@@ -47,7 +47,7 @@ def test_bulged_cylinder_accepts_fixed_angle_u_and_metric_meridian_v():
     assert stats["u_meters_per_uv"]["max"] > 1.05
     assert stats["v_meters_per_uv"]["min"] == pytest.approx(1, abs=.001)
     assert stats["v_meters_per_uv"]["max"] == pytest.approx(1, abs=.001)
-    assert stats["cylindrical"]["u_at_mean_radius_meters_per_uv"] == pytest.approx(1, abs=.001)
+    assert stats["cylindrical"]["u_at_mean_section_meters_per_uv"]["mean"] == pytest.approx(1, abs=.001)
     json.dumps(stats, allow_nan=False)
 
 
@@ -59,12 +59,12 @@ def test_cylinder_rejects_six_percent_v_error():
         assert_uv_quality(stats)
 
 
-def test_cylinder_rejects_six_percent_u_error_at_mean_radius():
+def test_cylinder_rejects_six_percent_u_error_at_mean_section():
     vertices, faces, uv = cylinder_profile()
     uv[:, :, 0] /= 1.06
     stats = uv_quality(vertices, faces, uv, "cylinder")
     assert stats["u_meters_per_uv"]["max"] < 1.15
-    with pytest.raises(AssertionError, match="U at mean radius"):
+    with pytest.raises(AssertionError, match="U at mean section"):
         assert_uv_quality(stats)
 
 
@@ -72,7 +72,7 @@ def test_cylinder_rejects_one_sixteen_percent_u_face_without_averaging_it_away()
     vertices, faces, uv = cylinder_profile((1., 1., 1.))
     uv[0, :, 0] /= 1.16
     stats = uv_quality(vertices, faces, uv, "cylinder")
-    assert stats["cylindrical"]["u_at_mean_radius_meters_per_uv"] == pytest.approx(1, abs=.001)
+    assert stats["cylindrical"]["u_at_mean_section_meters_per_uv"]["mean"] == pytest.approx(1, abs=.001)
     with pytest.raises(AssertionError, match="U .*outside 1m"):
         assert_uv_quality(stats)
 
@@ -117,3 +117,81 @@ def test_degenerate_uv_fails_explicitly_instead_of_being_dropped():
     uv[0] = 0
     with pytest.raises(ValueError, match="nondegenerate UV"):
         uv_quality(vertices, faces, uv, "box")
+
+
+def elliptical_mean_section(angular_u=False):
+    """Known ellipse arc, calculated by quadrature without the UV implementation."""
+    vertices, faces, uv = cylinder_profile((.96, 1.02, 1.04, 1.02, .96))
+    parameter = uv[:, :, 0].copy()
+    # Recover the original circle's parameter from its test reference radius.
+    triangles = vertices[faces]
+    area = np.linalg.norm(np.cross(triangles[:, 1] - triangles[:, 0],
+                                   triangles[:, 2] - triangles[:, 0]), axis=1) * .5
+    reference = np.average(np.linalg.norm(triangles[:, :, [0, 2]], axis=2).mean(axis=1), weights=area)
+    parameter /= reference
+    vertices[:, 0] *= .47
+    vertices[:, 2] *= .38
+    triangles = vertices[faces]
+    area = np.linalg.norm(np.cross(triangles[:, 1] - triangles[:, 0],
+                                   triangles[:, 2] - triangles[:, 0]), axis=1) * .5
+    radial_scale = np.linalg.norm(triangles[:, :, [0, 2]] / [.47, .38], axis=2).mean(axis=1)
+    reference = np.average(radial_scale, weights=area)
+    grid = np.linspace(0, 2 * np.pi, 32769)
+    if angular_u:
+        angle = np.unwrap(np.arctan2(.38 * np.sin(grid), .47 * np.cos(grid)))
+        physical_radius = np.linalg.norm(triangles[:, :, [0, 2]], axis=2).mean(axis=1)
+        uv[:, :, 0] = np.interp(parameter, grid, angle) * np.average(physical_radius, weights=area)
+    else:
+        speed = np.hypot(.47 * np.sin(grid), .38 * np.cos(grid))
+        arc = np.r_[0., np.cumsum((speed[:-1] + speed[1:]) * np.diff(grid) * .5)]
+        uv[:, :, 0] = np.interp(parameter, grid, arc) * reference
+    # The geometric bow has a small slope, so height itself is within the 5% V
+    # tolerance; this avoids sharing the implementation's meridian calculation.
+    uv[:, :, 1] = vertices[faces, 1]
+    return vertices, faces, uv
+
+
+def test_ellipse_arc_has_metric_mean_section_in_every_occupied_angle_bin():
+    vertices, faces, uv = elliptical_mean_section()
+    stats = uv_quality(vertices, faces, uv, "cylinder", np.ones(len(faces), dtype=int))
+    assert_uv_quality(stats)
+    reference = stats["cylindrical"]["u_at_mean_section_meters_per_uv"]
+    assert reference["occupied_bins"] == 64
+    assert reference["min"] == pytest.approx(1, abs=.01)
+    assert reference["max"] == pytest.approx(1, abs=.01)
+
+
+def test_ellipse_angular_u_cannot_hide_mean_section_distortion_in_global_average():
+    vertices, faces, uv = elliptical_mean_section(angular_u=True)
+    stats = uv_quality(vertices, faces, uv, "cylinder", np.ones(len(faces), dtype=int))
+    assert stats["u_meters_per_uv"]["min"] > .85
+    assert stats["u_meters_per_uv"]["max"] < 1.15
+    reference = stats["cylindrical"]["u_at_mean_section_meters_per_uv"]
+    assert reference["mean"] == pytest.approx(1, abs=.04)
+    assert reference["min"] < .95
+    assert reference["max"] > 1.05
+    with pytest.raises(AssertionError, match="U at mean section"):
+        assert_uv_quality(stats)
+
+
+def test_mean_section_checks_each_actual_chart_instead_of_cancelling_scale_errors():
+    vertices, faces, uv = cylinder_profile((1., 1., 1.))
+    charts = (vertices[faces].mean(axis=1)[:, 2] >= 0).astype(int)
+    uv[charts == 0, :, 0] /= 1.06
+    uv[charts == 1, :, 0] /= .94
+    stats = uv_quality(vertices, faces, uv, "cylinder", patch_ids=charts)
+    assert stats["cylindrical"]["u_at_mean_section_meters_per_uv"]["charts"] == 2
+    with pytest.raises(AssertionError, match="U at mean section"):
+        assert_uv_quality(stats)
+
+
+def test_mean_section_u_does_not_mix_in_meridian_v_shear():
+    vertices, faces, uv = elliptical_mean_section()
+    types = np.ones(len(faces), dtype=int)
+    baseline = uv_quality(vertices, faces, uv, "cylinder", types)
+    sheared = uv.copy()
+    sheared[:, :, 1] += .6 * sheared[:, :, 0]
+    distorted = uv_quality(vertices, faces, sheared, "cylinder", types)
+    assert distorted["cylindrical"]["u_at_mean_section_meters_per_uv"] == baseline["cylindrical"]["u_at_mean_section_meters_per_uv"]
+    # The original checker measurement still sees the physical shear.
+    assert distorted["u_meters_per_uv"]["max"] > baseline["u_meters_per_uv"]["max"] + .05

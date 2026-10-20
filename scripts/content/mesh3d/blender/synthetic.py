@@ -82,7 +82,7 @@ def glb_document(path):
     return json.loads(data[20:20 + size])
 
 
-def uv_quality(vertices, faces, uv, projection, face_types=None):
+def uv_quality(vertices, faces, uv, projection, face_types=None, patch_ids=None):
     """Measure physical metres per U/V, retaining each triangle's distortion.
 
     The inverse UV Jacobian's rows are the surface vectors traced by one unit
@@ -149,16 +149,76 @@ def uv_quality(vertices, faces, uv, projection, face_types=None):
         stats["planar"] = surface(~side)
         stats["cylindrical"] = surface(side)
         if np.any(side):
-            radius = np.linalg.norm(relative[:, :, [0, 2]], axis=2).mean(axis=1)[side]
-            if np.any(radius <= 0):
-                raise ValueError("cylindrical sides require a positive radius")
-            mean_radius = np.average(radius, weights=area[side])
-            # Evaluate the fixed-angle map at its mean radius. Separately check
-            # side extrema below, so this reference never hides local failures.
-            reference = meters[side, 0] * mean_radius / radius
-            stats["cylindrical"]["mean_radius_meters"] = float(mean_radius)
-            stats["cylindrical"]["u_at_mean_radius_meters_per_uv"] = float(
-                np.average(reference, weights=area[side]))
+            # Reconstruct the mean section independently from area-weighted
+            # vertex radii. A sparse stave's face angles can vary with height;
+            # using face-centre radii would then mistake its ends for the mean.
+            centres = relative.mean(axis=1)[side]
+            if patch_ids is None:
+                charts = np.zeros(int(side.sum()), dtype=np.int32)
+            else:
+                patch_ids = np.asarray(patch_ids)
+                if patch_ids.shape != (len(faces),):
+                    raise ValueError("patch_ids must identify every triangle's UV chart")
+                charts = patch_ids[side]
+            angle = np.arctan2(centres[:, 2], centres[:, 0])
+            bins = np.minimum(((angle + np.pi) / (2 * np.pi) * 64).astype(int), 63)
+            side_area, side_faces, side_uv = area[side], faces[side], uv[side]
+            reference_values, reference_weights = [], []
+            for chart in np.unique(charts):
+                chart_mask = charts == chart
+                chart_area = side_area[chart_mask]
+                chart_bins = bins[chart_mask]
+                used, corners = np.unique(side_faces[chart_mask], return_inverse=True)
+                points = vertices[used] - centre
+                vertex_area = np.bincount(corners.ravel(), weights=np.repeat(chart_area / 3, 3))
+                radius = np.linalg.norm(points[:, [0, 2]], axis=1)
+                if np.any(radius <= 0):
+                    raise ValueError("cylindrical sides require a positive radius")
+                vertex_angle = np.arctan2(points[:, 2], points[:, 0])
+                origin = np.arctan2(np.sum(vertex_area * np.sin(vertex_angle)),
+                                    np.sum(vertex_area * np.cos(vertex_angle)))
+                vertex_angle = (vertex_angle - origin + np.pi) % (2 * np.pi) - np.pi
+                vertex_bins = np.minimum(((vertex_angle + np.pi) / (2 * np.pi) * 64).astype(int), 63)
+                weights = np.bincount(vertex_bins, weights=vertex_area, minlength=64)
+                occupied = weights > 0
+                sample_angle = np.bincount(vertex_bins, weights=vertex_area * vertex_angle, minlength=64)[occupied] / weights[occupied]
+                sample_radius = np.bincount(vertex_bins, weights=vertex_area * radius, minlength=64)[occupied] / weights[occupied]
+                section_radius = np.interp(vertex_angle, sample_angle, sample_radius)
+                points[:, [0, 2]] *= (section_radius / radius)[:, None]
+                section = points[corners].reshape(-1, 3, 3)
+                section_edges = section[:, 1:] - section[:, :1]
+                section_normal = np.cross(section_edges[:, 0], section_edges[:, 1])
+                section_length = np.linalg.norm(section_normal, axis=1)
+                if np.any(section_length <= 0):
+                    raise ValueError("mean section must contain nondegenerate triangles")
+                section_normal /= section_length[:, None]
+                section_e1 = section_edges[:, 0] / np.linalg.norm(section_edges[:, 0], axis=1)[:, None]
+                section_e2 = np.cross(section_normal, section_e1)
+                section_local = np.stack((np.einsum("fij,fj->fi", section_edges, section_e1),
+                                          np.einsum("fij,fj->fi", section_edges, section_e2)), axis=-1)
+                u_edges = side_uv[chart_mask, 1:, 0] - side_uv[chart_mask, :1, 0]
+                gradient = np.linalg.solve(section_local, u_edges[..., None])[..., 0]
+                horizontal = np.column_stack((-section_normal[:, 2], np.zeros(len(section_normal)), section_normal[:, 0]))
+                horizontal /= np.linalg.norm(horizontal, axis=1)[:, None]
+                tangent = np.column_stack((np.einsum("ij,ij->i", horizontal, section_e1),
+                                           np.einsum("ij,ij->i", horizontal, section_e2)))
+                # U on the horizontal mean section is independent of V's
+                # meridian interpolation. Original-face inverse-Jacobian U/V
+                # extrema above still measure all physical checker distortion.
+                rate = abs(np.einsum("ij,ij->i", gradient, tangent))
+                if np.any(rate <= 0):
+                    raise ValueError("mean-section U must vary along the horizontal tangent")
+                reference = 1 / rate
+                weights = np.bincount(chart_bins, weights=chart_area, minlength=64)
+                occupied = weights > 0
+                sums = np.bincount(chart_bins, weights=chart_area * reference, minlength=64)
+                reference_values.extend((sums[occupied] / weights[occupied]).tolist())
+                reference_weights.extend(weights[occupied].tolist())
+            reference_values = np.asarray(reference_values)
+            reference_weights = np.asarray(reference_weights)
+            stats["cylindrical"]["u_at_mean_section_meters_per_uv"] = {
+                **describe(reference_values, reference_weights),
+                "occupied_bins": len(reference_values), "charts": int(len(np.unique(charts)))}
     return stats
 
 
@@ -180,9 +240,10 @@ def assert_uv_quality(stats):
         side = stats["cylindrical"]
         within(side, "u", .15)
         if side["triangles"]:
-            reference = side["u_at_mean_radius_meters_per_uv"]
-            assert abs(reference - 1) <= .05, (
-                f"cylinder UV U at mean radius {reference:.6f}m outside 1m +/-5%")
+            reference = side["u_at_mean_section_meters_per_uv"]
+            assert reference["min"] >= .95 and reference["max"] <= 1.05, (
+                f"cylinder UV U at mean section {reference['min']:.6f}.."
+                f"{reference['max']:.6f}m outside 1m +/-5%")
 
 
 def verify(obj, raw_v, raw_f, raw_m, meta, goal, metrics, output):
@@ -206,7 +267,8 @@ def verify(obj, raw_v, raw_f, raw_m, meta, goal, metrics, output):
     accuracy = float(area[pred == expected].sum() / area.sum())
     uv = np.array([item.uv[:] for item in obj.data.uv_layers.active.data]).reshape(-1, 3, 2)
     face_types = np.array([item.value for item in obj.data.attributes["UVProjection"].data])
-    uv_stats = uv_quality(v, f, uv, metrics["uv_projection"], face_types)
+    patch_ids = np.array([item.value for item in obj.data.attributes["UVPatch"].data])
+    uv_stats = uv_quality(v, f, uv, metrics["uv_projection"], face_types, patch_ids)
     doc = glb_document(output / "model.glb")
     used_materials = {goal["zones"][p.material_index]["key"] for p in obj.data.polygons}
     assert {m["name"] for m in doc["materials"]} == used_materials
@@ -273,7 +335,8 @@ def main():
         cv, cf = mesh_arrays(control_obj)
         control_uv = np.array([item.uv[:] for item in control_obj.data.uv_layers.active.data]).reshape(-1, 3, 2)
         control_types = np.array([item.value for item in control_obj.data.attributes["UVProjection"].data])
-        control_quality = uv_quality(cv, cf, control_uv, control_metrics["uv_projection"], control_types)
+        control_patches = np.array([item.value for item in control_obj.data.attributes["UVPatch"].data])
+        control_quality = uv_quality(cv, cf, control_uv, control_metrics["uv_projection"], control_types, control_patches)
         assert_uv_quality(control_quality)
         assert control_metrics["triangles"] <= goal["budget_tris"], control_metrics
         assert control_metrics["open_edges"] == control_metrics["non_manifold_edges"] == 0, control_metrics

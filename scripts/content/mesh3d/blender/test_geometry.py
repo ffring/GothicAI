@@ -279,7 +279,7 @@ def test_cylinder_uv_has_metric_scale_including_seam():
     assert np.max(np.ptp(uv[:, :, 0], axis=1)) < .05
 
 
-def test_cylinder_shared_meridian_and_angle_keep_metric_checker():
+def test_cylinder_shared_meridian_and_mean_section_arc_keep_metric_checker():
     vertices, faces = noisy_bowed_barrel()
     vertices *= [1.18, 1., .93]
     uv, patches, types = cylinder_uv(vertices, faces, return_patches=True)
@@ -304,12 +304,13 @@ def test_cylinder_uses_shared_binned_cone_meridian_and_mean_radius_u():
     assert np.all(types == 1)
     expected_length = 1.2 * np.sqrt(1 + .125 ** 2)
     assert expected_length > 1.2
+    all_triangles = vertices[faces]
+    expected_radius = np.average(np.linalg.norm(all_triangles[:, :, [0, 2]], axis=2).mean(axis=1),
+                                 weights=triangle_areas(vertices, faces))
     for patch in np.unique(patches):
         selected = patches == patch
         np.testing.assert_allclose(np.ptp(uv[selected, :, 1]), expected_length, rtol=.05)
         triangles = vertices[faces[selected]]
-        areas = triangle_areas(vertices, faces[selected])
-        expected_radius = np.average(np.linalg.norm(triangles[:, :, [0, 2]], axis=2).mean(axis=1), weights=areas)
         angle = np.arctan2(triangles[:, :, 2], triangles[:, :, 0])
         # Differentiating within each triangle removes the half-chart's seam
         # phase while checking a single mean-radius multiplier everywhere.
@@ -320,6 +321,45 @@ def test_cylinder_uses_shared_binned_cone_meridian_and_mean_radius_u():
         for level in np.unique(height):
             at_level = triangles[:, :, 1] == level
             assert np.ptp(uv[selected, :, 1][at_level]) < 1e-6
+    assert_no_patch_uv_jumps(faces, uv, patches)
+
+
+def test_cylinder_mean_ellipse_section_arc_has_physical_metre_scale():
+    vertices, faces = cylinder(segments=128, radius=1., height=1.2)
+    vertices *= [.47, 1., .38]
+    uv, patches, types = cylinder_uv(vertices, faces, return_patches=True)
+    assert np.all(types == 1)
+    scale = physical_checker_scale(vertices, faces, uv)
+    # Every horizontal section is the mean section on this straight ellipse.
+    np.testing.assert_allclose(scale[:, 0], 1., rtol=.05)
+    np.testing.assert_allclose(scale[:, 1], 1., rtol=.05)
+    phi = np.linspace(0., 2 * np.pi, 16385)
+    outline = np.column_stack((.47 * np.cos(phi), .38 * np.sin(phi)))
+    perimeter = np.linalg.norm(np.diff(outline, axis=0), axis=1).sum()
+    measured = sum(np.ptp(uv[patches == patch, :, 0]) for patch in np.unique(patches))
+    np.testing.assert_allclose(measured, perimeter, rtol=.05)
+    assert_no_patch_uv_jumps(faces, uv, patches)
+
+
+def test_cylinder_meridian_ignores_uneven_angular_height_sampling():
+    sides, rings = 48, 17
+    theta, height = np.meshgrid(np.arange(sides) * 2 * np.pi / sides,
+                               np.linspace(0., 1.2, rings))
+    # An extruded ellipse has straight vertical meridians even when its vertex
+    # rows follow different heights at different angles.
+    height += .35 * np.sin(np.pi * height / 1.2) ** 2 * np.cos(2 * theta)
+    vertices = np.stack((.47 * np.cos(theta), height, .38 * np.sin(theta)), axis=-1).reshape(-1, 3)
+    first = (np.arange(rings - 1)[:, None] * sides + np.arange(sides)).ravel()
+    following = first // sides * sides + (first + 1) % sides
+    faces = np.vstack((np.column_stack((first, first + sides, following)),
+                       np.column_stack((following, first + sides, following + sides))))
+    uv, patches, types = cylinder_uv(vertices, faces, return_patches=True)
+    assert np.all(types == 1)
+    scale = physical_checker_scale(vertices, faces, uv)
+    np.testing.assert_allclose(scale[:, 0], 1., rtol=.05)
+    np.testing.assert_allclose(scale[:, 1], 1., rtol=.05)
+    for patch in np.unique(patches):
+        np.testing.assert_allclose(np.ptp(uv[patches == patch, :, 1]), 1.2, rtol=.05)
     assert_no_patch_uv_jumps(faces, uv, patches)
 
 

@@ -415,11 +415,59 @@ def box_uv(vertices, faces, return_patches=False):
     return (uv, labels, types) if return_patches else uv
 
 
+def _angular_profile(angle, radius, weights):
+    """Area-weighted mean section and its physical arc, without ellipse fitting."""
+    circular = np.mod(angle, 2 * np.pi)
+    ordered = np.sort(circular)
+    gaps = np.diff(np.r_[ordered, ordered[0] + 2 * np.pi])
+    first = ordered[(int(np.argmax(gaps)) + 1) % len(ordered)]
+    covered = 2 * np.pi - gaps.max()
+    periodic = covered > np.pi
+    if periodic:
+        # A decimated pilot has only a few samples per 128-bin sector.
+        # Keep angular resolution broad enough to average their height mix.
+        count = 32
+        grid = -np.pi + (np.arange(count) + .5) * 2 * np.pi / count
+        samples = np.mod(angle + np.pi, 2 * np.pi) - np.pi
+        # atan2 of points on the same ray can differ by a few ulps as their
+        # radius changes. Keep those samples in one bin at exact boundaries.
+        scaled = np.round((samples + np.pi) / (2 * np.pi) * count, 12)
+        bins = np.floor(scaled).astype(int) % count
+        samples = np.where((bins == 0) & (samples > 0), samples - 2 * np.pi, samples)
+    else:
+        count = max(3, int(np.ceil(covered / (2 * np.pi / 32))) + 1)
+        grid = np.linspace(first, first + covered, count)
+        samples = np.mod(circular - first, 2 * np.pi) + first
+        bins = np.rint((samples - first) / covered * (count - 1)).astype(int)
+    totals = np.bincount(bins, weights=weights, minlength=count)
+    occupied = totals > 0
+    sample_angle = np.bincount(bins, weights=weights * samples, minlength=count)[occupied] / totals[occupied]
+    sample_radius = np.bincount(bins, weights=weights * radius, minlength=count)[occupied] / totals[occupied]
+    profile = np.interp(grid, sample_angle, sample_radius,
+                        period=2 * np.pi if periodic else None)
+    if periodic:
+        smooth = (np.roll(profile, 2) + 4 * np.roll(profile, 1) + 6 * profile
+                  + 4 * np.roll(profile, -1) + np.roll(profile, -2)) / 16
+        derivative = (np.roll(smooth, -1) - np.roll(smooth, 1)) / (2 * (grid[1] - grid[0]))
+        speed = np.hypot(smooth, derivative)
+        grid = np.r_[grid, grid[0] + 2 * np.pi]
+        speed = np.r_[speed, speed[0]]
+        smooth = np.r_[smooth, smooth[0]]
+    else:
+        profile[0] = sample_radius[0] + (grid[0] - sample_angle[0]) * (sample_radius[1] - sample_radius[0]) / (sample_angle[1] - sample_angle[0])
+        profile[-1] = sample_radius[-1] + (grid[-1] - sample_angle[-1]) * (sample_radius[-1] - sample_radius[-2]) / (sample_angle[-1] - sample_angle[-2])
+        padded = np.r_[2 * profile[0] - profile[1], profile, 2 * profile[-1] - profile[-2]]
+        smooth = np.convolve(padded, [.25, .5, .25], mode="valid")
+        speed = np.hypot(smooth, np.gradient(smooth, grid))
+    arc = np.r_[0., np.cumsum((speed[:-1] + speed[1:]) * np.diff(grid) * .5)]
+    return grid, arc, periodic, smooth
+
+
 def cylinder_uv(vertices, faces, return_patches=False):
     """Shared cap, cylindrical and OBB charts around the object's +Y axis.
 
     A chart never changes its projection, origin or scale between triangles.
-    Cylinder U is the polar angle times the patch's mean physical radius.
+    Cylinder U integrates the arc of a smoothed, angle-binned mean section.
     V integrates a smoothed, height-binned physical radius profile shared by
     every vertex at that height. Two half charts put the wrapping seam
     on patch boundaries. Returned face types are 0=box, 1=cylinder and 2=cap.
@@ -444,6 +492,12 @@ def cylinder_uv(vertices, faces, return_patches=False):
         radial /= np.linalg.norm(radial, axis=1)[:, None]
         alignment = np.abs(np.einsum("ij,ij->i", normals[selected][:, [0, 2]], radial))
         cylindrical = not planar and not cap and np.average(alignment, weights=areas[selected]) > .85
+        if cylindrical:
+            patch_vertices, patch_corners = np.unique(faces[selected], return_inverse=True)
+            vertex_weights = np.bincount(patch_corners.ravel(), weights=np.repeat(areas[selected], 3))
+            angular_grid, angular_arc, periodic, angular_radius = _angular_profile(
+                theta[patch_vertices], radius[patch_vertices], vertex_weights)
+            mean_radius = np.sum((angular_radius[:-1] + angular_radius[1:]) * np.diff(angular_grid) * .5) / np.ptp(angular_grid)
         # Separate half charts before assigning coordinates; no internal edge
         # crosses the angular branch cut. Flat patches need no artificial seam.
         halves = (local[faces[selected], 2].mean(axis=1) >= 0).astype(int) if cylindrical else np.zeros(len(selected), dtype=int)
@@ -465,19 +519,26 @@ def cylinder_uv(vertices, faces, return_patches=False):
                     angle[angle < -np.pi / 2] += 2 * np.pi
                 else:
                     angle[angle > np.pi / 2] -= 2 * np.pi
-                reference = np.average(radius[faces[group]].mean(axis=1), weights=areas[group])
+                wrapped = np.mod(np.mod(angle, 2 * np.pi) - angular_grid[0], 2 * np.pi) + angular_grid[0]
+                horizontal = np.interp(wrapped, angular_grid, angular_arc)
+                if periodic:
+                    horizontal += np.floor((angle - angular_grid[0]) / (2 * np.pi)) * angular_arc[-1]
                 height = points[:, 1]
                 bottom, top = height.min(), height.max()
                 span = top - bottom
                 if span <= 1e-12:
                     raise ValueError("cylindrical UV patch needs a vertical extent")
-                # One radius profile for the chart. Binning suppresses angular
-                # sampling noise; smoothing retains a linear cone exactly.
+                # Remove the section's angular radius before height binning:
+                # an ellipse sampled unevenly must not invent meridian slopes.
+                section_radius = np.interp(wrapped, angular_grid, angular_radius)
+                height_radius = radius[used] / section_radius * mean_radius
+                # One radius profile for the chart. Smoothing retains a linear
+                # cone exactly, with one V coordinate for every shared height.
                 bins = np.rint((height - bottom) / span * 32).astype(int)
                 counts = np.bincount(bins, minlength=33)
                 occupied = counts > 0
                 sample_height = np.bincount(bins, weights=height, minlength=33)[occupied] / counts[occupied]
-                sample_radius = np.bincount(bins, weights=radius[used], minlength=33)[occupied] / counts[occupied]
+                sample_radius = np.bincount(bins, weights=height_radius, minlength=33)[occupied] / counts[occupied]
                 grid_height = np.linspace(bottom, top, 33)
                 grid_radius = np.interp(grid_height, sample_height, sample_radius)
                 # Extrapolate to the true ends instead of clamping V in the
@@ -489,7 +550,7 @@ def cylinder_uv(vertices, faces, return_patches=False):
                 smooth_radius = np.convolve(padding, [.25, .5, .25], mode="valid")
                 meridian = np.r_[0., np.cumsum(np.hypot(np.diff(grid_height), np.diff(smooth_radius)))]
                 vertical = np.interp(height, grid_height, meridian)
-                coordinates = np.column_stack((angle * reference, vertical))
+                coordinates = np.column_stack((horizontal, vertical))
                 projection = 1
             uv[group] = coordinates[corners].reshape(-1, 3, 2)
             patch_ids[group] = next_id

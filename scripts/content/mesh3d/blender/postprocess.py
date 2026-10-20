@@ -189,7 +189,7 @@ def activate(obj):
     bpy.context.view_layer.objects.active = obj
 
 
-def decimate(obj, budget):
+def decimate(obj, budget, projection):
     import bpy
     import bmesh
     activate(obj)
@@ -290,11 +290,30 @@ def decimate(obj, budget):
             modifier.vertex_group = weights_name
             modifier.vertex_group_factor = 1.0
         bpy.ops.object.modifier_apply(modifier=modifier.name)
-    modifier = obj.modifiers.new("Planar 5 degrees", "DECIMATE")
-    modifier.decimate_type = "DISSOLVE"
-    modifier.angle_limit = math.radians(5)
-    modifier.delimit = {"MATERIAL", "SHARP"}
-    bpy.ops.object.modifier_apply(modifier=modifier.name)
+    if projection == "cylinder":
+        # A curved strip can become one nonplanar ngon under repeated planar
+        # dissolves. Its retriangulation creates narrow chords across the bow.
+        # Keep the collapsed side triangles; dissolve only cap/box patches.
+        v, f = mesh_arrays(obj)
+        _, _, types = cylinder_uv(v, f, return_patches=True)
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.faces.index_update()
+        edges = [e for e in bm.edges if e.is_manifold
+                 and all(types[face.index] != 1 for face in e.link_faces)]
+        vertices = [v for v in bm.verts
+                    if all(types[face.index] != 1 for face in v.link_faces)]
+        bmesh.ops.dissolve_limit(bm, angle_limit=math.radians(5),
+                                 verts=vertices, edges=edges, delimit={"MATERIAL", "SHARP"})
+        bmesh.ops.triangulate(bm, faces=list(bm.faces))
+        bm.to_mesh(obj.data)
+        bm.free()
+    else:
+        modifier = obj.modifiers.new("Planar 5 degrees", "DECIMATE")
+        modifier.decimate_type = "DISSOLVE"
+        modifier.angle_limit = math.radians(5)
+        modifier.delimit = {"MATERIAL", "SHARP"}
+        bpy.ops.object.modifier_apply(modifier=modifier.name)
     obj.vertex_groups.remove(obj.vertex_groups[weights_name])
     # Export and UV assignment operate on the exact same triangles.
     modifier = obj.modifiers.new("Export triangles", "TRIANGULATE")
@@ -448,7 +467,7 @@ def process_arrays(vertices, faces, color, metallic, target, output_dir, meta, c
     obj.data.polygons.foreach_set("material_index", labels.astype(np.int32))
     if cleanup:
         clean(obj)
-    decimate(obj, target["budget_tris"])
+    decimate(obj, target["budget_tris"], projection)
     # Cleanup / simplification can move extremes: preserve the supplied anchor exactly.
     final_v, final_f = mesh_arrays(obj)
     lo, hi = np.asarray(target["bbox_min"]), np.asarray(target["bbox_max"])
