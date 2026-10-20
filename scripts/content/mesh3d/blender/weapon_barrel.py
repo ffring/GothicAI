@@ -4,7 +4,8 @@ blender -b --factory-startup -P weapon_barrel.py -- weapon-barrel.json OUT_DIR  
 config: {"id": "weapon-barrel", "target": "data/content/mesh3d-market.json", "seed": 1, "barrel_height": 0.9,
          "sides": 16, "end_ratio": 0.84, "hoops": [0.1, 0.5, 0.9], "hoop": [0.06, 0.008], "rim": 0.022, "depth": 0.22,
          "weapons": [{"kind": "sword"|"short"|"axe"|"spear", "at": [dx, dy], "lean": [deg_x, deg_y], "length": m}, ...],
-         "stave_tile": 0.38, "steel_tile": 0.3}
+         "hilt": {"pommel": 0.05, "grip": [0.14, 0.036], "guard": [0.24, 0.03, 0.026]}, "blade_width": 0.058,
+         "axe": [0.22, 0.18], "spear": [0.32, 0.085], "stave_tile": 0.38, "steel_tile": 0.3}
 The barrel stands on the ground with an open top: staves as separate parts, three
 raised hoops, a rim whose inner wall leads down to a dark fill. The original's
 origin sits at the barrel's middle and its hilts reach above, as here. Blades stand
@@ -108,31 +109,73 @@ def lens(start, end, width, thick, material, part, taper=0.75, point=True):
         P.poly(r1, material, [(0, 0), (0.02, 0), (0.02, 0.02), (0, 0.02)])
 
 
-def sword(top, axis, length, blade_w, guard_l):
+hilt = cfg.get("hilt", {"pommel": 0.05, "grip": [0.14, 0.036], "guard": [0.24, 0.03, 0.026]})
+
+
+def knob(centre, axis, radius, length):
+    """A round pommel: an octagonal disc along the blade's axis, faceted ends."""
     part = P.new_part()
     flat, edge = frame(axis)
-    pommel = 0.035
-    P.post(top, top + axis * pommel, pommel, pommel * 0.7, flat, edge, IRON, 0.1)
+    rings = []
+    for f, rr in ((-0.5, 0.65), (-0.25, 1.0), (0.25, 1.0), (0.5, 0.65)):
+        rings.append([P.vert(centre + axis * (f * length) + (flat * math.cos(2 * math.pi * k / 8) + edge * math.sin(2 * math.pi * k / 8)) * radius * rr, part)
+                      for k in range(8)])
+    for i in range(3):
+        for k in range(8):
+            k2 = (k + 1) % 8
+            P.poly((rings[i][k], rings[i][k2], rings[i + 1][k2], rings[i + 1][k]), IRON, ((0, 0), (0.02, 0), (0.02, 0.02), (0, 0.02)))
+    P.poly(rings[0][::-1], IRON, [(0, 0)] * 8)
+    P.poly(rings[3], IRON, [(0, 0)] * 8)
+
+
+def sword(top, axis, length, blade_w, guard_l):
+    flat, edge = frame(axis)
+    pommel = hilt["pommel"]
+    knob(top + axis * (pommel / 2), axis, pommel / 2, pommel * 0.75)
+    grip_len, grip_w = hilt["grip"]
     grip = top + axis * pommel
-    P.post(grip, grip + axis * 0.13, 0.03, 0.026, flat, edge, HAFT, 0.3)
-    guard = grip + axis * 0.145
-    P.board(guard, flat, axis, edge, guard_l, 0.026, 0.022, IRON)
-    lens(guard + axis * 0.013, top + axis * length, blade_w, 0.01, STEEL, P.new_part())
+    P.post(grip, grip + axis * grip_len, grip_w, grip_w * 0.85, flat, edge, HAFT, 0.3)
+    _, gw, gt = hilt["guard"]
+    guard = grip + axis * (grip_len + gt / 2)
+    P.board(guard, flat, axis, edge, guard_l, gt, gw, IRON)
+    lens(guard + axis * (gt / 2), top + axis * length, blade_w, 0.011, STEEL, P.new_part())
+
+
+def plate(outline, origin, u_axis, v_axis, n_axis, thick, material):
+    """A closed prism from a convex 2D outline in the (u, v) plane, thick along n."""
+    part = P.new_part()
+    front = [P.vert(origin + u_axis * u + v_axis * v + n_axis * (thick / 2), part) for u, v in outline]
+    back = [P.vert(origin + u_axis * u + v_axis * v - n_axis * (thick / 2), part) for u, v in outline]
+    uv = [(u * 2, v * 2) for u, v in outline]
+    P.poly(front, material, uv)
+    P.poly(back[::-1], material, uv[::-1])
+    for i in range(len(outline)):
+        j = (i + 1) % len(outline)
+        P.poly((front[j], front[i], back[i], back[j]), material, ((0, 0), (0.02, 0), (0.02, 0.02), (0, 0.02)))
 
 
 def axe(top, axis, length):
     flat, edge = frame(axis)
-    P.post(top, top + axis * length, 0.032, 0.036, flat, edge, HAFT, 0.3)
-    head = top + axis * 0.06
-    P.board(head + flat * 0.06, flat, axis, edge, 0.13, 0.08, 0.025, IRON)   # cheek
-    lens(head + flat * 0.12, head + flat * 0.19, 0.16, 0.012, STEEL, P.new_part(), taper=1.15, point=False)   # bit
+    P.post(top, top + axis * length, 0.036, 0.04, flat, edge, HAFT, 0.3)
+    bw, bh = cfg.get("axe", [0.22, 0.18])
+    head = top + axis * 0.08
+    P.board(head + flat * 0.05, flat, axis, edge, 0.1, 0.09, 0.03, IRON)    # eye and cheek round the haft
+    # the bit: a plate in the plane of haft and cheek, narrow at the cheek, flaring to a curved edge
+    outline = [(0.0, -bh * 0.22), (bw * 0.55, -bh * 0.3)]
+    for a in np.linspace(-1, 1, 7):
+        outline.append((bw - 0.02 * (1 - a * a), a * bh / 2))
+    outline += [(bw * 0.55, bh * 0.3), (0.0, bh * 0.22)]
+    plate(outline, head + flat * 0.09, flat, -axis, edge, 0.014, STEEL)
 
 
 def spear(top, axis, length):
     flat, edge = frame(axis)
-    lens(top - axis * 0.0, top + axis * 0.2, 0.06, 0.014, STEEL, P.new_part())
-    lens(top + axis * 0.2, top + axis * 0.0, 0.06, 0.014, STEEL, P.new_part())    # leaf: two tapered halves
-    P.post(top + axis * 0.2, top + axis * length, 0.03, 0.03, flat, edge, HAFT, 0.3)
+    hl, hw = cfg.get("spear", [0.32, 0.085])
+    tip = top - axis * 0.0
+    socket = top + axis * hl
+    lens(socket, tip, hw, 0.016, STEEL, P.new_part(), taper=0.9)          # leaf from the socket to the point
+    P.post(socket, socket + axis * 0.06, 0.04, 0.034, flat, edge, IRON, 0.1)
+    P.post(socket + axis * 0.06, top + axis * length, 0.032, 0.032, flat, edge, HAFT, 0.3)
 
 
 for spec in cfg["weapons"]:
@@ -144,7 +187,8 @@ for spec in cfg["weapons"]:
     if kind in ("sword", "short"):
         length = spec.get("length", 1.0 if kind == "sword" else 0.66)
         top = foot - down * length
-        sword(top, down, length, 0.048 if kind == "sword" else 0.042, 0.2 if kind == "sword" else 0.15)
+        g_l = hilt["guard"][0]
+        sword(top, down, length, cfg.get("blade_width", 0.058) * (1.0 if kind == "sword" else 0.85), g_l if kind == "sword" else g_l * 0.75)
     elif kind == "axe":
         length = spec.get("length", 0.95)
         axe(foot - down * length, down, length)

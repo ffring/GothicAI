@@ -3,14 +3,16 @@
 blender -b --factory-startup -P wolf_head.py -- wolf-head.json OUT_DIR   (run from the repository root)
 config: {"id": "wolf-head", "target": "data/content/mesh3d-market.json", "seed": 1, "around": 14,
          "plaque": [0.1, 3], "sections": [[s, w, h, dz], ...], "jaw": [[s, w, h], ...], "jaw_open_deg": 22,
-         "turn_deg": 14, "dip_deg": 10, "ruff": [18, 0.09], "ears": [0.13, 0.07], "fangs": 4,
+         "turn_deg": 14, "dip_deg": 10, "ruff": [24, 0.12], "ears": [0.19, 0.12], "fangs": 4, "eye": 0.026, "nose": 0.036, "eye_at": 0.6,
          "fur_tile": 0.3, "wood_tile": 0.38}
 A pointed shield plaque of three boards against the wall (the original's plaque is
 on that side of its bbox), and a wolf's head lofted from elliptical sections along
 its muzzle axis: a wide fur ruff at the plaque, the skull, cheeks, the stop and a
 narrowing muzzle to the nose. The lower jaw hangs open under the muzzle; fangs in
-both jaws; two pointed ears; the ruff breaks into jagged clumps. The head looks a
-little down and to one side, as on the concept.
+both jaws; two pointed ears; the ruff breaks into jagged clumps; two amber eyes
+at "eye_at" of the way to the muzzle tip and a black nose at the tip, each a
+shallow dome in its own zone. The head looks a little down and to one side, as
+on the concept.
 """
 import math
 import sys
@@ -26,7 +28,8 @@ cfg, out = args()
 goal, lo, hi = load_goal(cfg)
 rng = np.random.default_rng(cfg.get("seed", 1))
 keys = [z["key"] for z in goal["zones"]]
-WOOD, FUR, BONE = (keys.index(k) for k in ("OWN_PROP_WOOD_PLANK", "OWN_PROP_FUR", "OWN_PROP_BONE"))
+WOOD, FUR, BONE, EYE, NOSE = (keys.index(k) for k in ("OWN_PROP_WOOD_PLANK", "OWN_PROP_FUR", "OWN_PROP_BONE",
+                                                      "OWN_PROP_EYE", "OWN_PROP_NOSE"))
 fur_tile, wood_tile = cfg.get("fur_tile", 0.3), cfg.get("wood_tile", 0.38)
 P = Parts(rng, wood_tile / 4)
 around = cfg.get("around", 14)
@@ -145,6 +148,38 @@ for sx in (-1, 1):
     apex = P.vert(b + up * ear_h - fwd * (ear_h * 0.35) + side * (sx * 0.02), p)
     for i in range(4):
         P.poly((corners[i], corners[(i + 1) % 4], apex), FUR, ((0, 0), (0.1, 0), (0.05, 0.15)))
+
+def dome(centre, normal, radius, depth, material, segs=8):
+    """A low dome (eye, nose) on the surface: a ring at the base and a rounded cap toward normal."""
+    n = normal.normalized()
+    a = n.cross(Z) if abs(n.dot(Z)) < 0.9 else n.cross(X)
+    a.normalize()
+    b = n.cross(a)
+    part = P.new_part()
+    rings = []
+    for f, rr in ((0.0, 1.0), (0.55, 0.8), (0.9, 0.45)):
+        rings.append([P.vert(centre + n * (depth * f) + (a * math.cos(2 * math.pi * k / segs) + b * math.sin(2 * math.pi * k / segs)) * radius * rr, part)
+                      for k in range(segs)])
+    tip = P.vert(centre + n * depth, part)
+    for i in range(2):
+        for k in range(segs):
+            k2 = (k + 1) % segs
+            P.poly((rings[i][k], rings[i][k2], rings[i + 1][k2], rings[i + 1][k]), material, ((0, 0), (0.02, 0), (0.02, 0.02), (0, 0.02)))
+    for k in range(segs):
+        P.poly((rings[2][k], rings[2][(k + 1) % segs], tip), material, ((0, 0), (0.02, 0), (0.01, 0.02)))
+    P.poly(rings[0][::-1], material, [(0, 0)] * segs)
+
+
+# eyes at the stop, set into the sides of the head, looking forward and out
+eye_r = cfg.get("eye", 0.017)
+stop = [sec for sec in cfg["sections"] if sec[0] >= s_tip * cfg.get("eye_at", 0.55)][0]
+for sx in (-1, 1):
+    c = centre(stop[0], stop[3]) + side * (sx * stop[1] * 0.4) + up * (stop[2] * 0.08)
+    dome(c, side * (sx * 0.75) + fwd * 0.55 + up * 0.15, eye_r, eye_r * 0.9, EYE)
+# a black nose capping the muzzle tip
+tip_sec = cfg["sections"][-1]
+nose_c = centre(tip_sec[0], tip_sec[3]) + up * (tip_sec[2] * 0.2)
+dome(nose_c, fwd * 0.85 + up * 0.35, cfg.get("nose", 0.032), 0.022, NOSE, segs=10)
 
 # ruff: jagged clumps of fur fanning out round the neck at the plaque
 n_ruff, length = cfg.get("ruff", [18, 0.09])
