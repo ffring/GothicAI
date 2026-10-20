@@ -250,7 +250,7 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const ProtoMesh& mesh,
     auto& skin = mesh.skined[i];
     for(auto& m:skin.sub) {
       Material mat = m.material;
-      mat.tex=owner.solveTex(mat.tex,m.texName,texVar,bodyColor);
+      mat.setAlbedo(owner.solveTex(mat.tex,m.texName,texVar,bodyColor));
       if(mat.tex!=nullptr) {
         sub[subCount] = owner.parent->get(skin,mat,m.iboOffset,m.iboSize,*anim);
         ++subCount;

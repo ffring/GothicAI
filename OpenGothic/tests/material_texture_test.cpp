@@ -1,5 +1,9 @@
 #include "commandline.h"
 #include "graphics/material.h"
+#include "graphics/mesh/skeleton.h"
+#include "graphics/meshobjects.h"
+#include "graphics/sceneglobals.h"
+#include "graphics/shaders.h"
 #include "resources.h"
 
 #include <Tempest/Device>
@@ -122,6 +126,49 @@ void variants() {
   require(Resources::textureVariantName(longName,2,3)==longName,"long-name fallback must remain unchanged");
   }
 
+void skinnedVariant(bool ownAlbedo) {
+  // Use the renderer owner: the CPU-only MeshObjects path does not select
+  // skinned texture variants or allocate the resulting material's draw bucket.
+  Shaders shaders;
+  shaders.waitCompiler();
+  SceneGlobals globals;
+  VisualObjects visuals(globals,{{0,0,0},{1,1,0}});
+  MeshObjects owner(visuals);
+
+  zenkit::ModelMesh model;
+  model.meshes.resize(1);
+  auto& skin = model.meshes[0];
+  skin.mesh.positions = {{0,0,0},{1,0,0},{0,1,0}};
+  skin.mesh.bbox = {{0,0,0},{1,1,0}};
+  skin.mesh.sub_meshes.resize(1);
+  auto& surface = skin.mesh.sub_meshes[0];
+  surface.mat = source("HUM_BODY_V0_C0.TGA");
+  surface.wedges = {{{0,0,1},{0,0},0},{{0,0,1},{1,0},1},{{0,0,1},{0,1},2}};
+  surface.triangles = {{{0,1,2}}};
+  skin.weights = {{{1.f,{0,0,0},0}},{{1.f,{1,0,0},0}},{{1.f,{0,1,0},0}}};
+  skin.nodes = {0};
+  ProtoMesh proto(model,nullptr,"MATERIAL_TEXTURE_SKIN.MDM");
+  require(proto.skined.size()==1 && proto.skined[0].sub.size()==1,
+          "the variant fixture must contain one real skinned submesh");
+  const auto& base = proto.skined[0].sub[0].material;
+  require(base.tex!=nullptr && base.tex->format()==
+              (ownAlbedo ? Tempest::TextureFormat::DXT1 : Tempest::TextureFormat::DXT5),
+          "the skinned source must use the base texture's actual format");
+  require(base.alpha==(ownAlbedo ? Material::Solid : Material::AlphaTest),
+          "the skinned source alpha must be classified from the base texture");
+
+  MeshObjects::Mesh selected(owner,proto,2,0,3,false);
+  require(selected.nodesCount()==1,"the renderer must allocate the selected skinned submesh");
+  const auto& material = selected.node(0).material();
+  require(material.tex==Resources::loadMaterialAlbedo("HUM_BODY_V2_C3.TGA"),
+          "the skinned draw bucket must use the selected variant's albedo");
+  require(material.tex!=nullptr && material.tex->format()==
+              (ownAlbedo ? Tempest::TextureFormat::DXT5 : Tempest::TextureFormat::DXT1),
+          "the skinned variant must use its own DDS format");
+  require(material.alpha==(ownAlbedo ? Material::AlphaTest : Material::Solid),
+          "the skinned variant draw bucket must reclassify alpha from its selected albedo");
+  }
+
 void replacements(Tempest::Device& device, const Fixture& fixture) {
   Resources resources(device);
   Resources::mountWork(fixture.root/"_work");
@@ -161,6 +208,7 @@ void replacements(Tempest::Device& device, const Fixture& fixture) {
     wood.setAlbedo(alpha);
     require(wood.alpha==mode,"albedo replacement must preserve explicit blending modes");
     }
+  skinnedVariant(true);
   require(Resources::writeCensus(),"replacement census must be writable");
   }
 
@@ -203,6 +251,7 @@ void emptyTable(Tempest::Device& device, const Fixture& fixture) {
   Material wood(source("NW_CITY_WOOD_01.TGA"),true);
   require(rope.alpha==Material::AlphaTest && wood.alpha==Material::Solid,
           "without replacements alpha classification must use the original formats");
+  skinnedVariant(false);
   }
 }
 
