@@ -56,6 +56,67 @@ def test_insufficient_balanced_region_cannot_hide_behind_large_other_regions():
         collect.select_points(training, set())
 
 
+def six_region_points():
+    return [point(index * 6 + region, region=f"r{region}")
+            for index in range(67) for region in range(6)][:400]
+
+
+def test_point_cap_keeps_frozen_order_and_all_recorded_attempts_in_equal_quotas(tmp_path):
+    values = six_region_points()
+    frozen = tmp_path / "point.jsonl"
+    collect.freeze_selection(frozen, values)
+    before = frozen.read_bytes(), frozen.stat().st_mtime_ns, deepcopy(values)
+    late = values[-1]
+    done = {("point", late["id"]), ("point", values[0]["id"])}
+    scheduled = collect.point_schedule(values, done, 12)
+    assert len(scheduled) == 12
+    assert Counter(value["region"] for value in scheduled) == Counter({f"r{index}": 2 for index in range(6)})
+    assert late in scheduled and values[0] in scheduled
+    assert scheduled == [value for value in values if value in scheduled]
+    assert collect.point_schedule(values, done) == values
+    assert (frozen.read_bytes(), frozen.stat().st_mtime_ns, values) == before
+
+
+def test_point_cap_cannot_drop_an_already_attempted_region_even_if_other_regions_are_empty():
+    values = six_region_points()
+    done = {("point", value["id"]) for value in values if value["region"] == "r0"}
+    with pytest.raises(ValueError, match="discard completed"):
+        collect.point_schedule(values, done, 396)
+
+
+@pytest.mark.parametrize("limit", [0, -6, 1, 7, 399, 402])
+def test_reduced_point_cap_requires_equal_six_region_quotas(limit):
+    with pytest.raises(ValueError, match="multiple of six"):
+        collect.point_schedule(six_region_points(), set(), limit)
+
+
+def test_point_cap_rejects_missing_regions_or_too_small_frozen_region_pool():
+    with pytest.raises(ValueError, match="six regions"):
+        collect.point_schedule([point()], set(), 6)
+    with pytest.raises(ValueError, match="region pool"):
+        collect.point_schedule(six_region_points()[:6], set(), 12)
+
+
+def test_summary_uses_point_cap_without_changing_other_targets_or_frozen_pool(monkeypatch):
+    selections = {name: [] for name in (*collect.FAMILIES, collect.FOLLOW_BELOW_GATE)}
+    selections["point"] = six_region_points()
+    selections["jump"] = [dict(point(index), dataset_family="jump") for index in range(168)]
+    episodes = [dict(family="point", key_counts={}, decisions=1, training_eligible=False,
+                     success=False, episode=f"/unused/{index}") for index in range(12)]
+    monkeypatch.setattr(collect.campaign, "tree_bytes", lambda path: 0)
+    normal = collect.summarize(episodes, selections, False, 0, True)
+    capped = collect.summarize(episodes, selections, False, 0, True, point_limit=12)
+    assert normal["point_limit"] == normal["by_family"]["point"]["target"] == 400
+    assert normal["by_family"]["point"]["complete"] is False
+    assert capped["point_limit"] == capped["by_family"]["point"]["target"] == 12
+    assert capped["by_family"]["point"]["complete"] is True
+    assert capped["by_family"]["point"]["available_candidates"] == 400
+    assert {name: value["target"] for name, value in capped["by_family"].items() if name != "point"} == {
+        "object": 100, "approach": 60, "follow": 60, "jump": 168, "follow_below_gate": 60}
+    assert all(capped["by_family"][name] == normal["by_family"][name]
+               for name in capped["by_family"] if name != "point")
+
+
 def test_objects_require_train_split_matching_visible_qualified_probe_and_balance_places():
     values = [object_value(index, f"place-{index % 5}") for index in range(110)]
     probes = [probe(value) for value in values]
@@ -454,6 +515,23 @@ def test_aggregate_storage_reserves_across_families_and_releases_after_failure(t
     assert budget.reserved == 0 and retained.read_bytes() == new_family.read_bytes() == b"x" * 10
 
 
+def test_storage_preflight_accounts_for_whole_parallel_batch_and_active_reservations(tmp_path, monkeypatch):
+    budget = collect.StorageBudget(tmp_path, max_bytes=3 * 20480)
+    monkeypatch.setattr(collect.shutil, "disk_usage", lambda root: SimpleNamespace(free=10**12))
+    (tmp_path / "retained").write_bytes(b"x")
+    assert budget.can_reserve_batch(100, 2)
+    assert not budget.can_reserve_batch(100, 3)
+    with budget.reserve(100):
+        assert budget.can_reserve_batch(100, 1)
+        assert not budget.can_reserve_batch(100, 2)
+    assert budget.reserved == 0
+    monkeypatch.setattr(collect.shutil, "disk_usage", lambda root: SimpleNamespace(free=256 * 1024**2))
+    assert not budget.can_reserve_batch(100, 1)
+    with pytest.raises(collect.StorageLimit, match="Disk budget"):
+        with budget.reserve(100):
+            pytest.fail("A full disk must not start a new episode")
+
+
 def forbid_existing_recalculation(monkeypatch):
     def forbidden(*args, **kwargs):
         pytest.fail("A finalized recording must not replay or recalculate historical metrics")
@@ -530,7 +608,8 @@ def test_existing_failed_episode_remains_completed_and_never_reruns(tmp_path, mo
     assert episode_files(directory) == before
 
 
-def test_collection_skips_completed_failed_candidate_when_selecting_new_work(tmp_path, monkeypatch):
+@pytest.mark.parametrize("has_room", [True, False])
+def test_collection_skips_completed_failed_candidate_when_selecting_new_work(tmp_path, monkeypatch, has_room):
     worker, value, directory = retained_record(tmp_path, monkeypatch)
     old = v3.read_json(directory / "episode.json")["collection_metrics"]
     next_value = point(1)
@@ -555,14 +634,19 @@ def test_collection_skips_completed_failed_candidate_when_selecting_new_work(tmp
     monkeypatch.setattr(collect, "settings", lambda *args: legacy_identity())
     monkeypatch.setattr(collect, "prepare_selections", lambda *args, **kwargs: pytest.fail("Existing selections must not regenerate"))
     monkeypatch.setattr(collect.sys, "platform", "linux")
+    monkeypatch.setattr(collect.StorageBudget, "can_reserve_batch", lambda *args, **kwargs: has_room)
     options = SimpleNamespace(task=tmp_path, include_follow="no", follow_below_gate=False,
         parallel=1, limit_ms=240000, max_bytes=15_000_000_000, wall_minutes=100,
         max_new=1, round_size=12, verify_existing_only=False, expect_existing=None)
     result = collect.run(options)
-    assert calls == [value["id"], next_value["id"]]
+    assert calls == ([value["id"], next_value["id"]] if has_room else [value["id"]])
     assert result["resume_verified_episodes"] == 1
-    assert result["by_family"]["point"]["episodes"] == 2
+    assert result["by_family"]["point"]["episodes"] == (2 if has_room else 1)
     assert result["by_family"]["point"]["training_eligible"] == 0
+    if not has_room:
+        assert result["stop_reason"] == "storage_limit"
+        assert result["complete"] is False
+        assert v3.read_json(tmp_path / "recordings/collection-metrics.json")["stop_reason"] == "storage_limit"
 
 
 def test_existing_episode_ignores_command_witness_and_current_recording_identity(tmp_path, monkeypatch):

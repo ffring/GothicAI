@@ -148,6 +148,29 @@ def select_points(training, excluded, count=400):
     return selected
 
 
+def point_schedule(values, done, limit=400):
+    """Reduce future road work without changing the frozen candidate pool."""
+    if limit == 400:
+        return list(values)
+    if not isinstance(limit, int) or limit <= 0 or limit >= 400 or limit % 6:
+        raise ValueError("A reduced point limit must be a positive multiple of six below 400")
+    regions = sorted({value["region"] for value in values})
+    if len(regions) != 6:
+        raise ValueError("Reduced road collection requires the original six regions")
+    quota = limit // 6
+    recorded = [value for value in values if ("point", value["id"]) in done]
+    counts = Counter(value["region"] for value in recorded)
+    pool = Counter(value["region"] for value in values)
+    if any(counts[region] > quota or pool[region] < quota for region in regions):
+        raise ValueError(f"Point limit cannot discard completed candidates or exceed a region pool: {dict(counts)}")
+    selected = {value["id"] for value in recorded}
+    for value in values:
+        if value["id"] not in selected and counts[value["region"]] < quota:
+            selected.add(value["id"])
+            counts[value["region"]] += 1
+    return [value for value in values if value["id"] in selected]
+
+
 def select_objects(pool, probes, excluded):
     v3.validate_splits(pool)
     by_id = {}
@@ -285,6 +308,10 @@ def prepare_selections(task, follow_below_gate=False):
     return selections
 
 
+class StorageLimit(ValueError):
+    """No new attempt was started because its reservation would exceed space."""
+
+
 class StorageBudget:
     """One aggregate 15-GiB ceiling, including every family's failed attempts."""
     def __init__(self, root, max_bytes=v3.MAX_BYTES):
@@ -297,15 +324,29 @@ class StorageBudget:
     def used(self):
         return campaign.tree_bytes(self.root)
 
+    @staticmethod
+    def estimate(limit_ms, jump=False):
+        amount = math.ceil(limit_ms / 100) * v3.ESTIMATED_DECISION_BYTES
+        return max(amount, jumps.RESERVE_BYTES) if jump else amount
+
+    def require_room(self, amount):
+        used, free = self.used(), shutil.disk_usage(self.root).free
+        if used + self.reserved + amount > self.max_bytes or free < self.reserved + amount + 256 * 1024**2:
+            raise StorageLimit(f"Disk budget: used={used}, reserved={self.reserved}, next={amount}, limit={self.max_bytes}, free={free}")
+
+    def can_reserve_batch(self, limit_ms, count, jump=False):
+        with self.lock:
+            try:
+                self.require_room(self.estimate(limit_ms, jump) * count)
+            except StorageLimit:
+                return False
+            return True
+
     @contextmanager
     def reserve(self, limit_ms, jump=False):
-        amount = math.ceil(limit_ms / 100) * v3.ESTIMATED_DECISION_BYTES
-        if jump:
-            amount = max(amount, jumps.RESERVE_BYTES)
+        amount = self.estimate(limit_ms, jump)
         with self.lock:
-            used, free = self.used(), shutil.disk_usage(self.root).free
-            if used + self.reserved + amount > self.max_bytes or free < self.reserved + amount + 256 * 1024**2:
-                raise ValueError(f"Disk budget: used={used}, reserved={self.reserved}, next={amount}, limit={self.max_bytes}, free={free}")
+            self.require_room(amount)
             self.reserved += amount
         try:
             yield
@@ -583,15 +624,16 @@ def recording_identity(identity, value):
                 minimum_follow_fraction=policy["minimum_follow_fraction"], family_policy=policy)
 
 
-def summarize(episodes, selections, include_follow, used, follow_below_gate=False):
+def summarize(episodes, selections, include_follow, used, follow_below_gate=False, point_limit=None):
     groups = {}
     for name in (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ())):
         values = [value for value in episodes if value["family"] == name]
         keys = sum((Counter(value["key_counts"]) for value in values), Counter())
         decisions = sum(value["decisions"] for value in values)
         eligible = sum(value["training_eligible"] for value in values)
-        needed = (len(selections[name]) if name in ("point", "jump") else 100 if name == "object" else 60)
-        complete = len(values) == needed if name in ("point", "jump") else eligible >= needed
+        needed = (point_limit if name == "point" and point_limit is not None else
+                  len(selections[name]) if name in ("point", "jump") else 100 if name == "object" else 60)
+        complete = len(values) >= needed if name in ("point", "jump") else eligible >= needed
         if name == "follow" and not include_follow:
             complete = True
         groups[name] = dict(episodes=len(values),
@@ -601,12 +643,13 @@ def summarize(episodes, selections, include_follow, used, follow_below_gate=Fals
             backward_fraction=keys["back"] / decisions if decisions else None,
             strafe_fraction=keys["strafe"] / decisions if decisions else None, jump=keys["jump"], climb=keys["climb"],
             dataset_bytes=sum(campaign.tree_bytes(value["episode"]) for value in values), complete=complete,
-            available_candidates=len(selections[name]), excluded=name == "follow" and not include_follow,
+            target=needed, available_candidates=len(selections[name]), excluded=name == "follow" and not include_follow,
             candidate_pool_exhausted=len(values) == len(selections[name]) and not complete)
         if name == FOLLOW_BELOW_GATE:
             groups[name].update(follow_below_gate=True,
                                 minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION)
     return dict(complete=all(value["complete"] for value in groups.values()), by_family=groups,
+                point_limit=groups["point"]["target"],
                 navigation_memory_version=3, demo_version=2, dataset_bytes=used, episodes=episodes,
                 student_training_run=False)
 
@@ -616,6 +659,7 @@ def run(options):
     if sys.platform != "linux":
         raise ValueError("Run collection on Ryzen/Linux inside the caller's gq batch")
     follow_below_gate = getattr(options, "follow_below_gate", False)
+    point_limit = getattr(options, "point_limit", 400)
     verify_only = getattr(options, "verify_existing_only", False)
     expect_existing = getattr(options, "expect_existing", None)
     if follow_below_gate and options.include_follow == "yes":
@@ -678,8 +722,9 @@ def run(options):
     episodes, done = [], set()
     new = 0
     verified = 0
+    stop_reason = None
     def metrics():
-        return dict(summarize(episodes, selections, include_follow, budget.used(), follow_below_gate),
+        return dict(summarize(episodes, selections, include_follow, budget.used(), follow_below_gate, point_limit),
                     resume_verified_episodes=verified)
 
     try:
@@ -698,6 +743,10 @@ def run(options):
                     existing.append(value)
         if expect_existing is not None and len(existing) != expect_existing:
             raise ValueError(f"Expected {expect_existing} existing episodes, found {len(existing)}")
+        # Validate the cap against every already attempted candidate before
+        # dispatch. Recorded failures count as attempts.
+        scheduled_points = point_schedule(selections["point"],
+            {(family(value), value["id"]) for value in existing}, point_limit)
         campaign.emit("collection_resume_started", episodes=len(existing), parallel=options.parallel)
         with ThreadPoolExecutor(max_workers=options.parallel) as executor:
             for offset in range(0, len(existing), options.parallel):
@@ -715,34 +764,46 @@ def run(options):
                 done.update((family(value), value["id"]) for value in batch)
                 campaign.emit("collection_resume_progress", verified_episodes=len(episodes), total_episodes=len(existing))
             campaign.emit("collection_resume_complete", episodes=len(existing))
-            while not verify_only:
+            while not verify_only and stop_reason is None:
                 progressed = False
                 for name in families:
                     result = metrics()
                     if result["by_family"][name]["complete"]:
                         continue
-                    pending = [value for value in selections[name] if (name, value["id"]) not in done]
+                    candidates = scheduled_points if name == "point" else selections[name]
+                    pending = [value for value in candidates if (name, value["id"]) not in done]
                     # Round-robin families prevent long road collections starving other sets.
                     for offset in range(0, min(len(pending), options.round_size), options.parallel):
                         if time.monotonic() + 900 >= deadline or new >= options.max_new:
-                            pending = []
+                            stop_reason = "wall_limit" if time.monotonic() + 900 >= deadline else "episode_limit"
                             break
                         batch = pending[offset:min(offset + options.parallel, options.max_new - new + offset)]
                         if not batch:
                             break
+                        if not budget.can_reserve_batch(options.limit_ms, len(batch), jump=name == "jump"):
+                            stop_reason = "storage_limit"
+                            break
                         futures = [executor.submit(worker.trial, value) for worker, value in zip(workers, batch)]
                         # Always drain and preserve all concurrently started attempts.
-                        measured = [future.result() for future in futures]
+                        measured, completed = [], []
+                        for value, future in zip(batch, futures):
+                            try:
+                                measured.append(future.result())
+                                completed.append(value)
+                            except StorageLimit:
+                                stop_reason = "storage_limit"
                         episodes.extend(measured)
-                        done.update((family(value), value["id"]) for value in batch)
-                        new += len(batch)
-                        progressed = True
+                        done.update((family(value), value["id"]) for value in completed)
+                        new += len(completed)
+                        progressed = bool(completed) or progressed
                         result = metrics()
                         atomic_json(output / "collection-metrics.json", dict(result, settings=identity))
                         campaign.emit("collection_progress", family=name, new_episodes=new,
                                       by_family=result["by_family"], bytes=budget.used())
-                        if result["by_family"][name]["complete"]:
+                        if stop_reason is not None or result["by_family"][name]["complete"]:
                             break
+                    if stop_reason is not None:
+                        break
                 if not progressed or metrics()["complete"]:
                     break
     finally:
@@ -753,11 +814,12 @@ def run(options):
         raise ValueError("Frozen recording inputs or binaries changed during the phase")
     result = metrics()
     result["resume_verification_complete"] = True
+    result["stop_reason"] = "complete" if result["complete"] else "existing_verified" if verify_only else stop_reason or "candidate_pool_exhausted"
     atomic_json(output / "collection-metrics.json", dict(result, settings=identity))
     state.update(status="existing_verified" if verify_only else
                  "complete" if result["complete"] else "bounded_phase_complete")
     campaign.emit("collection_phase_complete", complete=result["complete"], new_episodes=new,
-                  bytes=result["dataset_bytes"], by_family=result["by_family"])
+                  bytes=result["dataset_bytes"], by_family=result["by_family"], stop_reason=result["stop_reason"])
     return result
 
 
@@ -773,6 +835,8 @@ def main():
                         help="Require this exact number of existing episodes before verification")
     parser.add_argument("--wall-minutes", type=float, default=100)
     parser.add_argument("--max-new", type=int, default=300)
+    parser.add_argument("--point-limit", type=int, default=400,
+                        help="Road target: 400, or a smaller multiple of six with equal region quotas; prior attempts are retained")
     parser.add_argument("--round-size", type=int, default=12)
     parser.add_argument("--parallel", type=int, choices=(1, 2, 3), default=3)
     parser.add_argument("--limit-ms", type=int, default=240000)
@@ -784,6 +848,8 @@ def main():
         parser.error("Wall budget must be in (15,110] minutes; positive episode bounds are required")
     if options.expect_existing is not None and options.expect_existing < 0:
         parser.error("Expected existing episode count cannot be negative")
+    if options.point_limit != 400 and (options.point_limit <= 0 or options.point_limit >= 400 or options.point_limit % 6):
+        parser.error("Point limit must be 400 or a positive multiple of six below 400")
     options.task = options.task.resolve()
     try:
         run(options)

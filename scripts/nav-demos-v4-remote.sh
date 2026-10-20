@@ -2,8 +2,8 @@
 # Submit a bounded phase and return its gq ID. Never trains a student.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-demos-v4-remote.sh build-validate|validate-moving|retry|record|record-follow-below-gate [EXPECT_EXISTING]}"
-case "$stage" in build-validate|validate-moving|retry|record|record-follow-below-gate) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+stage="${1:?Usage: nav-demos-v4-remote.sh build-validate|validate-moving|retry|record|record-follow-below-gate|record-chain [EXPECT_EXISTING]}"
+case "$stage" in build-validate|validate-moving|retry|record|record-follow-below-gate|record-chain) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 expect_existing="${2:-}"
 if [[ -n "$expect_existing" && ! "$expect_existing" =~ ^[1-9][0-9]*$ ]]; then
   echo 'EXPECT_EXISTING must be a positive episode count' >&2; exit 2
@@ -55,8 +55,12 @@ if [[ "$stage" == build-validate || "$stage" == retry ]]; then
   cmake --build "$task/build" --target Gothic2Notr gothic-body-runner \
     check-navmemoryteacher check-navkeyteacher --parallel 3
 fi
-if [[ "$stage" == record || "$stage" == record-follow-below-gate ]]; then
-  "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_demos_v4_collect.py
+if [[ "$stage" == record || "$stage" == record-follow-below-gate || "$stage" == record-chain ]]; then
+  "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_demos_v4_collect.py \
+    scripts/tests/test_nav_demos_v4_budget.py scripts/tests/test_nav_demos_v4_chain.py
+  if [[ "$stage" == record-chain ]]; then
+    exec "$task/.venv/bin/python" -I "$task/source/scripts/nav_demos_v4_chain.py" --task "$task"
+  fi
   follow=(--include-follow auto)
   if [[ "$stage" == record-follow-below-gate ]]; then
     follow=(--include-follow no --follow-below-gate)
