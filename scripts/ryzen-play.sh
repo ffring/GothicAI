@@ -51,6 +51,7 @@ def create_settings(path, source, repo, home):
     """Copy only non-secret settings; no Mac paths or existing Ryzen settings."""
     settings = {key: dict(source.get(key, {})) for key in ("game", "llm", "voice", "tts")}
     settings["game"]["dir"] = str(home / "gothic-ai/game")
+    settings["voice"].pop("mic_device", None)
     settings["paths"] = {"repo": str(repo), "uv": str(home / ".local/bin/uv")}
     lines = []
     for section, values in settings.items():
@@ -119,8 +120,17 @@ def remote_install(action, payload, source):
     home = Path.home()
     repo = home / "gothic-ai/play"
     repo.parent.mkdir(parents=True, exist_ok=True)
-    with (repo.parent / "play.install.lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with (repo.parent / "play.install.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("Gothic AI is playing or updating; close it before install/update") from None
+        queue = home / "gothic-ai/bin/gq"
+        if not os.access(queue, os.X_OK):
+            raise ValueError("gq is not installed: run scripts/gq install ryzen on the Mac")
+        queue_help = subprocess.run([str(queue), "run", "--help"], check=False, capture_output=True, text=True)
+        if queue_help.returncode or "--interactive" not in queue_help.stdout:
+            raise ValueError("Installed gq lacks --interactive: run scripts/gq install ryzen on the Mac")
         if not (home / ".local/bin/uv").is_file():
             raise ValueError("Missing ~/.local/bin/uv on Ryzen")
         if not (home / "gothic-ai/game").is_dir():
@@ -136,14 +146,6 @@ def remote_install(action, payload, source):
         if subprocess.check_output(["git", "-C", repo, "status", "--porcelain"], text=True).strip():
             raise ValueError("~/gothic-ai/play has local changes; keep them before updating")
         run(["git", "-C", repo, "pull", "--ff-only"])
-        # Install only the queue executable/profile, never services or system settings.
-        queue = home / "gothic-ai/bin/gq"
-        queue.parent.mkdir(parents=True, exist_ok=True)
-        temporary = queue.with_suffix(".play-new")
-        shutil.copyfile(repo / "scripts/gq.py", temporary)
-        temporary.chmod(0o755)
-        temporary.replace(queue)
-        (queue.parent / "gq.profile").write_text("ryzen\n")
         os.chdir(repo)
         os.environ["GQ_OWNER"] = "ryzen-play-install"
         result = owned_process(build_command(source))

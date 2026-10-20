@@ -1,5 +1,6 @@
 """Personal install/config and queue boundaries, without SSH or a real game."""
 import ctypes
+import fcntl
 import importlib.machinery
 import importlib.util
 import io
@@ -42,7 +43,8 @@ class RyzenPlayTests(unittest.TestCase):
                       "game_home": "/Mac/Saves"},
             "llm": {"backend": "chatgpt", "reasoning_effort": "medium", "decider_url": "ws://models:1",
                     "body_url": "tcp://body:2", "quick": True},
-            "voice": {"provider": "voxtral", "voxtral_url": "http://models:3"},
+            "voice": {"provider": "voxtral", "voxtral_url": "http://models:3",
+                      "mic_device": "MacBook Pro Microphone"},
             "tts": {"provider": "inworld", "voxcpm_url": "ws://models:4"},
             "secrets": {"openai_api_key": "must-not-copy"},
         }
@@ -55,8 +57,11 @@ class RyzenPlayTests(unittest.TestCase):
             result = tomllib.loads(content)
             self.assertEqual(result["game"]["dir"], str(home / "gothic-ai/game"))
             self.assertEqual(result["paths"], {"repo": str(repo), "uv": str(home / ".local/bin/uv")})
-            for section in ("llm", "voice", "tts"):
+            for section in ("llm", "tts"):
                 self.assertEqual(result[section], source[section])
+            self.assertEqual(result["voice"], {"provider": "voxtral", "voxtral_url": "http://models:3"})
+            self.assertNotIn("mic_device", result["voice"])
+            self.assertEqual(source["voice"]["mic_device"], "MacBook Pro Microphone")
             self.assertNotIn("must-not-copy", content)
             self.assertNotIn("/Mac/", content)
             self.assertEqual(list(path.parent.iterdir()), [path])
@@ -86,6 +91,105 @@ class RyzenPlayTests(unittest.TestCase):
                          [repo / name for name in ("server", "asr-service", "tts-service", "launcher/core")])
         self.assertTrue(all("--locked" in call for call in calls[4:]))
 
+    def test_remote_install_preserves_shared_queue_and_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            repo = home / "gothic-ai/play"
+            repo.mkdir(parents=True)
+            (home / "gothic-ai/game").mkdir()
+            uv = home / ".local/bin/uv"
+            uv.parent.mkdir(parents=True)
+            uv.touch()
+            queue = home / "gothic-ai/bin/gq"
+            queue.parent.mkdir()
+            queue.write_text("#!/bin/sh\n# marker from another session\nprintf '%s\\n' '--interactive'\n")
+            queue.chmod(0o755)
+            profile = queue.parent / "gq.profile"
+            profile.write_bytes(b"ryzen\n")
+            before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in (queue, profile)]
+            for action in ("install", "update"):
+                with self.subTest(action=action), patch.dict(install.os.environ), \
+                        patch.object(install.Path, "home", return_value=home), \
+                        patch.object(install.os, "chdir"), \
+                        patch.object(install, "run") as run, \
+                        patch.object(install.subprocess, "check_output", side_effect=["main\n", "origin\n", ""]), \
+                        patch.object(install, "owned_process", return_value=0) as build:
+                    self.assertEqual(install.remote_install(action, {"origin": "origin", "settings": {}}, "source"), 0)
+                    run.assert_called_once_with(["git", "-C", repo, "pull", "--ff-only"])
+                    build.assert_called_once()
+                self.assertEqual([(path.read_bytes(), path.stat().st_mtime_ns) for path in (queue, profile)], before)
+
+    def test_remote_install_requires_interactive_queue_before_git(self):
+        for queue_source in (None, "#!/bin/sh\nprintf '%s\\n' '--display'\n", "#!/bin/sh\nexit 1\n"):
+            with self.subTest(queue_source=queue_source), tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                (home / "gothic-ai/game").mkdir(parents=True)
+                uv = home / ".local/bin/uv"
+                uv.parent.mkdir(parents=True)
+                uv.touch()
+                queue = home / "gothic-ai/bin/gq"
+                if queue_source is not None:
+                    queue.parent.mkdir()
+                    queue.write_text(queue_source)
+                    queue.chmod(0o755)
+                with patch.object(install.Path, "home", return_value=home), \
+                        patch.object(install, "run") as run, \
+                        patch.object(install.subprocess, "check_output") as metadata, \
+                        patch.object(install, "owned_process") as build:
+                    with self.assertRaisesRegex(ValueError, "scripts/gq install ryzen"):
+                        install.remote_install("install", {"origin": "origin", "settings": {}}, "source")
+                    run.assert_not_called()
+                    metadata.assert_not_called()
+                    build.assert_not_called()
+                self.assertFalse((home / "gothic-ai/play").exists())
+
+    def test_session_holds_clone_lock_until_game_exits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            lock_path = home / "gothic-ai/play.install.lock"
+            lock_path.parent.mkdir(parents=True)
+
+            def while_game_runs():
+                with self.assertRaisesRegex(ValueError, "playing"):
+                    install.remote_install("update", {"origin": "origin", "settings": {}}, "source")
+                run.assert_not_called()
+                metadata.assert_not_called()
+                build.assert_not_called()
+                return 0
+
+            with patch.dict(session.os.environ, DISPLAY=":0"), \
+                    patch.object(session.Path, "home", return_value=home), \
+                    patch.object(session.Path, "is_file", return_value=True), \
+                    patch.object(session.os, "chdir"), \
+                    patch.object(session, "portaudio_available", return_value=True), \
+                    patch.object(session.subprocess, "Popen") as start, \
+                    patch.object(install, "run") as run, \
+                    patch.object(install.subprocess, "check_output") as metadata, \
+                    patch.object(install, "owned_process") as build:
+                start.return_value.wait.side_effect = while_game_runs
+                self.assertEqual(session.main([]), 0)
+                start.assert_called_once()
+            with lock_path.open("r+") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_session_refuses_active_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            lock_path = home / "gothic-ai/play.install.lock"
+            lock_path.parent.mkdir(parents=True)
+            with lock_path.open("w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with patch.dict(session.os.environ, DISPLAY=":0"), \
+                        patch.object(session.Path, "home", return_value=home), \
+                        patch.object(session.Path, "is_file", return_value=True), \
+                        patch.object(session.os, "chdir"), \
+                        patch.object(session, "portaudio_available", return_value=True), \
+                        patch.object(session.subprocess, "Popen") as start, \
+                        patch.object(session.sys.stdin, "isatty", return_value=False), \
+                        patch.object(session.sys, "stderr", io.StringIO()):
+                    self.assertEqual(session.main([]), 2)
+                    start.assert_not_called()
+
     def test_play_exclusive_six_hour_live_request(self):
         command = session.session_command(Path("/repo"), microphone=False)
         for flag, value in (("--class", "quick"), ("--threads", "8"), ("--mem", "8G"),
@@ -110,12 +214,15 @@ class RyzenPlayTests(unittest.TestCase):
 
     def test_missing_portaudio_prints_install_command_and_starts_without_microphone(self):
         output = io.StringIO()
-        with patch.dict(session.os.environ, DISPLAY=":0", ALSOFT_DRIVERS="null"), \
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(session.os.environ, DISPLAY=":0", ALSOFT_DRIVERS="null"), \
+                patch.object(session.Path, "home", return_value=Path(directory)), \
                 patch.object(session.Path, "is_file", return_value=True), \
                 patch.object(session.os, "chdir"), \
                 patch.object(session, "portaudio_available", return_value=False), \
                 patch.object(session.subprocess, "Popen") as start, \
                 patch.object(session.sys, "stdout", output):
+            (Path(directory) / "gothic-ai").mkdir()
             start.return_value.wait.return_value = 0
             self.assertEqual(session.main([]), 0)
             self.assertIn("--no-voice", start.call_args.args[0])

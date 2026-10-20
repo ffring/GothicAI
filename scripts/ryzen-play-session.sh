@@ -3,6 +3,7 @@
 import argparse
 import contextlib
 import ctypes
+import fcntl
 import os
 import signal
 import subprocess
@@ -37,6 +38,7 @@ def session_command(repo, smoke=False, microphone=True):
 
 def main(argv=None):
     args = arguments(sys.argv[1:] if argv is None else argv)
+    session_lock = None
     try:
         if not os.environ.get("DISPLAY"):
             raise ValueError("Start Gothic AI from the Ryzen GNOME desktop (DISPLAY is missing)")
@@ -53,6 +55,11 @@ def main(argv=None):
             print("Voice input disabled: libportaudio2 is missing. Install it yourself on Ryzen:\n"
                   "  sudo apt install libportaudio2\nGame sound remains enabled.", flush=True)
         repo = Path(__file__).resolve().parent.parent
+        session_lock = (Path.home() / "gothic-ai/play.install.lock").open("a")
+        try:
+            fcntl.flock(session_lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError("Gothic AI install/update is running; try again after it finishes") from None
         os.chdir(repo)
         # A private pipe stays open even if the terminal/SSH has no stdin. Signals
         # cancel gq, whose cgroup contains only this launcher and its children.
@@ -82,6 +89,9 @@ def main(argv=None):
             with contextlib.suppress(EOFError):
                 input("Press Enter to close this terminal.")
         return 2
+    finally:
+        if session_lock is not None:
+            session_lock.close()
 
 
 if __name__ == "__main__":
