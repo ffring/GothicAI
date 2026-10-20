@@ -80,8 +80,8 @@ with Image.open(sys.argv[1]) as image:
     if image.format != "PNG" or image.mode != "RGBA":
         raise SystemExit("Input must be an RGBA PNG")
     alpha_min, alpha_max = image.getchannel("A").getextrema()
-    if alpha_min == 255 or alpha_max == 0:
-        raise SystemExit("Input must have both visible content and a transparent background")
+    if alpha_min == 255 or alpha_max <= 204:
+        raise SystemExit("Input must have opaque foreground and a transparent background")
 PY
 
 exec 9>"$HOME/gothic-ai/materials/gpu.lock"

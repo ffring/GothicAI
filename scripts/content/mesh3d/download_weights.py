@@ -13,6 +13,7 @@ REVISIONS = {
     "dinov3": ("facebook/dinov3-vitl16-pretrain-lvd1689m", "ea8dc2863c51be0a264bab82070e3e8836b02d51"),
 }
 DINO2_URL = "https://dl.fbaipublicfiles.com/dinov2/dinov2_vitl14/dinov2_vitl14_reg4_pretrain.pth"
+DINO2_SHA256 = "36e4deffbaef061a2576705b0c36f93621e2ae20bf6274694821b0b492551b51"
 
 
 def download_public(root):
@@ -55,6 +56,8 @@ def download_public(root):
     with target.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
+    if digest.hexdigest() != DINO2_SHA256:
+        raise ValueError("DINOv2 checkpoint SHA256 does not match the pinned weights")
     print(f"DINOv2 SHA256 {digest.hexdigest()}", flush=True)
 
 
@@ -67,9 +70,10 @@ def dino_token():
 
 def download_dinov3(root):
     # The credential is read only for these explicitly authenticated calls.
-    print(HfApi().whoami(token=dino_token())["name"], flush=True)
+    token = dino_token()
+    print(HfApi().whoami(token=token)["name"], flush=True)
     repo, revision = REVISIONS["dinov3"]
-    snapshot_download(repo, revision=revision, token=dino_token(),
+    snapshot_download(repo, revision=revision, token=token,
         local_dir=root / "models/dinov3",
         allow_patterns=["config.json", "model.safetensors", "preprocessor_config.json", "LICENSE.md"],
         max_workers=2)

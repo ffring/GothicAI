@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CPU-only installation/downloads; never stops services or opens a GPU window.
+# Installation/downloads and imports; never stops services or runs generation.
 # From the Mac: bash scripts/content/mesh3d/setup-dev-ubuntu.sh [--skip-dinov3]
 # On dev-ubuntu: bash ~/gothic-ai/mesh3d/setup-dev-ubuntu.sh [--skip-dinov3|--dinov3-only]
 set -euo pipefail
@@ -20,7 +20,6 @@ export HF_HUB_DISABLE_IMPLICIT_TOKEN=1 HF_HOME="$root/hf"
 export TORCH_HOME="$root/cache/torch" XDG_CACHE_HOME="$root/cache" TMPDIR="$root/tmp"
 export MAMBA_ROOT_PREFIX="$root/mamba"
 export TORCH_CUDA_ARCH_LIST=8.6 ATTN_BACKEND=xformers MAX_JOBS=2
-export CUDA_VISIBLE_DEVICES=""
 export FLEX_GEMM_USE_AUTOTUNE_CACHE=0 FLEX_GEMM_AUTOSAVE_AUTOTUNE_CACHE=0
 uv="$HOME/.local/bin/uv"
 [[ -x "$uv" ]] || { echo 'Install uv in ~/.local/bin first' >&2; exit 1; }
@@ -81,6 +80,10 @@ for model in trellis2 trellis; do
   "$uv" pip install --python "$python" --no-build-isolation "$root/repos/utils3d"
 done
 python="$root/.venv-trellis2/bin/python"
+# CUDA runtime wheels also carry cuBLAS/cuSPARSE headers used by CuMesh's BVH.
+for include in "$root/.venv-trellis2/lib/python3.10/site-packages/nvidia/"*/include; do
+  export CPATH="$CPATH:$include"
+done
 # Do not invoke upstream setup.sh: it installs noncommercial rendering/rembg packages.
 for extension in FlexGEMM CuMesh TRELLIS.2/o-voxel; do
   "$uv" pip install --python "$python" --no-build-isolation --no-deps "$root/repos/$extension"

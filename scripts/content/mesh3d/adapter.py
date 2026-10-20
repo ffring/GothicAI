@@ -89,9 +89,7 @@ def _load_flexicubes(source: Path):
 
 
 def pipeline_class(root: Path, model: str):
-    """Import the pipeline and required decoder classes without loading weights/CUDA."""
-    import torch
-    cuda_initialized_before = torch.cuda.is_initialized()
+    """Import required decoder classes without loading weights or running inference."""
     os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -156,8 +154,6 @@ def pipeline_class(root: Path, model: str):
         if not callable(hub[config["image_cond_model"]]):
             raise RuntimeError("Pinned DINOv2 torch-hub entry is unavailable")
     assert_clean_imports()
-    if torch.cuda.is_initialized() != cuda_initialized_before:
-        raise RuntimeError("Pipeline import unexpectedly initialized CUDA")
     return cls
 
 
