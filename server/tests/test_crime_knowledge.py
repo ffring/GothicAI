@@ -8,6 +8,7 @@ import pytest
 
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.concerns import Concerns
+from gothic_ai.crime_memory import memory_value
 from gothic_ai.crimes import Crimes
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm.fake import FakeBackend
@@ -235,6 +236,45 @@ async def test_learning_a_crime_reacts_once_and_preserves_the_models_decision_af
     knowledge.link.receive(Session(type="session", branch="A", reason="connect"))
     await knowledge.crimes.prepare(LOBART)
     assert attitude_dialogue.open(LOBART, "Лобарт").intent.attitude == "friendly"
+
+
+async def test_enemy_witness_keeps_truth_without_attitude_change_before_or_after_load(
+    knowledge, attitude_dialogue,
+):
+    knowledge.crimes.people[HILDA] = {"guild": 8, "npctype": 0}
+    knowledge.crimes.people[MALETH] = {"guild": 8, "npctype": 0}
+    knowledge.crimes.sides.note_fight(LOBART, HILDA)
+    crime = knowledge.crimes.record(deed(
+        kind="murder", victim=LOBART, victim_guild=8, witnesses=[HILDA, MALETH],
+        witnesses_metadata=[{"npc": HILDA, "guild": 8}, {"npc": MALETH, "guild": 8}],
+    ))
+    assert crime is not None and crime["witnesses"] == [HILDA, MALETH]
+    assert knowledge.crimes.side(HILDA, crime["id"])["why"] == "fought"
+    assert knowledge.crimes.known(HILDA)[0].degree == "seen"
+    assert "Ты видел сам" in knowledge.crimes.situation(HILDA)
+    assert knowledge.crimes.attitude(HILDA) is None
+    assert knowledge.crimes.distrust(HILDA) == []
+    assert knowledge.crimes.distrust(MALETH)
+    assert attitude_dialogue.open(HILDA, "Хильда").intent.attitude == "neutral"
+    assert [fact["npc"] for fact in knowledge.chronicle.facts("crime_attitude")] == [MALETH]
+    assert attitude_dialogue.open(MALETH, "Малет").intent.attitude == "hostile"
+    assert memory_value(knowledge.crimes, HILDA) == (0, 0)
+    assert memory_value(knowledge.crimes, MALETH) == (4, 3)
+
+    saved = knowledge.memory.head("A")
+    knowledge.link.receive(
+        Session(type="session", branch="loaded", parent="A", parent_seq=saved, reason="load")
+    )
+    assert knowledge.crimes.sides.fights == {}
+    await knowledge.crimes.prepare(HILDA)
+    assert knowledge.crimes.side(HILDA, crime["id"]) is not None
+    assert knowledge.crimes.attitude(HILDA) is None
+    assert knowledge.crimes.distrust(HILDA) == []
+    assert knowledge.crimes.distrust(MALETH)
+    assert attitude_dialogue.open(HILDA, "Хильда").intent.attitude == "neutral"
+    assert [fact["npc"] for fact in knowledge.chronicle.facts("crime_attitude")] == [MALETH]
+    assert memory_value(knowledge.crimes, HILDA) == (0, 0)
+    assert memory_value(knowledge.crimes, MALETH) == (4, 3)
 
 
 async def test_an_older_branch_can_react_to_the_same_crime_independently(knowledge, attitude_dialogue):

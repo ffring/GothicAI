@@ -63,6 +63,14 @@ def test_vanilla_fight_reasons_keep_theft_nonlethal_and_murder_native():
     assert reaction_for("attack", "guard").fight_reason == "AR_GUARDSTOPSFIGHT"
 
 
+@pytest.mark.parametrize("kind", ["theft", "attack", "murder", "sheep", "unknown"])
+@pytest.mark.parametrize("courage", [1, 3, 5])
+def test_ally_always_consumes_the_perception_without_action(kind, courage):
+    reaction = reaction_for(kind, "ally", courage=courage, honesty=5, guards=True)
+    assert reaction is not None
+    assert (reaction.kind, reaction.svm, reaction.fight_reason) == ("ignore", "", "")
+
+
 class ReactLink(Link):
     def __init__(self) -> None:
         super().__init__()
@@ -82,6 +90,10 @@ class ReactLink(Link):
         return self.people
 
     async def story_eval(self, npc, exprs):
+        if exprs == [["var", "GIL_MAX"], ["var", "ATT_HOSTILE"]]:
+            return [2, 0]
+        if exprs and exprs[0][:2] == ["call", "WLD_GETGUILDATTITUDE"]:
+            return [2] * len(exprs)
         return self.eval_values
 
     async def story_nearby(self, npc, radius):
@@ -183,6 +195,14 @@ async def test_room_and_chest_owner_are_owners_even_when_item_owner_is_another_n
     case = system.crimes.crime("deed-1")
     assert system.react.role(HILDA, case) == "owner"
     assert system.react.role("CHESTKEEPER", case) == "owner"
+
+
+async def test_ally_role_precedes_guard_but_not_owner(system):
+    case = crime(system, npc=GUARD, owner=MATTEO, guild=3)
+    for npc in (GUARD, MATTEO):
+        system.chronicle.record({"fact": "crime_side", "npc": npc, "crime": case["id"], "why": "fought"})
+    assert system.react.role(GUARD.lower(), case) == "ally"
+    assert system.react.role(MATTEO, case) == "owner"
 
 
 @pytest.mark.parametrize("unknown", [HILDA, LOBART])
@@ -343,6 +363,24 @@ async def test_silence_and_ignore_are_valid_server_verdicts_without_body_action(
     assert system.crimes.known(HILDA)[0].degree == "seen"
 
 
+@pytest.mark.parametrize("busy", [False, True])
+async def test_allied_murder_witness_keeps_truth_and_suppresses_vanilla_even_when_busy(system, busy):
+    system.link.receive(deed(
+        kind="murder", victim=MATTEO, victim_guild=3, witnesses=[GUARD],
+        witnesses_metadata=[{"npc": GUARD, "guild": 2, "npctype": 0}],
+    ))
+    system.chronicle.record({"fact": "crime_side", "npc": GUARD, "crime": "deed-1", "why": "fought"})
+    if busy:
+        system.link.owned.add(GUARD)
+    system.link.receive(held().model_copy(update={"kind": "murder", "npc": GUARD}))
+    row = await finish(system)
+    assert (row["role"], row["reaction"], row["verdict"]) == ("ally", "ignore", "server")
+    assert system.crimes.known(GUARD)[0].degree == "seen"
+    assert system.link.actions == []
+    assert [(v.hold, v.to) for v in verdicts(system)] == [("h1", "server")]
+    assert system.law.tick(3 * 1440 + 9 * 60 + 15) == []
+
+
 @pytest.mark.parametrize("failure", ["missing_crime", "missing_deed", "busy", "owned", "unknown_role"])
 async def test_uncertain_hold_returns_to_scripts_exactly_once(system, monkeypatch, failure):
     monkeypatch.setattr(crime_react, "HOLD_SECONDS", 0.02)
@@ -433,6 +471,24 @@ async def test_cold_guard_metadata_is_shared_with_called_law_path(system):
     assert system.chronicle.facts("crime_known")[0]["how"] == "called"
 
 
+async def test_called_guard_who_sided_with_the_hero_is_not_sent_to_fight(system):
+    system.react.cards = {CITIZEN: card(CITIZEN, honesty=4)}
+    system.link.nearby = [
+        {"npc": GUARD, "guild": 2, "distance": 100},
+        {"npc": OTHER_GUARD, "guild": 2, "distance": 500},
+    ]
+    case = crime(system, npc=CITIZEN, owner=MATTEO, guild=3)
+    system.chronicle.record({"fact": "crime_side", "npc": GUARD, "crime": case["id"], "why": "hostile"})
+    system.link.receive(held().model_copy(update={"npc": CITIZEN}))
+    row = await finish(system)
+    assert row["reaction"] == "call_guards"
+    assert system.crimes.known(GUARD) == []
+    assert system.crimes.known(OTHER_GUARD)[0].degree == "heard"
+    assert system.link.actions[-1] == (
+        OTHER_GUARD, "fight", {"npc": "PLAYER", "reason": "AR_GUARDCALLEDTOTHIEF"},
+    )
+
+
 async def test_prepare_uses_real_house_metadata_and_preserves_npctype(system):
     system.link.people = [{"npc": HILDA, "guild": 12, "home_room": "NW_HOUSE_LOBART"}]
     await system.react.prepare()
@@ -444,8 +500,11 @@ async def test_prepare_uses_real_house_metadata_and_preserves_npctype(system):
 async def test_identity_read_preserves_home_loaded_while_vm_reply_is_pending(system):
     system.crimes.people[HILDA] = {"guild": 12}
     reply = asyncio.get_running_loop().create_future()
+    evaluate_world = system.link.story_eval
 
     async def evaluate(npc, expressions):
+        if npc == "PC_HERO":
+            return await evaluate_world(npc, expressions)
         return await reply
 
     system.link.story_eval = evaluate

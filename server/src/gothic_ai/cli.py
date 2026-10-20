@@ -1345,6 +1345,21 @@ async def serve(args: argparse.Namespace) -> int:
             if state.errands is not None:  # an npc on an errand
                 state.errands.attach_planner(planner)
             brain = asyncio.create_task(planner.run())
+        if state.crimes is not None:
+            sides = state.crimes.sides
+            sides.orders, sides.book = state.talk.orders, state.book
+            previous_intent = state.dialogue.on_intent
+
+            def remember_fight(npc: str, intent: Intent) -> None:
+                sides.note_intent(npc, intent)
+                if previous_intent is not None:
+                    previous_intent(npc, intent)
+
+            state.dialogue.on_intent = remember_fight
+            state.dialogue.on_fight = sides.note_fight
+            state.dialogue.on_attack.append(lambda npc: sides.note_fight(npc, "PLAYER"))
+            assert state.talk.orders is not None
+            state.talk.orders.on_fight = sides.note_fight
         if (crime_meet_task := _start_crime_meet(state, link, personas.cards)) is not None:
             directing.append(crime_meet_task)
         await link.send(_perception_control(args, planner=decider is not None))

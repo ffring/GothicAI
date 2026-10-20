@@ -55,6 +55,8 @@ def reaction_for(
     kind: str, role: Role, *, courage: int = 3, law_known: bool = False
 ) -> ReactionKind | None:
     """Knowing a theft never licenses an encounter fight; murder requires a narrow reason."""
+    if role == "ally":
+        return None
     if kind in {"theft", "attack"}:
         return "demand" if role == "owner" and courage >= OWNER_COURAGE else None
     if kind != "murder":

@@ -43,6 +43,12 @@ def test_role_and_character_table(kind, role, courage, law, expected):
     assert reaction_for(kind, role, courage=courage, law_known=law) == expected
 
 
+@pytest.mark.parametrize("kind", ["theft", "attack", "murder", "sheep"])
+@pytest.mark.parametrize("courage", [1, 3, 5])
+def test_ally_has_no_encounter_reaction_even_when_law_knows(kind, courage):
+    assert reaction_for(kind, "ally", courage=courage, law_known=True) is None
+
+
 class MeetLink(ReactLink):
     def __init__(self) -> None:
         super().__init__()
@@ -390,6 +396,24 @@ async def test_brave_outsider_refuses_instead_of_avenging_another_community(syst
     assert [action for _, action, _ in system.link.actions] == ["say_svm", "turn_away"]
     assert system.link.actions[0][2]["svm"] == "NOTNOW"
     assert system.chronicle.facts("crime_meet")[-1]["reaction"] == "refuse"
+
+
+@pytest.mark.parametrize("npc", [STRANGER, GUARD])
+@pytest.mark.parametrize("courage", [2, 3, 5])
+async def test_allied_witness_neither_refuses_flees_nor_fights_after_murder(system, npc, courage):
+    crime = case(system, kind="murder", npc=npc, community="city")
+    system.chronicle.record({"fact": "crime_side", "npc": npc, "crime": crime["id"], "why": "fought"})
+    system.chronicle.record({"fact": "crime_known", "community": "city", "crime": crime["id"]})
+    system.meet.cards = {npc: card(npc, courage=courage)}
+    near(system, npc)
+    await system.meet.tick()
+    assert system.react.role(npc, crime) == "ally"
+    assert system.crimes.known(npc)[0].degree == "seen"
+    assert system.meet.refusal(npc) is None
+    assert not system.meet.refuses(npc)
+    assert system.link.actions == []
+    assert system.link.refusal == {}
+    assert system.chronicle.facts("crime_meet") == []
 
 
 @pytest.mark.parametrize("kind", ["theft", "attack", "sheep"])

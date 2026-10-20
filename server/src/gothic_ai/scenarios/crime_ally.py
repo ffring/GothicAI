@@ -32,7 +32,7 @@ async def crime_ally(
     service: Crimes,
     perception: PerceptionDesk | None = None,
 ) -> dict[str, str]:
-    """New game, fake models; answers deliberately fails while the current murder rule refuses."""
+    """A following ally sees the murder of his enemy and still answers the hero."""
     if dialogue.llm.name != "fake":
         raise GameError("scenario crime_ally requires LLM=fake and a new game without SAVE")
     await link.wait_world()
@@ -256,6 +256,12 @@ async def crime_ally(
         deed = next((message for message in received if isinstance(message, HeroDeed)
                      and message.kind == "murder" and message.victim == BRAGO), None)
         if not check("murder_seen", seen and deed is not None, murder() or "no witnessed murder"):
+            return _logged(results)
+
+        crime = murder()
+        assert crime is not None
+        side = service.side(CAVALORN, crime["id"])
+        if not check("crime_side", side is not None, side or "no ally fact"):
             return _logged(results)
 
         await link.debug("teleport", near=CAVALORN, distance=250)
