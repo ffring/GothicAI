@@ -193,6 +193,101 @@ def test_experimental_resume_is_text_only_and_never_reruns_a_complete_take(tmp_p
     assert (directory / "samples.bin.gz").read_bytes() == b"must not be deleted"
 
 
+def raw_moving_fixture(tmp_path, kind="follow", mode="v2"):
+    value = scenario(kind)
+    experiment = tmp_path / "oracle-experiment"
+    directory = experiment / mode / kind / value["split"] / value["id"]
+    metadata, _, _ = write_text_episode(directory, value, mode, experimental=True)
+    for key in v3.SCENARIO_IDENTITY_FIELDS:
+        if key not in ("start", "goal", "goal_kind", "seed"):
+            metadata.pop(key, None)
+    metadata.update(goal="RESOLVED_OR_CURRENT_WAYPOINT", target_position=[12000, 1500, -4000])
+    v3.write_json(directory / "episode.json", metadata)
+    args = SimpleNamespace(output=experiment / "workers" / "2", roads=tmp_path / "places.json",
+                           physics="cv", npc="NPC", limit_ms=240000, seed=value["seed"])
+    # The old worker differs from the worker assigned after resume.
+    witness_args = SimpleNamespace(**vars(args))
+    witness_args.output = experiment / "workers" / "0"
+    collector = v3.module("collect_nav_demos")
+    witness = collector.scenario_file(witness_args, f"oracle-experiment-{mode}-{value['id']}",
+                                      oracle.command_sequence(args, value, mode))
+    return value, directory, metadata, args, witness
+
+
+@pytest.mark.parametrize("kind", ["follow", "approach"])
+@pytest.mark.parametrize("mode", ["v2", "oracle"])
+def test_raw_moving_resume_uses_frozen_command_not_target_goal_and_preserves_payload(tmp_path, monkeypatch, kind, mode):
+    value, directory, raw, args, _ = raw_moving_fixture(tmp_path, kind, mode)
+    payload = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in directory.iterdir()
+               if path.name != "episode.json"}
+    events = []
+    monkeypatch.setattr(oracle.campaign, "emit", lambda event, **fields: events.append((event, fields)))
+    worker = oracle.Worker(args, 3, None)
+    monkeypatch.setattr(worker, "scenario", lambda *args: pytest.fail("Raw completed moving take must not run again"))
+    assert worker.trial(value, directory, mode)["success"] is True
+    promoted = v3.read_json(directory / "episode.json")
+    assert promoted["goal"] == value["goal"]
+    assert promoted["runner_goal"] == raw["goal"]
+    assert promoted["target_position"] == raw["target_position"]
+    assert promoted["route"] == value["route"] and promoted["target"] == value["target"]
+    assert events == [("oracle_trial_resumed", dict(mode=mode, kind=kind, id=value["id"], success=True, recovered_raw=True))]
+    for path, (content, modified) in payload.items():
+        assert (path.read_bytes(), path.stat().st_mtime_ns) == (content, modified)
+    metadata_bytes = (directory / "episode.json").read_bytes()
+    metadata_time = (directory / "episode.json").stat().st_mtime_ns
+    worker.trial(value, directory, mode)
+    assert (directory / "episode.json").read_bytes() == metadata_bytes
+    assert (directory / "episode.json").stat().st_mtime_ns == metadata_time
+    assert events[-1][1]["recovered_raw"] is False
+
+
+@pytest.mark.parametrize("change", ["seed", "start", "version", "limit", "route", "target", "mode", "bench-route", "bench-seed", "bench-weights", "missing-bench"])
+def test_raw_moving_resume_rejects_changed_identity_before_promoting(tmp_path, monkeypatch, change):
+    value, directory, metadata, args, witness = raw_moving_fixture(tmp_path)
+    if change in ("seed", "start", "route", "target"):
+        metadata[change] = dict(seed=99, start="OTHER", route=["OTHER", "ROUTE"], target="OTHER_TARGET")[change]
+    elif change == "version":
+        metadata["teacher_version"] = 3
+    elif change == "limit":
+        metadata["limit_ms"] = 1000
+    elif change == "mode":
+        metadata["oracle"] = True
+    elif change == "bench-route":
+        witness.write_text(witness.read_text().replace("G0,T0,R0", "G0,OTHER,R0"))
+    elif change == "bench-seed":
+        witness.write_text(witness.read_text().replace("seed 42", "seed 99"))
+    elif change == "bench-weights":
+        witness.write_text(witness.read_text().replace("navdemos wait", "navdemos drive NPC S0 G0 240000 /other.navbc 0 42\nnavdemos wait"))
+    else:
+        witness.unlink()
+    v3.write_json(directory / "episode.json", metadata)
+    before = (directory / "episode.json").read_bytes()
+    worker = oracle.Worker(args, 3, None)
+    monkeypatch.setattr(worker, "scenario", lambda *args: pytest.fail("Invalid completed take must not be rerun"))
+    with pytest.raises(ValueError, match="identity differs|scenario .* differs|mode differs|saved moving scenario"):
+        worker.trial(value, directory, "v2")
+    assert (directory / "episode.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("field", ["goal", "route", "target", "seed"])
+def test_enriched_moving_identity_remains_strict(tmp_path, field):
+    value = scenario("follow")
+    metadata, _, _ = write_text_episode(tmp_path, value, "v2", experimental=True)
+    metadata[field] = ["OTHER", "ROUTE"] if field == "route" else (99 if field == "seed" else "OTHER")
+    v3.write_json(tmp_path / "episode.json", metadata)
+    with pytest.raises(ValueError, match="identity, seed or time limit"):
+        oracle.validate_identity(tmp_path, value, "v2", 240000, experimental=True)
+
+
+@pytest.mark.parametrize("kind", ["point", "object"])
+def test_raw_static_identity_still_requires_exact_goal(tmp_path, kind):
+    value = scenario(kind)
+    metadata, _, _ = write_text_episode(tmp_path, value, "v2", experimental=True)
+    metadata["goal"] = "OTHER_GOAL"
+    with pytest.raises(ValueError, match="identity differs"):
+        oracle.validate_raw_identity(SimpleNamespace(limit_ms=240000), tmp_path, metadata, value, "v2")
+
+
 def test_oracle_identity_requires_adapter_and_no_navdemo(tmp_path):
     value = scenario()
     metadata, _, _ = write_text_episode(tmp_path, value, "oracle", experimental=True)

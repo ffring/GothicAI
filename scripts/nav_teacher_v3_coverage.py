@@ -36,6 +36,7 @@ KINDS = ("point", "object", "follow", "approach")
 EXPECTED = dict(point=30, object=30, follow=18, approach=18)
 LAYERS = dict(near=(64, 25), far=(100, 200))
 CLASS_NAMES = ("free", "unknown", "danger")
+OUTCOMES = ("success", "failure")
 
 
 def vector_token(value):
@@ -67,6 +68,36 @@ def sample_indices(decisions, identifier, seed):
     return sorted(set(range(offset if offset < decisions else 0, decisions, 10)) | {decisions - 1})
 
 
+def episode_outcome(kind, metadata, directory):
+    """Classify saved honest-v3 performance, keeping native success separate.
+
+    Native follow success denotes surviving the episode, so its outcome must
+    instead use the brief's time-weighted 2–5m occupancy after first contact.
+    """
+    native_success = bool(metadata["success"])
+    result = dict(metadata_success=native_success)
+    if kind == "follow":
+        trace = np.loadtxt(Path(directory) / "target-trajectory.txt", ndmin=2)
+        if trace.shape[1] < 5 or not np.isfinite(trace).all():
+            raise ValueError(f"Invalid honest-v3 follow trajectory: {directory}")
+        metrics = v3.follow_metrics(trace[:, 0], trace[:, 4], metadata["elapsed_ms"])
+        fraction = metrics["follow_fraction"]
+        succeeded = (metrics["first_contact_ms"] is not None
+                     and metrics["follow_observed_ms"] > 0 and fraction is not None and fraction >= .8)
+        reason = ("no_first_contact" if metrics["first_contact_ms"] is None else
+                  "no_post_contact_time" if metrics["follow_observed_ms"] <= 0 else
+                  "band_fraction_below_80_percent" if not succeeded else None)
+        result.update(metrics, outcome_basis="first <=5m contact, then >=80% of observed time within inclusive 2–5m band",
+                      outcome_failure_reason=reason)
+    elif kind in ("point", "object", "approach"):
+        succeeded = native_success
+        result.update(outcome_basis="native episode.json success", outcome_failure_reason=None if succeeded else metadata.get("failure"))
+    else:
+        raise ValueError(f"Unknown honest-v3 goal kind: {kind}")
+    result.update(outcome="success" if succeeded else "failure", outcome_success=bool(succeeded))
+    return result
+
+
 def source_cases(task, data):
     selected = list(v3.rows(task / "expanded-scenarios.jsonl"))
     if Counter(value["goal_kind"] for value in selected) != EXPECTED:
@@ -80,9 +111,11 @@ def source_cases(task, data):
         metadata = v3.read_json(directory / "episode.json")
         if not v3.same_scenario(metadata, value, 3) or not v3.complete(directory):
             raise ValueError(f"Honest-v3 recording identity or payload mismatch: {directory}")
-        cases.append(dict(id=value["id"], goal_kind=value["goal_kind"], split=value["split"],
-                          region=value.get("region"), place_id=value.get("place_id"), source=str(directory),
-                          cohort=cohort, decisions=int(metadata["decisions"]), success=bool(metadata["success"])))
+        case = dict(id=value["id"], goal_kind=value["goal_kind"], split=value["split"],
+                    region=value.get("region"), place_id=value.get("place_id"), source=str(directory),
+                    cohort=cohort, decisions=int(metadata["decisions"]), success=bool(metadata["success"]))
+        case.update(episode_outcome(value["goal_kind"], metadata, directory))
+        cases.append(case)
     return cases
 
 
@@ -354,11 +387,37 @@ def aggregate(cases):
                 layers={layer: fractions(value) for layer, value in layers.items()})
 
 
+def aggregate_outcomes(cases):
+    """Partition episode outcomes without mixing native follow termination in."""
+    for case in cases:
+        if case.get("outcome") not in OUTCOMES or type(case.get("outcome_success")) is not bool:
+            raise ValueError("Missing honest-v3 outcome classification")
+        if (case["outcome"] == "success") != case["outcome_success"]:
+            raise ValueError("Contradictory honest-v3 outcome classification")
+    return {outcome: aggregate([case for case in cases if case["outcome"] == outcome]) for outcome in OUTCOMES}
+
+
+def refresh_outcomes(args, cases):
+    """Add outcome strata to old prepared queries without recomputing truth."""
+    current = {case["id"]: case for case in source_cases(args.task, args.data)}
+    if len(cases) != len(current) or {case["id"] for case in cases} != current.keys():
+        raise ValueError("Prepared coverage scenario identities changed")
+    result = []
+    identity = ("id", "goal_kind", "split", "region", "place_id", "source", "cohort", "decisions", "success")
+    for case in cases:
+        source = current[case["id"]]
+        if any(case.get(key) != source.get(key) for key in identity):
+            raise ValueError(f"Prepared honest-v3 recording identity changed: {case['id']}")
+        result.append(dict(case, **source))
+    return result
+
+
 def analyze(args):
     preparation = v3.read_json(args.output / "preparation.json")
     cases = preparation["cases"]
     if Counter(case["goal_kind"] for case in cases) != EXPECTED:
         raise ValueError("Prepared coverage cohort changed")
+    cases = refresh_outcomes(args, cases)
     distribute_truth(args, cases)
     results = []
     for case in cases:
@@ -373,6 +432,9 @@ def analyze(args):
                       for kind in KINDS}
     summary = dict(seed=preparation["seed"], sampling=preparation["sampling"], corridor=preparation["requested_corridor"],
                    all=aggregate(results), by_goal_kind=grouped, by_region=regions, by_goal_kind_region=by_kind_region,
+                   by_outcome=aggregate_outcomes(results),
+                   by_goal_kind_outcome={kind: aggregate_outcomes([case for case in results if case["goal_kind"] == kind]) for kind in KINDS},
+                   by_region_outcome={region: aggregate_outcomes([case for case in results if case.get("region") == region]) for region in regions},
                    definitions=dict(danger="any nonzero quantized wall/ledge/drop/water/movable; takes precedence",
                      unknown="no danger, and confidence==0 or free==0; observed confidence>0/free==0 is separately counted",
                      free="no danger, confidence>0 and free>0",
@@ -380,21 +442,26 @@ def analyze(args):
                      denominator="native corridor cell observations pooled over fixed seeded 1-Hz frames; each cell counted once per frame",
                      near_far="near footprint owns [-800,800) cm on both axes; far cells in that footprint are excluded",
                      height="memory classifications unchanged by height; known memory-vs-truth height differences >100cm counted separately",
-                     area_fraction="secondary weighting by native-cell area, near625cm2/far40000cm2; primary fractions weight cells equally"),
+                     area_fraction="secondary weighting by native-cell area, near625cm2/far40000cm2; primary fractions weight cells equally",
+                     outcome="saved honest-v3 episodes: point/object/approach use native success; follow requires first <=5m contact, positive post-contact time and >=80% within inclusive 2–5m band; no contact is failure",
+                     outcome_denominator="all sampled corridor frames of episodes in that outcome stratum, including pre-contact follow frames; original near/far and truth-passable denominators retained"),
                    limitations=["Evaluator-only comparison of saved honest-memory trajectories; not a counterfactual rollout.",
                      "Corridor follows the complete current-pose-to-current-goal Detour path, 5–15m along ground path, radius15cm.",
                      "Paths not extending beyond5m and unavailable paths are explicit frame denominators, excluded from cell fractions.",
                      "The raster samples walkable Detour ground at native cell centers; native coarse cells touched by a corridor may have unpassable centers."])
     v3.write_json(args.output / "metrics.json", summary)
-    columns = ["id", "goal_kind", "split", "region", "place_id", "success", "sampled_frames", "path_unavailable_frames", "path_not_beyond5m_frames",
-               "corridor_available_frames", "cells", *CLASS_NAMES, "false_danger", "free_fraction", "unknown_fraction", "danger_fraction",
+    identity_columns = ["id", "goal_kind", "split", "region", "place_id", "success", "outcome", "outcome_success", "outcome_failure_reason",
+                        "first_contact_ms", "follow_observed_ms", "follow_in_band_ms", "follow_fraction"]
+    status_columns = ["sampled_frames", "path_unavailable_frames", "path_not_beyond5m_frames", "corridor_available_frames"]
+    columns = [*identity_columns, *status_columns,
+               "cells", *CLASS_NAMES, "false_danger", "free_fraction", "unknown_fraction", "danger_fraction",
                "false_danger_fraction_all_cells", "false_danger_fraction_truth_passable"]
     with (args.output / "cases.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         for case in results:
-            row = {key: case.get(key) for key in columns[:6]}
-            row.update({key: case["status"].get(key, 0) for key in columns[6:10]})
+            row = {key: case.get(key) for key in identity_columns}
+            row.update({key: case["status"].get(key, 0) for key in status_columns})
             row.update({key: case["coverage"]["counts"].get(key, 0) for key in ("cells", *CLASS_NAMES, "false_danger")})
             row.update({f"{key}_fraction": case["coverage"]["fractions"][key] for key in CLASS_NAMES})
             for name in ("false_danger_fraction_all_cells", "false_danger_fraction_truth_passable"):

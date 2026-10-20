@@ -2,8 +2,8 @@
 """One seeded evaluation: v2, recorded memory-v3, and eval-only oracle-v3.
 
 Execute inside one caller-owned gq batch. Existing DATA recordings are read-only.
-All v2 and oracle episodes run again; experimental outputs
-belong to TASK/oracle-experiment and never contain NAVDEMO training samples.
+Complete experimental outputs are reused; only missing v2 and oracle episodes
+run. Outputs belong to TASK/oracle-experiment and never contain NAVDEMO samples.
 """
 from __future__ import annotations
 
@@ -156,6 +156,42 @@ def command_sequence(args, value, mode):
             v3.start_command(value, 2 if mode == "v2" else 3, args.npc, args.limit_ms), "navdemos wait"]
 
 
+def validate_raw_identity(args, directory, metadata, value, mode):
+    """Moving goals are runtime state; the saved command fixes their scenario.
+
+    The runner resolves freepoints to connected waypoints and moves the target.
+    Neither its goal name nor target_position identifies the moving experiment.
+    Enriched metadata still goes through the unchanged, strict same_scenario.
+    """
+    version = 2 if mode == "v2" else 3
+    moving = value["goal_kind"] in ("follow", "approach")
+    fields = ("start", "goal_kind") if moving else ("start", "goal", "goal_kind")
+    if (metadata.get("teacher_version") != version or metadata.get("demo_version") != 2
+            or any(metadata.get(key) != value.get(key) for key in fields)
+            or metadata.get("limit_ms") != args.limit_ms
+            or (moving and metadata.get("seed") != value["seed"])):
+        raise ValueError(f"Raw experimental episode identity differs: {directory}")
+    if not moving:
+        return
+    # Raw native output normally lacks these fields. Never overwrite a
+    # conflicting scenario if an interrupted collector already added some.
+    for key in v3.SCENARIO_IDENTITY_FIELDS:
+        if key != "goal" and key in metadata and metadata[key] != value.get(key):
+            raise ValueError(f"Raw moving scenario {key} differs: {directory}")
+    if (metadata.get("oracle") is not (mode == "oracle")
+            or (mode == "oracle" and metadata.get("observation_source") != "detour_raster")
+            or metadata.get("record") is not False or metadata.get("demonstration_recorded") is not False):
+        raise ValueError(f"Raw moving experimental mode differs: {directory}")
+    expected = [f"seed {value['seed']}", "cheat god", "set time 10 0",
+                f"navdemos physics {args.physics}", *command_sequence(args, value, mode), "label done"]
+    # A resumed take may be assigned to a different worker. All matching
+    # command witnesses must agree, rather than selecting a convenient one.
+    experiment = Path(args.output).parent.parent
+    witnesses = sorted((experiment / "workers").glob(f"*/scenarios/oracle-experiment-{mode}-{value['id']}.bench"))
+    if not witnesses or any(path.read_text(encoding="utf-8").splitlines() != expected for path in witnesses):
+        raise ValueError(f"Missing or different saved moving scenario command: {directory}")
+
+
 class Worker(campaign.Worker):
     def trial(self, value, directory, mode):
         directory = Path(directory)
@@ -165,16 +201,18 @@ class Worker(campaign.Worker):
             if not complete_text(directory, value["goal_kind"]):
                 raise ValueError(f"Completed experimental episode has missing text files: {directory}")
             metadata = v3.read_json(directory / "episode.json")
-            if not metadata.get("id"):
-                version = 2 if mode == "v2" else 3
-                if (metadata.get("teacher_version") != version or metadata.get("demo_version") != 2
-                        or any(metadata.get(key) != value.get(key) for key in ("start", "goal", "goal_kind"))
-                        or (value["goal_kind"] in ("follow", "approach") and metadata.get("seed") != value["seed"])):
-                    raise ValueError(f"Raw experimental episode identity differs: {directory}")
+            recovered_raw = not metadata.get("id")
+            if recovered_raw:
+                validate_raw_identity(self.args, directory, metadata, value, mode)
+                if value["goal_kind"] in ("follow", "approach"):
+                    metadata["runner_goal"] = metadata.get("goal")
                 metadata.update(value, experiment_mode=mode)
                 v3.write_json(directory / "episode.json", metadata)
             validate_identity(directory, value, mode, self.args.limit_ms, experimental=True)
-            return text_metrics(directory)
+            measured = text_metrics(directory)
+            campaign.emit("oracle_trial_resumed", mode=mode, kind=value["goal_kind"], id=value["id"],
+                          success=metadata["success"], recovered_raw=recovered_raw)
+            return measured
         with self.budget.reserve(self.args.limit_ms):
             started = time.monotonic()
             campaign.emit("oracle_trial_started", mode=mode, kind=value["goal_kind"], id=value["id"])
@@ -182,11 +220,9 @@ class Worker(campaign.Worker):
             if not complete_text(directory, value["goal_kind"]):
                 raise ValueError(f"Incomplete experimental evaluation: {directory}")
             metadata = v3.read_json(directory / "episode.json")
-            version = 2 if mode == "v2" else 3
-            if (metadata.get("teacher_version") != version or metadata.get("demo_version") != 2
-                    or any(metadata.get(key) != value.get(key) for key in ("start", "goal", "goal_kind"))
-                    or (value["goal_kind"] in ("follow", "approach") and metadata.get("seed") != value["seed"])):
-                raise ValueError(f"Runner changed experimental identity: {directory}")
+            validate_raw_identity(self.args, directory, metadata, value, mode)
+            if value["goal_kind"] in ("follow", "approach"):
+                metadata["runner_goal"] = metadata.get("goal")
             metadata.update(value, experiment_mode=mode, collector_wall_s=time.monotonic() - started)
             v3.write_json(directory / "episode.json", metadata)
             validate_identity(directory, value, mode, self.args.limit_ms, experimental=True)

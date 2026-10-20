@@ -217,3 +217,91 @@ def test_aggregate_weights_native_cell_observations_and_serializes_missing_denom
     assert result["coverage"]["denominator_cells"] == 4
     assert result["coverage"]["false_danger_fraction_truth_passable"] == .5
     assert json.loads(json.dumps(result))["layers"]["far"]["denominator_cells"] == 0
+
+
+@pytest.mark.parametrize("kind", ["point", "object", "approach"])
+@pytest.mark.parametrize("success", [True, False])
+def test_static_and_approach_outcomes_use_native_metadata_success(tmp_path, kind, success):
+    result = coverage.episode_outcome(kind, dict(success=success, failure="path_timeout"), tmp_path)
+    assert result["outcome_success"] is success
+    assert result["outcome"] == ("success" if success else "failure")
+    assert result["metadata_success"] is success
+
+
+@pytest.mark.parametrize("times,distances,elapsed,native_success,expected_fraction,expected_reason", [
+    ([0, 800, 1000], [300, 600, 300], 1000, False, .8, None),
+    ([0, 1000, 2000], [600, 300, 100], 3000, True, .5, "band_fraction_below_80_percent"),
+    ([0, 1000], [700, 600], 2000, True, None, "no_first_contact"),
+    ([0, 1000], [600, 300], 1000, True, None, "no_post_contact_time"),
+])
+def test_follow_outcome_uses_weighted_band_after_contact_and_rejects_no_contact(tmp_path, times, distances, elapsed,
+                                                                            native_success, expected_fraction, expected_reason):
+    trace = np.column_stack((times, np.zeros((len(times), 3)), distances))
+    np.savetxt(tmp_path / "target-trajectory.txt", trace)
+    result = coverage.episode_outcome("follow", dict(success=native_success, elapsed_ms=elapsed), tmp_path)
+    assert result["metadata_success"] is native_success
+    assert result["follow_fraction"] == expected_fraction
+    assert result["outcome_failure_reason"] == expected_reason
+    assert result["outcome_success"] is (expected_reason is None)
+
+
+def test_outcome_aggregation_preserves_native_cell_and_truth_passable_denominators_for_each_layer():
+    def case(outcome, near, far):
+        totals = coverage.Counter(near)
+        totals.update(far)
+        return dict(outcome=outcome, outcome_success=outcome == "success", status=dict(sampled_frames=2),
+                    coverage=coverage.fractions(totals), layers=dict(near=coverage.fractions(near), far=coverage.fractions(far)))
+
+    successful = case("success", dict(cells=2, free=2, truth_passable=2, truth_passable_free=2), {})
+    failed = case("failure", dict(cells=2, unknown=2, truth_passable=1, truth_passable_unknown=1, truth_unpassable=1),
+                  dict(cells=1, danger=1, false_danger=1, truth_passable=1, truth_passable_danger=1))
+    strata = coverage.aggregate_outcomes([successful, failed])
+    assert strata["success"]["scenarios"] == strata["failure"]["scenarios"] == 1
+    assert strata["success"]["coverage"]["fractions"] == dict(free=1, unknown=0, danger=0)
+    assert strata["failure"]["coverage"]["fractions"] == dict(free=0, unknown=2 / 3, danger=1 / 3)
+    assert strata["failure"]["coverage"]["false_danger_fraction_truth_passable"] == .5
+    assert strata["failure"]["coverage"]["false_danger_fraction_all_cells"] == 1 / 3
+    assert strata["failure"]["layers"]["near"]["truth_blocked_fraction_all_cells"] == .5
+    assert strata["failure"]["layers"]["far"]["false_danger_fraction_truth_passable"] == 1
+    pooled = coverage.aggregate([successful, failed])
+    assert sum(value["coverage"]["denominator_cells"] for value in strata.values()) == pooled["coverage"]["denominator_cells"]
+    assert coverage.aggregate_outcomes([successful])["failure"]["coverage"]["denominator_cells"] == 0
+
+
+def test_outcome_aggregation_rejects_missing_or_contradictory_labels():
+    with pytest.raises(ValueError, match="Missing"):
+        coverage.aggregate_outcomes([{}])
+    with pytest.raises(ValueError, match="Contradictory"):
+        coverage.aggregate_outcomes([dict(outcome="success", outcome_success=False)])
+
+
+def test_old_preparation_is_enriched_with_follow_outcome_without_mutating_sampling_or_raw_source(monkeypatch):
+    original = dict(id="follow-case", goal_kind="follow", source="/readonly/v3-visible/follow/train/follow-case",
+                    success=True, sampled_frames=51)
+    current = dict(original, outcome="failure", outcome_success=False, follow_fraction=.28,
+                   outcome_failure_reason="band_fraction_below_80_percent")
+    current.pop("sampled_frames")
+    monkeypatch.setattr(coverage, "source_cases", lambda task, data: [current])
+    enriched = coverage.refresh_outcomes(SimpleNamespace(task=Path("/task"), data=Path("/data")), [original])
+    assert enriched[0]["sampled_frames"] == 51
+    assert enriched[0]["success"] is True
+    assert enriched[0]["outcome_success"] is False
+    assert "outcome" not in original
+    assert enriched[0]["source"] == original["source"]
+
+
+def test_moving_goal_validation_tracks_two_current_goal_positions_not_only_initial_target():
+    first = record()
+    first["time_ms"] = 1000
+    first["roads"]["goal_direction"] = [0, 0, 1]
+    first["roads"]["goal_distance_cm"] = 1000
+    second = first.copy()
+    second["time_ms"] = 2000
+    second["roads"]["goal_direction"] = [1, 0, 0]
+    second["roads"]["goal_distance_cm"] = 500
+    initial_query = dict(label="follow-frame0", index=0, elapsed_ms=0, position_cm=[0, 0, 0], goal_cm=[1000, 0, 0], yaw_deg=0)
+    current_query = dict(initial_query, label="follow-frame10", index=10, elapsed_ms=1000, goal_cm=[0, 0, 500])
+    coverage.validate_record(first, initial_query, 1000)
+    coverage.validate_record(second, current_query, 1000)
+    with pytest.raises(ValueError, match="current moving goal"):
+        coverage.validate_record(second, dict(current_query, goal_cm=initial_query["goal_cm"]), 1000)
