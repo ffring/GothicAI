@@ -92,6 +92,27 @@
 
 Во всех промптах — запрет запечённого света: «flat albedo only, no painted shadows, no shading under beams or overhangs, no dark contact lines, no ambient occlusion, no highlights». Тени, затенение у контактов и объём даёт рендер (карта нормалей, AO фильтра, свет игры); нарисованные в цвете, они удваиваются и не двигаются вместе со светом.
 
+### Шаблон пилота
+
+Эксперимент шага 2, **ещё не правило**: станет основным шаблоном только после приёмки пользователем. Для семи материалов `pilot-b` / `pilot-c` используется этот шаблон вместо общего хвоста и длинного списка отрицаний выше. Каждый пункт — короткая подписанная строка; назначение материала и физическая раскладка важнее художественных эпитетов.
+
+```text
+Asset type: <albedo material for its specific in-game surface; tile or complete architectural module>.
+Subject: <substance and functional parts of the surface>.
+Medium: calibrated photographic material scan strictly from above, camera perpendicular, surface filling the image edge to edge.
+Lighting: even shadowless diffuse illumination, identical exposure from corner to corner.
+Weathering: <rain / footsteps / soot / coastal moisture causes fine wear and pigment>, small details evenly spread across the entire tile.
+Colour and value: <medium-dark colour in words>, average sRGB <#hex converted from target_oklab>.
+Layout: <count across U and V from scale-plan.csv, long-axis direction, physical tile size; fixed parts of modules>.
+Constraints: seamless on <measured repeat axes>, no text, frame, loose objects or perspective.
+```
+
+Грязь и мох в швах — допустимый пигмент. Свет описывается положительно; список теней под каждой балкой не добавляется. Для `tiled` износ мелкий и распределён по всему тайлу, без крупных одиночных пятен и градиента «внизу больше». У модуля или панели вся грань — один объект, поэтому грязь у рамы допустима. «Frame» в Constraints означает декоративную рамку картинки; конструктивная обвязка из Subject/Layout сохраняется.
+
+Hex — sRGB-кодирование обратного преобразования `target_oklab` в средний линейный RGB, с округлением до 8 бит для текста промпта. После генерации применяется точная поканальная поправка к численной цели, допуск ≤0,005. Название цвета и hex не заменяют этот контроль.
+
+Layout берёт **обе оси и scale** из [плана шага 1](../reports/content/2026-10-pilot-measures/scale-plan.csv): например, две доски поперёк V, длинные доски идут слева направо; для мощения — 5×5 камней; для ступеней — шесть горизонтальных рядов. Нулевой измеренный период не превращается в обязательное число деталей. Для `ROOF_INSIDE_01` один квадратный исходный модуль стыкуется в три квадратных модуля с перекрытием на холсте **1536×681**; исходная композиция сохраняет пропорции (растяжение 1,0, предел 1,25), затем один ресемпл переводит её в квадратное UV-хранение. Камера, число деталей, направление и результат измерителя проверяются независимо от текста запроса.
+
 ## Материалы с альфой
 
 В `city-3` три панели с вырезами: `NW_CITY_FLAG_01.TGA`, `NW_CITY_IVY_BORDER_01.TGA` и `NW_CITY_IVY_FULL_01.TGA`. Встроенный `image_gen` получает только текст и `transparent_background=true`: нужен настоящий RGBA с прозрачными промежутками, без нарисованной шахматной подложки. Форма и направление заполнения следуют задумке панели; бесшовность к ним не применяется. Запрет запечённого света сохраняется.
