@@ -56,5 +56,5 @@ elif [[ "$stage" == evaluate ]]; then
   fi
 fi
 PHASE
-"$ROOT/scripts/gq" submit --class batch --threads 12 --mem 8G --max 3h --cpu-quota 1200% \
+"$ROOT/scripts/gq" submit --class batch --threads 12 --mem 8G --max 2h --cpu-quota 1200% \
   --name "nav perception $stage" -- bash "$task/phase.sh" "$stage"
