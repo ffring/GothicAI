@@ -45,16 +45,18 @@ class TestMakeTestBarrel(unittest.TestCase):
     def tearDownClass(cls):
         cls.temp.cleanup()
 
-    def read_accessor(self, index):
-        accessor = self.document["accessors"][index]
-        view = self.document["bufferViews"][accessor["bufferView"]]
+    def read_accessor(self, index, document=None, binary=None):
+        document = self.document if document is None else document
+        binary = self.binary if binary is None else binary
+        accessor = document["accessors"][index]
+        view = document["bufferViews"][accessor["bufferView"]]
         components = {"SCALAR": 1, "VEC2": 2, "VEC3": 3}[accessor["type"]]
         code = {5123: "H", 5126: "f"}[accessor["componentType"]]
         layout = "<" + code * components
         size = struct.calcsize(layout)
         start = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
         stride = view.get("byteStride", size)
-        return [struct.unpack_from(layout, self.binary, start + i * stride)
+        return [struct.unpack_from(layout, binary, start + i * stride)
                 for i in range(accessor["count"])]
 
     def geometry(self):
@@ -66,11 +68,14 @@ class TestMakeTestBarrel(unittest.TestCase):
         indices = [value[0] for value in self.read_accessor(primitive["indices"])]
         return positions, normals, uv, indices
 
-    def run_script(self, directory, home=None):
+    def run_script(self, directory, home=None, radius_scale=None):
         env = os.environ.copy()
         if home is not None:
             env["HOME"] = str(home)
-        return subprocess.run([sys.executable, str(SCRIPT), str(directory)],
+        command = [sys.executable, str(SCRIPT), str(directory)]
+        if radius_scale is not None:
+            command.append(f"--radius-scale={radius_scale}")
+        return subprocess.run(command,
                               env=env, capture_output=True, text=True, check=False)
 
     def test_output_layout_and_indexes(self):
@@ -205,6 +210,57 @@ class TestMakeTestBarrel(unittest.TestCase):
             self.assertAlmostEqual(min(p[axis] for p in gothic), expected_low[axis], delta=1e-4)
             self.assertAlmostEqual(max(p[axis] for p in gothic), expected_high[axis], delta=1e-4)
         self.assertLess(sum(p[1] for p in gothic) / len(gothic), -0.4)
+
+    def test_explicit_unit_radius_scale_preserves_default_content(self):
+        target = Path(self.temp.name) / "unit-radius"
+        result = self.run_script(target, radius_scale=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for original in self.root.rglob("*"):
+            if original.is_file():
+                self.assertEqual((target / original.relative_to(self.root)).read_bytes(),
+                                 original.read_bytes())
+
+    def test_radius_scale_preserves_axis_height_origin_and_normals(self):
+        positions, normals, _, _ = self.geometry()
+        center = tuple((min(p[axis] for p in positions) + max(p[axis] for p in positions)) / 2
+                       for axis in (0, 2))
+        for scale in (0.5, 1.5):
+            with self.subTest(scale=scale):
+                target = Path(self.temp.name) / f"radius-{scale}"
+                result = self.run_script(target, radius_scale=scale)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                glb = (target / "meshes/test/nw_harbour_barrel_01.glb").read_bytes()
+                json_length = struct.unpack_from("<I", glb, 12)[0]
+                document = json.loads(glb[20:20 + json_length])
+                binary = glb[28 + json_length:]
+                attributes = document["meshes"][0]["primitives"][0]["attributes"]
+                scaled_positions = self.read_accessor(attributes["POSITION"], document, binary)
+                scaled_normals = self.read_accessor(attributes["NORMAL"], document, binary)
+                self.assertEqual(len(scaled_positions), len(positions))
+                for point, scaled in zip(positions, scaled_positions):
+                    self.assertEqual(scaled[1], point[1])
+                    for axis, middle in zip((0, 2), center):
+                        self.assertAlmostEqual(scaled[axis], middle + scale * (point[axis] - middle),
+                                               delta=1e-7)
+                # Scaling geometry requires inverse-transpose normals; the Y
+                # component changes through normalization even though height does not.
+                for normal, scaled in zip(normals, scaled_normals):
+                    expected = (normal[0] / scale, normal[1], normal[2] / scale)
+                    length = math.sqrt(sum(value * value for value in expected))
+                    for actual, value in zip(scaled, expected):
+                        self.assertAlmostEqual(actual, value / length, delta=1e-7)
+                self.assertNotIn("translation", document["nodes"][0])
+                self.assertNotIn("scale", document["nodes"][0])
+                self.assertEqual((target / "materials/test/barrel_wood.dds").read_bytes(), self.dds)
+
+    def test_refuses_invalid_radius_scale_without_creating_output(self):
+        for scale in ("0", "-1", "nan", "inf", "-inf"):
+            with self.subTest(scale=scale):
+                target = Path(self.temp.name) / f"invalid-radius-{scale}"
+                result = self.run_script(target, radius_scale=scale)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("radius scale must be finite and greater than zero", result.stderr)
+                self.assertFalse(target.exists())
 
     def dds_pixel(self, x, y):
         width = struct.unpack_from("<I", self.dds, 16)[0]

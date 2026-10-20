@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write a procedural GLB barrel and DDS material into new or empty test content.
 
-Usage: python3 scripts/meshes/make_test_barrel.py <directory>
+Usage: python3 scripts/meshes/make_test_barrel.py <directory> [--radius-scale K]
 Only the Python standard library is used; no original geometry or pixels.
 """
 
@@ -23,12 +23,15 @@ RING_HEIGHTS = (0.0, 0.1, 0.25, 0.5, 0.75, 0.9, 1.0)
 TEXTURE_SIZE = 256
 
 
-def make_glb():
+def make_glb(radius_scale=1.0):
     """Build glTF in metres, with right-handed CCW faces and outward normals."""
+    if not math.isfinite(radius_scale) or radius_scale <= 0:
+        raise ValueError("radius scale must be finite and greater than zero")
     low = (-GOTHIC_MAX[0] / 100, GOTHIC_MIN[1] / 100, GOTHIC_MIN[2] / 100)
     high = (-GOTHIC_MIN[0] / 100, GOTHIC_MAX[1] / 100, GOTHIC_MAX[2] / 100)
     cx, cz = (low[0] + high[0]) / 2, (low[2] + high[2]) / 2
     rx, rz = (high[0] - low[0]) / 2, (high[2] - low[2]) / 2
+    rx, rz = rx * radius_scale, rz * radius_scale
     height = high[1] - low[1]
     positions, normals, uvs, indices = [], [], [], []
 
@@ -181,7 +184,7 @@ def make_dds():
     return b"DDS " + struct.pack("<31I", *words) + blocks
 
 
-def make_test_barrel(directory):
+def make_test_barrel(directory, radius_scale=1.0):
     target = Path(directory).expanduser().resolve()
     working = (Path.home() / ".local/share/gothic-ai/content").resolve()
     in_working = target == working or working in target.parents
@@ -194,10 +197,11 @@ def make_test_barrel(directory):
         raise ValueError("refusing to write into the working content directory")
     if target.exists() and (not target.is_dir() or next(target.iterdir(), None) is not None):
         raise ValueError("output directory must be new or empty")
+    glb = make_glb(radius_scale)
     target.mkdir(parents=True, exist_ok=True)
     (target / "meshes/test").mkdir(parents=True)
     (target / "materials/test").mkdir(parents=True)
-    (target / "meshes/test/nw_harbour_barrel_01.glb").write_bytes(make_glb())
+    (target / "meshes/test/nw_harbour_barrel_01.glb").write_bytes(glb)
     (target / "materials/test/barrel_wood.dds").write_bytes(make_dds())
     (target / "meshes/meshes.json").write_text(json.dumps({
         "NW_HARBOUR_BARREL_01": {"glb": "test/nw_harbour_barrel_01.glb"}
@@ -211,9 +215,11 @@ def make_test_barrel(directory):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path, help="new or empty test content directory")
+    parser.add_argument("--radius-scale", type=float, default=1.0,
+                        help="scale X/Z about the barrel axis, preserving height and origin (default: 1)")
     args = parser.parse_args()
     try:
-        make_test_barrel(args.directory)
+        make_test_barrel(args.directory, radius_scale=args.radius_scale)
     except (OSError, ValueError) as error:
         print(f"make_test_barrel: {error}", file=sys.stderr)
         return 1

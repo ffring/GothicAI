@@ -1660,6 +1660,7 @@ std::vector<DynamicWorld::MovableVobContacts> DynamicWorld::movableVobContacts(f
     entry.zenId = obj->pose->zenId;
     entry.visual = obj->visual;
     entry.className = obj->className;
+    entry.disposition = obj->disposition;
     entry.enabled = true;
     entry.mass = obj->movableMass;
     entry.position = obj->body->position();
@@ -1738,9 +1739,15 @@ std::vector<DynamicWorld::MovableVobSnapshot> DynamicWorld::movableVobSnapshot()
     entry.visual = obj->visual;
     entry.className = obj->className;
     entry.blocksWalking = obj->blocksWalking;
+    entry.disposition = obj->disposition;
     entry.legacyCollision = obj->legacyCollision;
     entry.enabled = obj->body!=nullptr;
     entry.mass = obj->movableMass;
+    entry.hullVolume = obj->movableShape->hull!=nullptr ?
+      float(obj->movableShape->hull->GetVolume()*volumeScale(obj->origin)) : 0.f;
+    entry.material = obj->movableShape->material;
+    entry.density = materialDensity(entry.material);
+    entry.massMultiplier = obj->massMultiplier;
     entry.destructible=obj->fractureRule!=nullptr && obj->movableShape->fracture!=nullptr;
     entry.broken=obj->pose->broken;
     entry.health=obj->health;
