@@ -437,8 +437,8 @@ class Converter {
 
 }
 
-zenkit::MultiResolutionMesh loadGltfMesh(const std::filesystem::path& path) {
-  const auto bytes = readGlb(path);
+zenkit::MultiResolutionMesh loadGltfMesh(const std::filesystem::path& path, std::vector<uint8_t>* source) {
+  auto bytes = readGlb(path);
   cgltf_options options = {};
   options.type = cgltf_file_type_glb;
   cgltf_data* parsed = nullptr;
@@ -465,5 +465,7 @@ zenkit::MultiResolutionMesh loadGltfMesh(const std::filesystem::path& path) {
       pending.push_back(node->children[i]);
     }
   converter.finish();
+  if(source!=nullptr)
+    *source = std::move(bytes);
   return std::move(converter.mesh);
   }

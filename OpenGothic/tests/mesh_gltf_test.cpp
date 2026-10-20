@@ -11,6 +11,7 @@
 #include <Tempest/Log>
 #include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
+#include <miniz.h>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
@@ -577,19 +578,20 @@ void indexCases(const Fixture& fixture) {
   resourcePaths(fixture,true);
   }
 
-void fractureCache(const Fixture& fixture) {
-  const auto root = fixture.root/"fracture";
-  std::filesystem::create_directories(root);
+void fractureFile(const std::filesystem::path& path, size_t version = 1, size_t sourceSize = 0, uint32_t sourceCrc32 = 0) {
   // Eight independent solid tetrahedra exercise the real cache parser and
   // Jolt convex-hull construction, with no geometry from the original game.
-  std::ofstream file(root/"OWN_MESH.fracture");
-  file << "GOTHIC_FRACTURE 1\npieces 8\n";
+  std::ofstream file(path);
+  file << "GOTHIC_FRACTURE " << version << '\n';
+  if(version==2)
+    file << "source " << sourceSize << ' ' << std::hex << sourceCrc32 << std::dec << '\n';
+  file << "pieces 8\n";
   const std::array<std::array<float,3>,4> points = {{{0,0,0},{10,0,0},{0,10,0},{0,0,10}}};
   const std::array<std::array<size_t,3>,4> triangles = {{{0,2,1},{0,1,3},{0,3,2},{1,2,3}}};
   for(size_t piece=0;piece<8;++piece) {
     file << "piece 166.6666666667 " << float(piece)*20.f+2.5f << " 2.5 2.5 4\n";
     for(const auto& triangle:triangles) {
-      file << "tri ORIGINAL.TGA\n";
+      file << "tri " << (version==2 ? "OWN_TEST_BARREL_WOOD.TGA" : "ORIGINAL.TGA") << '\n';
       for(const auto index:triangle) {
         const auto& point = points[index];
         file << point[0]+float(piece)*20.f << ' ' << point[1] << ' ' << point[2] << " 0 1 0 0 0\n";
@@ -598,6 +600,14 @@ void fractureCache(const Fixture& fixture) {
     }
   file.close();
   require(bool(file),"temporary fracture cache must be writable");
+  }
+
+void fractureCache(const Fixture& fixture) {
+  const auto root = fixture.root/"fracture";
+  const auto glb = fixture.root/"meshes/test/own.glb";
+  const auto sidecar = fixture.root/"meshes/test/own.fracture";
+  std::filesystem::create_directories(root);
+  fractureFile(root/"OWN_MESH.fracture");
 
   struct FractureEnvironment {
     std::string previous;
@@ -623,7 +633,7 @@ void fractureCache(const Fixture& fixture) {
   for(const auto& piece:original->pieces)
     require(piece.hull!=nullptr && piece.triangles.size()==4,"each original cache piece must have a real convex hull");
 
-  const auto expectFracture = [&](bool own) {
+  const auto expectFracture = [&](bool own, bool ownPieces = false) {
     Resources resources;
     require(!Resources::meshReplacementLoaded("own_mesh.3ds"),"an index entry alone must not count as a loaded replacement");
     Resources::mountWork(fixture.root/"_work");
@@ -640,15 +650,19 @@ void fractureCache(const Fixture& fixture) {
       require(Resources::meshReplacementLoaded(visual)==own,
               "loaded replacement lookup must normalize case, paths and extension");
       const auto fracture = FractureMesh::load(visual);
-      if(own) {
-        require(fracture==nullptr,"successfully loaded GLB must block the original fracture cache");
+      if(own && !ownPieces) {
+        require(fracture==nullptr,"GLB without a matching v2 sidecar must block the original fracture cache");
         }
       else {
         require(fracture!=nullptr && fracture->pieces.size()==8 && fracture->volume==original->volume,
-                "original geometry must retain eight cached pieces for saved destruction");
-        for(const auto& piece:fracture->pieces)
+                "selected geometry must retain eight matched cached pieces for saved destruction");
+        for(const auto& piece:fracture->pieces) {
           require(piece.hull!=nullptr && piece.triangles.size()==4,
-                  "fallback fracture pieces must retain their solid hulls");
+                  "selected fracture pieces must retain their solid hulls");
+          for(const auto& triangle:piece.triangles)
+            require(triangle.texture==(own ? "OWN_TEST_BARREL_WOOD.TGA" : "ORIGINAL.TGA"),
+                    "fracture must use only the selected mesh's materials");
+          }
         }
       }
     require(!Resources::meshReplacementLoaded("OTHER.MRM"),"loaded replacement state must be specific to the visual");
@@ -679,24 +693,49 @@ void fractureCache(const Fixture& fixture) {
       }
     ~FractureLog() { Tempest::Log::setOutputCallback({}); }
     } log;
-  glbFile(fixture.root/"meshes/test/own.glb");
+  glbFile(glb);
   expectFracture(true);
   require(log.count==1,"fracture guard must log once per visual, independent of case and extension");
   expectFracture(true);
   require(log.count==1,"fracture guard must not log again after Resources is recreated");
-  textFile(fixture.root/"meshes/test/own.glb","broken glb");
+  std::ifstream file(glb,std::ios::binary);
+  const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};
+  require(!bytes.empty(),"GLB identity fixture must contain bytes");
+  const uint32_t crc = uint32_t(mz_crc32(0,bytes.data(),bytes.size()));
+  fractureFile(sidecar,2,bytes.size(),crc);
+  expectFracture(true,true);
+  fractureFile(sidecar,2,bytes.size(),crc^1u);
+  expectFracture(true);
+  fractureFile(sidecar,2,bytes.size()+1,crc);
+  expectFracture(true);
+  fractureFile(sidecar); // v1 is never suitable for a replacement, even beside its GLB.
+  expectFracture(true);
+  fractureFile(sidecar,2,bytes.size(),crc);
+  {
+    Resources resources;
+    const auto loaded = Resources::loadVisualMesh("OWN_MESH.MRM");
+    require(!loaded.positions.empty(),"identity fixture must load its replacement");
+    // A sidecar must match the bytes already parsed by the engine, even when
+    // the file on disk changes after that successful load.
+    textFile(glb,"changed after the successful GLB load");
+    const auto fracture = FractureMesh::load("OWN_MESH.MRM");
+    require(fracture!=nullptr && fracture->pieces.size()==8,
+            "fracture identity must use the loaded GLB bytes without reopening the file");
+    }
+  std::filesystem::remove(sidecar);
+  textFile(glb,"broken glb");
   expectFracture(false);
-  std::filesystem::remove(fixture.root/"meshes/test/own.glb");
+  std::filesystem::remove(glb);
   expectFracture(false);
   GlbOptions unsupported;
   unsupported.alpha = "BLEND";
-  glbFile(fixture.root/"meshes/test/own.glb",unsupported);
+  glbFile(glb,unsupported);
   expectFracture(false);
   require(log.count==1,"fallback to the original must not log a disabled fracture cache");
   fixture.indexPath("../test/own.glb");
   expectFracture(false);
   fixture.index();
-  glbFile(fixture.root/"meshes/test/own.glb");
+  glbFile(glb);
   }
 
 void alphaDdsFile(const std::filesystem::path& path, bool transparentBc1, bool dxt5 = false) {
