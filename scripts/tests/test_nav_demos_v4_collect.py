@@ -91,9 +91,20 @@ def test_moving_generation_preserves_all_frozen_membership_and_uses_original_reg
         collect.select_moving([], [], set(), old)
 
 
-def test_moving_generation_cannot_change_frozen_route_identity(monkeypatch):
+def test_moving_route_id_collision_preserves_exact_frozen_seed_and_target(monkeypatch):
     old = [moving()]
-    changed = dict(old[0], target="OTHER")
+    before = deepcopy(old)
+    changed = dict(old[0], target="OTHER", seed=old[0]["seed"] + 1)
+    monkeypatch.setattr(v3, "build_candidates", lambda *args, **kwargs: [changed])
+    assert collect.select_moving([], [], set(), old) == before
+    assert old == before
+
+
+@pytest.mark.parametrize("changes", [dict(route=["G0", "S0", "OTHER"]), dict(start="OTHER"),
+    dict(goal="OTHER"), dict(goal_kind="approach"), dict(region="harbour")])
+def test_moving_generation_cannot_change_frozen_core_route_or_membership(monkeypatch, changes):
+    old = [moving()]
+    changed = dict(old[0], **changes)
     monkeypatch.setattr(v3, "build_candidates", lambda *args, **kwargs: [changed])
     with pytest.raises(ValueError, match="frozen moving membership"):
         collect.select_moving([], [], set(), old)

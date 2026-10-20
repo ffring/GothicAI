@@ -127,7 +127,11 @@ def select_moving(places, training, excluded, frozen, per_region=100):
             continue
         value["split"] = MOVING_SPLITS[value["region"]]
         if value["id"] in pool:
-            if any(value.get(key) != pool[value["id"]].get(key) for key in v3.SCENARIO_IDENTITY_FIELDS):
+            # Older IDs describe the route, excluding count-dependent seed and
+            # target choice. A larger pool can generate that same route with
+            # another seed/creature; keep the exact frozen trial instead.
+            core = ("id", "goal_kind", "split", "region", "start", "goal", "route")
+            if any(value.get(key) != pool[value["id"]].get(key) for key in core):
                 raise ValueError(f"Generated route changed frozen moving membership: {value['id']}")
         else:
             pool[value["id"]] = value
