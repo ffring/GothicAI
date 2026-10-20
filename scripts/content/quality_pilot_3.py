@@ -151,6 +151,7 @@ def prepare(args):
             if name == pilot.ROOF_INSIDE:
                 image, geometry = pilot.roof_canvas(image)
             if name == WINDOW:
+                params.update(source_width=image.width, source_height=image.height)
                 image, geometry, seam = window_canvas(image, physical)
             else:
                 image = image.resize((1024, 1024), Image.Resampling.LANCZOS)

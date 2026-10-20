@@ -199,6 +199,7 @@ def test_window_prepare_uses_selected_albedo_and_one_physical_u_seamed_module(tm
         assert generation['geometry']['modules_u'] == generation['geometry']['modules_v'] == 1
         assert generation['geometry']['resamples_to_uv'] == 1
         assert generation['geometry']['source_size'] == ([48, 53] if index == 0 else [60, 66])
+        assert [params['source_width'], params['source_height']] == generation['geometry']['source_size']
         assert generation['seam']['applied'] is True
         assert generation['seam']['axes'] == 'u'
         assert generation['seam']['output_size'] == [1024, 1024]
