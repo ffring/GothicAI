@@ -805,3 +805,180 @@ def test_contract_replay_still_rejects_current_teacher_mismatch_or_decision_coun
     with pytest.raises(ValueError, match="mismatch"):
         collect.replay_contract(Path("/contract"), tmp_path, 42)
     assert episode_files(tmp_path) == before
+
+
+SETUP_REFUSAL = "Runner rejected advance: navdemos moving route needs distinct connected points"
+
+
+def setup_refusal_collection(tmp_path, monkeypatch):
+    """Exercise the real worker and scheduler without starting a game."""
+    values = [moving(index) for index in range(3)]
+    selections = {name: [] for name in collect.FAMILIES}
+    selections["follow"] = values
+    source = tmp_path / "recording-input"
+    source.mkdir()
+    for name, candidates in selections.items():
+        (source / f"{name}.jsonl").write_text("".join(json.dumps(value) + "\n" for value in candidates))
+    (source / "moving-all-splits.jsonl").write_text("")
+    collect.atomic_json(tmp_path / "recordings/collection-state.json", dict(settings=legacy_identity()))
+    monkeypatch.setattr(collect, "settings", lambda *args: legacy_identity())
+    monkeypatch.setattr(collect, "follow_enabled", lambda *args: True)
+    monkeypatch.setattr(collect.sys, "platform", "linux")
+    monkeypatch.setattr(collect.shutil, "disk_usage", lambda root: SimpleNamespace(free=10**12))
+    checks = []
+
+    def check(directory, *, validate):
+        assert validate is True
+        checks.append(Path(directory).name)
+        return dict(navigation_memory_versions=[3], format_versions=[2],
+                    key_counts=dict(back=0, strafe=0, jump=0, climb=0))
+
+    monkeypatch.setattr(collect.demos, "summarize", check)
+    monkeypatch.setattr(collect.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        returncode=0, stdout=json.dumps(dict(records=2, mismatches=0, previous_mismatches=0))))
+    calls = []
+
+    def scenario(self, name, commands, directory, seed):
+        value = next(value for value in values if value["id"] == directory.name)
+        calls.append(value["id"])
+        self.runner = SimpleNamespace(process=SimpleNamespace(poll=lambda: None), close=lambda: None)
+        directory.mkdir(parents=True)
+        (directory / "runner.log").write_text("scenario setup attempted\n")
+        if value is values[0]:
+            raise RuntimeError(SETUP_REFUSAL)
+        collect.atomic_json(directory / "episode.json", native(value))
+        (directory / "samples.bin.gz").write_bytes(gzip.compress(b"fake complete samples", mtime=0))
+        for file_name in ("actions.txt", "trajectory.txt"):
+            (directory / file_name).write_text("fake complete trajectory\n")
+        (directory / "target-trajectory.txt").write_text(
+            "0 0 0 0 300 0\n120000 0 0 0 300 0\n240000 0 0 0 300 0\n")
+        witness = self.args.output / "scenarios" / f"{name}.bench"
+        witness.parent.mkdir(parents=True, exist_ok=True)
+        witness.write_text("\n".join([f"seed {seed}", "cheat god", "set time 10 0", "navdemos physics cv",
+                                      *commands, "label done", ""]))
+
+    monkeypatch.setattr(collect.Worker, "scenario", scenario)
+    options = SimpleNamespace(task=tmp_path, include_follow="yes", follow_below_gate=False,
+        parallel=2, limit_ms=240000, max_bytes=15_000_000_000, wall_minutes=100,
+        max_new=100, round_size=12, verify_existing_only=False, expect_existing=None)
+    return options, values, calls, checks
+
+
+def test_setup_refusal_rejects_candidate_preserves_parallel_peer_and_collects_next(tmp_path, monkeypatch):
+    options, values, calls, checks = setup_refusal_collection(tmp_path, monkeypatch)
+    result = collect.run(options)
+    assert Counter(calls) == Counter(value["id"] for value in values)
+    assert result["by_family"]["follow"]["episodes"] == 2
+    assert result["by_family"]["follow"]["training_eligible"] == 2
+    assert result["by_family"]["follow"]["rejected_candidates"] == 1
+    assert result["by_family"]["follow"]["candidate_pool_exhausted"] is True
+    assert {value["id"] for value in result["episodes"]} == {values[1]["id"], values[2]["id"]}
+    rejected, = result["rejected_candidates"]
+    assert rejected["id"] == values[0]["id"] and rejected["reason"] == SETUP_REFUSAL
+    assert rejected["training_eligible"] is False and rejected["recorded"] is False
+    assert rejected["scenario"] == values[0]
+    directory = collect.directory_for(tmp_path, values[0])
+    assert not (directory / "episode.json").exists() and not (directory / "samples.bin.gz").exists()
+    assert directory.joinpath("runner.log").read_text() == "scenario setup attempted\n"
+    assert Counter(checks) == Counter({values[1]["id"]: 1, values[2]["id"]: 1})
+    assert v3.read_json(tmp_path / "recordings/collection-metrics.json")["rejected_candidates"] == [rejected]
+
+    before = {value["id"]: episode_files(collect.directory_for(tmp_path, value)) for value in values}
+    again = collect.run(options)
+    assert Counter(calls) == Counter(value["id"] for value in values)
+    assert again["rejected_candidates"] == [rejected]
+    assert again["by_family"]["follow"]["episodes"] == 2
+    assert again["by_family"]["follow"]["training_eligible"] == 2
+    assert again["resume_verified_episodes"] == 2
+    assert {value["id"]: episode_files(collect.directory_for(tmp_path, value)) for value in values} == before
+
+
+@pytest.mark.parametrize("failure", [
+    RuntimeError("runner exited before response: 1"),
+    RuntimeError("runner closed protocol output: 1"),
+    RuntimeError("runner watchdog expired"),
+    RuntimeError("Runner rejected advance: unknown internal failure"),
+    RuntimeError("unexpected collector defect"),
+    TimeoutError("runner watchdog expired"),
+    BrokenPipeError("runner input pipe closed"),
+    OSError("No space left on device"),
+])
+def test_runner_or_disk_failures_are_fatal_instead_of_candidate_rejection(tmp_path, monkeypatch, failure):
+    worker = collect.Worker(SimpleNamespace(task=tmp_path, limit_ms=240000), 0,
+                           SimpleNamespace(reserve=lambda *args, **kwargs: nullcontext()), legacy_identity())
+    worker.runner = SimpleNamespace(process=SimpleNamespace(poll=lambda: None), close=lambda: None)
+
+    def scenario(*args):
+        raise failure
+
+    monkeypatch.setattr(worker, "scenario", scenario)
+    with pytest.raises(type(failure), match=str(failure)):
+        worker.trial(moving())
+    assert worker.state.rejections() == []
+
+
+def test_known_setup_refusal_from_dead_runner_remains_fatal(tmp_path, monkeypatch):
+    worker = collect.Worker(SimpleNamespace(task=tmp_path, limit_ms=240000), 0,
+                           SimpleNamespace(reserve=lambda *args, **kwargs: nullcontext()), legacy_identity())
+    worker.runner = SimpleNamespace(process=SimpleNamespace(poll=lambda: 1), close=lambda: None)
+    monkeypatch.setattr(worker, "scenario", lambda *args: (_ for _ in ()).throw(RuntimeError(SETUP_REFUSAL)))
+    with pytest.raises(RuntimeError, match="distinct connected points"):
+        worker.trial(moving())
+    assert worker.state.rejections() == []
+
+
+@pytest.mark.parametrize("started_file", ["episode.json", "samples.bin.gz", "samples.bin"])
+def test_setup_refusal_after_recording_started_is_fatal_and_retains_files(tmp_path, monkeypatch, started_file):
+    value = moving()
+    worker = collect.Worker(SimpleNamespace(task=tmp_path, limit_ms=240000), 0,
+                           SimpleNamespace(reserve=lambda *args, **kwargs: nullcontext()), legacy_identity())
+    worker.runner = SimpleNamespace(process=SimpleNamespace(poll=lambda: None), close=lambda: None)
+
+    def scenario(name, commands, directory, seed):
+        directory.mkdir(parents=True)
+        (directory / started_file).write_bytes(b"recording already started")
+        raise RuntimeError(SETUP_REFUSAL)
+
+    monkeypatch.setattr(worker, "scenario", scenario)
+    with pytest.raises(RuntimeError, match="distinct connected points"):
+        worker.trial(value)
+    assert worker.state.rejections() == []
+    assert (collect.directory_for(tmp_path, value) / started_file).read_bytes() == b"recording already started"
+
+
+def test_navdemo_failure_stays_fatal_after_a_valid_scenario(tmp_path, monkeypatch):
+    options, values, calls, checks = setup_refusal_collection(tmp_path, monkeypatch)
+    value = values[1]
+    worker = collect.Worker(options, 0, SimpleNamespace(reserve=lambda *args, **kwargs: nullcontext()), legacy_identity())
+    monkeypatch.setattr(collect.demos, "summarize", lambda *args, **kwargs:
+                        (_ for _ in ()).throw(ValueError("NAVDEMO sample CRC differs")))
+    with pytest.raises(ValueError, match="NAVDEMO sample CRC differs"):
+        worker.trial(value)
+    assert worker.state.rejections() == []
+    assert calls == [value["id"]]
+    directory = collect.directory_for(tmp_path, value)
+    assert v3.complete(directory)
+    assert (directory / "samples.bin.gz").is_file()
+    assert "training_eligible" not in v3.read_json(directory / "episode.json")
+
+
+def test_fatal_runner_failure_drains_parallel_peer_into_summary_before_stopping(tmp_path, monkeypatch):
+    options, values, calls, checks = setup_refusal_collection(tmp_path, monkeypatch)
+    original_scenario = collect.Worker.scenario
+
+    def scenario(self, name, commands, directory, seed):
+        if directory.name == values[0]["id"]:
+            calls.append(values[0]["id"])
+            self.runner = SimpleNamespace(process=SimpleNamespace(poll=lambda: 1), close=lambda: None)
+            raise RuntimeError("runner exited before response: 1")
+        return original_scenario(self, name, commands, directory, seed)
+
+    monkeypatch.setattr(collect.Worker, "scenario", scenario)
+    with pytest.raises(RuntimeError, match="runner exited before response: 1"):
+        collect.run(options)
+    assert Counter(calls) == Counter({values[0]["id"]: 1, values[1]["id"]: 1})
+    result = v3.read_json(tmp_path / "recordings/collection-metrics.json")
+    assert [value["id"] for value in result["episodes"]] == [values[1]["id"]]
+    assert result["by_family"]["follow"]["episodes"] == 1
+    assert result["by_family"]["follow"]["training_eligible"] == 1
+    assert result["rejected_candidates"] == []

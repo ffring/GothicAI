@@ -1,6 +1,7 @@
 """Pure phase forecasts: retained recordings, equal roads, fixed other goals."""
 from copy import deepcopy
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,75 @@ def test_exhausted_success_candidate_pool_stops():
     result = budget.plan(summary, selections, 3_000_000_000)
     assert not result["can_collect"] and result["reason"] == "candidate_pool_exhausted"
     assert result["exhausted_families"] == ["object"]
+
+
+def test_rejections_consume_candidates_without_counting_as_episodes_or_lowering_quota():
+    summary, selections = corpus(decisions=200)
+    baseline = budget.plan(summary, selections, 3_000_000_000)
+    summary["rejected_candidates"] = [dict(id="follow_below_gate-48", family="follow_below_gate",
+        reason="moving route needs distinct connected points", training_eligible=False,
+        decisions=2400, payload_bytes=40_000_000)]
+    result = budget.plan(summary, selections, 3_000_000_000)
+    before = baseline["by_family"]["follow_below_gate"]
+    after = result["by_family"]["follow_below_gate"]
+    assert result["can_collect"] and result["targets"] == baseline["targets"]
+    assert after["rejected_candidates"] == 1
+    assert after["candidates_remaining"] == before["candidates_remaining"] - 1
+    assert {key: value for key, value in after.items() if key not in ("candidates_remaining", "rejected_candidates")} == {
+        key: value for key, value in before.items() if key not in ("candidates_remaining", "rejected_candidates")}
+    assert after["training_eligible"] == 29 and after["remaining_needed"] == 31
+
+
+def test_rejected_last_candidate_exhausts_pool_without_satisfying_success_target():
+    summary, selections = corpus(decisions=200)
+    selections["follow_below_gate"] = selections["follow_below_gate"][:49]
+    summary["rejected_candidates"] = [dict(id="follow_below_gate-48", family="follow_below_gate")]
+    result = budget.plan(summary, selections, 3_000_000_000)
+    assert not result["can_collect"] and result["reason"] == "candidate_pool_exhausted"
+    assert result["exhausted_families"] == ["follow_below_gate"]
+    assert not result["by_family"]["follow_below_gate"]["complete"]
+
+
+def test_reduced_point_quotas_skip_rejected_candidates_and_select_replacements_in_same_region():
+    summary, selections = corpus(decisions=200)
+    summary["rejected_candidates"] = [dict(id=f"p-{index}", family="point") for index in (126, 132)]
+    result = budget.plan(summary, selections, 3_000_000_000, previous_point_limit=372)
+    assert result["can_collect"] and result["point_limit"] == 372
+    assert len(result["point_ids"]) == 372
+    assert {"p-126", "p-132"}.isdisjoint(result["point_ids"])
+    assert {"p-372", "p-378"} <= set(result["point_ids"])
+    assert {row["quota"] for row in result["point_regions"].values()} == {62}
+    assert result["by_family"]["point"]["recorded_episodes"] == 126
+
+
+def test_point_region_pool_exhaustion_does_not_count_rejections_toward_recording_quota():
+    summary, selections = corpus(decisions=200)
+    summary["rejected_candidates"] = [dict(id="p-126", family="point")]
+    result = budget.plan(summary, selections, 3_000_000_000)
+    assert result["point_limit"] == 400
+    assert not result["can_collect"] and result["reason"] == "candidate_pool_exhausted"
+    assert result["exhausted_families"] == ["point"]
+    assert result["by_family"]["point"]["remaining_needed"] == 274
+
+
+def test_task_plan_merges_new_state_rejections_with_saved_summary_without_double_counting(tmp_path):
+    summary, selections = corpus(decisions=200)
+    rejected = dict(id="follow_below_gate-48", family="follow_below_gate")
+    summary["rejected_candidates"] = [rejected]
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    (recordings / "collection-metrics.json").write_text(json.dumps(summary))
+    (recordings / "collection-state.json").write_text(json.dumps(dict(rejected_candidates={
+        "follow_below_gate/train/48": rejected,
+        "follow_below_gate/train/49": dict(id="follow_below_gate-49", family="follow_below_gate")})))
+    inputs = tmp_path / "recording-input"
+    inputs.mkdir()
+    for name, values in selections.items():
+        (inputs / f"{name}.jsonl").write_text("".join(json.dumps(value) + "\n" for value in values))
+    result = budget.task_plan(tmp_path, free_bytes=100_000_000_000)
+    assert result["by_family"]["follow_below_gate"]["rejected_candidates"] == 2
+    assert result["by_family"]["follow_below_gate"]["candidates_remaining"] == 410 - 48 - 2
+    assert json.loads((recordings / "collection-metrics.json").read_text()) == summary
 
 
 def test_empty_success_history_is_conservative_and_complete_families_cost_zero():

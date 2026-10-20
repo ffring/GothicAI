@@ -63,6 +63,8 @@ class CollectionState:
         integrity = self.data.setdefault("integrity", dict(schema_version=1, episodes={}))
         if (integrity.get("schema_version") != 1 or not isinstance(integrity.get("episodes"), dict)):
             raise ValueError("Unsupported recording integrity cache")
+        if not isinstance(self.data.setdefault("rejected_candidates", {}), dict):
+            raise ValueError("Unsupported rejected candidate registry")
         summary = self.path.with_name("collection-metrics.json")
         self.saved = {str(Path(value["episode"])): value for value in
                       (v3.read_json(summary).get("episodes", []) if summary.is_file() else [])}
@@ -99,6 +101,37 @@ class CollectionState:
     def remember_metrics(self, directory, measured):
         with self.lock:
             self.saved[str(Path(directory))] = measured
+
+    def rejections(self):
+        with self.lock:
+            return [dict(value) for _, value in sorted(self.data["rejected_candidates"].items())]
+
+    def rejected_candidate(self, directory):
+        with self.lock:
+            value = self.data["rejected_candidates"].get(self.key(directory))
+            return dict(value) if value is not None else None
+
+    def reject_candidate(self, directory, value, reason):
+        """Persist a native setup refusal outside its untouched log directory.
+
+        A caller recovering an already failed phase may use the same method
+        after verifying its saved runner refusal. Live workers additionally
+        require a surviving process and a clean close before calling this.
+        """
+        if setup_rejection_reason(RuntimeError(reason), value) is None:
+            raise ValueError(f"Not a recognized candidate setup refusal: {reason}")
+        require_no_recording_output(directory)
+        result = dict(candidate_rejected=True, id=value["id"], family=family(value),
+            reason=reason, scenario=dict(value), training_eligible=False, recorded=False,
+            directory=str(directory), teacher_version=version(value), navigation_memory_version=MEMORY_VERSION)
+        with self.lock:
+            rejected = self.data["rejected_candidates"]
+            key = self.key(directory)
+            if key in rejected and rejected[key] != result:
+                raise ValueError(f"Rejected candidate changed: {directory}")
+            rejected[key] = result
+            atomic_json(self.path, self.data)
+        return result
 
     def update(self, **values):
         with self.lock:
@@ -148,23 +181,25 @@ def select_points(training, excluded, count=400):
     return selected
 
 
-def point_schedule(values, done, limit=400):
+def point_schedule(values, done, limit=400, rejected=None):
     """Reduce future road work without changing the frozen candidate pool."""
+    rejected = rejected or set()
+    available = [value for value in values if ("point", value["id"]) not in rejected]
     if limit == 400:
-        return list(values)
+        return available
     if not isinstance(limit, int) or limit <= 0 or limit >= 400 or limit % 6:
         raise ValueError("A reduced point limit must be a positive multiple of six below 400")
     regions = sorted({value["region"] for value in values})
     if len(regions) != 6:
         raise ValueError("Reduced road collection requires the original six regions")
     quota = limit // 6
-    recorded = [value for value in values if ("point", value["id"]) in done]
+    recorded = [value for value in available if ("point", value["id"]) in done]
     counts = Counter(value["region"] for value in recorded)
     pool = Counter(value["region"] for value in values)
     if any(counts[region] > quota or pool[region] < quota for region in regions):
         raise ValueError(f"Point limit cannot discard completed candidates or exceed a region pool: {dict(counts)}")
     selected = {value["id"] for value in recorded}
-    for value in values:
+    for value in available:
         if value["id"] not in selected and counts[value["region"]] < quota:
             selected.add(value["id"])
             counts[value["region"]] += 1
@@ -261,6 +296,29 @@ def directory_for(task, value):
     if Path(identifier).name != identifier or identifier in ("", ".", ".."):
         raise ValueError("Unsafe recording scenario ID")
     return Path(task) / "recordings" / family(value) / "train" / identifier
+
+
+def setup_rejection_reason(error, value):
+    """Recognize only native candidate validation before a moving episode starts."""
+    if not isinstance(error, RuntimeError) or value.get("goal_kind") not in ("follow", "approach"):
+        return None
+    text = str(error)
+    prefix = "Runner rejected advance: navdemos moving "
+    if text in (prefix + "route needs distinct connected points", prefix + "route lacks waynet point"):
+        return text
+    waypoint = prefix + "missing route waypoint "
+    if text.startswith(waypoint) and text[len(waypoint):] and not any(
+            char.isspace() for char in text[len(waypoint):]):
+        return text
+    return None
+
+
+def require_no_recording_output(directory):
+    """A refusal may retain diagnostics, but never any episode recording output."""
+    protected = {"episode.json", "actions.txt", "trajectory.txt", "target-trajectory.txt"}
+    if any(path.name in protected or path.name.startswith("samples.bin")
+           for path in Path(directory).rglob("*")):
+        raise ValueError(f"Setup refusal has recording output; retaining incomplete attempt: {directory}")
 
 
 def freeze_selection(path, values):
@@ -510,6 +568,10 @@ class Worker(campaign.Worker):
 
     def trial(self, value):
         directory = directory_for(self.options.task, value)
+        rejected = self.state.rejected_candidate(directory)
+        if rejected is not None:
+            require_no_recording_output(directory)
+            return rejected
         if (directory / "episode.json").is_file():
             return self.resume(value, directory)
         identity = recording_identity(self.identity, value)
@@ -528,7 +590,23 @@ class Worker(campaign.Worker):
             raise ValueError(f"Verification cannot start a new recording: {directory}")
         with self.budget.reserve(self.args.limit_ms, jump=jump):
             campaign.emit("recording_started", family=family(value), id=value["id"])
-            self.scenario(scenario_name, commands(self.args, value), directory, value["seed"])
+            try:
+                self.scenario(scenario_name, commands(self.args, value), directory, value["seed"])
+            except RuntimeError as error:
+                reason = setup_rejection_reason(error, value)
+                process = getattr(self.runner, "process", None)
+                if reason is None or process is None or process.poll() is not None:
+                    raise
+                try:
+                    require_no_recording_output(directory)
+                except ValueError:
+                    raise error from None
+                # A rejected advance leaves its scenario active. Replace only
+                # this worker's engine; close failures remain fatal.
+                self.close()
+                rejected = self.state.reject_candidate(directory, value, reason)
+                campaign.emit("candidate_rejected", family=family(value), id=value["id"], reason=reason)
+                return rejected
         if not v3.complete(directory):
             raise ValueError(f"Incomplete recording retained: {directory}")
         witnesses = sorted((self.options.task / "recording-workers").glob(f"*/*/scenarios/{scenario_name}.bench"))
@@ -624,10 +702,12 @@ def recording_identity(identity, value):
                 minimum_follow_fraction=policy["minimum_follow_fraction"], family_policy=policy)
 
 
-def summarize(episodes, selections, include_follow, used, follow_below_gate=False, point_limit=None):
+def summarize(episodes, selections, include_follow, used, follow_below_gate=False, point_limit=None,
+              rejected_candidates=(), point_candidates=None):
     groups = {}
     for name in (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ())):
         values = [value for value in episodes if value["family"] == name]
+        rejected = [value for value in rejected_candidates if value["family"] == name]
         keys = sum((Counter(value["key_counts"]) for value in values), Counter())
         decisions = sum(value["decisions"] for value in values)
         eligible = sum(value["training_eligible"] for value in values)
@@ -644,13 +724,16 @@ def summarize(episodes, selections, include_follow, used, follow_below_gate=Fals
             strafe_fraction=keys["strafe"] / decisions if decisions else None, jump=keys["jump"], climb=keys["climb"],
             dataset_bytes=sum(campaign.tree_bytes(value["episode"]) for value in values), complete=complete,
             target=needed, available_candidates=len(selections[name]), excluded=name == "follow" and not include_follow,
-            candidate_pool_exhausted=len(values) == len(selections[name]) and not complete)
+            rejected_candidates=len(rejected),
+            candidate_pool_exhausted=(len(values) >= point_candidates if name == "point" and point_candidates is not None
+                                      else len(values) + len(rejected) >= len(selections[name])) and not complete)
         if name == FOLLOW_BELOW_GATE:
             groups[name].update(follow_below_gate=True,
                                 minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION)
     return dict(complete=all(value["complete"] for value in groups.values()), by_family=groups,
                 point_limit=groups["point"]["target"],
                 navigation_memory_version=3, demo_version=2, dataset_bytes=used, episodes=episodes,
+                rejected_candidates=list(rejected_candidates),
                 student_training_run=False)
 
 
@@ -723,11 +806,28 @@ def run(options):
     new = 0
     verified = 0
     stop_reason = None
+    scheduled_points = []
     def metrics():
-        return dict(summarize(episodes, selections, include_follow, budget.used(), follow_below_gate, point_limit),
+        return dict(summarize(episodes, selections, include_follow, budget.used(), follow_below_gate, point_limit,
+                              state.rejections(), len(scheduled_points)),
                     resume_verified_episodes=verified)
 
     try:
+        # Rejected setup candidates have diagnostics rather than NAVDEMO
+        # episodes. Their durable terminal IDs are never dispatched again.
+        by_directory = {directory_for(options.task, value): value
+                        for values in selections.values() for value in values}
+        for rejected in state.rejections():
+            directory = Path(rejected["directory"])
+            candidate = by_directory.get(directory)
+            if (candidate is None or rejected.get("id") != candidate["id"]
+                    or rejected.get("family") != family(candidate)
+                    or rejected.get("candidate_rejected") is not True
+                    or rejected.get("recorded") is not False or rejected.get("training_eligible") is not False):
+                raise ValueError(f"Rejected candidate is outside its frozen selection: {directory}")
+            require_no_recording_output(directory)
+            done.add((family(candidate), candidate["id"]))
+        rejected_ids = set(done)
         # Verify prior attempts first; partial output is never automatically rerun.
         existing = []
         for name in families:
@@ -737,6 +837,8 @@ def run(options):
                     raise ValueError(f"Recording outside frozen train selection: {directory}")
             for value in selections[name]:
                 directory = directory_for(options.task, value)
+                if (name, value["id"]) in rejected_ids:
+                    continue
                 if directory.exists():
                     if name == "follow" and not include_follow:
                         raise ValueError("Follow recordings exist despite a closed follow gate")
@@ -746,7 +848,7 @@ def run(options):
         # Validate the cap against every already attempted candidate before
         # dispatch. Recorded failures count as attempts.
         scheduled_points = point_schedule(selections["point"],
-            {(family(value), value["id"]) for value in existing}, point_limit)
+            {(family(value), value["id"]) for value in existing}, point_limit, rejected_ids)
         campaign.emit("collection_resume_started", episodes=len(existing), parallel=options.parallel)
         with ThreadPoolExecutor(max_workers=options.parallel) as executor:
             for offset in range(0, len(existing), options.parallel):
@@ -758,10 +860,18 @@ def run(options):
                                 verified_episodes=len(episodes), total_episodes=len(existing), new_episodes=0)
                 batch = existing[offset:offset + options.parallel]
                 futures = [executor.submit(worker.trial, value) for worker, value in zip(workers, batch)]
-                measured = [future.result() for future in futures]
+                measured, completed, fatal = [], [], None
+                for value, future in zip(batch, futures):
+                    try:
+                        measured.append(future.result())
+                        completed.append(value)
+                    except Exception as error:
+                        fatal = fatal or error
                 episodes.extend(measured)
                 verified += len(measured)
-                done.update((family(value), value["id"]) for value in batch)
+                done.update((family(value), value["id"]) for value in completed)
+                if fatal is not None:
+                    raise fatal
                 campaign.emit("collection_resume_progress", verified_episodes=len(episodes), total_episodes=len(existing))
             campaign.emit("collection_resume_complete", episodes=len(existing))
             while not verify_only and stop_reason is None:
@@ -785,21 +895,33 @@ def run(options):
                             break
                         futures = [executor.submit(worker.trial, value) for worker, value in zip(workers, batch)]
                         # Always drain and preserve all concurrently started attempts.
-                        measured, completed = [], []
+                        measured, completed, fatal = [], [], None
                         for value, future in zip(batch, futures):
                             try:
-                                measured.append(future.result())
+                                outcome = future.result()
+                                if not outcome.get("candidate_rejected", False):
+                                    measured.append(outcome)
                                 completed.append(value)
                             except StorageLimit:
                                 stop_reason = "storage_limit"
+                            except Exception as error:
+                                fatal = fatal or error
                         episodes.extend(measured)
                         done.update((family(value), value["id"]) for value in completed)
-                        new += len(completed)
+                        new += len(measured)
+                        # Point rejections may require another frozen candidate
+                        # from the same region to fill its original quota.
+                        if name == "point":
+                            rejected_ids = {(value["family"], value["id"]) for value in state.rejections()}
+                            scheduled_points = point_schedule(selections["point"], done - rejected_ids,
+                                                              point_limit, rejected_ids)
                         progressed = bool(completed) or progressed
                         result = metrics()
                         atomic_json(output / "collection-metrics.json", dict(result, settings=identity))
                         campaign.emit("collection_progress", family=name, new_episodes=new,
                                       by_family=result["by_family"], bytes=budget.used())
+                        if fatal is not None:
+                            raise fatal
                         if stop_reason is not None or result["by_family"][name]["complete"]:
                             break
                     if stop_reason is not None:

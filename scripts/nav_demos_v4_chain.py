@@ -81,6 +81,10 @@ def episode_count(summary):
     return len(summary.get("episodes", []))
 
 
+def rejection_count(summary):
+    return len({(budget.family(value), value["id"]) for value in budget.rejection_rows(summary)})
+
+
 def exhausted(summary):
     return any(value.get("candidate_pool_exhausted") and not value.get("complete")
                for value in summary.get("by_family", {}).values())
@@ -201,7 +205,7 @@ def run(task):
         summary_path = task / "recordings/collection-metrics.json"
         before = read_json(summary_path, {})
         entry = dict(phase=phase, started=now(), plan=plan,
-                     episodes_before=episode_count(before))
+                     episodes_before=episode_count(before), rejected_before=rejection_count(before))
         phases.append(entry)
         state["phases"] = phases
         save_plan(task, plan, phases, phase)
@@ -227,15 +231,17 @@ def run(task):
         except Exception as error:
             stop("failed", error=type(error).__name__, detail=str(error))
             raise
-        entry.update(episodes_after=episode_count(result), complete=result.get("complete", False))
+        entry.update(episodes_after=episode_count(result), rejected_after=rejection_count(result),
+                     complete=result.get("complete", False))
         if result.get("complete"):
             return stop("complete")
         if exhausted(result):
             return stop("limit_reached", reason="candidate_pool_exhausted")
         if result.get("stop_reason") not in (None, "wall_limit", "episode_limit"):
             return stop("limit_reached", reason=result["stop_reason"])
-        if episode_count(result) <= episode_count(before):
-            return stop("no_progress", reason="No new finalized episodes in this phase")
+        if (episode_count(result) <= episode_count(before)
+                and rejection_count(result) <= rejection_count(before)):
+            return stop("no_progress", reason="No new finalized episodes or rejected candidates in this phase")
 
         # Forecast again before admitting another allocation. This also makes
         # the latest reduced road target authoritative for the next phase.

@@ -32,7 +32,12 @@ def family(value):
     return value.get("family", value.get("dataset_family", value.get("goal_kind")))
 
 
-def _point_selection(values, recorded, limit):
+def rejection_rows(summary):
+    values = summary.get("rejected_candidates", [])
+    return list(values.values()) if isinstance(values, dict) else list(values)
+
+
+def _point_selection(values, recorded, limit, rejected=()):
     regions = sorted({value["region"] for value in values})
     if len(regions) != 6:
         raise ValueError("Point budget requires the frozen six-region selection")
@@ -47,7 +52,6 @@ def _point_selection(values, recorded, limit):
         if len(values) != limit:
             raise ValueError("The original point selection must contain 400 pairs")
         quotas = Counter(value["region"] for value in values)
-        selected = values
     else:
         if limit <= 0 or limit % 6:
             raise ValueError("Reduced point limit must be a positive multiple of six")
@@ -55,21 +59,20 @@ def _point_selection(values, recorded, limit):
         if any(counts[region] > quota for region in regions):
             return None
         quotas = {region: quota for region in regions}
-        remaining = Counter({region: quota - counts[region] for region in regions})
-        selected = []
-        for value in values:
-            if value["id"] in recorded_ids:
-                selected.append(value)
-            elif remaining[value["region"]] > 0:
-                selected.append(value)
-                remaining[value["region"]] -= 1
-        if any(remaining.values()):
-            return None
+    remaining = Counter({region: quotas[region] - counts[region] for region in regions})
+    selected = []
+    for value in values:
+        if value["id"] in recorded_ids:
+            selected.append(value)
+        elif value["id"] not in rejected and remaining[value["region"]] > 0:
+            selected.append(value)
+            remaining[value["region"]] -= 1
     return dict(ids=[value["id"] for value in selected], regions={region:
-        dict(recorded=counts[region], quota=quotas[region]) for region in regions})
+        dict(recorded=counts[region], quota=quotas[region]) for region in regions},
+        exhausted_regions=[region for region in regions if remaining[region] > 0])
 
 
-def _estimate(name, values, group, candidates, target):
+def _estimate(name, values, group, candidates, target, rejected=()):
     count = len(values) if values else int(group.get("episodes", 0))
     eligible = (sum(bool(value.get("training_eligible")) for value in values) if values
                 else int(group.get("training_eligible", 0)))
@@ -85,13 +88,17 @@ def _estimate(name, values, group, candidates, target):
     rate = eligible / count if count and eligible else 1 / (count + 1) if count else 1.0
     attempts = math.ceil(missing / rate) if name in SUCCESS_FAMILIES else missing
     future_bytes = math.ceil(attempts * bytes_per_attempt * FUTURE_BYTE_FACTOR)
+    recorded_ids = {value["id"] for value in values}
+    candidate_ids = {value["id"] for value in candidates}
+    rejected_count = len(set(rejected) & candidate_ids - recorded_ids)
     return dict(target=target, goal="eligible" if name in SUCCESS_FAMILIES else "episodes",
         recorded_episodes=count, training_eligible=eligible, recorded_decisions=decisions,
         recorded_payload_bytes=payload, eligible_rate=rate,
         mean_decisions_per_episode=mean_decisions, mean_payload_bytes_per_episode=mean_payload,
         forecast_bytes_per_episode=bytes_per_attempt, remaining_needed=missing,
         estimated_remaining_attempts=attempts, forecast_additional_bytes=future_bytes,
-        candidates_remaining=max(0, len(candidates) - count), complete=missing == 0)
+        rejected_candidates=rejected_count,
+        candidates_remaining=max(0, len(candidates) - count - rejected_count), complete=missing == 0)
 
 
 def plan(summary, selections, used_bytes, max_bytes=MAX_BYTES,
@@ -109,6 +116,8 @@ def plan(summary, selections, used_bytes, max_bytes=MAX_BYTES,
         raise ValueError("Invalid previous point limit")
     episodes = summary.get("episodes", [])
     grouped = {name: [value for value in episodes if family(value) == name] for name in TARGETS}
+    rejected = {name: {value["id"] for value in rejection_rows(summary) if family(value) == name}
+                for name in TARGETS}
     groups = summary.get("by_family", {})
     points = grouped["point"]
     # Point records are required here because their region quotas cannot be
@@ -118,7 +127,7 @@ def plan(summary, selections, used_bytes, max_bytes=MAX_BYTES,
 
     def estimates(limit):
         return {name: _estimate(name, grouped[name], groups.get(name, {}),
-            selections.get(name, []), limit if name == "point" else target)
+            selections.get(name, []), limit if name == "point" else target, rejected[name])
             for name, target in TARGETS.items()}
 
     def total(by_family):
@@ -129,7 +138,7 @@ def plan(summary, selections, used_bytes, max_bytes=MAX_BYTES,
     # when the corpus's own 15 GB ceiling would permit another phase.
     effective_limit = (min(max_bytes, used_bytes + max(0, free_bytes - DISK_FREE_FLOOR_BYTES))
                        if free_bytes is not None else max_bytes)
-    current = _point_selection(selections["point"], points, previous_point_limit)
+    current = _point_selection(selections["point"], points, previous_point_limit, rejected["point"])
     if current is None:
         raise ValueError("Previous point quota excludes completed recordings")
     chosen, by_family = previous_point_limit, estimates(previous_point_limit)
@@ -146,8 +155,8 @@ def plan(summary, selections, used_bytes, max_bytes=MAX_BYTES,
             first = min(396, (previous_point_limit // 6) * 6)
             minimum = max(6, max((value["recorded"] for value in current["regions"].values()), default=0) * 6)
             for limit in range(first, minimum - 1, -6):
-                selected = _point_selection(selections["point"], points, limit)
-                if selected is None:
+                selected = _point_selection(selections["point"], points, limit, rejected["point"])
+                if selected is None or selected["exhausted_regions"]:
                     continue
                 candidate_estimates = estimates(limit)
                 if total(candidate_estimates) <= effective_limit:
@@ -160,6 +169,8 @@ def plan(summary, selections, used_bytes, max_bytes=MAX_BYTES,
                 reason = "point_reduced_for_budget"
     incomplete = [name for name, value in by_family.items() if not value["complete"]]
     exhausted = [name for name in incomplete if not by_family[name]["candidates_remaining"]]
+    if current["exhausted_regions"] and "point" in incomplete and "point" not in exhausted:
+        exhausted.append("point")
     if not incomplete:
         reason = "complete"
     elif exhausted:
@@ -190,6 +201,12 @@ def task_plan(task, max_bytes=MAX_BYTES, previous_point_limit=None, free_bytes=N
     task = Path(task)
     root = task / "recordings"
     summary = json.loads((root / "collection-metrics.json").read_text())
+    state_path = root / "collection-state.json"
+    if state_path.is_file():
+        state = json.loads(state_path.read_text())
+        rejected = {(family(value), value["id"]): value for value in
+                    rejection_rows(summary) + rejection_rows(state)}
+        summary["rejected_candidates"] = list(rejected.values())
     selections = {name: [json.loads(line) for line in
         (task / "recording-input" / f"{name}.jsonl").read_text().splitlines() if line.strip()]
         for name in TARGETS}

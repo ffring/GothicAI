@@ -130,6 +130,38 @@ def test_budget_is_rechecked_before_continuation(setup, monkeypatch):
     assert saved["phases"][0]["next_plan"]["reason"] == "budget_blocked_nonpoint"
 
 
+def test_rejection_only_phase_queues_next_phase_when_candidate_pool_remains(setup, monkeypatch):
+    task, calls = setup
+    value = dict(summary(483), stop_reason="wall_limit", rejected_candidates=[dict(
+        id="follow-bad-route", family="follow_below_gate", training_eligible=False,
+        reason="moving route needs distinct connected points")])
+    monkeypatch.setattr(chain.collect, "run", lambda options: value)
+    state = chain.run(task)
+    assert state["status"] == "continued" and calls["submit"] == [task]
+    assert state["phases"][0]["episodes_before"] == state["phases"][0]["episodes_after"] == 483
+    assert state["phases"][0]["rejected_before"] == 0
+    assert state["phases"][0]["rejected_after"] == 1
+
+
+def test_old_rejections_do_not_count_as_new_progress(setup, monkeypatch):
+    task, calls = setup
+    value = dict(summary(483), rejected_candidates=[dict(id="follow-bad-route", family="follow_below_gate")])
+    chain.atomic_json(task / "recordings/collection-metrics.json", value)
+    monkeypatch.setattr(chain.collect, "run", lambda options: deepcopy(value))
+    assert chain.run(task)["status"] == "no_progress"
+    assert not calls["submit"]
+
+
+def test_rejection_progress_still_stops_when_candidate_pool_is_exhausted(setup, monkeypatch):
+    task, calls = setup
+    value = dict(summary(483, candidate_pool_exhausted=True), rejected_candidates=[dict(
+        id="follow-last-route", family="follow_below_gate")])
+    monkeypatch.setattr(chain.collect, "run", lambda options: value)
+    state = chain.run(task)
+    assert state["status"] == "limit_reached" and state["reason"] == "candidate_pool_exhausted"
+    assert not calls["submit"]
+
+
 def test_final_reduced_quota_refreshes_only_summary_without_another_recording_phase(setup, monkeypatch):
     task, calls = setup
     before = summary(483)
