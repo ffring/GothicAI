@@ -32,6 +32,12 @@ records the replacement, original-mesh screenshots and alternating branch/main r
 row next to that barrel (`own-mesh-crate.png`); the barrels stay in its frame.
 `own-mesh-table` frames the `NW_CITY_TABLE_PEASANT_01` in a harbour house (candle-lit room,
 candle and books stay on it) and writes `own-mesh-table.png`.
+`own-mesh-market` frames one copy of each of the 21 market-set visuals (`NW_CITY_MERCHANT`, see
+[the market report](../../reports/content/2026-10-market-set/README.md)), writes `<visual>.png` per frame,
+then the census, an overview `market-overview.png` and thirty seconds of app cadence. Run it twice on the
+same host with `WORLD=NEWWORLD.ZEN`, `OPENGOTHIC_CENSUS=<absolute output>/census.json` and either
+`OPENGOTHIC_CONTENT=` (originals) or the set root `~/.local/share/gothic-ai/content-staging/market-set/content`.
+A `shot` is written at the end of its frame, so the scenario waits after each one before moving the camera.
 `own-mesh-mob` frames the harbour `BENCH_NW_CITY_01.ASC` beside the wooden wall
 (prop-survey 20649, ZEN vob.id 23479), then uses the native `AI_UseMob` seat/stand
 fixture at `NW_CITY_HABOUR_BENCH_01`. It writes empty, seated and standing screenshots,

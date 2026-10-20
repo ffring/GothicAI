@@ -8,13 +8,15 @@ config: {"id": "deco-shield", "target": "data/content/mesh3d-market.json", "seed
 A heater shield of four vertical boards, a little convex, painted in two halves
 (dull red and off-white, no emblem) with an iron rim and boss, hangs in front of two
 long swords crossed in an X: hilts above the shield's top corners, tips below its
-lower edge, as on the concept. The wall is on +Y (the original's flat back); the
+lower edge, as on the concept. It is built with the wall on +Y and mirrored at the
+end: the original hangs with its flat back on -Y and faces +Y (glTF -Z); the
 trophy fills the bbox, sword hilts at its top corners.
 """
 import math
 import sys
 from pathlib import Path
 
+import bmesh
 import numpy as np
 from mathutils import Vector
 
@@ -157,5 +159,11 @@ for i in range(2):
         P.poly((rings[i][k2], rings[i][k], rings[i + 1][k], rings[i + 1][k2]), IRON, ((0, 0), (0.02, 0), (0.02, 0.02), (0, 0.02)))
 for k in range(segs):
     P.poly((rings[2][(k + 1) % segs], rings[2][k], top_v), IRON, ((0, 0), (0.02, 0), (0.01, 0.02)))
+
+# Built with the wall on +Y; the originals hang with the wall on -Y and face +Y (glTF -Z), so mirror
+# the trophy across the depth of its bbox and turn the faces back outward.
+for v in P.bm.verts:
+    v.co.y = lo.y + hi.y - v.co.y
+bmesh.ops.reverse_faces(P.bm, faces=P.bm.faces[:])
 
 P.finish(goal, out, lo, hi, {})

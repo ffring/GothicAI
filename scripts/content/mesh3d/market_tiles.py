@@ -159,10 +159,11 @@ def main() -> int:
             shutil.copytree(Path(tile["copy"]).expanduser(), target)  # pilot tiles: wood and iron
             print(f"{key}: copied {tile['copy']}")
             continue
-        raw = Path(tile["png"]).read_bytes()
-        seam = build_tile(Path(tile["png"]), tile["axes"], tile["roughness"], tile.get("metallic", 0.0), target,
+        png = Path(tile["png"]).expanduser()
+        raw = png.read_bytes()
+        seam = build_tile(png, tile["axes"], tile["roughness"], tile.get("metallic", 0.0), target,
                           tile.get("crop"), tile.get("size"))
-        print(f"{key}: built from {Path(tile['png']).name}, seam {seam.get('applied')}")
+        print(f"{key}: built from {png.name}, seam {seam.get('applied')}")
         if args.import_sources:
             record = record_for(key, tile, seam, raw, args.utc, files_root, target)
             store = source_root / record["source_png"]
