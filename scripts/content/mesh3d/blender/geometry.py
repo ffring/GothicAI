@@ -419,9 +419,9 @@ def cylinder_uv(vertices, faces, return_patches=False):
     """Shared cap, cylindrical and OBB charts around the object's +Y axis.
 
     A chart never changes its projection, origin or scale between triangles.
-    Cylinder U measures the ellipse arc at the patch's mean radius. V integrates
-    the physical meridian of a shared fitted radius profile, retaining constant
-    angular stave width on a bowed body. Two half charts put the wrapping seam
+    Cylinder U is the polar angle times the patch's mean physical radius.
+    V integrates a smoothed, height-binned physical radius profile shared by
+    every vertex at that height. Two half charts put the wrapping seam
     on patch boundaries. Returned face types are 0=box, 1=cylinder and 2=cap.
     """
     vertices = np.asarray(vertices, dtype=float)
@@ -430,17 +430,12 @@ def cylinder_uv(vertices, faces, return_patches=False):
     centre = (vertices.min(axis=0) + vertices.max(axis=0)) * .5
     local = vertices - centre
     axes = np.ptp(vertices[:, [0, 2]], axis=0) * .5
-    normalized = local[:, [0, 2]] / axes
-    theta = np.arctan2(normalized[:, 1], normalized[:, 0])
-    rho = np.linalg.norm(normalized, axis=1)
+    theta = np.arctan2(local[:, 2], local[:, 0])
+    radius = np.linalg.norm(local[:, [0, 2]], axis=1)
     uv = np.empty((len(faces), 3, 2), dtype=np.float32)
     patch_ids = np.empty(len(faces), dtype=np.int32)
     types = np.empty(len(faces), dtype=np.int32)
     next_id = 0
-    angle_grid = np.linspace(-np.pi, np.pi, 8193)
-    speed = np.hypot(axes[0] * np.sin(angle_grid), axes[1] * np.cos(angle_grid))
-    arc = np.r_[0., np.cumsum((speed[:-1] + speed[1:]) * np.diff(angle_grid) * .5)]
-    quadrature_x, quadrature_w = np.polynomial.legendre.leggauss(16)
     for label in range(int(labels.max()) + 1):
         selected = np.flatnonzero(labels == label)
         planar = np.all(normals[selected] @ normals[selected[0]] > 1 - 1e-6)
@@ -470,29 +465,31 @@ def cylinder_uv(vertices, faces, return_patches=False):
                     angle[angle < -np.pi / 2] += 2 * np.pi
                 else:
                     angle[angle > np.pi / 2] -= 2 * np.pi
-                # Arc is periodic; the branch adjustment belongs to the chart,
-                # rather than to individual triangles.
-                wrapped = (angle + np.pi) % (2 * np.pi) - np.pi
-                arc_u = np.interp(wrapped, angle_grid, arc)
-                arc_u += np.floor((angle + np.pi) / (2 * np.pi)) * arc[-1]
-                reference = np.average(rho[faces[group]].mean(axis=1), weights=areas[group])
+                reference = np.average(radius[faces[group]].mean(axis=1), weights=areas[group])
                 height = points[:, 1]
                 bottom, top = height.min(), height.max()
                 span = top - bottom
                 if span <= 1e-12:
                     raise ValueError("cylindrical UV patch needs a vertical extent")
-                scaled_height = (height - bottom) / span * 2 - 1
-                distinct = len(np.unique(np.round(scaled_height, 5)))
-                degree = min(5, distinct - 1)
-                profile = np.polynomial.polynomial.polyfit(scaled_height, rho[used], degree)
-                derivative = np.polynomial.polynomial.polyder(profile)
-                # Integrate each vertex's meridian from the one patch origin.
-                sample_height = (scaled_height[:, None] + 1) * (quadrature_x + 1) * .5 - 1
-                slope = np.polynomial.polynomial.polyval(sample_height, derivative) * 2 / span
-                meridian_radius = np.hypot(axes[0] * np.cos(angle), axes[1] * np.sin(angle))
-                metric = np.sqrt(1 + (slope * meridian_radius[:, None]) ** 2)
-                vertical = (height - bottom) * .5 * (metric @ quadrature_w)
-                coordinates = np.column_stack((arc_u * reference, vertical))
+                # One radius profile for the chart. Binning suppresses angular
+                # sampling noise; smoothing retains a linear cone exactly.
+                bins = np.rint((height - bottom) / span * 32).astype(int)
+                counts = np.bincount(bins, minlength=33)
+                occupied = counts > 0
+                sample_height = np.bincount(bins, weights=height, minlength=33)[occupied] / counts[occupied]
+                sample_radius = np.bincount(bins, weights=radius[used], minlength=33)[occupied] / counts[occupied]
+                grid_height = np.linspace(bottom, top, 33)
+                grid_radius = np.interp(grid_height, sample_height, sample_radius)
+                # Extrapolate to the true ends instead of clamping V in the
+                # first/last bin. Linear padding avoids flattening end slopes.
+                grid_radius[0] = sample_radius[0] + (bottom - sample_height[0]) * (sample_radius[1] - sample_radius[0]) / (sample_height[1] - sample_height[0])
+                grid_radius[-1] = sample_radius[-1] + (top - sample_height[-1]) * (sample_radius[-1] - sample_radius[-2]) / (sample_height[-1] - sample_height[-2])
+                padding = np.r_[2 * grid_radius[0] - grid_radius[1], grid_radius,
+                                2 * grid_radius[-1] - grid_radius[-2]]
+                smooth_radius = np.convolve(padding, [.25, .5, .25], mode="valid")
+                meridian = np.r_[0., np.cumsum(np.hypot(np.diff(grid_height), np.diff(smooth_radius)))]
+                vertical = np.interp(height, grid_height, meridian)
+                coordinates = np.column_stack((angle * reference, vertical))
                 projection = 1
             uv[group] = coordinates[corners].reshape(-1, 3, 2)
             patch_ids[group] = next_id

@@ -279,7 +279,7 @@ def test_cylinder_uv_has_metric_scale_including_seam():
     assert np.max(np.ptp(uv[:, :, 0], axis=1)) < .05
 
 
-def test_cylinder_shared_meridian_and_ellipse_arc_keep_metric_checker():
+def test_cylinder_shared_meridian_and_angle_keep_metric_checker():
     vertices, faces = noisy_bowed_barrel()
     vertices *= [1.18, 1., .93]
     uv, patches, types = cylinder_uv(vertices, faces, return_patches=True)
@@ -287,6 +287,39 @@ def test_cylinder_shared_meridian_and_ellipse_arc_keep_metric_checker():
     np.testing.assert_allclose(scale[:, 1], 1., rtol=.05)
     np.testing.assert_allclose(scale[:, 0], 1., rtol=.15)
     assert np.all(types == 1)
+    assert_no_patch_uv_jumps(faces, uv, patches)
+
+
+def test_cylinder_uses_shared_binned_cone_meridian_and_mean_radius_u():
+    sides, rings = 96, 65
+    theta, height = np.meshgrid(np.arange(sides) * 2 * np.pi / sides,
+                               np.linspace(0., 1.2, rings))
+    radius = .5 + .125 * height
+    vertices = np.stack((radius * np.cos(theta), height, radius * np.sin(theta)), axis=-1).reshape(-1, 3)
+    first = (np.arange(rings - 1)[:, None] * sides + np.arange(sides)).ravel()
+    following = first // sides * sides + (first + 1) % sides
+    faces = np.vstack((np.column_stack((first, first + sides, following)),
+                       np.column_stack((following, first + sides, following + sides))))
+    uv, patches, types = cylinder_uv(vertices, faces, return_patches=True)
+    assert np.all(types == 1)
+    expected_length = 1.2 * np.sqrt(1 + .125 ** 2)
+    assert expected_length > 1.2
+    for patch in np.unique(patches):
+        selected = patches == patch
+        np.testing.assert_allclose(np.ptp(uv[selected, :, 1]), expected_length, rtol=.05)
+        triangles = vertices[faces[selected]]
+        areas = triangle_areas(vertices, faces[selected])
+        expected_radius = np.average(np.linalg.norm(triangles[:, :, [0, 2]], axis=2).mean(axis=1), weights=areas)
+        angle = np.arctan2(triangles[:, :, 2], triangles[:, :, 0])
+        # Differentiating within each triangle removes the half-chart's seam
+        # phase while checking a single mean-radius multiplier everywhere.
+        angle = np.unwrap(angle, axis=1)
+        np.testing.assert_allclose(np.diff(uv[selected, :, 0], axis=1),
+                                   np.diff(angle, axis=1) * expected_radius,
+                                   rtol=1e-5, atol=1e-6)
+        for level in np.unique(height):
+            at_level = triangles[:, :, 1] == level
+            assert np.ptp(uv[selected, :, 1][at_level]) < 1e-6
     assert_no_patch_uv_jumps(faces, uv, patches)
 
 
