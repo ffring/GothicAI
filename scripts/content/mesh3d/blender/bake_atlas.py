@@ -102,8 +102,10 @@ if light:
 tone_attr = mesh.attributes.new("tone", "FLOAT", "FACE")
 tone_attr.data.foreach_set("value", tones[part].astype(np.float32))
 zone_attr = mesh.attributes.new("zone", "FLOAT", "FACE")
-hidden = normals[:, 2] < -0.9  # the bottom stands on the ground: baked, but not part of the measured mean
-zone_attr.data.foreach_set("value", np.where(hidden, 0, mat_index + 1).astype(np.float32))
+# Faces pointing down (a barrel's bottom on the ground) are left out of the measured mean, but still
+# get their zone's gain: a canopy's underside is seen. They carry half a step on top of their zone.
+hidden = normals[:, 2] < -0.9
+zone_attr.data.foreach_set("value", (mat_index + 1 + np.where(hidden, 0.5, 0.0)).astype(np.float32))
 
 
 # --- bake materials ---
@@ -289,11 +291,12 @@ ao = bake_pass("ao", "AO", samples=cfg.get("ao_samples", 64))[:, :, 0]
 
 strength = cfg.get("ao_strength", 0.85)
 albedo = colour * (1 - strength * (1 - ao))[..., None]
-zone_id = np.rint(zone).astype(int)
+zone_id = np.floor(zone + 1e-3).astype(int)
+down = zone - zone_id > 0.25
 report = {}
 for index, key in enumerate(keys):
-    sel = zone_id == index + 1  # hidden faces have zone 0 and keep their colour
-    measured = sel & inside
+    sel = zone_id == index + 1  # the gain reaches every pixel of the zone, faces pointing down included
+    measured = sel & inside & ~down
     if not measured.any():
         continue
     gamma = cfg.get("contrast", {}).get(key, 1.0)
@@ -355,13 +358,17 @@ for key, (atlas_key, group) in cfg["slots"].items():
     if atlas_key not in new_slots:
         new_slots.append(atlas_key)
 remap = np.array([new_slots.index(cfg["slots"][k][0]) for k in keys])
-mesh.polygons.foreach_set("material_index", remap[mat_index].astype(np.int32))
-mesh.materials.clear()
+mesh.materials.clear()  # resets every face's material index, so the indices are set after the new materials
 groups = {atlas_key: group for atlas_key, group in cfg["slots"].values()}
 for atlas_key in new_slots:
     mat = bpy.data.materials.new(atlas_key)
     mat["group"] = groups[atlas_key]
     mesh.materials.append(mat)
+mesh.polygons.foreach_set("material_index", remap[mat_index].astype(np.int32))
+mesh.update()
+written = np.empty(len(mesh.polygons), np.int32)
+mesh.polygons.foreach_get("material_index", written)
+faces_per_material = np.bincount(written, minlength=len(new_slots)).tolist()
 for o in scene.objects:
     o.select_set(o == obj)
 bpy.ops.export_scene.gltf(filepath=str(out / "model.glb"), export_format="GLB", use_selection=True,
@@ -369,6 +376,6 @@ bpy.ops.export_scene.gltf(filepath=str(out / "model.glb"), export_format="GLB", 
                           export_texcoords=True, export_animations=False, export_attributes=False)
 coverage = float(inside.mean())
 metrics = {"atlas": size, "coverage": round(coverage, 4), "triangles": sum(len(p.vertices) - 2 for p in mesh.polygons),
-           "materials": new_slots, "zones": report, "blender_version": bpy.app.version_string}
+           "materials": new_slots, "faces_per_material": dict(zip(new_slots, faces_per_material)), "zones": report, "blender_version": bpy.app.version_string}
 (out / "metrics.json").write_text(json.dumps(metrics, indent=2))
 print("ATLAS", json.dumps(metrics))
