@@ -156,6 +156,45 @@ void opaqueStaticVariant(MeshObjects& owner, const zenkit::MultiResolutionMesh& 
           "equal current formats must not hide a different alpha-test policy");
   }
 
+void sourceAlphaPolicy(MeshObjects& owner, const zenkit::ModelMesh& model, bool ownAlbedo) {
+  for(auto function:{zenkit::AlphaFunction::BLEND,zenkit::AlphaFunction::NONE}) {
+    for(uint8_t colorAlpha:{uint8_t(255),uint8_t(128)}) {
+      auto baseSource = source("HUM_BODY_V0_C0.TGA");
+      baseSource.alpha_func = function;
+      baseSource.color.a = colorAlpha;
+      auto variantSource = baseSource;
+      variantSource.texture = "HUM_BODY_V2_C3.TGA";
+      const Material base(baseSource,true);
+      const Material variant(variantSource,true);
+      if(function==zenkit::AlphaFunction::BLEND && colorAlpha==255)
+        require(base.alpha==(ownAlbedo ? Material::Solid : Material::Transparent),
+                "the BLEND fixture must exercise the DXT1 solid optimization in one direction");
+
+      Material changed = base;
+      changed.setAlbedo(Resources::loadTexture(baseSource.texture,2,3));
+      require(changed.tex==variant.tex,"the policy test must select the variant's actual albedo");
+      require(changed.alpha==variant.alpha,
+              "albedo changes must preserve the source alpha function and color alpha like the variant constructor");
+      changed.setAlbedo(Resources::loadTexture(baseSource.texture,0,0));
+      require(changed.tex==base.tex,"the reverse policy test must restore the base albedo");
+      require(changed.alpha==base.alpha,
+              "reverse albedo changes must classify alpha like the base constructor");
+
+      if(function==zenkit::AlphaFunction::BLEND) {
+        auto blendModel = model;
+        blendModel.meshes[0].mesh.sub_meshes[0].mat = baseSource;
+        ProtoMesh blendProto(blendModel,nullptr,"MATERIAL_TEXTURE_BLEND.MDM");
+        MeshObjects::Mesh selected(owner,blendProto,2,0,3,false);
+        require(selected.nodesCount()==1,"the renderer must allocate the selected BLEND skinned submesh");
+        const auto& material = selected.node(0).material();
+        require(material.tex==variant.tex,"the BLEND skinned draw bucket must use the selected albedo");
+        require(material.alpha==variant.alpha,
+                "the BLEND skinned draw bucket must classify alpha like the variant constructor");
+        }
+      }
+    }
+  }
+
 void skinnedVariant(bool ownAlbedo) {
   // Use the renderer owner: the CPU-only MeshObjects path does not select
   // skinned texture variants or allocate the resulting material's draw bucket.
@@ -166,6 +205,7 @@ void skinnedVariant(bool ownAlbedo) {
   MeshObjects owner(visuals);
 
   zenkit::ModelMesh model;
+  model.checksum = 0;
   model.meshes.resize(1);
   auto& skin = model.meshes[0];
   skin.mesh.positions = {{0,0,0},{1,0,0},{0,1,0}};
@@ -198,6 +238,7 @@ void skinnedVariant(bool ownAlbedo) {
   require(material.alpha==(ownAlbedo ? Material::AlphaTest : Material::Solid),
           "the skinned variant draw bucket must reclassify alpha from its selected albedo");
   opaqueStaticVariant(owner,skin.mesh,ownAlbedo);
+  sourceAlphaPolicy(owner,model,ownAlbedo);
   }
 
 void replacements(Tempest::Device& device, const Fixture& fixture) {

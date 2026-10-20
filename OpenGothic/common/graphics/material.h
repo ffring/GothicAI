@@ -69,6 +69,11 @@ class Material final {
 
   private:
     bool             alphaTestEnabled = false;
+    zenkit::AlphaFunction sourceAlphaFunc = zenkit::AlphaFunction::NONE;
+    zenkit::MaterialGroup sourceMaterialGroup = zenkit::MaterialGroup::UNDEFINED;
+    uint8_t          sourceColorAlpha = 255;
+    // Keep explicit alpha overrides separate from texture-derived classification.
+    AlphaFunc        classifiedAlpha = AlphaTest;
 
     static AlphaFunc loadAlphaFunc(zenkit::AlphaFunction zenAlpha, zenkit::MaterialGroup matGroup,
                                    uint8_t alpha, const Tempest::Texture2d* tex, bool enableAlphaTest);
