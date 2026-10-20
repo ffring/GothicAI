@@ -10,7 +10,9 @@ static Tempest::Color toColor(zenkit::Color v) {
   return c;
   }
 
-Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
+Material::Material(const zenkit::Material& m, bool enableAlphaTest)
+  :alphaTestEnabled(enableAlphaTest), sourceAlphaFunc(m.alpha_func),
+   sourceMaterialGroup(m.group), sourceColorAlpha(m.color.a) {
   loadFrames(m);
 
   Resources::MaterialMaps maps;
@@ -22,9 +24,7 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
     // Our colour also determines alpha classification; consulting the original
     // texture format here would open an asset that this record replaces.
     if(maps.hasAlbedo) {
-      tex = maps.albedo!=nullptr ? maps.albedo : &Resources::fallbackTexture();
-      if(maps.albedo!=nullptr)
-        Resources::materialAlbedoReplaced(m.texture);
+      tex = Resources::loadMaterialAlbedo(m.texture);
       }
     }
   if(tex==nullptr)
@@ -34,11 +34,12 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
       tex = Resources::loadTexture("DEFAULT.TGA");
       } else {
       tex = Resources::loadTexture(toColor(m.color));
-      enableAlphaTest &= (m.color.a!=255);
+      alphaTestEnabled &= (m.color.a!=255);
       }
     }
 
-  alpha = loadAlphaFunc(m.alpha_func,m.group,m.color.a,tex,enableAlphaTest);
+  alpha = loadAlphaFunc(sourceAlphaFunc,sourceMaterialGroup,sourceColorAlpha,tex,alphaTestEnabled);
+  classifiedAlpha = alpha;
   if(alpha==Water && m.name=="OWODWFALL_WATERFALL_01") {
     // NOTE: waterfall heuristics
     alpha = Solid;
@@ -71,13 +72,15 @@ Material::Material(const zenkit::Material& m, bool enableAlphaTest) {
     }
   }
 
-Material::Material(const zenkit::VisualDecal& decal) {
+Material::Material(const zenkit::VisualDecal& decal)
+  :alphaTestEnabled(true), sourceAlphaFunc(decal.alpha_func), sourceColorAlpha(decal.alpha_weight) {
   tex = Resources::loadTexture(decal.name);
   if(tex==nullptr && !decal.name.empty())
     tex = Resources::loadTexture("DEFAULT.TGA");
   loadFrames(decal.name, decal.texture_anim_fps);
 
-  alpha        = loadAlphaFunc(decal.alpha_func, zenkit::MaterialGroup::UNDEFINED, decal.alpha_weight, tex, true);
+  alpha        = loadAlphaFunc(sourceAlphaFunc, sourceMaterialGroup, sourceColorAlpha, tex, alphaTestEnabled);
+  classifiedAlpha = alpha;
   alphaWeight  = float(decal.alpha_weight)/255.f;
   }
 
@@ -99,6 +102,11 @@ bool Material::operator ==(const Material& other) const {
          materialMaps==other.materialMaps &&
          frames==other.frames &&
          alpha==other.alpha &&
+         alphaTestEnabled==other.alphaTestEnabled &&
+         sourceAlphaFunc==other.sourceAlphaFunc &&
+         sourceMaterialGroup==other.sourceMaterialGroup &&
+         sourceColorAlpha==other.sourceColorAlpha &&
+         classifiedAlpha==other.classifiedAlpha &&
          alphaWeight==other.alphaWeight &&
          texAniMapDirPeriod==other.texAniMapDirPeriod &&
          texAniFPSInv==other.texAniFPSInv &&
@@ -109,6 +117,14 @@ bool Material::operator ==(const Material& other) const {
 
 bool Material::isSolid() const {
   return !isGhost && (alpha==Material::Solid || alpha==Material::AlphaTest);
+  }
+
+void Material::setAlbedo(const Tempest::Texture2d* texture) {
+  tex = texture;
+  if(alpha==classifiedAlpha) {
+    alpha = loadAlphaFunc(sourceAlphaFunc,sourceMaterialGroup,sourceColorAlpha,tex,alphaTestEnabled);
+    classifiedAlpha = alpha;
+    }
   }
 
 bool Material::isForwardShading(AlphaFunc alpha) {

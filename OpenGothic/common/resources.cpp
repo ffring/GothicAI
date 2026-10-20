@@ -62,17 +62,6 @@ using namespace Tempest;
 
 Resources* Resources::inst=nullptr;
 
-static void emplaceTag(char* buf, char tag){
-  for(size_t i=1;buf[i];++i){
-    if(buf[i]==tag && buf[i-1]=='_' && buf[i+1]=='0'){
-      buf[i  ]='%';
-      buf[i+1]='s';
-      ++i;
-      return;
-      }
-    }
-  }
-
 Resources::Resources() {
   inst=this;
   initCensus();
@@ -1154,26 +1143,24 @@ const Texture2d* Resources::loadTexture(Tempest::Color color) {
   return ret;
   }
 
-const Texture2d *Resources::loadTexture(std::string_view name, int32_t iv, int32_t ic) {
+bool Resources::hasTextureVariant(std::string_view name) {
+  return name.find("_V0")!=std::string_view::npos || name.find("_C0")!=std::string_view::npos;
+  }
+
+std::string Resources::textureVariantName(std::string_view name, int32_t iv, int32_t ic) {
+  std::string ret(name);
+  // Preserve the original long-name fallback and first-tag substitution.
   if(name.size()>=128)
-    return loadTexture(name);
+    return ret;
+  if(const auto at = ret.find("_V0"); at!=std::string::npos)
+    ret.replace(at+1,2,"V"+std::to_string(iv));
+  if(const auto at = ret.find("_C0"); at!=std::string::npos)
+    ret.replace(at+1,2,"C"+std::to_string(ic));
+  return ret;
+  }
 
-  char v[16]={};
-  char c[16]={};
-  char buf1[128]={};
-  char buf2[128]={};
-
-  std::snprintf(v,sizeof(v),"V%d",iv);
-  std::snprintf(c,sizeof(c),"C%d",ic);
-  std::snprintf(buf1,sizeof(buf1),"%.*s",int(name.size()),name.data());
-
-  emplaceTag(buf1,'V');
-  std::snprintf(buf2,sizeof(buf2),buf1,v);
-
-  emplaceTag(buf2,'C');
-  std::snprintf(buf1,sizeof(buf1),buf2,c);
-
-  return loadTexture(buf1);
+const Texture2d *Resources::loadTexture(std::string_view name, int32_t iv, int32_t ic) {
+  return loadMaterialAlbedo(textureVariantName(name,iv,ic));
   }
 
 std::vector<const Texture2d*> Resources::loadTextureAnim(std::string_view name) {
@@ -1247,6 +1234,17 @@ Resources::MaterialMaps Resources::loadMaterialMaps(std::string_view name) {
   ret.present = true;
   ret.hasAlbedo = !files.albedo.empty();
   return ret;
+  }
+
+const Texture2d* Resources::loadMaterialAlbedo(std::string_view name) {
+  const auto maps = loadMaterialMaps(name);
+  if(!maps.hasAlbedo)
+    return loadTexture(name);
+  // A broken replacement must not silently open the original texture.
+  if(maps.albedo==nullptr)
+    return &fallbackTexture();
+  materialAlbedoReplaced(name);
+  return maps.albedo;
   }
 
 void Resources::materialAlbedoReplaced(std::string_view name) {

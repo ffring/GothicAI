@@ -50,6 +50,7 @@ class Material final {
     bool operator == (const Material& other) const;
 
     bool isSolid() const;
+    void setAlbedo(const Tempest::Texture2d* texture);
 
     bool hasMaterialMaps()       const { return materialMaps; }
     bool hasFrameAnimation()     const { return !frames.empty() && texAniFPSInv!=0;    }
@@ -67,6 +68,13 @@ class Material final {
     static bool isTextureInShadowPass(AlphaFunc alpha);
 
   private:
+    bool             alphaTestEnabled = false;
+    zenkit::AlphaFunction sourceAlphaFunc = zenkit::AlphaFunction::NONE;
+    zenkit::MaterialGroup sourceMaterialGroup = zenkit::MaterialGroup::UNDEFINED;
+    uint8_t          sourceColorAlpha = 255;
+    // Keep explicit alpha overrides separate from texture-derived classification.
+    AlphaFunc        classifiedAlpha = AlphaTest;
+
     static AlphaFunc loadAlphaFunc(zenkit::AlphaFunction zenAlpha, zenkit::MaterialGroup matGroup,
                                    uint8_t alpha, const Tempest::Texture2d* tex, bool enableAlphaTest);
     void             loadFrames(const zenkit::Material& m);

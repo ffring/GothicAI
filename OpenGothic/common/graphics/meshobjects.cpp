@@ -22,13 +22,13 @@ MeshObjects::Item MeshObjects::implGet(const StaticMesh &mesh, const StaticMesh:
   Material mat = s.material;
   if(teethTex!=0 || bodyColor!=0 || texVar!=0){
     if(s.texName=="HUM_TEETH_V0.TGA"){
-      mat.tex=solveTex(s.material.tex,s.texName,teethTex,bodyColor);
+      mat.setAlbedo(solveTex(s.material.tex,s.texName,teethTex,bodyColor));
       }
     else if(s.texName=="HUM_MOUTH_V0.TGA"){
-      mat.tex=solveTex(s.material.tex,s.texName,teethTex,bodyColor);
+      mat.setAlbedo(solveTex(s.material.tex,s.texName,teethTex,bodyColor));
       }
-    else if(s.texName.find_first_of("VC")!=std::string::npos){
-      mat.tex=solveTex(s.material.tex,s.texName,texVar,bodyColor);
+    else if(Resources::hasTextureVariant(s.texName)){
+      mat.setAlbedo(solveTex(s.material.tex,s.texName,texVar,bodyColor));
       }
     }
 
@@ -41,7 +41,7 @@ MeshObjects::Item MeshObjects::implGet(const StaticMesh &mesh, const StaticMesh:
   }
 
 const Tempest::Texture2d *MeshObjects::solveTex(const Tempest::Texture2d *def, std::string_view format, int32_t v, int32_t c) {
-  if(format.find_first_of("VC")!=std::string::npos){
+  if(Resources::hasTextureVariant(format)){
     auto ntex = Resources::loadTexture(format,v,c);
     if(ntex!=nullptr)
       return ntex;
@@ -250,7 +250,7 @@ MeshObjects::Mesh::Mesh(MeshObjects& owner, const ProtoMesh& mesh,
     auto& skin = mesh.skined[i];
     for(auto& m:skin.sub) {
       Material mat = m.material;
-      mat.tex=owner.solveTex(mat.tex,m.texName,texVar,bodyColor);
+      mat.setAlbedo(owner.solveTex(mat.tex,m.texName,texVar,bodyColor));
       if(mat.tex!=nullptr) {
         sub[subCount] = owner.parent->get(skin,mat,m.iboOffset,m.iboSize,*anim);
         ++subCount;
