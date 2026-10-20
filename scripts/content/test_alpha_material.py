@@ -67,3 +67,18 @@ def test_coverage_admission_uses_absolute_ten_point_tolerance():
 def test_no_visible_pixels_cannot_supply_colour_for_dilation():
     with pytest.raises(ValueError, match='no visible pixels'):
         alpha_material.harden_and_dilate(np.zeros((2, 2, 4), dtype=np.uint8))
+
+
+def test_measured_foreground_colour_bypasses_saturation_cap_without_changing_alpha():
+    from material_colour import _linear, linear_to_oklab
+    target = _linear(np.array([.7, .24, .1]))
+    value = record(target=float(target @ alpha_material.LUMINANCE))
+    value['parameters']['target_oklab'] = linear_to_oklab(target).tolist()
+    maps, correction, rejection = alpha_material.corrected_maps(rgba(), value)
+    assert rejection is None
+    mask = maps['albedo'][..., 3] == 1
+    assert mask.mean() == .5
+    actual = _linear(np.rint(maps['albedo'][mask, :3]*255).astype(float)/255).mean(axis=0)
+    np.testing.assert_allclose(actual, target, atol=.005)
+    assert correction['saturation']['mean_hsv_s_after'] > .3
+    assert correction['saturation']['cap_applied'] is False

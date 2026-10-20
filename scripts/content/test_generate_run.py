@@ -113,6 +113,51 @@ def test_exhausted_mixed_series_selects_only_numerically_valid_visual_reject(run
     assert runtime.loads == [] and runtime.calls == []
 
 
+def test_exhausted_real_colour_recipe_retains_valid_visual_reject_without_loading_flux(runtime):
+    root = Path(__file__).resolve().parents[2]
+    record = generate.recipes(root/'data/content/city-materials.csv', root/'docs/content-style.md', 'city-1')[0]
+    assert 'target_oklab' in record['parameters']
+    assert 'target_luminance' not in record['parameters']
+    attempts = [candidate(runtime, record, colour, number) for number, colour in enumerate(
+        ((120, 100, 80), (120, 100, 80), 'black'), 1)]
+    assert attempts[0]['brightness_correction']['target'] is None
+    record['generation']['attempts'] = attempts
+    generate.run([record], runtime.registry, runtime.root, 'city-1')
+    assert record['generation']['outcome'] == 'complete'
+    assert record['generation']['selected_attempt'] == 1
+    assert record['files'] == attempts[0]['files']
+    assert [attempt['numeric_valid'] for attempt in attempts] == [True, True, False]
+    assert generate.bakeoff.read_registry(runtime.registry) == [record]
+    assert runtime.loads == [] and runtime.calls == []
+
+
+@pytest.mark.parametrize('valid', [True, False])
+def test_colour_fallback_ranks_against_current_rgb_target_not_cached_error_or_luminance(runtime, valid):
+    from material_colour import _linear, linear_to_oklab
+    record = material()
+    target = _linear(np.array([.7, .24, .1]))
+    record['parameters'].update(set='city-2', target_oklab=linear_to_oklab(target).tolist(),
+        target_luminance=.9)
+    attempts = [candidate(runtime, record, (100, 100, 100), number) for number in (1, 2, 3)]
+    errors = (.004, .001) if valid else (.03, .01)
+    for attempt, error in zip(attempts[:2], errors):
+        correction = attempt['brightness_correction']
+        mean = target + [error, 0, 0]
+        correction['linear_rgb_mean_after'] = mean.tolist()
+        correction['linear_mean_after'] = correction['saturation']['linear_mean_after'] = float(mean @ [.2126, .7152, .0722])
+        # Both legacy luminance and stale cached colour errors favour attempt 1.
+        correction['linear_rgb_max_error'] = .1-error
+        correction['target_linear_rgb'] = (target+[errors[0], 0, 0]).tolist()
+    attempts[2] = candidate(runtime, record, 'black', 3)
+    record['generation']['attempts'] = attempts
+    generate.run([record], runtime.registry, runtime.root, 'city-2')
+    assert record['generation']['selected_attempt'] == 2
+    assert [a['numeric_valid'] for a in attempts] == [valid, valid, False]
+    assert record['generation']['selected_failed'] is True  # Its visual rejection remains recorded.
+    assert ('failure_warning' in record['generation']) is not valid
+    assert runtime.loads == [] and runtime.calls == []
+
+
 def test_all_visual_rejects_can_retain_best_available_without_loading_flux(runtime):
     record = material()
     attempts = [candidate(runtime, record, (v, v, v), n) for n, v in enumerate((75, 85, 99), 1)]
@@ -140,6 +185,39 @@ def test_final_quantized_luminance_after_saturation_is_the_admission_measurement
     assert correction['linear_mean_after'] == pytest.approx(stored_y, abs=1e-12)
     assert abs(stored_y-before) > 1e-8
     assert rejection == 'brightness correction could not reach class range'
+
+
+def test_original_mean_colour_bypasses_saturation_cap_and_is_checked_on_stored_pixels():
+    from material_colour import _linear, linear_to_oklab
+    record = material()
+    target = _linear(np.array([.7, .24, .1]))
+    record['parameters'].update(target_oklab=linear_to_oklab(target).tolist(),
+        target_luminance=float(target @ [.2126, .7152, .0722]))
+    maps, correction, rejection = generate.target_corrected_maps(
+        Image.new('RGB', (16, 16), (100, 100, 100)), record)
+    assert rejection is None
+    assert correction['saturation']['mean_hsv_s_after'] > .3
+    assert correction['saturation']['cap_applied'] is False
+    stored = np.rint(maps['albedo']*255).astype(float)/255
+    np.testing.assert_allclose(_linear(stored).mean(axis=(0, 1)), target, atol=.005)
+    correction['linear_rgb_mean_after'][0] += .02
+    assert 'colour correction' in generate.numeric_rejection(record, correction)
+
+
+def test_original_mean_colour_supersedes_legacy_alpha_weighted_luminance():
+    from material_colour import _linear, linear_to_oklab
+    record = material()
+    target = _linear(np.array([.7, .24, .1]))
+    record['parameters'].update(target_oklab=linear_to_oklab(target).tolist(),
+        target_luminance=.9, target_luminance_tolerance=.002)
+    _, correction, rejection = generate.target_corrected_maps(
+        Image.new('RGB', (16, 16), (100, 100, 100)), record)
+    assert rejection is None
+    assert correction['linear_mean_after'] < .2
+    np.testing.assert_allclose(correction['linear_rgb_mean_after'], target, atol=.005)
+    assert abs(correction['linear_mean_after']-.9) > .002
+    correction['saturation']['linear_mean_after'] = float('nan')
+    assert generate.numeric_rejection(record, correction) == 'final mean luminance is not finite or is not measured'
 
 
 @pytest.mark.parametrize('change', ['saturation', 'clipping'])

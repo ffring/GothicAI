@@ -29,6 +29,8 @@
 - **Сервер — один процесс asyncio.** `cli.ServerState` держит все подсистемы (около 45, все необязательные). Каждая получает `GameLink` из `game.py` и подписывается на сообщения игры через `link.listeners`.
 - Где что считается и почему — [`compute.md`](compute.md). Адреса машин лежат вне git.
 
+Пилот качества материалов: [численные замеры 71 оригинала и проверки 58 наших альбедо](../reports/content/2026-10-pilot-measures/README.md), `scripts/content/measure-originals.sh`, общая функция `material-measures.h` / `material_measures.py`, `measure_city.py`, политика `material_scale.py`, поканальный цвет `material_colour.py`, детектор `material_lighting.py` и `marigold_iid.py` (отдельный venv на dev-ubuntu). [Текущие поля CSV и ограничения](own-content.md#численные-замеры-качества-материалов).
+
 ## Путь одной реплики героя
 
 1. Герой держит клавишу разговора. `voice.py` пишет микрофон Mac и стримит звук в `asr-service`. Тот передаёт его Voxtral на dev-ubuntu, запасной вариант — подписка ChatGPT. Промежуточный текст сразу показывается в игре.

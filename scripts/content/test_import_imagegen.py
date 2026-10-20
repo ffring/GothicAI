@@ -30,6 +30,9 @@ def prepared(tmp_path, monkeypatch):
     sources = staging / 'sources'
     sources.mkdir(parents=True)
     for record in records:
+        # This fixture represents pre-pilot recipes with only scalar brightness.
+        record['parameters'].pop('target_oklab', None)
+        record['parameters'].pop('colour_policy', None)
         record['files'] = {name: f'city-2/{record["id"]}/attempt-1/{name}.png'
             for name in importer.bakeoff.MAPS}
         record['generation'] = dict(outcome='complete', attempts=[dict(number=1,

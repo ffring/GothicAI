@@ -5,7 +5,8 @@
     python3 scripts/content/map_textures.py update
 
 ``update`` refreshes area, UV density and material scale, preserving the manual
-decisions. It writes only after validating all 71 city and harbour textures.
+decisions and original scalar measurements (metre periods follow UV density).
+It writes only after validating all 71 city and harbour textures.
 """
 
 from __future__ import annotations
@@ -25,13 +26,18 @@ from pilot import selected_rows
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MAPPING = ROOT / "data/content/city-materials.csv"
 DEFAULT_CENSUS = ROOT / "reports/content/2026-10-world-textures/newworld.csv"
-FIELDS = (
+LEGACY_FIELDS = (
     "texture", "decision", "class", "state", "scale", "area_m2",
     "uv_m_per_unit_median", "reason",
     "object", "role", "depicts", "colour", "weathering", "orientation",
     "layout", "layout_share", "anti_repeat", "target_luminance", "target_coverage",
 )
-MAPPING_HEADERS = (FIELDS, FIELDS[:-1], FIELDS[:-2])
+MEASUREMENT_FIELDS = (
+    "target_period_u_uv", "target_period_v_uv", "target_period_u_m", "target_period_v_m",
+    "target_direction", "target_direction_confidence", "target_oklab_l", "target_oklab_a", "target_oklab_b",
+)
+FIELDS = (*LEGACY_FIELDS[:-2], *MEASUREMENT_FIELDS, *LEGACY_FIELDS[-2:])
+MAPPING_HEADERS = (FIELDS, FIELDS[:-1], FIELDS[:-2], LEGACY_FIELDS, LEGACY_FIELDS[:-1], LEGACY_FIELDS[:-2])
 ALPHA_TEXTURES = frozenset({
     "NW_CITY_FLAG_01.TGA", "NW_CITY_IVY_BORDER_01.TGA", "NW_CITY_IVY_FULL_01.TGA",
 })
@@ -114,6 +120,30 @@ def _number(value: str, field: str, *, positive: bool = False) -> Decimal:
         sign = "positive" if positive else "nonnegative"
         raise MappingError(f"{field}: expected a finite {sign} number, got {value!r}")
     return number
+
+
+def _check_measurements(row: dict[str, str], where: str) -> None:
+    for axis in ("u", "v"):
+        period = _number(row.get(f"target_period_{axis}_uv", ""), f"{where}: target_period_{axis}_uv")
+        meters = _number(row.get(f"target_period_{axis}_m", ""), f"{where}: target_period_{axis}_m")
+        if period > 1:
+            raise MappingError(f"{where}: target_period_{axis}_uv must be at most 1 (0 means no dominant peak)")
+        expected = period * _number(row["uv_m_per_unit_median"], f"{where}: uv_m_per_unit_median", positive=True)
+        if abs(meters - expected) > max(Decimal("1e-9"), expected * Decimal("1e-9")):
+            raise MappingError(f"{where}: stale target_period_{axis}_m; expected period UV × uv_m_per_unit_median")
+    if row.get("target_direction") not in ("U", "V", "none"):
+        raise MappingError(f"{where}: target_direction must be U, V or none")
+    for field in ("target_direction_confidence", "target_oklab_l"):
+        value = _number(row.get(field, ""), f"{where}: {field}")
+        if value > 1:
+            raise MappingError(f"{where}: {field} must be at most 1")
+    for field in ("target_oklab_a", "target_oklab_b"):
+        try:
+            value = Decimal(row.get(field, ""))
+        except InvalidOperation as error:
+            raise MappingError(f"{where}: {field} must be finite and in [-0.5, 0.5]") from error
+        if not value.is_finite() or abs(value) > Decimal("0.5"):
+            raise MappingError(f"{where}: {field} must be finite and in [-0.5, 0.5]")
 
 
 def _scope(texture: str) -> bool:
@@ -236,6 +266,7 @@ def validate_mapping(
             actual = _number(row[field], f"{where}: {field}", positive=field != "area_m2")
             if actual != Decimal(source[field]):
                 raise MappingError(f"{where}: stale {field}: {row[field]!r}; census has {source[field]!r}; run update")
+        _check_measurements(row, where)
         if row["decision"] == "exclude":
             for field in ("class", "state", "scale"):
                 if row[field]:
@@ -268,6 +299,9 @@ def update_mapping(mapping: Path = DEFAULT_MAPPING, census_path: Path = DEFAULT_
         source = census[row["texture"]]
         for field in ("area_m2", "uv_m_per_unit_median"):
             row[field] = source[field]
+        for axis in ("u", "v"):
+            if row.get(f"target_period_{axis}_uv"):
+                row[f"target_period_{axis}_m"] = format(Decimal(row[f"target_period_{axis}_uv"]) * Decimal(source["uv_m_per_unit_median"]), ".12g")
         if row["decision"] == "include" and row["class"] in TILE_METERS:
             row["scale"] = f"{material_scale(Decimal(source['uv_m_per_unit_median']), row['class']):.2f}"
         elif row["decision"] in ("panel", "strip", "module"):
