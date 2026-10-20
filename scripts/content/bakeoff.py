@@ -145,7 +145,8 @@ def content_bytes(root):
 def download(records, root):
     # Built-in tool recipes name their provider, not downloadable HF weights.
     models = {m['id']: m for r in records
-        if not r.get('skip_reason') and r['pipeline'] != 'imagegen-filter' for m in r['models']}
+        if not r.get('skip_reason') and r['pipeline'] not in ('imagegen-filter', 'imagegen-concept')
+        for m in r['models']}
     if not models:
         return
     from huggingface_hub import snapshot_download
