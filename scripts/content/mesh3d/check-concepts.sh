@@ -1,5 +1,5 @@
 #!/bin/sh
-# Narrow CPU checks. uv may fetch test dependencies if Python has no pytest.
+# Offline CPU checks. uv uses cached dependencies if Python has no pytest.
 set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 python=${PYTHON:-python3}
@@ -8,4 +8,4 @@ set -- -q -p no:cacheprovider \
 if "$python" -c 'import pytest' >/dev/null 2>&1; then
   exec "$python" -m pytest "$@"
 fi
-exec uv run --with pytest --with pillow --with numpy python -m pytest "$@"
+exec uv run --offline --with pytest --with pillow --with numpy python -m pytest "$@"
