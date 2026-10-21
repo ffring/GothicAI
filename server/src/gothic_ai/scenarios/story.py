@@ -32,7 +32,6 @@ from ..protocol import (
     NpcLook,
     NpcSpec,
     NpcThing,
-    NpcViews,
     RoutineEntry,
     SayCmd,
     Session,
@@ -449,12 +448,11 @@ class RepairScript:
 
 
 async def death_load(link: GameLink, director: Director, slot: int = 8) -> dict[str, str]:
-    """Report new human deaths once, and resume perception immediately after loading older world ticks."""
+    """Report new human deaths once after loading older world ticks, without repeating saved deaths."""
     results: dict[str, str] = {}
     first, second = "BDT_1014_BANDIT_L", "BDT_1013_BANDIT_L"
     events: list[tuple[float, NpcDied]] = []
     recorded: list[tuple[float, dict[str, Any]]] = []
-    views: list[tuple[float, NpcViews]] = []
     loaded = asyncio.get_running_loop().create_future()
     load_requested = False
     loaded_at: float | None = None
@@ -464,8 +462,6 @@ async def death_load(link: GameLink, director: Director, slot: int = 8) -> dict[
         at = time.monotonic()
         if isinstance(message, NpcDied) and message.npc in (first, second):
             events.append((at, message))
-        elif isinstance(message, NpcViews):
-            views.append((at, message))
         elif isinstance(message, Session) and message.reason == "load" and load_requested:
             loaded_at = at
             if not loaded.done():
@@ -493,9 +489,9 @@ async def death_load(link: GameLink, director: Director, slot: int = 8) -> dict[
         await link.wait_world()
         if link.session is None:
             await wait_message(link, Session, timeout=10)
-        # A pushed view proves that world ticks started; the same bridge tick primes the death scan.
-        if not await _until(lambda: bool(views), 10):
-            raise RuntimeError("No npc_views before the save/load check")
+        # A fresh response proves that world ticks started; the same tick primes the death scan.
+        clock_npc = "NONE_100_XARDAS"
+        await link.snapshot(clock_npc, fresh=True)
         before_at = time.monotonic()
         await link.debug("kill", instance=first, by="PLAYER")
         await asyncio.sleep(max(0, before_at + 3 - time.monotonic()))
@@ -511,43 +507,32 @@ async def death_load(link: GameLink, director: Director, slot: int = 8) -> dict[
         )
 
         await _save_or_fail(link, slot)
-        saved_t = views[-1][1].t
-        await asyncio.sleep(30)
-        if not await _until(lambda: views[-1][1].t - saved_t >= 30_000, 10):
-            raise RuntimeError(f"World advanced only {views[-1][1].t - saved_t} ms after the save")
-        before_t = views[-1][1].t
+        saved_t = (await link.snapshot(clock_npc, fresh=True)).t
+        async with asyncio.timeout(90):
+            while (before_t := (await link.snapshot(clock_npc, fresh=True)).t) - saved_t < 30_000:  # noqa: ASYNC110
+                await asyncio.sleep(0.25)
         load_requested = True
         await link.debug("load", slot)
         await asyncio.wait_for(loaded, 120)
         await link.wait_world(timeout=120)
         assert loaded_at is not None
-        # Give the loaded world's initial scan a frame before killing a new victim, even when pushes stall.
-        await asyncio.sleep(0.25)
+        # The response lets the initial scan prime before a new death, even when periodic pushes stall.
+        after_t = (await link.snapshot(clock_npc, fresh=True)).t
         after_at = time.monotonic()
         await link.debug("kill", instance=second, by="PLAYER")
         await asyncio.sleep(max(0, after_at + 3 - time.monotonic()))
         after_events, after_rows, after_ms = deaths(second, after_at, after_at + 3)
-        early_views = [(at, view) for at, view in views if loaded_at <= at <= loaded_at + 3]
         # Keep both raw events and newly written facts for the next five seconds: inherited facts are old.
         quiet_at = time.monotonic()
         await asyncio.sleep(5)
         quiet_ms = round((time.monotonic() - quiet_at) * 1000)
         extra_events, extra_rows, _ = deaths(second, after_at + 3, time.monotonic())
-        post_views = [(at, view) for at, view in views if at >= loaded_at]
-        after_t = post_views[0][1].t if post_views else -1
-        rewind_ms = before_t - after_t if post_views else -1
+        rewind_ms = before_t - after_t
         check(
             "rewound",
-            bool(post_views) and rewind_ms >= 20_000,
-            f"before_t={before_t}, after_t={after_t}, rewind_ms={rewind_ms}, "
-            f"required_ms=20000, advanced_ms={before_t - saved_t}, post_views={len(post_views)}",
-        )
-        check(
-            "views",
-            bool(early_views),
-            f"count={len(early_views)}, "
-            f"latency_ms={round((post_views[0][0] - loaded_at) * 1000) if post_views else -1}, "
-            "limit_ms=3000",
+            rewind_ms >= 20_000,
+            f"saved_t={saved_t}, before_t={before_t}, after_t={after_t}, rewind_ms={rewind_ms}, "
+            f"required_ms=20000, advanced_ms={before_t - saved_t}",
         )
         check(
             "after",

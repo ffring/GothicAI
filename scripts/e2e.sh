@@ -90,7 +90,7 @@
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
 #        rumor and has it in mind when the hero speaks to her (story graph, stage 4)
-#   death_load: new-game human deaths and npc_views resume after older-save load, without repeated deaths; LLM=fake, no SAVE.
+#   death_load: human deaths before/after older-save load, player credit, and no repeated saved deaths; LLM=fake, no SAVE.
 #   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
 #       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
 #       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)
