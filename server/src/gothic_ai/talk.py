@@ -218,7 +218,10 @@ def _asr_name_hints(name: str) -> list[str]:
         else:
             continue
         hints.extend(stem + (ending.upper() if word.isupper() else ending) for ending in endings)
-    return hints
+    return list(dict.fromkeys(
+        hint for hint in hints
+        if hint and all(c.isalpha() or c.isdigit() or c in " .,'():!?;-" for c in hint)
+    ))
 
 
 # a phrase to several of those around («Пацаны, здорово», «Всем привет», «Эй, вы двое»): to the conversation.
@@ -412,7 +415,7 @@ class TalkDesk:
         dialogue.on_end = self.on_npc_end
 
     def asr_hints(self, focus: str | None) -> list[str]:
-        """Names most likely to be spoken now, then world vocabulary and the rest of the roster."""
+        """Priority names and world words, then nearby names in a stable alphabetical order."""
         names: list[str] = []
         if focus and (entry := self.people.get(focus.upper())) is not None and entry.activity != "down":
             names.append(entry.name)
@@ -422,13 +425,23 @@ class TalkDesk:
                 names.append(self.partner.name)
         hints = [hint for name in names for hint in _asr_name_hints(name)]
         hints.extend(_WORLD_HINTS)
+        hints = list(dict.fromkeys(hints))[:100]
+        selected = set(hints)
+        others: list[tuple[str, list[str]]] = []
         for entry in sorted(self.people.values(), key=lambda entry: entry.earshot):
-            if entry.activity != "down":
-                hints.extend(_asr_name_hints(entry.name))
-        return list(dict.fromkeys(
-            hint for hint in hints
-            if hint and all(c.isalpha() or c.isdigit() or c in " .,'():!?;-" for c in hint)
-        ))[:100]
+            if len(selected) == 100:
+                break
+            if entry.activity == "down":
+                continue
+            forms = _asr_name_hints(entry.name)
+            others.append((entry.name, forms))
+            for hint in forms:
+                if len(selected) == 100:
+                    break
+                selected.add(hint)
+        for _, forms in sorted(others, key=lambda item: (item[0].casefold(), item[0])):
+            hints.extend(hint for hint in forms if hint in selected)
+        return list(dict.fromkeys(hints))
 
     # --- events ---------------------------------------------------------------------------
 

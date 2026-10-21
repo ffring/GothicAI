@@ -574,7 +574,7 @@ def asr_talk():
     return TalkDesk(link, dialogue)
 
 
-def test_asr_hints_prioritize_focus_partner_and_world_before_others_by_earshot(asr_talk):
+def test_asr_hints_prioritize_focus_partner_and_world_before_others_by_name(asr_talk):
     asr_talk.people = roster(
         person("FAR", "Ватрас", 1, heard=2000),
         person("FOCUS", "Лорд Хаген", 30),
@@ -587,8 +587,30 @@ def test_asr_hints_prioritize_focus_partner_and_world_before_others_by_earshot(a
     assert asr_talk.asr_hints("focus") == [
         "Лорд Хаген", "Хаген", "Хагена", "Хагену", "Хагеном", "Хагене", "Диего",
         *_ASR_WORLD_WORDS,
-        "Лотар", "Лотара", "Лотару", "Лотаром", "Лотаре",
         "Ватрас", "Ватраса", "Ватрасу", "Ватрасом", "Ватрасе",
+        "Лотар", "Лотара", "Лотару", "Лотаром", "Лотаре",
+    ]
+
+
+def test_asr_hints_remain_stable_when_roster_earshot_changes(asr_talk):
+    asr_talk.people = roster(
+        person("PEDRO", "Педро", 3),
+        person("LOTAR", "лотар", 4),
+        person("VATRAS", "Ватрас", 5),
+    )
+
+    before = asr_talk.asr_hints(None)
+    asr_talk.people = roster(
+        person("PEDRO", "Педро", 5),
+        person("LOTAR", "лотар", 4),
+        person("VATRAS", "Ватрас", 3),
+    )
+
+    assert asr_talk.asr_hints(None) == before == [
+        *_ASR_WORLD_WORDS,
+        "Ватрас", "Ватраса", "Ватрасу", "Ватрасом", "Ватрасе",
+        "лотар", "лотара", "лотару", "лотаром", "лотаре",
+        "Педро",
     ]
 
 
@@ -673,6 +695,7 @@ def test_asr_hints_filter_each_string_to_inworld_characters(asr_talk):
 def test_asr_hints_deduplicate_and_limit_to_100_after_prioritizing(asr_talk):
     asr_talk.people = roster(
         *(person(f"NPC_{i}", f"Педро {i}", i + 1) for i in reversed(range(110))),
+        person("FAR", "Аарон", 1000),
         person("FOCUS", "Ксардас", 50),
         person("PARTNER", "Ватрас", 40),
     )
@@ -685,5 +708,8 @@ def test_asr_hints_deduplicate_and_limit_to_100_after_prioritizing(asr_talk):
         "Ксардас", "Ксардаса", "Ксардасу", "Ксардасом", "Ксардасе",
         "Ватрас", "Ватраса", "Ватрасу", "Ватрасом", "Ватрасе", *_ASR_WORLD_WORDS,
     ]
-    assert hints[-1] == "Педро 71"
+    assert hints[27:] == [
+        "Педро 0", "Педро", *sorted((f"Педро {i}" for i in range(1, 72)), key=str.casefold),
+    ]
     assert "Педро 72" not in hints
+    assert "Аарон" not in hints
