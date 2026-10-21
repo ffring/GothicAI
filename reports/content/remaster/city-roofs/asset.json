@@ -565,6 +565,29 @@
           "sha256": "d5be860ffe7efa9161e8a5ea449b4a4b9a1922494639364c0aa0edf51020ad22"
         }
       }
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-7.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 7,
+      "sha256": "a6e6167c2dde7531485fc496bcdf057b6212544f63451eab6e07114aa4f266d5",
+      "c2pa": null,
+      "model": "derived: scripts/content/slate_bake.py",
+      "utc": "2026-10-21T23:10:22Z",
+      "thread": "blender",
+      "parent": "city-roofs-slate/reference-attempt-1.png city-roofs-slate/reference-attempt-2.png",
+      "tool": "scripts/content/slate_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-7.normal.png",
+          "sha256": "77a3dac4cdaf73b8b407b07e66d0132c68ea56b97fe4544225856a300036f252"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-7.roughness.png",
+          "sha256": "21876f29e02a834113957aeb5b9a13488337aefb05f4990438fe585b313007ec"
+        }
+      }
     }
   ],
   "selected": {
@@ -584,8 +607,8 @@
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_04.TGA": {
-      "file": "city-roofs/NW_CITY_ROOF_04-attempt-6.png",
-      "reason": "slate from the Blender model, rule B, darks matched to the original's luminance spread",
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-7.png",
+      "reason": "slate from the model (attempt 6) with its roughness fixed: no glossy specks in the moss of the gaps",
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_INSIDE_01.TGA": {
@@ -671,12 +694,12 @@
     }
   ],
   "build": {
-    "set": "roofs-7",
+    "set": "roofs-8",
     "base": "original",
     "date": "2026-10-21",
     "albedo_sha256": {
       "NW_CITY_ROOF_01.TGA": "7551e0022a5bb41a5c0ba88927183601dcf56931dea2e24aa2659c0dfe4f3d8d",
-      "NW_CITY_ROOF_04.TGA": "a4993c5463b05cf11d73f27ca3d7652153d1771417e3f3f4e8c0b71d74013278",
+      "NW_CITY_ROOF_04.TGA": "f8d898627942e6669cd2ef78dd09671cd2525225a3dbfcaa71090067d701ed73",
       "NW_CITY_ROOF_INSIDE_01.TGA": "c4f52f434e2147f0cfd67f715710032ba6f823ae8e87b443c324073b93b7eea3"
     },
     "entries": 3,

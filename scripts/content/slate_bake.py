@@ -15,8 +15,10 @@ left edge of the slate to its right, which lies over its left neighbour: the dar
 left of each joint and under each course edge. Original pixels are never used: the stone colour is an
 image_gen surface.
 
+The slates are pieces of piece_bake.py: the scene is the shared mesh3d/blender/piece_scene.py.
+
     slate_bake.py layout OUT.json [--seed N]
-    slate_bake.py render LAYOUT.json OUTDIR STONE.png... [--resolution PX] [--samples N] [--no-sun]
+    slate_bake.py render LAYOUT.json OUTDIR STONE.png... [--resolution PX] [--samples N] [--sun]
     slate_bake.py compose LAYOUT.json PASSES.exr OUT.png [--seed N]
 """
 from __future__ import annotations
@@ -24,10 +26,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import subprocess
 from pathlib import Path
 
 import numpy as np
+
+import piece_bake as pb
 
 PERIOD = 6.6            # metres per texture square
 ACROSS, COURSES = 16, 18
@@ -82,9 +85,8 @@ WORN_ROUGH = .25        # rain-polished worn patches are this much smoother: a f
 WET_ROUGH = .36         # wet slate reflects the sky and the sun
 DAMP = .1               # share of slates still wet from the last rain
 OUT_SIZE = 1024
-
-BLENDER = '/Applications/Blender.app/Contents/MacOS/Blender'
-SCENE = Path(__file__).with_name('mesh3d') / 'blender' / 'slate_roof.py'
+CAMERA_TILT = 25.       # degrees from straight down, looking up the slope: the thick tails show
+SUN = 2.5               # energy of the sun for --sun, over the ridge a little from the left
 
 
 def joint(x0, slant, height, v):
@@ -92,29 +94,6 @@ def joint(x0, slant, height, v):
     Above the visible part (v < 0) the joint goes on straight under the course above."""
     v = np.asarray(v, dtype=float)
     return x0 + slant * height * np.where(v >= 0, CURVE * v + (1 - CURVE) * v ** 2, CURVE * v)
-
-
-def _ragged(polygon, rng):
-    """Hand-dressed edge: every boundary point moves along its normal by a smooth random amount."""
-    import shapely
-    from shapely.geometry import Polygon
-    ring = np.asarray(shapely.segmentize(polygon, .008).exterior.coords)[:-1]
-    step = np.linalg.norm(np.roll(ring, -1, axis=0) - ring, axis=1)
-    s = np.concatenate([[0], np.cumsum(step)[:-1]])
-    offset = np.zeros(len(ring))
-    for wavelength in (.05, .11, .23):
-        offset += rng.uniform(.3, 1) * np.sin(2 * np.pi * s / wavelength + rng.uniform(0, 2 * np.pi))
-    offset = RAGGED * offset / 2 + rng.normal(0, RAGGED / 4, len(ring))
-    tangent = np.roll(ring, -1, axis=0) - np.roll(ring, 1, axis=0)
-    normal = np.stack([tangent[:, 1], -tangent[:, 0]], axis=1)
-    normal /= np.linalg.norm(normal, axis=1, keepdims=True) + 1e-12
-    return Polygon(ring + normal * offset[:, None]).buffer(0)
-
-
-def _largest(geometry):
-    if geometry.geom_type == 'MultiPolygon':
-        return max(geometry.geoms, key=lambda g: g.area)
-    return geometry
 
 
 def slate_outline(rng, x_left, slant_left, x_right, slant_right, y_bottom, height):
@@ -135,9 +114,9 @@ def slate_outline(rng, x_left, slant_left, x_right, slant_right, y_bottom, heigh
     slope = (y_right - y_left) / (x_right - x_left + SIDE_LAP)
     cut = Polygon([(x_a, y_left + slope * (x_a - x_left)), (x_b, y_left + slope * (x_b - x_left)),
                    (x_b, y_bottom + 3 * height), (x_a, y_bottom + 3 * height)])
-    shape = _largest(body.intersection(cut))
-    shape = _largest(shape.buffer(-TAIL_R, quad_segs=12).buffer(TAIL_R, quad_segs=12))
-    shape = _largest(_ragged(shape, rng))
+    shape = pb.largest(body.intersection(cut))
+    shape = pb.largest(shape.buffer(-TAIL_R, quad_segs=12).buffer(TAIL_R, quad_segs=12))
+    shape = pb.ragged(shape, rng, RAGGED)
     visible_top = y_bottom + height
     bottom_at = lambda x: y_left + slope * (x - x_left)       # noqa: E731
     left_at = lambda y: joint(x_left, slant_left, height, 1 - (y - y_bottom) / height)   # noqa: E731
@@ -153,7 +132,7 @@ def slate_outline(rng, x_left, slant_left, x_right, slant_right, y_bottom, heigh
         side = np.array([-far[1], far[0]])          # towards the corner that breaks off
         crack = Polygon([np.subtract(a, far), np.add(b, far), np.add(np.add(b, far), side),
                          np.add(np.subtract(a, far), side)])
-        shape = _largest(shape.difference(crack))
+        shape = pb.largest(shape.difference(crack))
     for _ in range(rng.poisson(CHIPS)):
         # a small chip on the visible edges: the curved left edge or the bottom edge
         boundary = shape.exterior
@@ -165,7 +144,7 @@ def slate_outline(rng, x_left, slant_left, x_right, slant_right, y_bottom, heigh
         radius = rng.uniform(.01, .03)
         chip = affinity.rotate(affinity.scale(Point(p.x, p.y).buffer(radius, quad_segs=2),
                                               rng.uniform(.6, 1.4), 1), rng.uniform(0, 180))
-        shape = _largest(shape.difference(chip))
+        shape = pb.largest(shape.difference(chip))
     return shape.simplify(.0015), broken
 
 
@@ -187,17 +166,17 @@ def face_points(shape, y_bottom, height):
         gx, gy = np.meshgrid(np.arange(minx, maxx, POINT_STEP * 1.6), np.arange(miny, maxy, POINT_STEP * 1.6))
         inside = shapely.contains_xy(core, gx.ravel(), gy.ravel())
         points += list(zip(gx.ravel()[inside], gy.ravel()[inside]))
-    return [[round(float(x), 4), round(float(y), 4)] for x, y in points]
+    return np.round(np.asarray(points, dtype=np.float64).reshape(-1, 2), 4)
 
 
-def layout(seed: int = 0) -> dict:
-    """Slates of one texture square, with copies across its edges so the render tiles."""
-    from shapely.geometry import polygon as shapely_polygon
+def layout(seed: int = 0) -> tuple[dict, dict]:
+    """Slates of one texture square, with copies across its edges so the render tiles; and the mesh
+    points of their faces."""
     rng = np.random.default_rng(seed)
     heights = (PERIOD / COURSES) * rng.uniform(1 - COURSE_SPREAD, 1 + COURSE_SPREAD, COURSES)
     heights *= PERIOD / heights.sum()
     bottoms = np.concatenate([[0], np.cumsum(heights)[:-1]])
-    slates = []
+    pieces, points = [], {}
     for course in range(COURSES):
         height, y_bottom = heights[course], bottoms[course]
         widths = rng.uniform(1 - WIDTH_SPREAD, 1 + WIDTH_SPREAD, ACROSS)
@@ -207,7 +186,6 @@ def layout(seed: int = 0) -> dict:
         slants = np.append(slants, slants[0])          # the last joint is the first one, a square later
         for k in range(ACROSS):
             shape, broken = slate_outline(rng, x0[k], slants[k], x0[k + 1], slants[k + 1], y_bottom, height)
-            shape = shapely_polygon.orient(shape, 1.0)
             # The slate is a plane: its tail rests on the course below, its left side on the neighbour.
             # Lateral position runs along the chord of the joint, so the lift follows the curved joints.
             def bottom_z(x, y):
@@ -220,79 +198,49 @@ def layout(seed: int = 0) -> dict:
             bx = bottom_z(cx + 1, cy) - z0 + tilt[0]
             by = bottom_z(cx, cy + 1) - z0 + tilt[1]
             a = z0 - bx * cx - by * cy
-            minx, miny, maxx, maxy = shape.bounds
-            copies = [[dx, dy] for dx in (-PERIOD, 0., PERIOD) for dy in (-PERIOD, 0., PERIOD)
-                      if maxx + dx > -MARGIN and minx + dx < PERIOD + MARGIN
-                      and maxy + dy > -MARGIN and miny + dy < PERIOD + MARGIN]
-            slates.append(dict(
-                id=len(slates), course=course, index=k, broken=bool(broken),
-                outline=[[round(x, 5), round(y, 5)] for x, y in list(shape.exterior.coords)[:-1]],
-                plane=[a, bx, by], thickness=float(rng.uniform(*THICKNESS)),
-                stone=int(rng.integers(0, 2)), uv_offset=rng.uniform(0, 1, 2).round(4).tolist(),
-                copies=copies, y_bottom=float(y_bottom), height=float(height),
-                joint_left=[float(x0[k]), float(slants[k])], joint_right=[float(x0[k + 1]), float(slants[k + 1])],
-                points=face_points(shape, y_bottom, height),
-                face=dict(lateral=[float(x0[k]), float(slants[k]), float(widths[k] + SIDE_LAP)],
-                          bow=float(rng.uniform(*BOW)), wave=float(rng.uniform(*WAVE)),
-                          wave_angle=float(rng.uniform(0, np.pi)), wave_length=float(rng.uniform(.08, .16)),
-                          wave_phase=float(rng.uniform(0, 2 * np.pi)))))
-    return dict(tool='scripts/content/slate_bake.py', seed=seed, period=PERIOD, across=ACROSS, courses=COURSES,
-                stone_metres=STONE_METRES,
-                parameters=dict(slant=SLANT, slant_spread=SLANT_SPREAD, curve=CURVE, head=HEAD, side_lap=SIDE_LAP, tail_r=TAIL_R,
-                                width_spread=WIDTH_SPREAD, course_spread=COURSE_SPREAD, drop=DROP, tilt=TILT,
-                                thickness=THICKNESS, lateral=LATERAL, lift=LIFT, wobble=WOBBLE, ragged=RAGGED,
-                                chips=CHIPS, broken=BROKEN, bow=BOW, wave=WAVE, round=ROUND,
+            thickness = float(rng.uniform(*THICKNESS))
+            stone = int(rng.integers(0, 2))
+            uv_offset = rng.uniform(0, 1, 2).round(4).tolist()
+            lateral_width = float(widths[k] + SIDE_LAP)
+            bow, wave = float(rng.uniform(*BOW)), float(rng.uniform(*WAVE))
+            wave_angle, wave_length = float(rng.uniform(0, np.pi)), float(rng.uniform(.08, .16))
+            wave_phase = float(rng.uniform(0, 2 * np.pi))
+            # The face: a bow across the slate along its curved joint, cleavage waviness, both only where
+            # the slate can be seen; and the hand-dressed edge, falling towards the outline.
+            seen = [0., -1 / (.3 * height), (y_bottom + 1.3 * height) / (.3 * height)]
+            across = [1 / lateral_width, slants[k] / lateral_width,
+                      -(x0[k] + slants[k] * (height + y_bottom)) / lateral_width]
+            terms = [dict(kind='bow', amp=bow, across=[float(c) for c in across], mask=seen),
+                     dict(kind='ripple', amp=wave, dir=[math.cos(wave_angle), math.sin(wave_angle)],
+                          length=wave_length, phase=wave_phase, mask=seen),
+                     dict(kind='round', width=ROUND, drop=ROUND_DROP * thickness)]
+            index = len(pieces)
+            pieces.append(pb.piece(
+                index, shape, [a, bx, by], [a + thickness, bx, by], stone, [*uv_offset, 0.], terms,
+                pb.copies(shape.bounds, (PERIOD, PERIOD), MARGIN), kind='slate',
+                course=course, index_in_course=k, broken=bool(broken), thickness=thickness,
+                y_bottom=float(y_bottom), height=float(height),
+                joint_left=[float(x0[k]), float(slants[k])], joint_right=[float(x0[k + 1]), float(slants[k + 1])]))
+            points[index] = face_points(shape, y_bottom, height)
+    surfaces = [dict(name=f'stone{i}', colour=[.07, .07, .065], metres=STONE_METRES, bump=0.) for i in range(2)]
+    spec = dict(tool='scripts/content/slate_bake.py', seed=seed, period=[PERIOD, PERIOD], across=ACROSS,
+                courses=COURSES, camera=dict(tilt=CAMERA_TILT), sky=dict(pitch=45., ground=.08),
+                ao=dict(distance=.15, crevice=.025), surfaces=surfaces,
+                parameters=dict(slant=SLANT, slant_spread=SLANT_SPREAD, curve=CURVE, head=HEAD, side_lap=SIDE_LAP,
+                                tail_r=TAIL_R, width_spread=WIDTH_SPREAD, course_spread=COURSE_SPREAD, drop=DROP,
+                                tilt=TILT, thickness=THICKNESS, lateral=LATERAL, lift=LIFT, wobble=WOBBLE,
+                                ragged=RAGGED, chips=CHIPS, broken=BROKEN, bow=BOW, wave=WAVE, round=ROUND,
                                 round_drop=ROUND_DROP),
-                slates=slates)
-
-
-def periodic_noise(rng, size, scale_x, scale_y):
-    """Smooth noise that wraps in both axes; scale_x, scale_y are the highest frequencies, in cycles
-    per square."""
-    fy = np.fft.fftfreq(size)[:, None] * size
-    fx = np.fft.fftfreq(size)[None, :] * size
-    spectrum = np.exp(-(fx / scale_x) ** 2 - (fy / scale_y) ** 2)
-    field = np.fft.ifft2(np.fft.fft2(rng.standard_normal((size, size))) * spectrum).real
-    return (field - field.mean()) / (field.std() + 1e-9)
-
-
-def read_passes(path: Path) -> dict:
-    import OpenEXR
-    raw = {}
-    with OpenEXR.File(str(path), separate_channels=True) as exr:
-        for part in exr.parts:
-            for name, channel in part.channels.items():
-                raw[name.removeprefix('ViewLayer.')] = channel.pixels.astype(np.float64)
-
-    def rgb(name):
-        return np.stack([raw[f'{name}.{c}'] for c in 'RGB'], axis=-1)
-    # The camera looks up the slope, so the render is shorter than wide: stretch it to the square.
-    width = raw['Object Index.X'].shape[1]
-
-    def square(field, nearest=False):
-        from PIL import Image
-        if field.shape[0] == width:
-            return field
-        method = Image.Resampling.NEAREST if nearest else Image.Resampling.BILINEAR
-        return np.asarray(Image.fromarray(field.astype(np.float32), mode='F').resize((width, width), method),
-                          dtype=np.float64)
-    raw = {k: square(v, nearest=k.startswith('Object Index')) for k, v in raw.items()}
-
-    def rgb(name):
-        return np.stack([raw[f'{name}.{c}'] for c in 'RGB'], axis=-1)
-    return dict(stone=rgb('Diffuse Color'), ao=raw['Ambient Occlusion.R'], crevice=raw['crevice.X'],
-                sky=(rgb('Diffuse Direct') + rgb('Diffuse Indirect')).mean(axis=-1),
-                x=raw['Position.X'], y=raw['Position.Y'], height=raw['Position.Z'],
-                normal=np.stack([raw[f'Normal.{c}'] for c in 'XYZ'], axis=-1),
-                slate=np.rint(raw['Object Index.X']).astype(int) - 1)
+                pieces=pieces)
+    return spec, points
 
 
 def local_coords(spec: dict, slate: np.ndarray, x: np.ndarray, y: np.ndarray):
     """Position inside the visible part of each pixel's slate, from the rendered world position:
     u from its left joint (0) to the next joint (1), v from the course edge above (0) to its own
     bottom edge (1)."""
-    period = spec['period']
-    table = spec['slates']
+    period = spec['period'][0]
+    table = spec['pieces']
     y_bottom = np.array([d['y_bottom'] for d in table])[slate]
     height = np.array([d['height'] for d in table])[slate]
     left = np.array([d['joint_left'] for d in table])[slate]
@@ -304,36 +252,14 @@ def local_coords(spec: dict, slate: np.ndarray, x: np.ndarray, y: np.ndarray):
     return u, v, x_right - x_left
 
 
-def smooth(field: np.ndarray, passes: int = 2) -> np.ndarray:
-    """3 × 3 box blur, repeated, wrapping at the edges: removes the sampling speckle of a pass."""
-    for _ in range(passes):
-        field = sum(np.roll(np.roll(field, dy, axis=0), dx, axis=1) for dy in (-1, 0, 1) for dx in (-1, 0, 1)) / 9
-    return field
-
-
-def ridge_shade(height: np.ndarray, metres_per_px: float) -> np.ndarray:
-    """0..1: how much of the light from the ridge side is blocked by the course edge above a pixel.
-    The roof's own sky comes mostly from the ridge (the zenith leans that way by the pitch)."""
-    shade = np.zeros_like(height)
-    for elevation in SHADE_ELEVATION:
-        rise = math.tan(math.radians(elevation)) * metres_per_px
-        reach = int(.08 / rise) + 1
-        above = np.zeros_like(height)
-        for d in range(1, reach + 1):
-            # row i - d lies d pixels towards the ridge
-            above = np.maximum(above, np.roll(height, d, axis=0) - height - d * rise)
-        shade += np.clip(above / .006, 0, 1)
-    return shade / len(SHADE_ELEVATION)
-
-
 def drip_trails(spec: dict, size: int, rng) -> np.ndarray:
     """0..1 trails running down the slope from the tails of some joints: water leaves the roof
     there and stains the slates below, darkest at the start, widening and fading over 0.6–2.2
     courses. Pixel rows run down the slope; the render's small vertical shift is ignored."""
-    period = spec['period']
+    period = spec['period'][0]
     px = size / period
     field = np.zeros((size, size))
-    for slate in spec['slates']:
+    for slate in spec['pieces']:
         if rng.random() > DRIPS:
             continue
         x0, slant = slate['joint_left']
@@ -358,11 +284,11 @@ def drip_trails(spec: dict, size: int, rng) -> np.ndarray:
 def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     """Albedo (linear RGB) and the masks it was made with, at the render size."""
     rng = np.random.default_rng(seed)
-    slate = passes['slate']
-    size, count = slate.shape[0], len(spec['slates'])
+    slate = passes['piece']
+    size, count = slate.shape[0], len(spec['pieces'])
     u, v, width = local_coords(spec, slate, passes['x'], passes['y'])
 
-    stone = passes['stone']
+    stone = passes['colour']
     grey = stone.mean(axis=-1, keepdims=True)
     out = grey + (stone - grey) * (1 - DESATURATE)
     mean = out.mean()
@@ -370,16 +296,16 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     tone = np.exp(rng.normal(0, TONE, count)) * np.where(rng.random(count) < PALE, 1.45, 1.)
     # Almost black slates come in groups where the roof stays damp, not scattered one by one:
     # scattered, they repeat with the texture as a lattice of dark diamonds (game shots 2026-10-22).
-    damp_field = periodic_noise(np.random.default_rng([seed, 2]), size, 6, 6)
-    centre = np.array([np.mean(s['outline'], axis=0) for s in spec['slates']])
-    period = spec['period']
+    damp_field = pb.periodic_noise(np.random.default_rng([seed, 2]), (size, size), 6, 6)
+    centre = np.array([np.mean(s['outline'], axis=0) for s in spec['pieces']])
+    period = spec['period'][0]
     rows = ((period - centre[:, 1]) / period * size).astype(int) % size
     cols = (centre[:, 0] / period * size).astype(int) % size
     damp_here = damp_field[rows, cols]
     black_odds = BLACK * np.exp(1.6 * damp_here) / np.exp(1.6 * damp_here).mean()
     tone *= np.where(rng.random(count) < black_odds, rng.uniform(.25, .45, count), 1.)
     out *= tone[slate][..., None]
-    out *= (1 + .10 * periodic_noise(rng, size, 40, 40))[..., None]       # mottling
+    out *= (1 + .10 * pb.periodic_noise(rng, (size, size), 40, 40))[..., None]       # mottling
 
     def blob(cu, cv, ru, rv):
         return np.exp(-((u - cu[slate]) / ru[slate]) ** 2 - ((v - cv[slate]) / rv[slate]) ** 2)
@@ -389,7 +315,7 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
                  rng.uniform(.25, .5, count), rng.uniform(.2, .4, count)) * rng.uniform(0, SHEEN, count)[slate]
     out = out * (1 - sheen[..., None]) + (out.mean(axis=-1, keepdims=True) * 2.4 + .02) * sheen[..., None]
     # dirt: one or two ragged dark smudges per slate, more often by the joint and the bottom edge
-    ragged = .55 + .45 * np.clip(periodic_noise(rng, size, 90, 90), -1, 1)
+    ragged = .55 + .45 * np.clip(pb.periodic_noise(rng, (size, size), 90, 90), -1, 1)
     for share in (1., .5):
         has = rng.random(count) < share
         dirt = blob(rng.choice([.1, .5, .85], count), rng.uniform(.3, .95, count),
@@ -399,15 +325,15 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     # light and shade from the model
     sky = passes['sky'] / np.percentile(passes['sky'], 95)
     out *= np.clip(sky, 0, 1.2)[..., None] ** SKY
-    shade = ridge_shade(passes['height'], spec['period'] / size)
+    shade = pb.overhang_shade(passes['height'], spec['period'][0] / size, SHADE_ELEVATION)
     out *= (1 - SHADE * shade)[..., None]
 
     # black moss and dirt packed into the gaps, along the left of each joint and in the corners
     # under course edges, in clumps
-    gap = np.clip((1 - smooth(passes['crevice'])) / .45, 0, 1)
+    gap = np.clip((1 - pb.smooth(passes['crevice'])) / .45, 0, 1)
     solid, reach = JOINT_GRIME
     beside = np.clip(((reach - (1 - u) * width) / (reach - solid)), 0, 1) ** .7 * ((v > 0) & (v < 1))
-    clumps = np.clip(.55 + .6 * periodic_noise(rng, size, 110, 110), 0, 1)
+    clumps = np.clip(.55 + .6 * pb.periodic_noise(rng, (size, size), 110, 110), 0, 1)
     moss = np.clip(gap + 1.3 * shade + beside, 0, 1) * (.7 + .3 * clumps)
     out = out * (1 - moss[..., None]) + np.array(MOSS) * moss[..., None]
     # every joint reads as a crisp black line, as in the original, whatever the moss does
@@ -418,10 +344,10 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     # Black lichen and grime in ragged blots over parts of slates, densest by the gaps and the
     # course edges: in the original most of the dark is this, not whole dark slates.
     blot_rng = np.random.default_rng([seed, 3])
-    field = .75 * periodic_noise(blot_rng, size, 28, 28) + .45 * periodic_noise(blot_rng, size, 95, 95)
+    field = .75 * pb.periodic_noise(blot_rng, (size, size), 28, 28) + .45 * pb.periodic_noise(blot_rng, (size, size), 95, 95)
     near = np.clip(moss * 1.5 + .5 * (np.clip(v, 0, 1) > .55), 0, 1)
     blots = np.clip((field + .6 * near - BLOT_SHARE) * 1.3, 0, 1) ** 1.4      # soft, ragged edges
-    depth = np.clip(.65 + .35 * periodic_noise(blot_rng, size, 20, 20), .3, 1)  # some blots only grime
+    depth = np.clip(.65 + .35 * pb.periodic_noise(blot_rng, (size, size), 20, 20), .3, 1)  # some blots only grime
     out *= (1 - BLOTS * blots * depth)[..., None]
     moss = np.maximum(moss, .6 * blots)          # lichen is matte like moss
 
@@ -429,9 +355,9 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     streak = drip_trails(spec, size, np.random.default_rng([seed, 1]))
     out *= (1 - DRIP * streak)[..., None]
     # wet black patches over several slates, ragged at the edge, with streaks running down from them
-    wet = np.clip((periodic_noise(rng, size, 7, 7) - .55) * 1.4, 0, 1) * (.6 + .4 * ragged)
+    wet = np.clip((pb.periodic_noise(rng, (size, size), 7, 7) - .55) * 1.4, 0, 1) * (.6 + .4 * ragged)
     out *= (1 - WET * wet)[..., None]
-    fade = np.clip(periodic_noise(rng, size, 6, 6) - .6, 0, 1)
+    fade = np.clip(pb.periodic_noise(rng, (size, size), 6, 6) - .6, 0, 1)
     out = out * (1 - FADE * fade[..., None]) + out.mean(axis=-1, keepdims=True) * 1.6 * FADE * fade[..., None]
 
     # Wet and dry parts: the wet patches, the water streaks and slates still wet from rain are
@@ -454,29 +380,11 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
                 roughness=rough, normal=normal)
 
 
-def _srgb(linear):
-    linear = np.clip(linear, 0, 1)
-    return np.where(linear <= .0031308, linear * 12.92, 1.055 * linear ** (1 / 2.4) - .055)
-
-
-def downsample(image: np.ndarray, size: int) -> np.ndarray:
-    """Lanczos resize of a float image, channel by channel (the render is at twice the texture size)."""
-    from PIL import Image
-    channels = image[..., None] if image.ndim == 2 else image
-    out = np.stack([np.asarray(Image.fromarray(channels[..., c].astype(np.float32), mode='F')
-                               .resize((size, size), Image.Resampling.LANCZOS)) for c in range(channels.shape[-1])],
-                   axis=-1)
-    return out[..., 0] if image.ndim == 2 else out
-
-
 def render(layout_path: Path, out_dir: Path, stones: list[Path], resolution: int, samples: int,
-           sun: bool = True) -> Path:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    options = [] if sun else ['sun=0']
-    subprocess.run([BLENDER, '-b', '--factory-startup', '--python-exit-code', '1', '-P', str(SCENE), '--',
-                    str(layout_path), str(out_dir), str(resolution), str(samples)] + options + [str(p) for p in stones],
-                   check=True)
-    return out_dir / 'passes.exr'
+           sun: bool = False) -> Path:
+    """Passes of the layout through the shared scene; the stone surfaces in the layout's order."""
+    surfaces = {f'stone{i}': path for i, path in enumerate(stones)}
+    return pb.render(layout_path, out_dir, surfaces, resolution, samples, {'sun': str(SUN if sun else 0)})
 
 
 def main(argv=None) -> int:
@@ -491,7 +399,7 @@ def main(argv=None) -> int:
     p.add_argument('stones', type=Path, nargs='+')
     p.add_argument('--resolution', type=int, default=2048)
     p.add_argument('--samples', type=int, default=64)
-    p.add_argument('--no-sun', action='store_true', help='bake the sky only, no light direction')
+    p.add_argument('--sun', action='store_true', help='bake a sun too (the accepted slate has none)')
     p = sub.add_parser('compose')
     p.add_argument('layout', type=Path)
     p.add_argument('passes', type=Path)
@@ -499,24 +407,17 @@ def main(argv=None) -> int:
     p.add_argument('--seed', type=int, default=0)
     args = parser.parse_args(argv)
     if args.command == 'layout':
-        args.out.write_text(json.dumps(layout(args.seed)) + '\n')
+        spec, points = layout(args.seed)
+        pb.write_layout(args.out, spec, points)
         print(args.out)
     elif args.command == 'render':
         print(render(args.layout, args.out_dir, [p.resolve() for p in args.stones], args.resolution, args.samples,
-                     sun=not args.no_sun))
+                     sun=args.sun))
     elif args.command == 'compose':
-        from PIL import Image
         spec = json.loads(args.layout.read_text())
-        result = compose(read_passes(args.passes), spec, args.seed)
-        albedo = downsample(result['albedo'], OUT_SIZE)
-        Image.fromarray((_srgb(albedo) * 255 + .5).astype(np.uint8)).save(args.out)
-        for name in ('shade', 'moss', 'sky', 'wetness', 'roughness'):
-            mask = downsample(np.clip(result[name], 0, 1), OUT_SIZE)
-            Image.fromarray((mask * 255 + .5).astype(np.uint8)).save(args.out.with_suffix(f'.{name}.png'))
-        # tangent-space normal, OpenGL style like bakeoff.filtered_maps: X right, Y up the slope
-        normal = downsample(result['normal'], OUT_SIZE)
-        normal /= np.linalg.norm(normal, axis=-1, keepdims=True) + 1e-9
-        Image.fromarray((normal * 127.5 + 128).clip(0, 255).astype(np.uint8)).save(args.out.with_suffix('.normal.png'))
+        result = compose(pb.read_passes(args.passes, spec['period']), spec, args.seed)
+        pb.write_maps(args.out, (OUT_SIZE, OUT_SIZE), result['albedo'], result['normal'],
+                      {k: result[k] for k in ('shade', 'moss', 'sky', 'wetness', 'roughness')})
         print(args.out)
     return 0
 

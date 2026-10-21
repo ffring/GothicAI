@@ -17,7 +17,7 @@ normalises fine detail to full contrast, which turns wood grain into bark.
 
 `"maps": "source"` takes the normal, roughness and optional AO baked from our own model together
 with the albedo (`remaster.py import --tool … --map normal=… --map roughness=…`, for example the
-slate of `slate_bake.py`) instead of deriving them from the albedo. Those maps line up with the
+roofs of `shingle_bake.py`, `slate_bake.py` and `inside_bake.py`) instead of deriving them from the albedo. Those maps line up with the
 albedo pixel for pixel and tile by construction, so such a texture takes no seam cut or crop
 (`axes: ""`); its roughness is not clipped to the class range, and AO defaults to 1 because the
 bake already holds its occlusion in the albedo.

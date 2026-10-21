@@ -5,31 +5,39 @@ import slate_bake
 
 
 @pytest.fixture(scope='module')
-def spec():
+def built():
     return slate_bake.layout(seed=1)
 
 
-def test_layout_is_reproducible_and_complete(spec):
-    assert len(spec['slates']) == slate_bake.ACROSS * slate_bake.COURSES
-    again = slate_bake.layout(seed=1)
-    assert [s['outline'] for s in again['slates']] == [s['outline'] for s in spec['slates']]
+@pytest.fixture(scope='module')
+def spec(built):
+    return built[0]
+
+
+def test_layout_is_reproducible_and_complete(built, spec):
+    slates = spec['pieces']
+    assert len(slates) == slate_bake.ACROSS * slate_bake.COURSES
+    again, _ = slate_bake.layout(seed=1)
+    assert [s['outline'] for s in again['pieces']] == [s['outline'] for s in slates]
     low, high = slate_bake.THICKNESS
-    assert all(low <= s['thickness'] <= high for s in spec['slates'])
-    assert any(s['broken'] for s in spec['slates']) and not all(s['broken'] for s in spec['slates'])
+    assert all(low <= s['thickness'] <= high for s in slates)
+    assert all(abs(s['top'][0] - s['bottom'][0] - s['thickness']) < 1e-9 for s in slates)
+    assert any(s['broken'] for s in slates) and not all(s['broken'] for s in slates)
+    assert all(len(built[1][s['id']]) > 50 for s in slates)       # mesh points of every face
 
 
 def test_slates_with_their_copies_cover_the_square(spec):
     from shapely import affinity, unary_union
     from shapely.geometry import Polygon, box
-    period = spec['period']
-    pieces = [affinity.translate(Polygon(s['outline']), dx, dy) for s in spec['slates'] for dx, dy in s['copies']]
+    period = spec['period'][0]
+    pieces = [affinity.translate(Polygon(s['outline']), dx, dy) for s in spec['pieces'] for dx, dy in s['copies']]
     hole = box(0, 0, period, period).difference(unary_union(pieces))
     assert hole.area < 1e-6 * period ** 2
 
 
 def test_slates_overlap_their_neighbours_and_the_course_above(spec):
     from shapely.geometry import Polygon
-    by_place = {(s['course'], s['index']): Polygon(s['outline']) for s in spec['slates']}
+    by_place = {(s['course'], s['index_in_course']): Polygon(s['outline']) for s in spec['pieces']}
     a, b = by_place[(3, 4)], by_place[(3, 5)]
     assert a.intersects(b) and a.intersection(b).area > 0        # the side lap
     above = [p for (c, _), p in by_place.items() if c == 4]
@@ -51,7 +59,7 @@ def test_drip_trails_start_dark_and_stay_in_range(spec):
 
 
 def test_local_coords_inside_a_visible_slate(spec):
-    slate = spec['slates'][40]
+    slate = spec['pieces'][40]
     v = .5
     x = (slate_bake.joint(*slate['joint_left'], slate['height'], v)
          + slate_bake.joint(*slate['joint_right'], slate['height'], v)) / 2
