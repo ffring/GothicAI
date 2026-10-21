@@ -52,6 +52,8 @@ def _minutes(fact: Fact) -> int | None:
 async def with_quest_outcomes(
     events: list[Fact], facts: list[Fact], link: GameLink, names: dict[str, str],
 ) -> list[Fact]:
+    if not events:
+        return events
     outcomes = {f["quest"]: f for f in facts if f.get("fact") == "quest_outcome"}
     relevant = [
         outcomes[e["quest"]] for e in events if e.get("to") != "running" and e.get("quest") in outcomes
@@ -286,7 +288,7 @@ class Occasions:
             events = list(self._events)
             vanilla = iter(await with_quest_outcomes(
                 [f for f in events if f["fact"] == "vanilla_quest"],
-                self.chronicle.facts(), self.link, {},
+                self.chronicle.facts("quest_outcome"), self.link, {},
             ))
             if generation != self._generation:
                 return
