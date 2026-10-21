@@ -102,6 +102,46 @@ def test_house_captures_reject_opened_basement_original(tmp_path, variant):
         capture.check(*inputs, market_house=True)
 
 
+def harbour_check_inputs(tmp_path):
+    inputs = capture_check_inputs(tmp_path, "original", capture.HARBOUR_MATERIALS, original=True)
+    spots = tuple(f"harbour-{number}" for number in range(1, 7))
+    inputs[1].write_text("".join(f"shot {spot}\n" for spot in spots))
+    (inputs[0] / "game.log").write_text("materials: 0 entries from test\n"
+        + "".join(f"[bench] shot {spot}\n" for spot in spots) + "[bench] done\n")
+    for spot in spots:
+        Image.new("RGB", (1280, 720)).save(inputs[0] / f"{spot}.png")
+    return inputs
+
+
+def test_harbour_captures_validate_six_original_frames(tmp_path, capsys):
+    capture.check(*harbour_check_inputs(tmp_path), harbour_house=True)
+    assert "shots=6 materials=0 pilot_replaced=0 pilot_originals=3" in capsys.readouterr().out
+
+
+def test_harbour_captures_reject_incomplete_scenario(tmp_path):
+    inputs = harbour_check_inputs(tmp_path)
+    inputs[1].write_text("shot harbour-1\n")
+    with pytest.raises(SystemExit, match="expected six distinct harbour shots"):
+        capture.check(*inputs, harbour_house=True)
+
+
+def test_harbour_captures_reject_wrong_frame_size(tmp_path):
+    inputs = harbour_check_inputs(tmp_path)
+    Image.new("RGB", (640, 360)).save(inputs[0] / "harbour-3.png")
+    with pytest.raises(SystemExit, match="shot harbour-3: expected 1280x720"):
+        capture.check(*inputs, harbour_house=True)
+
+
+def test_harbour_captures_require_port_materials(tmp_path):
+    inputs = harbour_check_inputs(tmp_path)
+    census = inputs[0] / "census.json"
+    data = json.loads(census.read_text())
+    data["files"] = data["files"][:-1]
+    census.write_text(json.dumps(data))
+    with pytest.raises(SystemExit, match="pilot originals not opened: NW_CITY_HAFEN_GIEBEL_01"):
+        capture.check(*inputs, harbour_house=True)
+
+
 def test_flat_frame_has_no_detail_and_uses_linear_rec709(tmp_path):
     path = tmp_path / "green.png"
     Image.new("RGB", (1280, 720), (0, 128, 0)).save(path)

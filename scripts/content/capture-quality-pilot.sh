@@ -6,6 +6,7 @@
 # --compose-2 CAPTURES OUTPUT writes seven original / city-3 / B / pilot-2 boards.
 # --compose-3 CAPTURES OUTPUT writes seven original / pilot-2 / pilot-3a / pilot-3b boards.
 # QUALITY_PILOT_TASK=gothic-ai/market-house selects market-house.bench (three views).
+# QUALITY_PILOT_TASK=gothic-ai/harbour-house selects harbour-house.bench (six original views).
 # --compose-house CAPTURES OUTPUT writes original / pilot-3b / house-1 boards.
 # --compose-house-2 CAPTURES OUTPUT writes original / house-1 / house-2 boards.
 set -euo pipefail
@@ -14,6 +15,7 @@ HOST="${RYZEN_HOST:-ryzen}"
 TASK="${QUALITY_PILOT_TASK:-gothic-ai/quality-pilot}"
 SCENARIO=quality-pilot.bench
 [[ "$TASK" != gothic-ai/market-house ]] || SCENARIO=market-house.bench
+[[ "$TASK" != gothic-ai/harbour-house ]] || SCENARIO=harbour-house.bench
 
 if [[ "${1:-}" == --remote-prepare ]]; then
   task="$HOME/$TASK"
@@ -33,6 +35,7 @@ fi
 if [[ "${1:-}" == --remote-capture ]]; then
   variant="${2:?variant}"
   [[ "$variant" == original || "$variant" == city-3 || "$variant" == pilot-b || "$variant" == pilot-c || "$variant" == pilot-2 || "$variant" == pilot-3a || "$variant" == pilot-3b || "$variant" == house-1 || "$variant" == house-2 ]] || exit 2
+  [[ "$TASK" != gothic-ai/harbour-house || "$variant" == original ]] || exit 2
   task="$HOME/$TASK"
   out="$task/runs/$variant"
   mkdir -p "$out/run"
@@ -75,6 +78,7 @@ INI
   check_args=()
   [[ "$TASK" != gothic-ai/quality-pilot-3 ]] || check_args+=(--iteration-3)
   [[ "$TASK" != gothic-ai/market-house ]] || check_args+=(--market-house)
+  [[ "$TASK" != gothic-ai/harbour-house ]] || check_args+=(--harbour-house)
   python3 "$task/scripts/capture-quality-pilot.py" check "$out" "$task/scripts/$SCENARIO" "$task/content/$variant/materials/materials.json" "${check_args[@]}"
   exit 0
 fi
@@ -100,6 +104,7 @@ fi
 if [[ "${1:-}" == --capture ]]; then
   variant="${2:?variant}"; out="${3:?output}"
   [[ "$variant" == original || "$variant" == city-3 || "$variant" == pilot-b || "$variant" == pilot-c || "$variant" == pilot-2 || "$variant" == pilot-3a || "$variant" == pilot-3b || "$variant" == house-1 || "$variant" == house-2 ]] || exit 2
+  [[ "$TASK" != gothic-ai/harbour-house || "$variant" == original ]] || exit 2
   mkdir -p "$out/$variant"
   if [[ "$variant" != original ]]; then
     source_root="${CONTENT_STAGING_ROOT:-$HOME/.local/share/gothic-ai/content-staging}/$variant"
