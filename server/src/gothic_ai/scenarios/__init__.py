@@ -87,6 +87,7 @@ from .story import death_load as death_load
 from .story import director_casts as director_casts
 from .story import graph_dialogs as graph_dialogs
 from .story import graph_programs as graph_programs
+from .story import own_amend as own_amend
 from .story import own_repair as own_repair
 from .story import own_symbols as own_symbols
 from .story import repair_after_death as repair_after_death

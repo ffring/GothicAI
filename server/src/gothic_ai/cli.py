@@ -2089,6 +2089,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario stages: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "own_amend":
+                assert state.book is not None and place_book is not None and state.dialogue and state.talk
+                results = await scenarios.own_amend(link, state.book, place_book, state.dialogue, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario own_amend: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "requires":
                 assert state.book is not None
                 results = await scenarios.book_requires(link, state.book)
@@ -2866,6 +2872,7 @@ def main() -> None:
             "own",
             "trigger",
             "stages",
+            "own_amend",
             "requires",
             "chain",
             "own_repair",

@@ -94,6 +94,17 @@ async def _setup(fake: FakeGame, llm: FakeBackend, graph: StoryGraph, store: Mem
     return link_cm, dialogue, chronicle, vanilla
 
 
+@pytest.mark.parametrize("tool", ["accept_quest", "amend_quest", "drop_quest", "check_claim", "expose_lie"])
+async def test_foreign_quest_ids_are_left_to_the_next_extension(graph, tool):
+    fake = FakeGame(branch="A")
+    link_cm, dialogue, _, vanilla = await _setup(fake, FakeBackend(delay=0), graph, MemoryStore(":memory:"))
+    try:
+        conv = dialogue.open(LOBART, "Лобарт")
+        assert await vanilla.handle(dialogue, conv, ToolCall(tool, {"quest": "DIR_Q1"}, "c1"), None) is None
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 def _effects(fake: FakeGame, npc: str) -> list[list[dict]]:
     return [m["effects"] for m in fake.story if m["type"] == "story_effect" and m["npc"] == npc]
 
@@ -1488,7 +1499,10 @@ async def test_a_giver_cannot_change_a_quest_it_did_not_ask_for(cavalorn, tool):
             if tool == "amend_quest":
                 args["drop"] = [BRAGO]
             result = await vanilla.handle(dialogue, conv, ToolCall(tool, args, "a1"), None)
-            assert result.status == "rejected"
+            if quest in cavalorn.quests:
+                assert result.status == "rejected"
+            else:
+                assert result is None  # another extension may own the quest
         assert chronicle.facts("quest_terms") == [] and chronicle.facts("quest_outcome") == []
     finally:
         await link_cm.__aexit__(None, None, None)
