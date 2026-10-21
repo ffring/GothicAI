@@ -195,7 +195,9 @@ def cmd_import(args) -> int:
     raw = source.read_bytes()
     if raw[:8] != b'\x89PNG\r\n\x1a\n':
         raise ValueError(f'{source}: expected a PNG from image_gen')
-    stem = Path(args.texture).stem if args.role == 'texture' else args.role
+    # A shared material keeps one concept image per texture: concept-<TEXTURE>-attempt-<n>.png.
+    stem = (Path(args.texture).stem if args.role == 'texture'
+            else f'concept-{Path(args.texture).stem}' if args.texture else args.role)
     if args.role == 'texture' and not args.texture:
         raise ValueError('--texture is required for --role texture')
     numbers = [int(m['n']) for p in folder.glob(f'{stem}-attempt-*.png') if (m := ATTEMPT.fullmatch(p.stem))]
@@ -206,7 +208,7 @@ def cmd_import(args) -> int:
     end = datetime.fromisoformat(args.end.replace('Z', '+00:00'))
     target.write_bytes(raw)
     c2pa = c2pa_agent(target)
-    meta = dict(texture=args.texture if args.role == 'texture' else None, role=args.role, attempt=attempt,
+    meta = dict(texture=args.texture, role=args.role, attempt=attempt,
         prompt=prompt, utc=args.start, utc_end=args.end, seconds=max(0, round((end - start).total_seconds())),
         generator='image_gen in a fresh Codex thread (ChatGPT plan); judged by Claude', thread=args.thread,
         parent=args.parent, reason=args.reason, c2pa=c2pa, source_sha256=sha256(target))
@@ -520,8 +522,9 @@ def missing_for(asset: str, stage: str) -> list[str]:
         missing.append('concept.md')
     if stage == 'concept':
         return missing
-    if 'concept' not in manifest['selected']:
-        missing.append('selected concept (remaster.py select --key concept)')
+    concepts = [key for key in manifest['selected'] if key == 'concept' or key.startswith('concept:')]
+    if not concepts:
+        missing.append('selected concept (remaster.py select --key concept, or concept:<TEXTURE> per texture)')
     if not _review_ok(manifest, 'concept'):
         missing.append('reviewer Р1 on the concept (PASS or DISPUTED)')
     if not _gate_ok(manifest, 'concept'):

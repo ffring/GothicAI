@@ -128,6 +128,51 @@
       "utc": "2026-10-21T16:18:18Z",
       "thread": "01a15f34-a782-7ce0-91fc-f0d7b2355ccf",
       "parent": "city-roofs-concept/concept-attempt-5.png"
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_01-attempt-1.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_01.TGA",
+      "attempt": 1,
+      "sha256": "42e4a438d88f54cadb031759862969b04048b961bc497ed11878021bcc431f7c",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:26:51Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": null
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_04-attempt-1.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 1,
+      "sha256": "1942972809c8e02a0c36524897116c916d77dde8676f2c616c8a5814233e4631",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:27:35Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": null
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_INSIDE_01-attempt-1.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_INSIDE_01.TGA",
+      "attempt": 1,
+      "sha256": "4b7bcc7de0a155b8385dc22ff3692d0258df535d751efe67f92464fd2b7c9036",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:28:58Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": null
     }
   ],
   "selected": {},
@@ -155,6 +200,13 @@
       "verdict": "REJECT",
       "date": "2026-10-21",
       "path": "reviews/r1-concept-7/merged.json"
+    },
+    {
+      "id": "r1-concept-r3",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "pending",
+      "date": "2026-10-21"
     }
   ],
   "gates": [

@@ -317,3 +317,20 @@ def test_private_reference_stays_out_of_pair_preview(env, tmp_path):
     assert preview.size[0] < 2 * preview.size[1]
     red, green, blue = preview.getpixel((preview.width // 2, preview.height // 2))
     assert blue > 200 and red < 50
+
+
+def test_material_concepts_are_named_per_texture(env, tmp_path):
+    run('new', 'roofs', '--title', 'Roofs', '--kind', 'material')
+    prompt = tmp_path / 'p.txt'
+    prompt.write_text('slate')
+    common = ['--prompt-file', prompt, '--start', '2026-10-21T10:00:00Z', '--end', '2026-10-21T10:01:00Z',
+              '--thread', 't']
+    run('import', 'roofs', png_with_c2pa(tmp_path / 'a.png'), '--role', 'concept',
+        '--texture', 'NW_CITY_ROOF_04.TGA', *common)
+    source = remaster.load_manifest('roofs')['sources'][0]
+    assert source['file'] == 'roofs/concept-NW_CITY_ROOF_04-attempt-1.png'
+    assert source['role'] == 'concept' and source['texture'] == 'NW_CITY_ROOF_04.TGA'
+    fill_intent('roofs')
+    (remaster.asset_dir('roofs') / 'concept.md').write_text('x')
+    run('select', 'roofs', '--key', 'concept:NW_CITY_ROOF_04.TGA', '--file', source['file'], '--reason', 'r')
+    assert not any('selected concept' in m for m in remaster.missing_for('roofs', 'textures'))
