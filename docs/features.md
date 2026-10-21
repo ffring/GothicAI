@@ -18,6 +18,7 @@ PR, который добавляет фичу или выключатель, д
 | Запросы к Responses по своему WebSocket на NPC (кэш промпта на подписке) | `--no-websocket` | `llm/openai_responses.py` | — | — |
 | Память NPC по веткам сохранений | нет | `memory.py` | e2e `m3` | [protocol.md](protocol.md#сессии-и-память) |
 | Разговор без окна: адресата выбирает сервер | нет | `talk.py`, `turn.py` | e2e `m5e` | [npc-agent.md](npc-agent.md#живой-разговор-m5e) |
+| Проход у городских ворот голосом: родное основание, вера привратника или взятка через Y | `--no-gates` | `gates.py`, `deals.py`, `vanilla.py`, `crime_law_graph.py` | e2e `gate` (новая игра, `LLM=fake`); pytest `test_gates.py`, `test_deals.py`, `test_vanilla.py`, `test_crime_law_graph.py`, `test_crime_law_runtime.py` | [gates.md](gates.md) |
 | Быстрые звуки, пока модель думает (`say.filler`) | нет | `dialogue.py` | — | [protocol.md](protocol.md#сервер--игра) |
 | Настроение реплики: лицо и голос | нет | `dialogue.py`; мост — `ai_bridge/aibridge.cpp` (`moodFace`) | бенчи `mood-ai`, `faces`, `face-fade` | [npc-agent.md](npc-agent.md#лицо) |
 | Реплики в бою от быстрой модели (Gemma) | `--no-quick`; без `--quick-url` и `--decider-url` её нет | `dialogue.py`, `server/deploy/gemma/` | e2e `m5` с `QUICK_URL` | [npc-agent.md](npc-agent.md#реплики-в-бою-быстрая-модель) |
@@ -100,7 +101,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
-| Граф сюжета и правки режиссёра | граф не грузится, только если выключены все четыре: `--no-director`, `--no-knowledge`, `--no-questlog`, `--no-crimes`; свой файл — `--story-graph PATH` | `story.py`, `validator.py`, `gamedata/storygraph.py` | e2e `graph`, `programs` | [story-graph.md](story-graph.md) |
+| Граф сюжета и правки режиссёра | граф не грузится, только если выключены все пять: `--no-director`, `--no-knowledge`, `--no-questlog`, `--no-crimes`, `--no-gates`; свой файл — `--story-graph PATH` | `story.py`, `validator.py`, `gamedata/storygraph.py` | e2e `graph`, `programs` | [story-graph.md](story-graph.md) |
 | Бандиты у башни Ксардаса без скриптовой засады | `--no-free-bandits` | `story.py` (`freed`) | e2e `companion` (проверка `freed`) | [npc-agent.md](npc-agent.md#приказы-спутникам) |
 | Ремонт квестов после смерти | `--no-director` | `director.py` | e2e `repair` | [story-graph.md](story-graph.md) |
 | Квесты скриптов в разговоре и ложь о них | `--no-director` | `vanilla.py` | e2e `vgive`, `vlie`, `vcheck` | [story-graph.md](story-graph.md) |

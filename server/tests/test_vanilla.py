@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from gothic_ai.llm import ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.memory import MemoryStore
 from gothic_ai.persona import PersonaProvider
-from gothic_ai.vanilla import VanillaQuests, _takes
+from gothic_ai.vanilla import VanillaQuests, _bridge, _takes
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
 from tests.test_director import GRAPH, HAS_20, HILDA, LOBART, QUEST, _node
@@ -593,5 +594,63 @@ async def test_an_ending_that_wants_its_quest_not_begun(cavalorn):
         assert {"do": "knows", "info": KILLED} in effects and {"do": "party", "value": 0} in effects
         # what he told of the bandits only in the conversation is no lie of the hero's
         assert chronicle.facts("claim")[-1]["truth"] is True and chronicle.facts("lie") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def test_bridge_translates_native_gate_fields_and_checklog(graph):
+    passage = {
+        "do": "set_field", "field": "AIVAR", "of": ["inst", "SELF"],
+        "index": ["int", 14, "AIV_PASSGATE"], "value": ["int", 1, "TRUE"],
+    }
+    assert _bridge(passage, {}, graph) == {"do": "gate_pass", "npc": "SELF", "value": 1}
+    assert _bridge({**passage, "of": ["inst", "HILDA"]}, {}, graph) == {
+        "do": "gate_pass", "npc": HILDA, "value": 1,
+    }
+    assert _bridge({**passage, "value": ["int", 0, "FALSE"]}, {}, graph) == {
+        "do": "gate_pass", "npc": "SELF", "value": 0,
+    }
+    assert _bridge({**passage, "field": "ATTRIBUTE"}, {}, graph) is None
+    assert _bridge({**passage, "index": ["int", 13, "AIV_LASTDISTTOWP"]}, {}, graph) is None
+    assert _bridge({"do": "call", "fn": "B_CHECKLOG", "args": []}, {}, graph) == {
+        "do": "gate_checklog",
+    }
+
+
+async def test_constantino_herbs_accept_quest_keeps_native_passage_and_checklog():
+    from tests.test_gates import GatesFake
+
+    data = Path(os.environ.get("GOTHIC_AI_DATA", Path.home() / ".local/share/gothic-ai"))
+    path = Path(os.environ.get("GOTHIC_STORY_GRAPH", data / "story.json"))
+    if not path.exists():
+        pytest.skip("needs actual storygraph export (GOTHIC_STORY_GRAPH)")
+    graph = load(path)
+    npc, partner = "MIL_310_STADTWACHE", "MIL_333_STADTWACHE"
+    quest, ending = "MIS_ADDON_LESTER_PICKFORCONSTANTINO", "DIA_ADDON_MIL_310_STADTWACHE_CONSTANTINO"
+    fake = GatesFake(branch="A")
+    accept = FakeStep("Ладно, проходи к Константино.", [ToolCall("accept_quest", {"quest": quest}, "a1")])
+    llm = FakeBackend(script=[accept, FakeStep("Ну?")], delay=0)
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars.update({quest: 1, "MIL_310_SCHONMALREINGELASSEN": 0})
+    fake.hero_items = {"ITPL_MANA_HERB_01": 10}
+    fake.npc_states.update({npc: {"state": "alive", "name": "Стражник"}, partner: {"state": "alive"}})
+    try:
+        dialogue.open(npc, "Стражник")
+        await vanilla.prepare(npc)
+        assert vanilla.offers[npc][quest].ending == ending
+        await dialogue.say_as_player(npc, "Я принёс травы Константино.")
+        await _until(lambda: chronicle.facts("claim") != [])
+        assert fake.vars[quest] == 2 and fake.vars["MIL_310_SCHONMALREINGELASSEN"] == 1
+        assert fake.hero_xp == 100 and ending in fake.known
+        assert len(fake.checklog) == 1
+        assert chronicle.facts("claim")[-1]["truth"] is True
+        programs = [
+            op["steps"] for patch in fake.graph for op in patch["ops"]
+            if op.get("op") == "trigger" and op.get("steps")
+        ]
+        assert programs
+        written = str(programs)
+        assert "AIVAR" in written and partner in written and "B_CHECKLOG" in written
     finally:
         await link_cm.__aexit__(None, None, None)
