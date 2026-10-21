@@ -203,6 +203,8 @@
 #       chapter occasions consumed by Showrunner.run; every line is finished by play_book_chain before
 #       the next occasion, with a game day and an injected 15 min between them. All three must have a
 #       line/none outcome, at least one completed line. SAVE=save_slot_1.sav; TIMEOUT=1200
+#   greg: LLM=fake, new game: Greg gives his city errand, accepts farmer clothes and pays 50 gold, a map
+#       and two rum; reload the branch without the clothes and his acceptance records a lie with its truth
 #   vanilla_line: LLM=fake only, stage 5 layer 3: take and finish Lobart's turnips through the scripts'
 #       own dialogs. The vanilla success occasion produces a neighbor's line with follows and a success
 #       requirement; its book offer is open, play_book_chain completes it, and save/load keeps the same
