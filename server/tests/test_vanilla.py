@@ -648,16 +648,11 @@ async def test_constantino_herbs_accept_quest_keeps_native_passage_and_checklog(
         await dialogue.say_as_player(npc, "Я принёс травы Константино.")
         await _until(lambda: chronicle.facts("claim") != [])
         assert fake.vars[quest] == 2 and fake.vars["MIL_310_SCHONMALREINGELASSEN"] == 1
+        assert fake.fields.get((npc, "AIVAR", 14)) == 1
+        assert fake.fields.get((partner, "AIVAR", 14)) == 1
         assert fake.hero_xp == 100 and ending in fake.known
         assert len(fake.checklog) == 1
         assert chronicle.facts("claim")[-1]["truth"] is True
-        programs = [
-            op["steps"] for patch in fake.graph for op in patch["ops"]
-            if op.get("op") == "trigger" and op.get("steps")
-        ]
-        assert programs
-        written = str(programs)
-        assert "AIVAR" in written and partner in written and "B_CHECKLOG" in written
     finally:
         await link_cm.__aexit__(None, None, None)
 

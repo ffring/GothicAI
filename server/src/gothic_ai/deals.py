@@ -721,12 +721,15 @@ class Deals:
 
     @property
     def all_tools(self) -> tuple[Tool, ...]:
-        tool = PROPOSE_TOOL if self.cover and self.crimes is not None else NO_COVER_TOOL
+        if self.gates is not None:
+            # The offered schema depends on whether this npc is at its gate post.
+            return (WITHDRAW_TOOL,)
+        tool = NO_GATES_TOOL if self.cover and self.crimes is not None else NO_COVER_NO_GATES_TOOL
         return (tool, WITHDRAW_TOOL)
 
     def tools(self, npc: str) -> list[Tool]:
         if self.gates is not None and self.gates.on_post(npc):
-            tool = self.all_tools[0]
+            tool = PROPOSE_TOOL if self.cover and self.crimes is not None else NO_COVER_TOOL
         else:
             tool = NO_GATES_TOOL if self.cover and self.crimes is not None else NO_COVER_NO_GATES_TOOL
         return [tool, WITHDRAW_TOOL] if npc.upper() in self.open else [tool]

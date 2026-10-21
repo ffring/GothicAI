@@ -52,6 +52,7 @@ class GatesFake(FakeGame):
         self.fields.update({(npc, "WP"): "GATE_POST" for npc in self.posts})
         self.checklog: list[str | None] = []
         self.executed: list[dict[str, Any]] = []
+        self.trigger_events = True
         self.vars.update({law_var("city"): 0, **projection_values("city", [])})
 
     def evaluate(self, expr: Any, npc: str | None = None) -> Any:
@@ -159,8 +160,9 @@ class GatesFake(FakeGame):
                 if effect["do"] == "set":
                     self.vars[effect["var"]] = effect["value"]
         await super().handle(msg)
-        for id, npc in fired:
-            await self.send(type="trigger_fired", id=id, count=1, npc=npc, other="PC_HERO")
+        if self.trigger_events:
+            for id, npc in fired:
+                await self.send(type="trigger_fired", id=id, count=1, npc=npc, other="PC_HERO")
 
 
 def _has(item: str, count: int = 1) -> list:
@@ -301,8 +303,10 @@ async def test_false_native_basis_cannot_open_gate(basis):
         assert not _has_pass(fake, CITY) and fake.executed == []
 
 
-async def test_claim_opens_both_guards_and_records_belief_with_game_time(monkeypatch):
+@pytest.mark.parametrize("trigger_events", [True, False])
+async def test_claim_opens_both_guards_and_records_belief_with_game_time(monkeypatch, trigger_events):
     fake = GatesFake()
+    fake.trigger_events = trigger_events
     fake.day, fake.hour, fake.minute = 4, 13, 27
     async with setup_gate(fake) as system:
         _, dialogue, chronicle, gates, _, _ = system
@@ -340,8 +344,10 @@ async def test_known_unpaid_theft_blocks_native_claim_and_bribe():
         assert fake.hero_items[GOLD] == 100 and not _has_pass(fake, CITY)
 
 
-async def test_accepted_gold_deal_writes_native_pass_and_bribe_absolution():
+@pytest.mark.parametrize("trigger_events", [True, False])
+async def test_accepted_gold_deal_writes_native_pass_and_bribe_absolution(trigger_events):
     fake = GatesFake()
+    fake.trigger_events = trigger_events
     fake.hero_items[GOLD] = 100
     fake.vars["ABSOLUTIONLEVEL_CITY"] = 3
     async with setup_gate(fake) as system:
@@ -352,15 +358,34 @@ async def test_accepted_gold_deal_writes_native_pass_and_bribe_absolution():
         assert outcome.status == "accepted"
         await _until(lambda: any(m["type"] == "deal_show" for m in fake.deals))
         shown = next(m for m in fake.deals if m["type"] == "deal_show")
+        deal = deals.open[CITY]
         assert fake.hero_items[GOLD] == 100 and not _has_pass(fake, CITY)
         await fake.send(type="deal_accept", deal=shown["deal"], version=shown["version"])
-        await _until(lambda: chronicle.facts("deal") != [])
+        await _until(lambda: chronicle.facts("deal") != [], timeout=8)
+        assert deal.state == "done"
         assert fake.hero_items[GOLD] == 0 and fake.npc_items[CITY][GOLD] == 100
         assert _has_pass(fake, CITY) and _has_pass(fake, PAIR)
         assert fake.vars["MIL_310_SCHONMALREINGELASSEN"] == 1
         assert fake.vars["MIL_310_PERSONAL_ABSOLUTIONLEVEL"] == 4
         assert fake.executed and fake.checklog
         assert chronicle.facts("deal")[0]["let_pass"] is True
+
+
+async def test_repeated_admissions_reuse_and_reset_the_same_two_globals():
+    fake = GatesFake()
+    fake.hero_items[GOLD] = 200
+    async with setup_gate(fake) as system:
+        _, _, _, gates, _, _ = system
+        effects = [{"do": "give", "item": GOLD, "count": 100, "to": "self"}]
+        await gates.bribe(CITY, effects)
+        variables = {name for name in fake.vars if name.startswith("DIR_GATE_")}
+        assert len(variables) == 2
+        await gates.bribe(CITY, effects)
+        assert {name for name in fake.vars if name.startswith("DIR_GATE_")} == variables
+        assert all(fake.vars[name] == 1 for name in variables)
+        assert len(fake.executed) == 2 and fake.executed[0]["id"] == fake.executed[1]["id"]
+        assert fake.hero_items[GOLD] == 0 and fake.npc_items[CITY][GOLD] == 200
+        assert _has_pass(fake, CITY) and _has_pass(fake, PAIR)
 
 
 @pytest.mark.parametrize("npc,amount,reason", [(CITY, 40, "60"), (UPPER, 100, "bribes")])

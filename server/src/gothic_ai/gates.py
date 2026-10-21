@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from .chronicle import Chronicle
 from .crime_law_graph import (
@@ -37,6 +36,7 @@ GROUNDS = {
     "PASSASMAGE": "герой — маг Огня",
     "PASSASSLD": "герой — наёмник",
 }
+_RUNNING: set[tuple[GameLink, str]] = set()
 LET_PASS = Tool(
     "let_pass",
     "Разрешить герою проход. basis — id настоящего основания из блока «Ворота», либо claim, "
@@ -358,8 +358,12 @@ async def _run(
 ) -> None:
     # A transient state trigger runs without opening a native menu, also in a normal (non-dev) game.
     # Its program checks law and funds in the same game tick as the stores and the transfer.
-    trigger = "DIR_GATE_" + uuid4().hex.upper()
+    trigger = "DIR_GATE_" + npc.upper()
     result = trigger + "_RESULT"
+    key = (link, trigger)
+    if key in _RUNNING:
+        raise GameError("gate admission is already in progress for this guard")
+    _RUNNING.add(key)
     done: asyncio.Future[TriggerFired] = asyncio.get_running_loop().create_future()
     session = link.session
 
@@ -382,21 +386,40 @@ async def _run(
     try:
         await link.patch_graph(
             [
-                {"op": "vars", "vars": {law_var("city"): 0, **projection_values("city", []), result: 0}},
-                {"op": "trigger", "id": trigger, "on": "state", "npc": npc, "steps": body},
+                {"op": "vars", "vars": {
+                    law_var("city"): 0, **projection_values("city", []), trigger: 0, result: 0,
+                }},
             ]
         )
-        fired = await asyncio.wait_for(done, 5)
-        if fired.error:
+        if session is not link.session:
+            raise GameError("world reloaded")
+        # Vars only supplies initial values: explicitly reset the two reused globals.
+        await link.story_effect(npc, [
+            {"do": "set", "var": trigger, "value": 0},
+            {"do": "set", "var": result, "value": 0},
+        ])
+        if session is not link.session:
+            raise GameError("world reloaded")
+        await link.patch_graph([
+            {"op": "trigger", "id": trigger, "on": "state", "npc": npc, "steps": body},
+        ])
+        try:
+            fired = await asyncio.wait_for(done, 5)
+        except TimeoutError:
+            fired = None  # The event can be lost; the save's counter and result are authoritative.
+        if fired is not None and fired.error:
             raise GameError(fired.error)
         if session is not link.session:
             raise GameError("world reloaded")
-        values = await link.story_eval(npc, [["var", result]])
-        if values != [1]:
+        values = await link.story_eval(npc, [["var", trigger], ["var", result]])
+        if values != [1, 1]:
             raise GameError(
                 "passage refused: unpaid crime, invalid ground, guard off post or insufficient gold"
             )
     finally:
         link.listeners.remove(hear)
-        if session is link.session:
-            await link.patch_graph([{"op": "trigger", "id": trigger, "steps": None}])
+        try:
+            if session is link.session:
+                await link.patch_graph([{"op": "trigger", "id": trigger, "steps": None}])
+        finally:
+            _RUNNING.discard(key)

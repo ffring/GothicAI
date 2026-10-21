@@ -800,6 +800,36 @@ async def test_a_tool_not_offered_in_the_turn_is_rejected():
         await link_cm.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("cover", [False, True])
+@pytest.mark.parametrize(
+    "enabled,npc,on_post",
+    [
+        (False, "MIL_310_STADTWACHE", True),
+        (True, "MIL_310_STADTWACHE", True),
+        (True, "MIL_310_STADTWACHE", False),
+        (True, XARDAS, False),
+    ],
+)
+async def test_gate_deal_request_schema_is_available_only_on_post(enabled, npc, on_post, cover):
+    fake = FakeGame(branch="A")
+    gates = SimpleNamespace(on_post=lambda _: on_post) if enabled else None
+    link_cm, dialogue, chronicle, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:"), gates=gates
+    )
+    deals.crimes = Crimes(dialogue.link, chronicle) if cover else None
+    try:
+        [tool] = [
+            tool for tool in dialogue._request_tools(dialogue._offered(npc))
+            if tool.name == "propose_deal"
+        ]
+        assert ("let_pass" in tool.parameters["properties"]) is (enabled and on_post)
+        assert ("let_pass" in tool.parameters["required"]) is (enabled and on_post)
+        assert ("Пропуск через ворота" in tool.description) is (enabled and on_post)
+        assert ("cover" in tool.parameters["properties"]) is cover
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_gate_deal_is_shown_and_paid_only_with_the_passage(monkeypatch):
     guard = "MIL_310_STADTWACHE"
     fake = FakeGame(branch="A")
