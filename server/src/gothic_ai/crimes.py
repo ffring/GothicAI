@@ -692,6 +692,7 @@ class Crimes:
                     violence = {
                         fact.get("kind") for fact in self.facts()
                         if self._npc(fact.get("victim", "")) == owner
+                        and not (fact.get("kind") == "murder" and fact.get("lawful_fight"))
                     }
                     if (
                         deed.owner_npc_guild > 16
@@ -746,6 +747,13 @@ class Crimes:
                 else:
                     kind = "murder"
                     community = self.community(deed.victim_guild, deed.victim_npctype)
+                    if (
+                        deed.victim_enemy
+                        or deed.victim_started_fight
+                        or deed.victim_tough_guy
+                        or deed.victim_guild in TOUGH_GUILDS
+                    ):
+                        extra["lawful_fight"] = True
                     if deed.victim_guild >= 0:
                         extra["victim_guild"] = deed.victim_guild
             case "pickpocket":

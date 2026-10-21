@@ -208,6 +208,32 @@ async def test_loot_after_the_heros_criminal_fight_is_still_theft(system, prior_
     assert not system.crimes.classified_noncrime("deed-1")
 
 
+@pytest.mark.parametrize("owner,guild,context", [
+    ("BDT_1015_BANDIT_L", 9, {}),
+    (LOBART, 8, {"victim_enemy": True}),
+])
+@pytest.mark.parametrize("aftermath", ["dead", "recent_fight"])
+async def test_loot_after_a_lawful_human_kill_preserves_murder_without_theft(
+    system, owner, guild, context, aftermath,
+):
+    murder = system.crimes.record(deed(
+        id="murder", kind="murder", victim=owner, victim_guild=guild, **context,
+    ))
+    assert murder is not None and murder["kind"] == "murder" and murder["lawful_fight"] is True
+    if aftermath == "dead":
+        system.chronicle.record({"fact": "died", "npc": owner, "killer": "PLAYER", "monster": False})
+    else:
+        system.crimes.sides.note_fight(owner, "PLAYER")
+    assert system.crimes.record(deed(
+        owner=owner, owner_npc_guild=guild, witnesses=[HILDA],
+        witnesses_metadata=[{"npc": HILDA, "guild": 8, "npctype": 2}],
+    )) is None
+    assert system.crimes.classified_noncrime("deed-1")
+    assert system.crimes.facts() == [murder]
+    assert system.chronicle.facts("crime_seen") == []
+    assert system.chronicle.facts("crime_attitude") == []
+
+
 @pytest.mark.parametrize("ownership", [
     {"chest": "CHEST_LOBART", "chest_owner": LOBART, "chest_owner_guild": 8},
     {"room_owner": LOBART, "room_owner_guild": 8},
@@ -373,6 +399,34 @@ async def test_human_kill_is_murder_even_after_assault_or_finishing_blow(system)
     )
     assert result is not None and result["kind"] == "murder" and result["victim"] == LOBART
     assert result["community"] == "farm"
+
+
+@pytest.mark.parametrize("context,lawful", [
+    ({"victim_enemy": True}, True),
+    ({"victim_started_fight": True}, True),
+    ({"victim_tough_guy": True}, True),
+    ({"victim_guild": 6}, True),
+    ({"victim_guild": 7}, True),
+    ({"victim_guild": 9}, True),
+    ({"victim_guild": 13}, True),
+    ({}, False),
+    ({"victim_in_fight": True}, False),
+    ({"victim_npctype": 2}, False),
+])
+async def test_human_murder_marks_only_lawful_combat(system, context, lawful):
+    fields = {"kind": "murder", "victim": LOBART, "victim_guild": 8, **context}
+    result = system.crimes.record(deed(**fields))
+    assert result is not None and result["kind"] == "murder"
+    if lawful:
+        assert result["lawful_fight"] is True
+    else:
+        assert "lawful_fight" not in result
+        system.chronicle.record({"fact": "died", "npc": LOBART, "killer": "PLAYER", "monster": False})
+        loot = system.crimes.record(deed(
+            id="loot", owner=LOBART, owner_npc_guild=8, witnesses=[HILDA],
+        ))
+        assert loot is not None and loot["kind"] == "theft"
+        assert not system.crimes.classified_noncrime("loot")
 
 
 async def test_monster_kill_is_not_human_murder(system):
