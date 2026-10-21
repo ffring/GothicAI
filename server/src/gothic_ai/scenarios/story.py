@@ -26,10 +26,13 @@ from ..llm.fake import FakeBackend
 from ..places import PlaceBook
 from ..protocol import (
     DialogChosen,
+    GameMessage,
     LineStarted,
+    NpcDied,
     NpcLook,
     NpcSpec,
     NpcThing,
+    NpcViews,
     RoutineEntry,
     SayCmd,
     Session,
@@ -443,6 +446,135 @@ class RepairScript:
         call = ToolCall(PROPOSE, args, f"r{len(self.calls)}")
         yield call
         yield Done("", (call,))
+
+
+async def death_load(link: GameLink, director: Director, slot: int = 8) -> dict[str, str]:
+    """Report new human deaths once, and resume perception immediately after loading older world ticks."""
+    results: dict[str, str] = {}
+    first, second = "BDT_1014_BANDIT_L", "BDT_1013_BANDIT_L"
+    events: list[tuple[float, NpcDied]] = []
+    recorded: list[tuple[float, dict[str, Any]]] = []
+    views: list[tuple[float, NpcViews]] = []
+    loaded = asyncio.get_running_loop().create_future()
+    load_requested = False
+    loaded_at: float | None = None
+
+    def receive(message: GameMessage) -> None:
+        nonlocal loaded_at
+        at = time.monotonic()
+        if isinstance(message, NpcDied) and message.npc in (first, second):
+            events.append((at, message))
+        elif isinstance(message, NpcViews):
+            views.append((at, message))
+        elif isinstance(message, Session) and message.reason == "load" and load_requested:
+            loaded_at = at
+            if not loaded.done():
+                loaded.set_result(message)
+
+    def record(fact: dict[str, Any]) -> None:
+        if fact.get("fact") == "died" and fact.get("npc") in (first, second):
+            recorded.append((time.monotonic(), fact))
+
+    def facts(npc: str) -> list[dict[str, Any]]:
+        return [fact for fact in director.chronicle.facts("died") if fact.get("npc") == npc]
+
+    def check(name: str, ok: bool, detail: str) -> None:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+
+    def deaths(npc: str, start: float, end: float) -> tuple[list[NpcDied], list[dict[str, Any]], int]:
+        seen = [(at, event) for at, event in events if event.npc == npc and start <= at <= end]
+        rows = [(at, fact) for at, fact in recorded if fact.get("npc") == npc and start <= at <= end]
+        elapsed = round((max(seen[0][0], rows[0][0]) - start) * 1000) if seen and rows else -1
+        return [event for _, event in seen], [fact for _, fact in rows], elapsed
+
+    link.listeners.append(receive)
+    director.chronicle.on_fact.append(record)
+    try:
+        await link.wait_world()
+        if link.session is None:
+            await wait_message(link, Session, timeout=10)
+        # A pushed view proves that world ticks started; the same bridge tick primes the death scan.
+        if not await _until(lambda: bool(views), 10):
+            raise RuntimeError("No npc_views before the save/load check")
+        before_at = time.monotonic()
+        await link.debug("kill", instance=first, by="PLAYER")
+        await asyncio.sleep(max(0, before_at + 3 - time.monotonic()))
+        before_events, before_rows, before_ms = deaths(first, before_at, before_at + 3)
+        check(
+            "before",
+            len(before_events) == len(before_rows) == len(facts(first)) == 1
+            and before_events[0].killer == before_rows[0].get("killer") == "PLAYER",
+            f"events={len(before_events)}, facts={len(facts(first))}, "
+            f"player_events={sum(event.killer == 'PLAYER' for event in before_events)}, "
+            f"player_facts={sum(fact.get('killer') == 'PLAYER' for fact in before_rows)}, "
+            f"latency_ms={before_ms}, limit_ms=3000",
+        )
+
+        await _save_or_fail(link, slot)
+        saved_t = views[-1][1].t
+        await asyncio.sleep(30)
+        if not await _until(lambda: views[-1][1].t - saved_t >= 30_000, 10):
+            raise RuntimeError(f"World advanced only {views[-1][1].t - saved_t} ms after the save")
+        before_t = views[-1][1].t
+        load_requested = True
+        await link.debug("load", slot)
+        await asyncio.wait_for(loaded, 120)
+        await link.wait_world(timeout=120)
+        assert loaded_at is not None
+        # Give the loaded world's initial scan a frame before killing a new victim, even when pushes stall.
+        await asyncio.sleep(0.25)
+        after_at = time.monotonic()
+        await link.debug("kill", instance=second, by="PLAYER")
+        await asyncio.sleep(max(0, after_at + 3 - time.monotonic()))
+        after_events, after_rows, after_ms = deaths(second, after_at, after_at + 3)
+        early_views = [(at, view) for at, view in views if loaded_at <= at <= loaded_at + 3]
+        # Keep both raw events and newly written facts for the next five seconds: inherited facts are old.
+        quiet_at = time.monotonic()
+        await asyncio.sleep(5)
+        quiet_ms = round((time.monotonic() - quiet_at) * 1000)
+        extra_events, extra_rows, _ = deaths(second, after_at + 3, time.monotonic())
+        post_views = [(at, view) for at, view in views if at >= loaded_at]
+        after_t = post_views[0][1].t if post_views else -1
+        rewind_ms = before_t - after_t if post_views else -1
+        check(
+            "rewound",
+            bool(post_views) and rewind_ms >= 20_000,
+            f"before_t={before_t}, after_t={after_t}, rewind_ms={rewind_ms}, "
+            f"required_ms=20000, advanced_ms={before_t - saved_t}, post_views={len(post_views)}",
+        )
+        check(
+            "views",
+            bool(early_views),
+            f"count={len(early_views)}, "
+            f"latency_ms={round((post_views[0][0] - loaded_at) * 1000) if post_views else -1}, "
+            "limit_ms=3000",
+        )
+        check(
+            "after",
+            after_at - loaded_at <= 5
+            and len(after_events) == len(after_rows) == len(facts(second)) == 1
+            and after_events[0].killer == after_rows[0].get("killer") == "PLAYER"
+            and not extra_events
+            and not extra_rows,
+            f"events={len(after_events)}, facts={len(facts(second))}, "
+            f"player_events={sum(event.killer == 'PLAYER' for event in after_events)}, "
+            f"player_facts={sum(fact.get('killer') == 'PLAYER' for fact in after_rows)}, "
+            f"latency_ms={after_ms}, limit_ms=3000, "
+            f"kill_after_load_ms={round((after_at - loaded_at) * 1000)}, "
+            f"extra_events={len(extra_events)}, extra_facts={len(extra_rows)}, watch_ms={quiet_ms}",
+        )
+        repeated_events, repeated_rows, _ = deaths(first, loaded_at, time.monotonic())
+        check(
+            "no_repeat",
+            not repeated_events and not repeated_rows and len(facts(first)) == 1,
+            f"new_events={len(repeated_events)}, new_facts={len(repeated_rows)}, "
+            f"inherited_facts={len(facts(first))}, "
+            f"observed_ms={round((time.monotonic() - loaded_at) * 1000)}",
+        )
+        return _logged(results)
+    finally:
+        link.listeners.remove(receive)
+        director.chronicle.on_fact.remove(record)
 
 
 async def repair_after_death(

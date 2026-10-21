@@ -79,6 +79,7 @@ from .story import book_requires as book_requires
 from .story import book_stages as book_stages
 from .story import cast_character as cast_character
 from .story import cast_person as cast_person
+from .story import death_load as death_load
 from .story import director_casts as director_casts
 from .story import graph_dialogs as graph_dialogs
 from .story import graph_programs as graph_programs
