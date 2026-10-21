@@ -10,7 +10,16 @@
   "sources": [],
   "selected": {},
   "reviews": [],
-  "gates": [],
+  "gates": [
+    {
+      "gate": "preserve",
+      "verdict": "approved",
+      "by": "user",
+      "date": "2026-10-21",
+      "quote": "Да, оба списка подтверждаю, делай концепты",
+      "note": "Список сохранения дерева, пункты 1–7."
+    }
+  ],
   "build": null,
   "backup": null
 }

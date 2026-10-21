@@ -299,3 +299,21 @@ def test_bench_lines_put_eye_and_target_back():
     assert hero[1] > max(eye[1], target[1]) and 'shot roof-01-close' in lines
     with pytest.raises(ValueError, match='unique'):
         remaster.bench_lines('a', [{'name': 'x', 'eye': eye, 'target': target}] * 2)
+
+
+def test_private_reference_stays_out_of_pair_preview(env, tmp_path):
+    run('new', 'hut', '--title', 'Hut')
+    fill_intent('hut')
+    reference = tmp_path / 'textures.png'
+    Image.new('RGB', (300, 200), (255, 0, 0)).save(reference)
+    concept = tmp_path / 'concept.png'
+    Image.new('RGB', (300, 200), (0, 0, 255)).save(concept)
+    run('pair', 'hut', '--id', 'r1', '--stage', 'concept', '--mode', 'reference', '--a', reference, '--b', concept,
+        '--subject', 's', '--a-label', 'превью оригинальных текстур', '--private-a')
+    review = env / 'data/remaster/hut/reviews/r1'
+    assert 'эталон, превью оригинальных текстур' in (review / 'order-1/packet.md').read_text()
+    remaster._pair_preview(json.loads((review.parent / 'r1.key.json').read_text()), tmp_path / 'pair.jpg')
+    preview = Image.open(tmp_path / 'pair.jpg').convert('RGB')
+    assert preview.size[0] < 2 * preview.size[1]
+    red, green, blue = preview.getpixel((preview.width // 2, preview.height // 2))
+    assert blue > 200 and red < 50

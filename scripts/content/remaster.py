@@ -324,7 +324,7 @@ def cmd_pair(args) -> int:
     images = [Path(args.a), Path(args.b)]
     orders = [(0, 1), (1, 0)] if blind else [(0, 1)]
     key = {'stage': args.stage, 'mode': args.mode, 'a': str(images[0]), 'b': str(images[1]),
-           'ours': args.ours, 'orders': {}}
+           'ours': args.ours, 'orders': {}, 'private_a': bool(args.private_a)}
     defaults = DEFAULTS.read_text().split('\n## ', 1)[-1]
     defaults = '## ' + defaults if not defaults.startswith('## ') else defaults
     defaults = re.sub(r'^## ', '### ', defaults, flags=re.M)
@@ -339,7 +339,7 @@ def cmd_pair(args) -> int:
             described = '\n'.join(f'- `image-{i}.png`: кадр из игры, {w}×{h}' for i, (w, h) in enumerate(sizes, 1))
         else:
             mode_text = 'с эталоном: изображение 1 — оригинал (эталон), изображение 2 — кандидат'
-            described = (f'- `image-1.png`: эталон, оригинал в игре, {sizes[0][0]}×{sizes[0][1]}\n'
+            described = (f'- `image-1.png`: эталон, {args.a_label}, {sizes[0][0]}×{sizes[0][1]}\n'
                          f'- `image-2.png`: кандидат, {sizes[1][0]}×{sizes[1][1]}')
         text = fill((TEMPLATES / 'packet.md').read_text(), packet=f'{args.asset}/{args.id}/order-{number}',
             stage=args.stage, mode_text=mode_text, images=described, subject=args.subject,
@@ -457,13 +457,14 @@ def cmd_merge(args) -> int:
 
 
 def _pair_preview(key: dict, target: Path, height: int = 432) -> None:
-    """Small side-by-side for the user and git: original/reference left, ours/candidate right."""
+    """Small side-by-side for the user and git: original/reference left, ours/candidate right.
+    A private reference (original texture pixels) stays out of git: only the candidate is shown."""
     from PIL import Image
     first, second = Path(key['a']), Path(key['b'])
     if key.get('ours') == 'a':
         first, second = second, first
     tiles = []
-    for path in (first, second):
+    for path in (second,) if key.get('private_a') else (first, second):
         with Image.open(path) as image:
             image = image.convert('RGB')
             tiles.append(image.resize((round(image.width * height / image.height), height), Image.Resampling.LANCZOS))
@@ -666,6 +667,9 @@ def main(argv=None) -> int:
     p.add_argument('--b', required=True, help='ours / candidate image')
     p.add_argument('--ours', choices=('a', 'b'), default='b')
     p.add_argument('--subject', required=True); p.add_argument('--measurements')
+    p.add_argument('--a-label', default='оригинал в игре', help='what the reference image shows (reference mode)')
+    p.add_argument('--private-a', action='store_true',
+                   help='the reference holds original texture pixels: keep it out of pair.jpg in git')
     p.set_defaults(func=cmd_pair)
     p = sub.add_parser('merge'); p.add_argument('asset'); p.add_argument('--id', required=True)
     p.set_defaults(func=cmd_merge)
