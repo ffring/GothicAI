@@ -71,7 +71,7 @@ class Purse:
         later = _gold(x.give for x in deal.later)
         gift = max(0, given - later - _gold(deal.hero_gives))
         spent = sum(_gift(f) for f in self.chronicle.facts("deal") if f.get("npc") == deal.npc)
-        if spent + gift > limits["gift"]:
+        if gift > 0 and spent + gift > limits["gift"]:
             left = max(0, limits["gift"] - spent)
             return (
                 f"Отклонено: даром ты даёшь герою не больше {limits['gift']} золотых за всё время, "
@@ -83,7 +83,7 @@ class Purse:
             for d in debts
             if d.npc == deal.npc and not d.paid and d.give.item == GOLD and d.id not in repaid
         )
-        if owed + later > limits["loan"]:
+        if later > 0 and owed + later > limits["loan"]:
             return (
                 f"Отклонено: в долг — не больше {limits['loan']} золотых; сейчас он должен тебе "
                 f"{owed}, с этой сделкой будет {owed + later}."

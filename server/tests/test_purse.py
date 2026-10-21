@@ -162,6 +162,43 @@ async def test_gift_allowance_follows_save_branch(purse):
     assert (await offer(purse, 50)).status == "accepted"
 
 
+async def test_old_excess_gift_allows_trade_and_loan_but_no_new_gift(purse):
+    purse.chronicle.record(
+        {"fact": "deal", "deal": "old-gift", "npc": XARDAS, "npc_gives": gold(100)}
+    )
+    out = await offer(
+        purse,
+        0,
+        hero_words=(),
+        npc_gives=[{"item": "ITRU_SUMSKEL", "count": 1}],
+        hero_gives=gold(10),
+    )
+    assert out.status == "accepted", out.output
+    out = await offer(purse, 100, later=100, hero_words=REQUEST)
+    assert out.status == "accepted", out.output
+    out = await offer(purse, 10)
+    assert out.status == "rejected" and out.output == GIFT.format(left=0)
+
+
+async def test_old_excess_debt_allows_trade_and_repayment_but_no_new_loan(purse):
+    purse.chronicle.record(
+        {"fact": "debt", "id": "old-debt", "npc": XARDAS, "item": GOLD, "count": 250, "due": 4}
+    )
+    purse.deals.reload()
+    out = await offer(
+        purse,
+        0,
+        hero_words=(),
+        npc_gives=[{"item": "ITRU_SUMSKEL", "count": 1}],
+        hero_gives=gold(10),
+    )
+    assert out.status == "accepted", out.output
+    out = await offer(purse, 0, hero_words=(), repay=["old-debt"])
+    assert out.status == "accepted", out.output
+    out = await offer(purse, 10, later=10)
+    assert out.status == "rejected" and out.output == LOAN.format(owed=250, after=260)
+
+
 @pytest.mark.parametrize("hero_gives", [gold(50), [{"item": POTION, "count": 1}]])
 async def test_only_gold_paid_now_covers_gift(purse, hero_gives):
     purse.fake.hero_items[GOLD] = 50
