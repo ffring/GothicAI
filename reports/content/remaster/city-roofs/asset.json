@@ -337,6 +337,65 @@
       "thread": "01a15f95-db55-7cb0-9e98-dc64b4eaf05c",
       "parent": "city-roofs-slate/reference-attempt-1.png,city-roofs-slate/reference-attempt-2.png",
       "tool": "scripts/content/slate_roof.py"
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-2.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 2,
+      "sha256": "dd77fa32a9927daa74f521cdd9d055c678e931ea8a328d93ca43d503d3ed44db",
+      "c2pa": null,
+      "model": "derived: scripts/content/slate_roof.py",
+      "utc": "2026-10-21T17:51:01Z",
+      "thread": "01a15f95-db55-7cb0-9e98-dc64b4eaf05c",
+      "parent": "city-roofs-slate/reference-attempt-1.png,city-roofs-slate/reference-attempt-2.png",
+      "tool": "scripts/content/slate_roof.py"
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-3.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 3,
+      "sha256": "3e9461342940240773175e012b8822381434a9fb792274a7ed75c1a3fbd2110f",
+      "c2pa": null,
+      "model": "derived: scripts/content/slate_bake.py",
+      "utc": "2026-10-21T20:56:20Z",
+      "thread": "blender",
+      "parent": "city-roofs-slate/reference-attempt-1.png city-roofs-slate/reference-attempt-2.png",
+      "tool": "scripts/content/slate_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-3.normal.png",
+          "sha256": "e8783fed77b57fe75e52fe1495f2e0904a96b33efa5cddd6cf54cc2327de2809"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-3.roughness.png",
+          "sha256": "1656ed89f646d23be810af0affa981a9957f7aa4f935bd17854d23ff3082e399"
+        }
+      }
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-4.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 4,
+      "sha256": "598443c5dd028f5a9e7f92b1435d50c0b36050f02b4c62b29fee78e95ff3ed66",
+      "c2pa": null,
+      "model": "derived: scripts/content/slate_bake.py",
+      "utc": "2026-10-21T20:56:20Z",
+      "thread": "blender",
+      "parent": "city-roofs-slate/reference-attempt-1.png city-roofs-slate/reference-attempt-2.png",
+      "tool": "scripts/content/slate_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-4.normal.png",
+          "sha256": "227221fda8a3be395c296799824fa0a384698bab38ac1877cf720e1afe76228f"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-4.roughness.png",
+          "sha256": "d0ab214059f0b30ac2e1b50fd5cd0eb3af455051601953092a48093f66ad5af5"
+        }
+      }
     }
   ],
   "selected": {
@@ -356,8 +415,8 @@
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_04.TGA": {
-      "file": "city-roofs/NW_CITY_ROOF_04-attempt-1.png",
-      "reason": "assembled by slate_roof.py (user's choice)",
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-4.png",
+      "reason": "slate from the Blender model, variant B: occlusion and sky light in the albedo, no baked sun; normal and roughness from the model",
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_INSIDE_01.TGA": {
@@ -419,8 +478,9 @@
       "id": "r2-textures-1",
       "stage": "textures",
       "mode": "reference",
-      "verdict": "pending",
-      "date": "2026-10-21"
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r2-textures-1/merged.json"
     }
   ],
   "gates": [
@@ -441,6 +501,22 @@
       "note": "Принят концепт гонта (попытка 3) и изнанки (попытка 2) с правками на этапе текстур: мох зеленее, как у оригинала; провалы видны изнутри рваными. Сланец ROOF_04 по выбору пользователя («Собрать самим») собирается кодом: раскладка плиток по обмеру оригинала, поверхность камня от image_gen. Апскейл оригинала отклонён правилом own-content (пиксели оригинала не идут генератору)."
     }
   ],
-  "build": null,
+  "build": {
+    "set": "roofs-1",
+    "base": "original",
+    "date": "2026-10-21",
+    "albedo_sha256": {
+      "NW_CITY_ROOF_01.TGA": "87fee9fcafecec6b86b40b2486753d016e2a47ab0d46c85e40d3c68064bdc47d",
+      "NW_CITY_ROOF_04.TGA": "c3d30b8507ac687bd1a7302bf9f9a32cc7880e6217a1d9fbf3fde2471af34a88",
+      "NW_CITY_ROOF_INSIDE_01.TGA": "c1da15b15b93d11739beb5ebe6edf2c47cc071e46c81b197c932f55e90361cf4"
+    },
+    "entries": 3,
+    "replaced": [
+      "NW_CITY_ROOF_01.TGA",
+      "NW_CITY_ROOF_04.TGA",
+      "NW_CITY_ROOF_INSIDE_01.TGA"
+    ],
+    "unchanged_entries": 0
+  },
   "backup": null
 }

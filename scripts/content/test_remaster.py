@@ -80,6 +80,30 @@ def test_import_numbers_attempts_keeps_files_read_only(env, tmp_path):
     assert manifest['sources'][1]['model'] == 'ChatGPT gpt-image'
 
 
+def test_import_keeps_model_maps_next_to_the_albedo(env, tmp_path, capsys):
+    run('new', 'roofs', '--title', 'Roofs')
+    prompt = tmp_path / 'prompt.txt'
+    prompt.write_text('slate assembled in Blender')
+    normal, rough = tmp_path / 'n.png', tmp_path / 'r.png'
+    normal.write_bytes(b'normal-bytes')
+    rough.write_bytes(b'rough-bytes')
+    common = ['--role', 'texture', '--texture', 'NW_CITY_ROOF_04.TGA', '--prompt-file', prompt,
+              '--start', '2026-10-21T07:00:00Z', '--end', '2026-10-21T07:00:01Z', '--thread', 'blender']
+    assert run('import', 'roofs', png_with_c2pa(tmp_path / 'a.png'), *common, '--map', f'normal={normal}') != 0
+    assert 'needs --tool' in capsys.readouterr().err
+    assert run('import', 'roofs', png_with_c2pa(tmp_path / 'a.png'), *common, '--tool', 'slate_bake.py',
+               '--map', f'height={normal}') != 0
+    assert 'unknown map' in capsys.readouterr().err
+    assert run('import', 'roofs', png_with_c2pa(tmp_path / 'a.png'), *common, '--tool', 'slate_bake.py',
+               '--map', f'normal={normal}', '--map', f'roughness={rough}') == 0
+    folder = env / 'data/content-sources/roofs'
+    copy = folder / 'NW_CITY_ROOF_04-attempt-1.normal.png'
+    assert copy.read_bytes() == b'normal-bytes' and not copy.stat().st_mode & stat.S_IWUSR
+    entry = remaster.load_manifest('roofs')['sources'][0]
+    assert entry['maps']['roughness'] == dict(file='roofs/NW_CITY_ROOF_04-attempt-1.roughness.png',
+                                              sha256=remaster.sha256(folder / 'NW_CITY_ROOF_04-attempt-1.roughness.png'))
+
+
 def test_import_warns_when_image_models_mix(env, tmp_path, capsys):
     run('new', 'hut', '--title', 'Hut')
     prompt = tmp_path / 'p.txt'

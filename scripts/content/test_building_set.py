@@ -132,4 +132,29 @@ def test_crop_band_drops_grey_margins():
     canvas = Image.new('RGB', (300, 200), (200, 200, 200))
     canvas.paste(Image.fromarray(noise(9, 60, size=100).repeat(2, axis=1)), (50, 40))
     band, box = building_set.crop_band(canvas)
-    assert box == (50, 40, 250, 140) and band.size == (200, 100)
+    assert box == [50, 40, 250, 140] and band.size == (200, 100)
+
+
+def test_model_maps_line_up_with_the_albedo(tmp_path, monkeypatch):
+    from PIL import Image
+    monkeypatch.setenv('GOTHIC_AI_DATA', str(tmp_path))
+    folder = tmp_path / 'content-sources' / 'roofs'
+    folder.mkdir(parents=True)
+    normal = np.zeros((512, 512, 3), np.uint8) + np.array([200, 128, 200], np.uint8)
+    Image.fromarray(normal).save(folder / 'S-attempt-1.normal.png')
+    Image.fromarray(np.full((512, 512), 77, np.uint8)).save(folder / 'S-attempt-1.roughness.png')
+    maps = {k: dict(file=f'roofs/S-attempt-1.{k}.png', sha256=remaster.sha256(folder / f'S-attempt-1.{k}.png'))
+            for k in ('normal', 'roughness')}
+    source = dict(file='roofs/S-attempt-1.png', maps=maps)
+    with pytest.raises(ValueError, match='axes'):
+        building_set.load_model_maps(source, {'axes': 'uv'})
+    with pytest.raises(ValueError, match='needs normal and roughness'):
+        building_set.load_model_maps(dict(source, maps={'normal': maps['normal']}), {'axes': ''})
+    loaded = building_set.load_model_maps(source, {'axes': ''})
+    assert loaded['normal'].shape == (1024, 1024, 3) and loaded['roughness'].shape == (1024, 1024)
+    vector = loaded['normal'] * 2 - 1
+    np.testing.assert_allclose(np.linalg.norm(vector, axis=-1), 1, atol=1e-6)
+    assert abs(loaded['roughness'].mean() - 77 / 255) < 1e-3
+    Image.fromarray(np.full((512, 512), 78, np.uint8)).save(folder / 'S-attempt-1.roughness.png')
+    with pytest.raises(ValueError, match='SHA-256'):
+        building_set.load_model_maps(source, {'axes': ''})

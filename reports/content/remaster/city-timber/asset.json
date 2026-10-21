@@ -445,8 +445,9 @@
       "id": "r2-textures-1",
       "stage": "textures",
       "mode": "reference",
-      "verdict": "pending",
-      "date": "2026-10-21"
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r2-textures-1/merged.json"
     }
   ],
   "gates": [

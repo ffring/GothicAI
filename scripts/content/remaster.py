@@ -22,6 +22,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+MODEL_MAPS = {'normal', 'roughness', 'ao'}   # maps a model bake may bring with its albedo
 TEMPLATES = ROOT / '.claude/skills/remaster/templates'
 DEFAULTS = ROOT / 'docs/remaster-defaults.md'
 MAX_EDGE = 2576
@@ -206,19 +207,35 @@ def cmd_import(args) -> int:
     prompt = Path(args.prompt_file).read_text().strip()
     start = datetime.fromisoformat(args.start.replace('Z', '+00:00'))
     end = datetime.fromisoformat(args.end.replace('Z', '+00:00'))
+    maps = dict(item.split('=', 1) for item in args.map or [])
+    if maps and not args.tool:
+        raise ValueError('--map needs --tool: only our own model bakes carry their own maps')
+    unknown = set(maps) - MODEL_MAPS
+    if unknown:
+        raise ValueError(f'--map: unknown map {sorted(unknown)}, expected {sorted(MODEL_MAPS)}')
     target.write_bytes(raw)
     c2pa = c2pa_agent(target)
+    copies = []
+    for name, path in sorted(maps.items()):
+        copy = target.with_name(f'{target.stem}.{name}.png')
+        copy.write_bytes(Path(path).read_bytes())
+        copies.append(copy)
     meta = dict(texture=args.texture, role=args.role, attempt=attempt,
         prompt=prompt, utc=args.start, utc_end=args.end, seconds=max(0, round((end - start).total_seconds())),
         generator='image_gen in a fresh Codex thread (ChatGPT plan); judged by Claude', thread=args.thread,
         parent=args.parent, reason=args.reason, c2pa=c2pa, source_sha256=sha256(target), tool=args.tool)
+    if copies:
+        meta['maps'] = {name: dict(file=f'{namespace}/{copy.name}', sha256=sha256(copy))
+                        for name, copy in zip(sorted(maps), copies)}
     target.with_suffix('.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2) + '\n')
-    for path in (target, target.with_suffix('.json')):
+    for path in (target, target.with_suffix('.json'), *copies):
         path.chmod(0o444)
     entry = _source_entry(target, meta, namespace)
     if args.tool:
         # Assembled by our code from image_gen sources (the parents); it has no C2PA of its own.
         entry.update(tool=args.tool, model=f'derived: {args.tool}')
+    if copies:
+        entry['maps'] = meta['maps']
     manifest['sources'].append(entry)
     if namespace not in manifest['namespaces']:
         manifest['namespaces'].append(namespace)
@@ -661,6 +678,8 @@ def main(argv=None) -> int:
     p.add_argument('--thread', required=True); p.add_argument('--parent'); p.add_argument('--reason')
     p.add_argument('--namespace')
     p.add_argument('--tool', help='our script that assembled this PNG from the --parent image_gen sources')
+    p.add_argument('--map', action='append', metavar='NAME=PNG',
+                   help='a map baked from our model with this albedo: normal, roughness, ao (with --tool)')
     p.set_defaults(func=cmd_import)
     p = sub.add_parser('select'); p.add_argument('asset'); p.add_argument('--key', required=True)
     p.add_argument('--file', required=True); p.add_argument('--reason', required=True)
