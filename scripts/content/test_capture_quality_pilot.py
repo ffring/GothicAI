@@ -321,3 +321,41 @@ def test_house_boards_keep_three_full_frame_panels_in_order(tmp_path, house2):
             assert board.size == (3 * 768, 432 + 44)
             for panel, colour in enumerate(colours):
                 assert board.getpixel((panel * 768 + 384, 260)) == pytest.approx(colour, abs=3)
+
+
+def remaster_check_inputs(tmp_path, variant, textures):
+    directory = tmp_path / variant
+    directory.mkdir()
+    (directory / "exit.txt").write_text("0\n")
+    spots = ("roofs-harbour", "roofs-upper")
+    scenario = tmp_path / "city-roofs.bench"
+    scenario.write_text("".join(f"goto spot\nshot {spot}\n" for spot in spots))
+    index = tmp_path / "materials.json"
+    index.write_text(json.dumps({texture: {} for texture in textures}))
+    (directory / "game.log").write_text(f"materials: {len(textures)} entries from test\n[bench] goto spot\n"
+        + "".join(f"[bench] shot {spot}\n" for spot in spots) + "[bench] done\n")
+    entries = [{"kind": "texture", "name": texture} for texture in textures]
+    (directory / "census.json").write_text(json.dumps({"files": [], "replacements": entries}))
+    for spot in spots:
+        Image.new("RGB", (1280, 720)).save(directory / f"{spot}.png")
+    return directory, scenario, index
+
+
+def test_remaster_set_checked_against_its_own_index(tmp_path, capsys):
+    inputs = remaster_check_inputs(tmp_path, "roofs-1", ["NW_CITY_ROOF_01.TGA", "NW_CITY_ROOF_04.TGA"])
+    capture.check(*inputs, remaster=True)
+    assert "roofs-1: shots=2 materials=2 pilot_replaced=2 pilot_originals=0" in capsys.readouterr().out
+    census = inputs[0] / "census.json"
+    census.write_text(json.dumps({"files": [{"kind": "texture", "name": "NW_CITY_ROOF_04.TGA"}],
+                                  "replacements": [{"kind": "texture", "name": "NW_CITY_ROOF_01.TGA"}]}))
+    with pytest.raises(SystemExit, match="pilot textures not replaced: NW_CITY_ROOF_04"):
+        capture.check(*inputs, remaster=True)
+
+
+def test_remaster_original_needs_empty_index(tmp_path, capsys):
+    for folder in ("empty", "filled"):
+        (tmp_path / folder).mkdir()
+    capture.check(*remaster_check_inputs(tmp_path / "empty", "original", []), remaster=True)
+    assert "original: shots=2 materials=0" in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="original needs an empty index"):
+        capture.check(*remaster_check_inputs(tmp_path / "filled", "original", ["NW_CITY_ROOF_01.TGA"]), remaster=True)

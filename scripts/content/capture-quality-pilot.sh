@@ -8,6 +8,7 @@
 # QUALITY_PILOT_TASK=gothic-ai/market-house selects market-house.bench (three views).
 # QUALITY_PILOT_TASK=gothic-ai/harbour-house selects harbour-house.bench (twelve original facade views).
 # QUALITY_PILOT_TASK=gothic-ai/harbour-hut selects harbour-hut.bench (six views, normal game FOV; original or a staging set such as hut-1).
+# QUALITY_PILOT_TASK=gothic-ai/remaster-ASSET selects ASSET.bench; a set must replace every entry of its own index.
 # --compose-house CAPTURES OUTPUT writes original / pilot-3b / house-1 boards.
 # --compose-house-2 CAPTURES OUTPUT writes original / house-1 / house-2 boards.
 set -euo pipefail
@@ -18,6 +19,7 @@ SCENARIO=quality-pilot.bench
 [[ "$TASK" != gothic-ai/market-house ]] || SCENARIO=market-house.bench
 [[ "$TASK" != gothic-ai/harbour-house ]] || SCENARIO=harbour-house.bench
 [[ "$TASK" != gothic-ai/harbour-hut ]] || SCENARIO=harbour-hut.bench
+[[ "$TASK" != gothic-ai/remaster-* ]] || SCENARIO="${TASK#gothic-ai/remaster-}.bench"
 
 if [[ "${1:-}" == --remote-prepare ]]; then
   task="$HOME/$TASK"
@@ -110,6 +112,7 @@ PYGAME
   [[ "$TASK" != gothic-ai/market-house ]] || check_args+=(--market-house)
   [[ "$TASK" != gothic-ai/harbour-house ]] || check_args+=(--harbour-house)
   [[ "$TASK" != gothic-ai/harbour-hut ]] || check_args+=(--harbour-hut)
+  [[ "$TASK" != gothic-ai/remaster-* ]] || check_args+=(--remaster)
   python3 "$task/scripts/capture-quality-pilot.py" check "$out" "$task/scripts/$SCENARIO" "$task/content/$variant/materials/materials.json" "${check_args[@]}"
   exit 0
 fi
