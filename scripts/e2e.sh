@@ -159,6 +159,9 @@
 #       Matteo witnesses a native theft; Andre stays locked until the next day, charges 50 through
 #       his native voiced dialog and accepts payment. Matteo still remembers. A second theft with
 #       an accepted silence deal never reaches Andre. Native theft perceptions stay enabled.
+#   gate: new game, LLM=fake: the city guard sells passage for 100 gold through Y; both gate guards
+#       get AIV_PASSGATE and the hero crosses without SECONDWARN/ATTACK. Loading the outside save,
+#       a believed let_pass claim grants passage and records its text, reference and game time.
 #   crime_react: rule reactions at the deed (docs/crime.md, layer 4a), LLM=fake; SAVE=save_slot_1.sav.
 #       Hilda's retained theft witness and own SVM shout; Lobart courage 2 demands restitution, then
 #       a temporary scenario card with courage 3 fights through native AR_THEFT to a living knockout
@@ -200,6 +203,8 @@
 #       chapter occasions consumed by Showrunner.run; every line is finished by play_book_chain before
 #       the next occasion, with a game day and an injected 15 min between them. All three must have a
 #       line/none outcome, at least one completed line. SAVE=save_slot_1.sav; TIMEOUT=1200
+#   greg: LLM=fake, new game: Greg gives his city errand, accepts farmer clothes and pays 50 gold, a map
+#       and two rum; reload the branch without the clothes and his acceptance records a lie with its truth
 #   vanilla_line: LLM=fake only, stage 5 layer 3: take and finish Lobart's turnips through the scripts'
 #       own dialogs. The vanilla success occasion produces a neighbor's line with follows and a success
 #       requirement; its book offer is open, play_book_chain completes it, and save/load keeps the same

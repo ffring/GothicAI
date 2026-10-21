@@ -56,6 +56,7 @@ from .executor import Intent
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
+from .gates import Gates
 from .gossip import GossipDesk
 from .group import GroupTalk
 from .guide import Guide
@@ -241,6 +242,7 @@ class ServerState:
         self.questlog: QuestLog | None = None
         self.showrunner: Showrunner | None = None
         self.vanilla: VanillaQuests | None = None
+        self.gates: Gates | None = None
         self.trust: Trust | None = None
         self.people_knowledge: PeopleKnowledge | None = None
         self.rumors: Rumors | None = None
@@ -819,7 +821,7 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
     graph = (
         None
-        if args.no_director and args.no_knowledge and args.no_questlog and args.no_crimes
+        if args.no_director and args.no_knowledge and args.no_questlog and args.no_crimes and args.no_gates
         else _story_graph(args, game_dir)
     )
     place_book = places.PlaceBook.load()
@@ -849,6 +851,8 @@ async def serve(args: argparse.Namespace) -> int:
         static = static if args.free_bandits else []
         if graph is not None and not args.no_crimes:
             static += crime_law_ops(graph)
+        elif graph is not None and not args.no_gates:
+            static += crime_law_ops(graph)[:1]
         state.story = StoryPatches(link, memory, static=static)
         # npc's we control: the body's instant reactions (behavioral model) and words for incidents
         reflexes = Reflexes(decider, apply_threats=args.apply_threats) if decider is not None else None
@@ -896,7 +900,7 @@ async def serve(args: argparse.Namespace) -> int:
             )
         if graph is not None and not args.no_knowledge:
             # what each npc knows of the world as far as the story has got: its dialogs, quests, talk (M6)
-            state.knowledge = Knowledge(link, graph)
+            state.knowledge = Knowledge(link, graph, state.story)
             state.dialogue.extensions.append(state.knowledge)
 
         def knows_hero(npc: str, dialogue: DialogueManager = state.dialogue) -> bool:
@@ -980,6 +984,8 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(state.people_knowledge)
         state.dialogue.extensions.append(trust)
         # deals the npc's offer the hero in conversation: a window, the player accepts (docs/npc-tools.md)
+        if graph is not None and not args.no_gates:
+            state.gates = Gates(link, state.dialogue, state.chronicle, graph)
         state.deals = Deals(
             link,
             state.dialogue,
@@ -991,6 +997,7 @@ async def serve(args: argparse.Namespace) -> int:
             cover=not args.no_cover and not args.no_crimes,
             cheat=not args.no_npc_cheat and not args.no_crimes,
             cards=personas.cards,
+            gates=state.gates,
         )
         state.deals.roster = lambda: talk.people
         state.deals.contracts.roster = lambda: talk.people
@@ -2035,12 +2042,27 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario own: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "gate":
+                assert state.dialogue and state.talk and state.deals and state.gates
+                results = await scenarios.gate_scenario(
+                    link, state.dialogue, state.talk, state.deals, state.gates
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario gate: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "vgive":
                 dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
                 assert dialogue is not None and talk is not None and vanilla is not None
                 results = await scenarios.vanilla_given(link, dialogue, talk, vanilla)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario vgive: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "greg":
+                dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
+                assert dialogue is not None and talk is not None and vanilla is not None
+                results = await scenarios.greg(link, dialogue, talk, vanilla)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario greg: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario in ("amends", "amends_deal"):
                 dialogue, talk, amends = state.dialogue, state.talk, state.amends
@@ -2754,6 +2776,8 @@ def main() -> None:
             "character",
             "vlie",
             "vgive",
+            "gate",
+            "greg",
             "vcheck",
             "rumor",
             "amends",
@@ -2825,6 +2849,7 @@ def main() -> None:
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
+    p.add_argument("--no-gates", action="store_true", help="disable conversational gate admission")
     p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
     p.add_argument(
         "--no-crimes", action="store_true", help="disable crimes and law patches; scripts own law entirely"
