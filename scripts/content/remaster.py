@@ -211,15 +211,18 @@ def cmd_import(args) -> int:
     meta = dict(texture=args.texture, role=args.role, attempt=attempt,
         prompt=prompt, utc=args.start, utc_end=args.end, seconds=max(0, round((end - start).total_seconds())),
         generator='image_gen in a fresh Codex thread (ChatGPT plan); judged by Claude', thread=args.thread,
-        parent=args.parent, reason=args.reason, c2pa=c2pa, source_sha256=sha256(target))
+        parent=args.parent, reason=args.reason, c2pa=c2pa, source_sha256=sha256(target), tool=args.tool)
     target.with_suffix('.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2) + '\n')
     for path in (target, target.with_suffix('.json')):
         path.chmod(0o444)
     entry = _source_entry(target, meta, namespace)
+    if args.tool:
+        # Assembled by our code from image_gen sources (the parents); it has no C2PA of its own.
+        entry.update(tool=args.tool, model=f'derived: {args.tool}')
     manifest['sources'].append(entry)
     if namespace not in manifest['namespaces']:
         manifest['namespaces'].append(namespace)
-    models = {s['model'] for s in manifest['sources']}
+    models = {s['model'] for s in manifest['sources'] if not s.get('tool')}
     save_manifest(args.asset, manifest)
     print(f'{target} ({entry["model"]})')
     if len(models) > 1:
@@ -657,6 +660,7 @@ def main(argv=None) -> int:
     p.add_argument('--start', required=True); p.add_argument('--end', required=True)
     p.add_argument('--thread', required=True); p.add_argument('--parent'); p.add_argument('--reason')
     p.add_argument('--namespace')
+    p.add_argument('--tool', help='our script that assembled this PNG from the --parent image_gen sources')
     p.set_defaults(func=cmd_import)
     p = sub.add_parser('select'); p.add_argument('asset'); p.add_argument('--key', required=True)
     p.add_argument('--file', required=True); p.add_argument('--reason', required=True)

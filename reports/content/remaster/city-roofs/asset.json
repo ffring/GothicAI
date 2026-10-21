@@ -6,7 +6,8 @@
   "goal": "the same Gothic, better made",
   "namespaces": [
     "city-roofs",
-    "city-roofs-concept"
+    "city-roofs-concept",
+    "city-roofs-slate"
   ],
   "sources": [
     {
@@ -263,9 +264,108 @@
       "utc": "2026-10-21T17:07:43Z",
       "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
       "parent": "city-roofs-concept/concept-NW_CITY_ROOF_INSIDE_01-attempt-2.png"
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_01.TGA",
+      "attempt": 1,
+      "sha256": "09d051aba4d6bd2534259075e1bc87ff7fc10f502a7241ebfbf44c945b12ba8e",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T17:58:01Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": "city-roofs-concept/concept-NW_CITY_ROOF_01-attempt-3.png"
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_INSIDE_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_INSIDE_01.TGA",
+      "attempt": 1,
+      "sha256": "69e89bbd15ea8fa89e949dbb37aec9d979b026524bd67e626cc9682263361da2",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T18:02:18Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": "city-roofs-concept/concept-NW_CITY_ROOF_INSIDE_01-attempt-2.png"
+    },
+    {
+      "file": "city-roofs-slate/reference-attempt-1.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 1,
+      "sha256": "d97635da17ab394080a141c883dff210c9e0f3d708e6737270281a90ee275571",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T17:51:01Z",
+      "thread": "01a15f95-db55-7cb0-9e98-dc64b4eaf05c",
+      "parent": null
+    },
+    {
+      "file": "city-roofs-slate/reference-attempt-2.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 2,
+      "sha256": "fa3e4eeae03b3fcfa6f30256c1fdf73b9cd155f14cb58b82450e8d0d4b4945f3",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T17:52:24Z",
+      "thread": "01a15f95-db55-7cb0-9e98-dc64b4eaf05c",
+      "parent": null
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 1,
+      "sha256": "b27d66eeb5f497d75549585f14d7d0edeb3b6af72efb31cbc2f2bfaa5aec2549",
+      "c2pa": null,
+      "model": "derived: scripts/content/slate_roof.py",
+      "utc": "2026-10-21T17:51:01Z",
+      "thread": "01a15f95-db55-7cb0-9e98-dc64b4eaf05c",
+      "parent": "city-roofs-slate/reference-attempt-1.png,city-roofs-slate/reference-attempt-2.png",
+      "tool": "scripts/content/slate_roof.py"
     }
   ],
-  "selected": {},
+  "selected": {
+    "concept:NW_CITY_ROOF_01.TGA": {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_01-attempt-3.png",
+      "reason": "попытка 3: 10 рядов, широкие мокрые полосы, пять провалов; мох поправить на этапе текстур",
+      "date": "2026-10-21"
+    },
+    "concept:NW_CITY_ROOF_INSIDE_01.TGA": {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_INSIDE_01-attempt-2.png",
+      "reason": "попытка 2: 20 реек, копоть пятнами; провалы добавить на этапе текстур рваными",
+      "date": "2026-10-21"
+    },
+    "NW_CITY_ROOF_01.TGA": {
+      "file": "city-roofs/NW_CITY_ROOF_01-attempt-1.png",
+      "reason": "texture edit of concept 3: green moss, stepped gaps",
+      "date": "2026-10-21"
+    },
+    "NW_CITY_ROOF_04.TGA": {
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-1.png",
+      "reason": "assembled by slate_roof.py (user's choice)",
+      "date": "2026-10-21"
+    },
+    "NW_CITY_ROOF_INSIDE_01.TGA": {
+      "file": "city-roofs/NW_CITY_ROOF_INSIDE_01-attempt-1.png",
+      "reason": "texture edit of concept 2",
+      "date": "2026-10-21"
+    }
+  },
   "reviews": [
     {
       "id": "r1-concept-2",
@@ -314,6 +414,13 @@
       "verdict": "REJECT",
       "date": "2026-10-21",
       "path": "reviews/r1-concept-r4/merged.json"
+    },
+    {
+      "id": "r2-textures-1",
+      "stage": "textures",
+      "mode": "reference",
+      "verdict": "pending",
+      "date": "2026-10-21"
     }
   ],
   "gates": [
@@ -324,6 +431,14 @@
       "date": "2026-10-21",
       "quote": "Да, оба списка подтверждаю, делай концепты",
       "note": "Список сохранения кровель, пункты 1–7."
+    },
+    {
+      "gate": "concept",
+      "verdict": "approved",
+      "by": "user",
+      "date": "2026-10-21",
+      "quote": "ну я с ним согласен. А мы пачкой генерировали? Может каждую оттедьно нужно? … можно, но сланец кажется сложно из такого одинакового делать красивее. А что если его просто заапскейлить?",
+      "note": "Принят концепт гонта (попытка 3) и изнанки (попытка 2) с правками на этапе текстур: мох зеленее, как у оригинала; провалы видны изнутри рваными. Сланец ROOF_04 по выбору пользователя («Собрать самим») собирается кодом: раскладка плиток по обмеру оригинала, поверхность камня от image_gen. Апскейл оригинала отклонён правилом own-content (пиксели оригинала не идут генератору)."
     }
   ],
   "build": null,

@@ -125,3 +125,11 @@ def test_compose_joins_parts_and_rejects_shared_texture(tmp_path, monkeypatch):
         building_set.compose('mixed', ['roofs-1', 'house-3'])
     with pytest.raises(ValueError, match='staging set exists'):
         building_set.compose('hut-4-review', ['roofs-1', 'hut-4'])
+
+
+def test_crop_band_drops_grey_margins():
+    from PIL import Image
+    canvas = Image.new('RGB', (300, 200), (200, 200, 200))
+    canvas.paste(Image.fromarray(noise(9, 60, size=100).repeat(2, axis=1)), (50, 40))
+    band, box = building_set.crop_band(canvas)
+    assert box == (50, 40, 250, 140) and band.size == (200, 100)

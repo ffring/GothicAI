@@ -308,9 +308,90 @@
       "utc": "2026-10-21T17:05:44Z",
       "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
       "parent": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_01-attempt-1.png"
+    },
+    {
+      "file": "city-timber/NW_CITY_WOODBEAM_02-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOODBEAM_02.TGA",
+      "attempt": 1,
+      "sha256": "ba6f9ad0c2850127130ffd665ab71e5f8002b02bb4a3207a034490ccc2943562",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T18:00:55Z",
+      "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
+      "parent": "city-timber-concept/concept-NW_CITY_WOODBEAM_02-attempt-3.png"
+    },
+    {
+      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOOD_ORNAMENT_01.TGA",
+      "attempt": 1,
+      "sha256": "96633c06979521769d061d17da4ee929cd768791e31d9cd26e939cdca654b4ba",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T18:07:29Z",
+      "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
+      "parent": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_01-attempt-3.png"
     }
   ],
-  "selected": {},
+  "selected": {
+    "concept:NW_CITY_WOODBEAM_02.TGA": {
+      "file": "city-timber-concept/concept-NW_CITY_WOODBEAM_02-attempt-3.png",
+      "reason": "попытка 3: цельный брус, неровные пятна сырости; трещины вдоль волокна — на этапе текстур",
+      "date": "2026-10-21"
+    },
+    "concept:NW_CITY_WOODBEAM_03.TGA": {
+      "file": "city-timber-concept/concept-NW_CITY_WOODBEAM_03-attempt-1.png",
+      "reason": "попытка 1: приглушённый красно-бурый, тонкая полоса на двух гвоздях",
+      "date": "2026-10-21"
+    },
+    "concept:NW_CITY_WOOD_ORNAMENT_02.TGA": {
+      "file": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_02-attempt-1.png",
+      "reason": "попытка 1: простая серо-бурая доска",
+      "date": "2026-10-21"
+    },
+    "concept:NW_CITY_WOOD_ORNAMENT_01.TGA": {
+      "file": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_01-attempt-3.png",
+      "reason": "попытка 3: тёмные углубления, узор читается; кольца сделать неровными на этапе текстур",
+      "date": "2026-10-21"
+    },
+    "concept:NW_CITY_WOOD_01.TGA": {
+      "file": "city-timber-concept/concept-NW_CITY_WOOD_01-attempt-2.png",
+      "reason": "попытка 2: оливковые доски, плоская сырость",
+      "date": "2026-10-21"
+    },
+    "NW_CITY_WOODBEAM_02.TGA": {
+      "file": "city-timber/NW_CITY_WOODBEAM_02-attempt-1.png",
+      "reason": "texture edit: three cracks along the grain",
+      "date": "2026-10-21"
+    },
+    "NW_CITY_WOODBEAM_03.TGA": {
+      "file": "city-timber-concept/concept-NW_CITY_WOODBEAM_03-attempt-1.png",
+      "reason": "accepted concept used as the texture",
+      "date": "2026-10-21"
+    },
+    "NW_CITY_WOOD_ORNAMENT_02.TGA": {
+      "file": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_02-attempt-1.png",
+      "reason": "accepted concept used as the texture",
+      "date": "2026-10-21"
+    },
+    "NW_CITY_WOOD_ORNAMENT_01.TGA": {
+      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-1.png",
+      "reason": "texture edit: hand-cut rings",
+      "date": "2026-10-21"
+    },
+    "NW_CITY_WOOD_01.TGA": {
+      "file": "city-timber-concept/concept-NW_CITY_WOOD_01-attempt-2.png",
+      "reason": "accepted concept used as the texture",
+      "date": "2026-10-21"
+    }
+  },
   "reviews": [
     {
       "id": "r1-concept-2",
@@ -359,6 +440,13 @@
       "verdict": "REJECT",
       "date": "2026-10-21",
       "path": "reviews/r1-concept-r4/merged.json"
+    },
+    {
+      "id": "r2-textures-1",
+      "stage": "textures",
+      "mode": "reference",
+      "verdict": "pending",
+      "date": "2026-10-21"
     }
   ],
   "gates": [
@@ -369,6 +457,14 @@
       "date": "2026-10-21",
       "quote": "Да, оба списка подтверждаю, делай концепты",
       "note": "Список сохранения дерева, пункты 1–7."
+    },
+    {
+      "gate": "concept",
+      "verdict": "approved",
+      "by": "user",
+      "date": "2026-10-21",
+      "quote": "можно",
+      "note": "Принят с правками на этапе текстур: на брусе каркаса три длинные трещины вдоль волокна; кольца резьбы неровные, вырезанные от руки; доска резьбы темнее. Каждая текстура делается отдельно."
     }
   ],
   "build": null,

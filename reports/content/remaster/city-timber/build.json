@@ -1,0 +1,8 @@
+{"set": "timber-1", "base": "original", "registry": "data/content/remaster/city-timber.jsonl",
+ "textures": {
+  "NW_CITY_WOODBEAM_02.TGA": {"crop": "band", "axes": "v", "colour": {"mode": "target"}, "relief": 0.35},
+  "NW_CITY_WOODBEAM_03.TGA": {"crop": "band", "axes": "v", "colour": {"mode": "target"}, "relief": 0.35},
+  "NW_CITY_WOOD_ORNAMENT_02.TGA": {"crop": "band", "axes": "v", "colour": {"mode": "target"}, "relief": 0.35},
+  "NW_CITY_WOOD_ORNAMENT_01.TGA": {"crop": "band", "axes": "v", "colour": {"mode": "target"}, "relief": 0.35},
+  "NW_CITY_WOOD_01.TGA": {"crop": "band", "axes": "u", "colour": {"mode": "target"}, "relief": 0.35}},
+ "guard": {"luminance_ratio": [0.75, 1.25], "clipped_max": 0.01}}

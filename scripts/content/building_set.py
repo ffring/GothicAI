@@ -147,6 +147,18 @@ def correct_colours(images: dict, spec: dict, targets: dict) -> tuple[dict, dict
     return corrected, info
 
 
+def crop_band(image: Image.Image, tolerance: int = 6, floor: int = 170) -> tuple[Image.Image, tuple]:
+    """Drop the plain light grey margins around a texture drawn as a band on a larger canvas."""
+    pixels = np.asarray(image.convert('RGB')).astype(int)
+    grey = (np.abs(pixels - pixels.mean(axis=2, keepdims=True)).max(axis=2) < tolerance) & (pixels.mean(axis=2) > floor)
+    rows = np.where(grey.mean(axis=1) < .9)[0]
+    cols = np.where(grey.mean(axis=0) < .9)[0]
+    if not len(rows) or not len(cols):
+        raise ValueError('crop: no band found')
+    box = (int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1)
+    return image.crop(box), box
+
+
 def source_attempts(manifest: dict, texture: str) -> list[dict]:
     attempts = []
     for source in manifest['sources']:
@@ -177,7 +189,11 @@ def prepare(asset: str, spec: dict) -> tuple[list[dict], dict]:
             raise ValueError(f'{path}: SHA-256 differs from asset.json')
         axes = spec['textures'][name].get('axes', 'uv')
         with Image.open(path) as image:
-            resized = image.convert('RGB').resize((1024, 1024), Image.Resampling.LANCZOS)
+            image = image.convert('RGB')
+            band = None
+            if spec['textures'][name].get('crop') == 'band':
+                image, band = crop_band(image)
+            resized = image.resize((1024, 1024), Image.Resampling.LANCZOS)
             joined, seam = seamless(resized, axes=axes, overlap_fraction=1/64)
         images[name] = np.asarray(joined)
         record = recipes[name]
@@ -186,7 +202,7 @@ def prepare(asset: str, spec: dict) -> tuple[list[dict], dict]:
         record['parameters'].update(set=spec['set'], material=record['id'], scale=1., tiling_axes=axes,
             tileable=bool(axes), antitile='off', source_attempt=source['attempt'],
             input='image_gen edit of the accepted remaster concept; no original texture pixels',
-            colour_policy=f"remaster building_set: {spec['textures'][name]['colour']['mode']}",
+            colour_policy=f"remaster building_set: {spec['textures'][name]['colour']['mode']}", source_band=band,
             luminance_policy='guard rail only: ratio to the original target is recorded, not enforced',
             source_size_policy='one Lanczos resize to 1024 square, then narrow permitted-axis seam cuts')
         record['generation'] = dict(outcome='complete', attempts=source_attempts(manifest, name),
