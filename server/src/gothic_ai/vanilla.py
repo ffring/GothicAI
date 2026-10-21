@@ -45,6 +45,7 @@ from .director import topic_titles
 from .game import GameError, GameLink
 from .gamedata.storygraph import Expr, Node, StoryGraph, walk
 from .journal import Journal
+from .knowledge import Partial, StoryState
 from .llm import Tool, ToolCall
 from .protocol import GameMessage, Loading, Session, Snapshot
 from .quests import SEE_CM, Lie, caught, unmask
@@ -886,16 +887,13 @@ class VanillaQuests:
             said=_said(effects, fired),
             asked=running,
             original=claim,
+            # A satisfied branch does not require the script state of its other alternatives.
             unseen_helpers=any(
-                not _claim(None, self.graph.functions[fn]["body"], self.graph, npc).removable
-                or any(
-                    e[0] in ("call", "fn", "var", "field", "unknown", "param")
-                    for e in walk(
-                        claim.select(set(claim.removable)).assume(
-                            self.graph.functions[fn]["body"], self.graph
-                        )
+                Partial(self.graph, StoryState()).truth(
+                    claim.select(set(claim.removable)).assume(
+                        self.graph.functions[fn]["body"], self.graph
                     )
-                )
+                ) is not True
                 for fn in claim.fns
             ),
         )

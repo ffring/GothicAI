@@ -528,7 +528,7 @@ async def vanilla_spare(
     spared = "BDT_1013_BANDIT_L"
     bandits = (killed, witnessed, spared)
     why = "Пощадил его по просьбе героя."
-    park = "NW_XARDAS_TOWER_VALLEY_01"
+    park = "NW_XARDAS_TOWER_VALLEY_09"  # flat ground; _01 drops sharply in front of its waypoint
     facts = vanilla.chronicle.facts
     hero = ["inst", "HERO"]
     async def var(name: str) -> int | None:
@@ -622,12 +622,19 @@ async def vanilla_spare(
     # Hold both while they negotiate: the spared bandit must remain alive before Cavalorn's eyes.
     if not await talk.hold(npc, "scenario"):
         return _logged({**results, "held": "failed (Cavalorn could not stop to listen)"})
-    await link.debug("npc_goto", npc=spared, to=npc, distance=300, face=npc)
+    await link.debug("npc_goto", npc=spared, to=npc, distance=150, face=npc)
     await link.attach(spared)
-    before_spare = (await link.story_state(npcs=[spared], near=npc)).get("npcs", {}).get(spared, {})
+    await link.act(npc, "turn_to", npc=spared)
+    visible = await _until_async(
+        lambda: link.story_state(npcs=[spared], near=npc),
+        lambda state: bool(state.get("npcs", {}).get(spared, {}).get("seen")),
+        10,
+    )
+    nearby = (await link.story_state(npcs=[npc, spared], near=npc)).get("npcs", {})
+    before_spare = nearby.get(spared, {})
     if not check(
-        "spared_in_view", before_spare.get("state") == "alive" and bool(before_spare.get("seen")),
-        before_spare,
+        "spared_in_view", visible and before_spare.get("state") == "alive" and bool(before_spare.get("seen")),
+        nearby,
     ):
         return _logged(results)
 

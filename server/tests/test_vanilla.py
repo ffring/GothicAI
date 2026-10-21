@@ -1867,3 +1867,54 @@ async def test_an_old_check_does_not_play_an_ending_after_the_quest_was_dropped(
         assert LOBART not in vanilla.checking
     finally:
         await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("away", [0, 1])
+async def test_an_optional_helper_branch_does_not_block_witnessed_amended_terms(cavalorn, away):
+    cavalorn.nodes[KILLED].condition[2] = ["==", ["var", KILLBRAGO], ["int", 1]]
+    cavalorn.instances.update({"SECOND_BANDIT": "BDT_2_BANDIT", "THIRD_BANDIT": "BDT_3_BANDIT"})
+    first = ["call", "NPC_ISDEAD", ["inst", "AMBUSHER_1013"]]
+    second = ["call", "NPC_ISDEAD", ["inst", "SECOND_BANDIT"]]
+    third = ["call", "NPC_ISDEAD", ["inst", "THIRD_BANDIT"]]
+    cavalorn.functions["C_BRAGOBANDITSDEAD"]["body"] = [
+        "||", ["&&", first, second, third],
+        ["&&", second, third, ["==", ["var", "BDT_1013_AWAY"], ["int", 1]]],
+    ]
+    fake = FakeGame(branch="A")
+    accept = FakeStep("С ними покончено.", [ToolCall("accept_quest", {"quest": KILLBRAGO}, "a1")])
+    llm = FakeBackend(script=[accept, FakeStep("Держи плату.")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _cavalorn(fake, llm, cavalorn)
+    fake.vars.update({KILLBRAGO: 1, "BDT_1013_AWAY": away})
+    fake.instances.update({"SECOND_BANDIT": "BDT_2_BANDIT", "THIRD_BANDIT": "BDT_3_BANDIT"})
+    fake.npc_states.update({
+        BRAGO: {"state": "alive", "name": "Пощажённый", "distance": 500, "seen": True},
+        "BDT_2_BANDIT": {"state": "dead", "name": "Второй", "distance": 9000, "seen": False},
+        "BDT_3_BANDIT": {"state": "dead", "name": "Третий", "distance": 9000, "seen": False},
+    })
+    fake.fns["C_BRAGOBANDITSDEAD"] = away
+    try:
+        chronicle.record({"fact": "caught", "npc": CAVALORN, "quest": KILLBRAGO})
+        for dead in ("BDT_2_BANDIT", "BDT_3_BANDIT"):
+            chronicle.record({"fact": "seen_dead", "npc": CAVALORN, "dead": dead, "how": "saw_die"})
+        conv = dialogue.open(CAVALORN, "Кавалорн")
+        await vanilla.prepare(CAVALORN)
+        result = await vanilla.handle(
+            dialogue, conv,
+            ToolCall("amend_quest", {"quest": KILLBRAGO, "drop": [BRAGO], "why": "Пощадил"}, "m1"),
+            None,
+        )
+        assert result.status == "accepted" and vanilla.trust.broken(CAVALORN)
+        offer = vanilla.offers[CAVALORN][KILLBRAGO]
+        assert offer.claim.dead == ["BDT_2_BANDIT", "BDT_3_BANDIT"] and offer.seen_true()
+        assert "check_claim" not in {t.name for t in vanilla.tools(CAVALORN)}
+        await dialogue.say_as_player(CAVALORN, "С ними покончено.")
+        await _until(lambda: chronicle.facts("quest_outcome") != [])
+        effects = _effects(fake, CAVALORN)[0]
+        assert {"do": "set", "var": KILLBRAGO, "value": 2} in effects
+        assert {"do": "set", "var": LETTER, "value": 1} in effects
+        assert not any(e.get("var") == "BDT_1013_AWAY" for e in effects)
+        assert fake.vars["BDT_1013_AWAY"] == away and fake.npc_states[BRAGO]["state"] == "alive"
+        assert chronicle.facts("lie") == []
+        assert chronicle.facts("quest_outcome")[0]["how"] == "amended"
+    finally:
+        await link_cm.__aexit__(None, None, None)
