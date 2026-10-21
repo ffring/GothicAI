@@ -208,6 +208,7 @@ async def test_a_lie_about_a_killing_is_found_out_when_the_victim_turns_up(graph
         await _until(lambda: any(m["type"] == "story_tag" for m in fake.story))
         tag = next(m for m in fake.story if m["type"] == "story_tag")
         assert (tag["tag"], tag["npcs"]) == (f"{KILL}_ALIVE", [BANDIT])
+        await _until(lambda: any(m["type"] == "story_watch" for m in fake.story))  # sent after the tag's answer
         watch = [m for m in fake.story if m["type"] == "story_watch"][-1]
         assert (watch["npcs"], watch["owner"]) == ([LOBART], "vanilla")
 
