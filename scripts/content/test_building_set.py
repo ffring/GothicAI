@@ -82,3 +82,16 @@ def test_load_spec_validates(tmp_path, monkeypatch):
     (folder / 'build.json').write_text(json.dumps(spec({'A.TGA': {'colour': {'mode': 'target'}}})))
     assert building_set.load_spec('hut')['set'] == 's'
     assert remaster.asset_dir('hut') == folder
+
+
+def test_scale_relief_flattens_and_keeps_unit_vectors():
+    tilt = np.array([.6, -.3, .74])
+    tilt /= np.linalg.norm(tilt)
+    encoded = np.tile(tilt * .5 + .5, (4, 4, 1))
+    flat = building_set.scale_relief(encoded, 0.)
+    assert np.allclose(flat[..., :2], .5) and np.allclose(flat[..., 2], 1.)
+    half = building_set.scale_relief(encoded, .5) * 2 - 1
+    assert np.allclose(np.linalg.norm(half, axis=-1), 1.)
+    assert abs(half[0, 0, 0]) < abs(tilt[0])
+    with pytest.raises(ValueError):
+        building_set.scale_relief(encoded, 1.5)

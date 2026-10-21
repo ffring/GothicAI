@@ -248,6 +248,36 @@
       "utc": "2026-10-21T11:25:17Z",
       "thread": "01a15d50-51ed-7270-beab-ca7655b0a6ce",
       "parent": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-1.png"
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-7.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_HOLZWAND_02.TGA",
+      "attempt": 7,
+      "sha256": "106ad6669ccf1c5ba6e5e59a729df32cc8148cec7fe8459a9b527a5d2f00365a",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T11:44:25Z",
+      "thread": "01a15d50-51ed-7270-beab-ca7655b0a6ce",
+      "parent": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-3.png"
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-4.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_GIEBEL_01.TGA",
+      "attempt": 4,
+      "sha256": "459c0576717a8bdf582d3b0d2ebf1d15bc11ee80a79ad2ceb1fc8e8a1bc604e6",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T11:49:15Z",
+      "thread": "01a15d50-51ed-7270-beab-ca7655b0a6ce",
+      "parent": "harbour-hut-concept/harbour-hut-elevations-attempt-2.png"
     }
   ],
   "selected": {
@@ -262,13 +292,13 @@
       "date": "2026-10-21"
     },
     "NW_CITY_HAFEN_HOLZWAND_02.TGA": {
-      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-4.png",
-      "reason": "a4: the original's large leaded double casement in a broad plank surround; darker glass than a5",
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-7.png",
+      "reason": "a7: the original texture's small dark window (frame U 0.35–0.68, V 0.27–0.60), same boards as HOLZWAND_01 a3; the large leaded window is the model NW_CITY_WINDOW_WOOD_OUT_01",
       "date": "2026-10-21"
     },
     "NW_CITY_HAFEN_GIEBEL_01.TGA": {
-      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-1.png",
-      "reason": "a1: natural staggered joints, more moss than a2",
+      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-4.png",
+      "reason": "a4: eight courses of smooth weathered boards with wavy edges, as the original; no bark strips or crumpled noise",
       "date": "2026-10-21"
     },
     "NW_CITY_WOODBEAM_01.TGA": {
@@ -309,6 +339,30 @@
       "verdict": "REJECT",
       "date": "2026-10-21",
       "path": "reviews/cal2-hut-concept-a2/merged.json"
+    },
+    {
+      "id": "r3-hut2-front",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r3-hut2-front/merged.json"
+    },
+    {
+      "id": "r3-hut2-gable",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r3-hut2-gable/merged.json"
+    },
+    {
+      "id": "r3-hut2-planks",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r3-hut2-planks/merged.json"
     }
   ],
   "gates": [
@@ -338,13 +392,13 @@
     }
   ],
   "build": {
-    "set": "hut-1",
+    "set": "hut-3",
     "base": "house-2",
     "date": "2026-10-21",
     "albedo_sha256": {
       "NW_CITY_HAFEN_HOLZWAND_01.TGA": "796b774c2b1e4110e4dfdb1e64474544aa2d05ec7a97b75ba3a22015601bc92d",
-      "NW_CITY_HAFEN_HOLZWAND_02.TGA": "6c8733e510478e85160f63e39185b21a2283b9765c806598449904fef4566ddb",
-      "NW_CITY_HAFEN_GIEBEL_01.TGA": "d78115f4ff54204c18256eb077b99775ef979b6504173fba069efe81645e1876",
+      "NW_CITY_HAFEN_HOLZWAND_02.TGA": "ded7441767f352fd6e8bc160d8a9d862e2717f189ff958c0bd661d2b35bf2701",
+      "NW_CITY_HAFEN_GIEBEL_01.TGA": "5f7072b03ea85ed15ecbdd268926f9c5693423e8967462a2a17355ca41c4e9cb",
       "NW_CITY_WOODBEAM_01.TGA": "ed351087ac3df49b38bdcbd803e04a6cfbe6ec3572cf74637617bd1f011e5dc2"
     },
     "entries": 58,

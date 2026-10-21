@@ -11,6 +11,9 @@ permitted axes, then colour by material:
 - `match`  — gains so the texture's pixels outside `exclude_uv` match the corrected mean
              of another texture of the same material (boards around a window).
 
+`relief` (0..1, default 1) scales the tilt of the filtered normal map: the CPU filter
+normalises fine detail to full contrast, which turns wood grain into bark.
+
 Numbers are guard rails: luminance outside the ratio range or clipped pixels are recorded,
 never "fixed" here. No detail fit, Marigold or highlight shoulder. Maps come from the
 existing CPU filter, the set is the base staging set with only these entries replaced.
@@ -208,6 +211,16 @@ def prepare(asset: str, spec: dict) -> tuple[list[dict], dict]:
     return records, report
 
 
+def scale_relief(normal_map: np.ndarray, relief: float) -> np.ndarray:
+    """Scale the tangent-space tilt of a 0..1 encoded normal map; 0 is flat, 1 unchanged."""
+    if not 0 <= relief <= 1:
+        raise ValueError(f'relief must be within 0..1, got {relief}')
+    vector = normal_map.astype(np.float64) * 2 - 1
+    vector[..., :2] *= relief
+    vector /= np.linalg.norm(vector, axis=-1, keepdims=True)
+    return (vector * .5 + .5).astype(normal_map.dtype)
+
+
 def pack(records: list[dict], spec: dict, derived_root: Path) -> dict:
     base = remaster.data_root() / 'content-staging' / spec['base']
     output = pack_materials.staging_output(base.parent / spec['set'])
@@ -267,6 +280,10 @@ def build(asset: str, spec: dict, records: list[dict]) -> dict:
         path = remaster.work_root(asset) / 'prepared' / spec['set'] / (Path(record['replaces'][0]).stem + '.png')
         with Image.open(path) as image:
             record['_maps'] = bakeoff.filtered_maps(image, record)
+        relief = float(spec['textures'][record['replaces'][0]].get('relief', 1.))
+        if relief != 1.:
+            record['_maps']['normal'] = scale_relief(record['_maps']['normal'], relief)
+        record['parameters']['relief'] = relief
         lo, hi = record['parameters']['roughness_range']
         record['_maps']['roughness'] = np.clip(record['_maps']['roughness'], np.ceil(lo * 255) / 255,
                                                np.floor(hi * 255) / 255)

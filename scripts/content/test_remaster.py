@@ -276,3 +276,10 @@ def test_context_and_minor_defaults_do_not_reject():
     assert remaster.merge_verdicts({'order-1': verdict_}, key)['verdict'] == 'PASS'
     verdict_['findings'][1]['severity'] = 'notable'
     assert remaster.merge_verdicts({'order-1': verdict_}, key)['verdict'] == 'REJECT'
+
+
+def test_criteria_token_survives_appended_reasons():
+    key = {'mode': 'blind', 'orders': {'order-1': {'ours': 2}, 'order-2': {'ours': 1}}}
+    one = {'preserve': [], 'criteria': {'material': '1 — на 2 нижняя полоса стены шумит'}, 'verdict': 'PASS'}
+    two = {'preserve': [], 'criteria': {'material': '2'}, 'verdict': 'PASS'}
+    assert remaster.merge_verdicts({'order-1': one, 'order-2': two}, key)['criteria']['material'] == 'worse'
