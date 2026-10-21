@@ -202,11 +202,11 @@ def test_hut_captures_reject_wrong_frame_size(tmp_path):
         capture.check(*inputs, harbour_hut=True)
 
 
-def test_hut_captures_require_original_variant(tmp_path):
+def test_hut_staging_capture_requires_full_material_set(tmp_path):
     inputs = hut_check_inputs(tmp_path)
-    variant = inputs[0].with_name("staging")
+    variant = inputs[0].with_name("hut-1")
     inputs[0].rename(variant)
-    with pytest.raises(SystemExit, match="harbour survey requires original materials"):
+    with pytest.raises(SystemExit, match="expected 0 original or 58 staging materials"):
         capture.check(variant, *inputs[1:], harbour_hut=True)
 
 

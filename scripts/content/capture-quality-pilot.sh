@@ -7,7 +7,7 @@
 # --compose-3 CAPTURES OUTPUT writes seven original / pilot-2 / pilot-3a / pilot-3b boards.
 # QUALITY_PILOT_TASK=gothic-ai/market-house selects market-house.bench (three views).
 # QUALITY_PILOT_TASK=gothic-ai/harbour-house selects harbour-house.bench (twelve original facade views).
-# QUALITY_PILOT_TASK=gothic-ai/harbour-hut selects harbour-hut.bench (six original views, normal game FOV).
+# QUALITY_PILOT_TASK=gothic-ai/harbour-hut selects harbour-hut.bench (six views, normal game FOV; original or a staging set such as hut-1).
 # --compose-house CAPTURES OUTPUT writes original / pilot-3b / house-1 boards.
 # --compose-house-2 CAPTURES OUTPUT writes original / house-1 / house-2 boards.
 set -euo pipefail
@@ -36,8 +36,8 @@ fi
 
 if [[ "${1:-}" == --remote-capture ]]; then
   variant="${2:?variant}"
-  [[ "$variant" == original || "$variant" == city-3 || "$variant" == pilot-b || "$variant" == pilot-c || "$variant" == pilot-2 || "$variant" == pilot-3a || "$variant" == pilot-3b || "$variant" == house-1 || "$variant" == house-2 ]] || exit 2
-  [[ "$TASK" != gothic-ai/harbour-house && "$TASK" != gothic-ai/harbour-hut || "$variant" == original ]] || exit 2
+  [[ "$variant" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || exit 2
+  [[ "$TASK" != gothic-ai/harbour-house || "$variant" == original ]] || exit 2
   task="$HOME/$TASK"
   out="$task/runs/$variant"
   mkdir -p "$out/run"
@@ -134,8 +134,8 @@ fi
 
 if [[ "${1:-}" == --capture ]]; then
   variant="${2:?variant}"; out="${3:?output}"
-  [[ "$variant" == original || "$variant" == city-3 || "$variant" == pilot-b || "$variant" == pilot-c || "$variant" == pilot-2 || "$variant" == pilot-3a || "$variant" == pilot-3b || "$variant" == house-1 || "$variant" == house-2 ]] || exit 2
-  [[ "$TASK" != gothic-ai/harbour-house && "$TASK" != gothic-ai/harbour-hut || "$variant" == original ]] || exit 2
+  [[ "$variant" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || exit 2
+  [[ "$TASK" != gothic-ai/harbour-house || "$variant" == original ]] || exit 2
   mkdir -p "$out/$variant"
   if [[ "$variant" != original ]]; then
     source_root="${CONTENT_STAGING_ROOT:-$HOME/.local/share/gothic-ai/content-staging}/$variant"
@@ -155,5 +155,5 @@ if [[ "${1:-}" == --capture ]]; then
   rsync -a "$HOST:$TASK/runs/$variant/" "$out/$variant/"
   exit "$rc"
 fi
-echo 'usage: capture-quality-pilot.sh --prepare | --capture original|city-3|pilot-b|pilot-c|pilot-2|pilot-3a|pilot-3b|house-1|house-2 OUTPUT | --compose|--compose-2|--compose-3|--compose-house|--compose-house-2 CAPTURES OUTPUT' >&2
+echo 'usage: capture-quality-pilot.sh --prepare | --capture original|<staging set> OUTPUT | --compose|--compose-2|--compose-3|--compose-house|--compose-house-2 CAPTURES OUTPUT' >&2
 exit 2
