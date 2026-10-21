@@ -896,7 +896,7 @@ async def serve(args: argparse.Namespace) -> int:
             )
         if graph is not None and not args.no_knowledge:
             # what each npc knows of the world as far as the story has got: its dialogs, quests, talk (M6)
-            state.knowledge = Knowledge(link, graph)
+            state.knowledge = Knowledge(link, graph, state.story)
             state.dialogue.extensions.append(state.knowledge)
 
         def knows_hero(npc: str, dialogue: DialogueManager = state.dialogue) -> bool:
