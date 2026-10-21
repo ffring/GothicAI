@@ -2034,7 +2034,7 @@ class DialogueManager:
                 start = 0
                 for end in _SENTENCE_END.finditer(pending):
                     start = end.end()
-                prefix = pending[start:]
+                prefix = pending[max(start, pending.rfind("\n") + 1) :]
                 if tool_leak(prefix + word, names):
                     # Keep completed sentences waiting in the splitter, and any clause already said.
                     remove = len(prefix)
@@ -2060,7 +2060,7 @@ class DialogueManager:
                     return
             else:
                 state.discarded_text += word
-            if _SENTENCE_END.search(state.discarded_text):
+            if "\n" in state.discarded_text or _SENTENCE_END.search(state.discarded_text):
                 log.warning("%s: discarded tool text: %s", conv.npc, state.discarded_text.strip())
                 state.discarded_text = ""
 

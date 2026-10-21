@@ -130,19 +130,42 @@ async def test_tool_names_are_filtered_from_base_extension_and_turn_tools(leak, 
 
 
 @pytest.mark.parametrize(
-    ("reply", "clean"),
+    ("reply", "clean", "leak"),
     [
         (
             "Ладно, пошли. give_item(item=ITMW_MACE)? После боя поговорим.",
             "Ладно, пошли. После боя поговорим.",
+            "give_item(item=ITMW_MACE)?",
         ),
-        ("Жди здесь. set_intent", "Жди здесь."),
+        ("Жди здесь. set_intent", "Жди здесь.", "set_intent"),
+        (
+            "Держи. give_item(item=ITMI_GOLD)\nЛадно, пошли.",
+            "Держи. Ладно, пошли.",
+            "give_item(item=ITMI_GOLD)",
+        ),
+        (
+            "Держи. give_item(item=ITMI_GOLD)\n\nЛадно, пошли.",
+            "Держи. Ладно, пошли.",
+            "give_item(item=ITMI_GOLD)",
+        ),
+        (
+            "Вот это разговор\nprotoc function give_quest?",
+            "Вот это разговор",
+            "protoc function give_quest?",
+        ),
+        (
+            "Держи. functions.give_quest({...})\nЛадно, пошли.",
+            "Держи. Ладно, пошли.",
+            "functions.give_quest({...})",
+        ),
     ],
 )
-async def test_only_the_service_sentence_is_removed_from_a_merged_line_or_tail(reply, clean):
+async def test_only_the_service_sentence_is_removed_from_a_merged_line_or_tail(
+    reply, clean, leak, caplog
+):
     fake = FakeGame()
     async with connected(fake) as link:
-        dialogue = DialogueManager(link, FakeBackend(reply, chunk=2, delay=0), PersonaProvider(None))
+        dialogue = DialogueManager(link, FakeBackend(reply, chunk=3, delay=0), PersonaProvider(None))
         conv = dialogue.open(XARDAS, "Ксардас")
         await dialogue.say_as_player(XARDAS, "Ладно")
         await _until(lambda: fake.statuses[-1:] == ["idle"])
@@ -150,6 +173,10 @@ async def test_only_the_service_sentence_is_removed_from_a_merged_line_or_tail(r
     assert " ".join(fake.said) == clean
     assert conv.history[-1] == Message("assistant", clean)
     assert [m["text"] for m in fake.received if m["type"] == "chat_text"][-1] == clean
+    assert any(
+        leak in r.getMessage() and XARDAS in r.getMessage() and r.levelname == "WARNING"
+        for r in caplog.records
+    )
 
 
 async def test_ordinary_speech_is_not_filtered(caplog):
