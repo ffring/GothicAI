@@ -79,8 +79,10 @@ def check(directory, scenario, material_index, iteration3=False, market_house=Fa
     require(bool(re.search(rf"materials: {len(index)} entries from ", log)), "wrong material count")
     if market_house:
         require(len(index) == (0 if directory.name == "original" else 58), "expected 0 original or 58 staging materials")
-    if harbour_house or harbour_hut:
+    if harbour_house:
         require(directory.name == "original" and not index, "harbour survey requires original materials")
+    if harbour_hut:
+        require(len(index) == (0 if directory.name == "original" else 58), "expected 0 original or 58 staging materials")
     census = json.loads((directory / "census.json").read_text())
     opened = {texture_key(row["name"]) for row in census["files"] if row["kind"] == "texture"}
     replaced = {texture_key(row["name"]) for row in census["replacements"] if row["kind"] == "texture"}
