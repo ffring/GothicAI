@@ -357,6 +357,52 @@ async def test_the_npc_goes_to_see_and_catches_the_lie(graph):
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_a_check_in_progress_cannot_start_another_walk(graph):
+    fake = FakeGame(branch="A")
+    fake.slow_actions = {"go_to_npc"}
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, _, vanilla = await _setup(fake, FakeBackend(delay=0), graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 4000, "seen": False}
+    try:
+        await vanilla.link.attach(LOBART)
+        conv = dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert "check_claim" in [t.name for t in vanilla.tools(LOBART)]
+
+        first = await vanilla.handle(dialogue, conv, ToolCall("check_claim", {"quest": KILL}, "c1"), None)
+        assert first.status == "accepted"
+        await _until(lambda: LOBART in fake.long_running)
+        await vanilla.prepare(LOBART)  # another turn refreshes the offers while the body is walking
+        assert "check_claim" not in [t.name for t in vanilla.tools(LOBART)]
+
+        second = await vanilla.handle(dialogue, conv, ToolCall("check_claim", {"quest": KILL}, "c2"), None)
+        assert (second.output, second.status) == (
+            "Отклонено: ты уже идёшь смотреть сам.",
+            "rejected",
+        )
+        go = [m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_npc"]
+        assert len(go) == 1
+        assert go[0]["args"] == {"npc": BANDIT, "radius": 1800}
+
+        await fake.send(
+            type="action_result",
+            id=fake.long_running.pop(LOBART),
+            npc=LOBART,
+            status="timeout",
+            detail="stuck behind a wall",
+            distance=4000,
+        )
+        await _until(lambda: not conv.actions)
+        assert LOBART not in vanilla.checking
+        assert "check_claim" in [t.name for t in vanilla.tools(LOBART)]
+        assert len(
+            [m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_npc"]
+        ) == 1
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_behind_a_wall_is_not_before_its_eyes(graph):
     """The bandit is 10 m from Lobart, behind the barn: Lobart does not see him (the engine's sight), so he
     can neither call it a lie to his face nor refuse on what he sees; he goes, looks that way, and sees."""

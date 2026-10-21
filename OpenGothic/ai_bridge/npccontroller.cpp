@@ -13,6 +13,7 @@
 #include "world/objects/item.h"
 #include "physics/dynamicworld.h"
 #include "world/objects/npc.h"
+#include "world/waypath.h"
 #include "world/waypoint.h"
 #include "world/world.h"
 #include "commandline.h"
@@ -401,9 +402,10 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
     a.toPlayer = target->isPlayer();
     a.target   = target->instanceSymbol();
     if(a.type=="go_to_npc") {
-      a.radius   = float(integer(args,"radius",400));
-      a.deadline = 60000;
-      npc.aiPush(AiQueue::aiGoToNpc(target));
+      a.radius    = float(integer(args,"radius",400));
+      a.deadline  = 60000;
+      a.updatedAt = a.start;
+      planNpcWalk(world,c,a,*target,!npc.canSeeNpc(*target,true));
       } else {
       a.deadline = 5000;
       npc.aiPush(AiQueue::aiTurnToNpc(target));
@@ -668,8 +670,47 @@ void NpcController::regainControl(Controlled& c) {
     npc.aiPush(AiQueue::aiRemoveWeapon());
   }
 
+void NpcController::planNpcWalk(World& world, Controlled& c, Action& a, Npc& target, bool byWay) {
+  const WayPoint* wp = nullptr;
+  if(byWay) {
+    wp = world.findWayPoint(target.position(),[&](const WayPoint& w) {
+      return target.canRayHitPoint(w.position(),true);
+      });
+    if(wp==nullptr)
+      wp = world.findWayPoint(target.position());
+    }
+  Npc& npc = *c.npc;
+  a.byWay     = wp!=nullptr;
+  a.movedFrom = npc.position();
+  a.movedAt   = world.tickCount();
+  a.distance  = std::sqrt(double(npc.qDistTo(target)));
+  if(a.replans>0)
+    Tempest::Log::i("[ai] ",c.symbol," go_to_npc ",a.id," replan ",a.replans," at [",
+                    a.movedFrom.x,",",a.movedFrom.y,",",a.movedFrom.z,"], ",a.distance/100.," m to ",npcId(world,target));
+  const auto seen = npc.canSeeNpc(target,true) ? "visible" : "not visible";
+  const auto step = a.replans==0 ? " start to " : " route to ";
+  if(wp!=nullptr) {
+    auto path = world.wayTo(npc,*wp);
+    auto from = npc.position();
+    double length = 0;
+    size_t count  = 0;
+    while(const auto p = path.pop()) {
+      length += double((p->position()-from).length());
+      from = p->position();
+      ++count;
+      }
+    Tempest::Log::i("[ai] ",c.symbol," go_to_npc ",a.id,step,npcId(world,target),": waynet to ",wp->name,
+                    ": ",count," points, ",length/100.," m path; direct ",a.distance/100.," m, ",seen);
+    npc.aiPush(AiQueue::aiGoToPoint(*wp));
+    } else {
+    Tempest::Log::i("[ai] ",c.symbol," go_to_npc ",a.id,step,npcId(world,target),": direct, ",a.distance/100.," m, ",seen);
+    }
+  npc.aiPush(AiQueue::aiGoToNpc(&target));
+  }
+
 void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
   auto& a = *c.act;
+  a.updatedAt = now;
   if(now<a.start+GraceMs)
     return;
   if(a.state.isValid()) {
@@ -681,12 +722,27 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
     a.deadline = now + a.timeout; // queued speech goes first, the clock starts after it
   if(a.pace=="hero")
     keepHeroPace(world,*c.npc);
-  if(a.type=="go_to_npc" && c.npc->isAiBusy() && !c.npc->haveOutput()) {
-    // it stops within the radius: to see someone, it need not walk right up to them
+  if(a.type=="go_to_npc") {
     Npc* target = a.toPlayer ? world.player() : world.findNpcByInstance(a.target);
-    if(target!=nullptr && c.npc->qDistTo(*target)<=a.radius*a.radius) {
-      c.npc->clearAiQueue();
-      c.npc->clearGoTo();
+    if(target!=nullptr) {
+      a.distance = std::sqrt(double(c.npc->qDistTo(*target)));
+      const auto pos = c.npc->position();
+      if(c.npc->haveOutput() || a.movedAt==0 || (pos-a.movedFrom).quadLength()>=FollowMovedCm*FollowMovedCm) {
+        a.movedFrom = pos;
+        a.movedAt   = now;
+        }
+      if(c.npc->isAiBusy() && !c.npc->haveOutput()) {
+        // Stop close enough to see the target, never on the other side of a wall.
+        if(a.distance<=a.radius && c.npc->canSeeNpc(*target,true)) {
+          c.npc->clearAiQueue();
+          c.npc->clearGoTo();
+          } else if(a.distance>a.radius && now>=a.movedAt+FollowStuckMs) {
+          c.npc->clearAiQueue();
+          c.npc->clearGoTo();
+          ++a.replans;
+          planNpcWalk(world,c,a,*target,!a.byWay);
+          }
+        }
       }
     }
   if(c.npc->isAiBusy()) {
@@ -870,6 +926,12 @@ void NpcController::useChest(World& world, Controlled& c, Action& a) {
 void NpcController::finishAction(Controlled& c, std::string_view status, std::string_view detail, double distance) {
   if(!c.act)
     return;
+  if(c.act->type=="go_to_npc") {
+    const auto& a = *c.act;
+    const double d = distance>=0 ? distance : a.distance;
+    Tempest::Log::i("[ai] ",c.symbol," go_to_npc ",a.id," finish status=",status," detail=",detail,
+                    " distance=",d/100.," m elapsed=",double(a.updatedAt-a.start)/1000.," s replans=",a.replans);
+    }
   if(c.act->type=="use_chest" && c.act->chest!=nullptr) {
     if(c.npc!=nullptr && c.npc->interactive()==c.act->chest && status!="done")
       c.npc->setInteraction(nullptr,true);  // cut off at the open chest: it lets go of it

@@ -469,7 +469,7 @@ class VanillaQuests:
     def tools(self, npc: str) -> list[Tool]:
         offers = list(self.offers.get(npc.upper(), {}).values())
         tools = [ACCEPT_TOOL] if offers else []
-        if any(o.reachable() for o in offers):
+        if npc.upper() not in self.checking and any(o.reachable() for o in offers):
             tools.append(CHECK_TOOL)
         if any(o.seen_false() for o in offers):
             tools.append(EXPOSE_TOOL)
@@ -522,6 +522,8 @@ class VanillaQuests:
         return ToolOutcome("Принято: засчитаешь и отдашь награду после реплики.", "accepted")
 
     def _go_check(self, conv: Conversation, offer: Offer) -> ToolOutcome:
+        if conv.npc in self.checking:
+            return ToolOutcome("Отклонено: ты уже идёшь смотреть сам.", "rejected")
         target = offer.reachable()
         if target is None:
             why = (
@@ -910,10 +912,27 @@ class VanillaQuests:
 
     async def _go(self, conv: Conversation, npc: str, radius: int) -> str:
         """The npc's body walks until it is `radius` cm from someone; what went wrong, or ''."""
+        log.info("vanilla: %s go_to_npc start target=%s radius=%s", conv.npc, npc, radius)
         try:
             res = await self.link.act(conv.npc, "go_to_npc", npc=npc, radius=radius)
+            log.info(
+                "vanilla: %s go_to_npc end target=%s radius=%s status=%s detail=%s distance=%s",
+                conv.npc,
+                npc,
+                radius,
+                res.status,
+                res.detail,
+                res.distance,
+            )
             return "" if res.status == "done" else res.detail or res.status
         except (GameError, TimeoutError) as err:
+            log.info(
+                "vanilla: %s go_to_npc end target=%s radius=%s status=error detail=%s distance=None",
+                conv.npc,
+                npc,
+                radius,
+                err,
+            )
             return str(err) or type(err).__name__
 
     async def _face(self, conv: Conversation, npc: str) -> None:

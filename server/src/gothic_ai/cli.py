@@ -1598,6 +1598,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario wolf_load: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "check_walk":
+                assert state.dialogue is not None
+                results = await scenarios.check_walk(link, state.dialogue)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario check_walk: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None
                 results = await scenarios.companion_scenario(
@@ -2825,6 +2831,7 @@ def main() -> None:
             "frame",
             "crime_meet",
             "crime_ally",
+            "check_walk",
             "crime_talk",
             "trace_crime",
             "cover",

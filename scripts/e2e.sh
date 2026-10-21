@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
+#   check_walk: new game, no SAVE, LLM=fake; Cavalorn walks from Xardas's stairs to Brago's
+#       unseen body in the bandit cave using the native waynet, sees it and returns to the hero
 #   memprobe: engine RSS after each step (Linux /proc status, macOS RSS and phys_footprint), and after
 #       each cycle Linux smaps groups or macOS `footprint` categories;
 #       MEMPROBE_PHASES=wave,save,load,spawn,teleport, MEMPROBE_CYCLES=8; LLM=fake, no body URL
