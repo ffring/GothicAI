@@ -7,6 +7,9 @@
 #       LLM=chatgpt runs only the short compensation scene with the real model
 #   crime_ally: new game, no SAVE, LLM=fake; Brago attacks the following Cavalorn, the hero knocks him
 #       down and finishes him; murder and crime_side remain in the chronicle and Cavalorn answers
+#   bandit_parley: new game, LLM=fake; Brago's first fight is rejected, an ultimatum runs its course;
+#       Y pays 100 gold for four hours of peace with the cave gang, including 1015; no attack for 20 s,
+#       then drawing a weapon breaks the truce and Brago attacks
 #   m0: takes Xardas over, walks him around and returns him to his routine
 #   m1: Xardas answers a player question line by line (LLM backend: LLM=fake|chatgpt|local)
 #   websocket: Lobart and Hilda speak through Responses against an in-process fake server: per-npc
@@ -26,7 +29,8 @@
 #   neural-group: three one-handed bandits fight the hero and his swordsman companion under P30 at once;
 #       each gets >=10 decisions, no fallback, release <=2 s, service p95 <=20 ms; requires GOTHIC_BODY_URL
 #   neural-talk: a non-bandit swordsman attacks after words (AR_NONE), knocks the hero out alive, releases
-#       P30 and returns to his routine; the hero gets up. Then a hostile bandit talks, attacks, loses the
+#       P30 and returns to his routine; the hero gets up. Then a hostile bandit gives a ten-second
+#       ultimatum, attacks after its expiry, loses the
 #       fleeing hero, returns to his routine, reattacks or talks again and starts a fresh fight. After
 #       return_to_second_fight, >=20 decisions or 20 s trigger another hero flight; fight_end_clean checks
 #       target_lost/npc_unavailable, release <=2 s and no lease/body/watch after 2 s; LLM=fake, GOTHIC_BODY_URL
@@ -372,6 +376,10 @@ if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = ne
   [ -z "${SAVE:-}" ] || { echo "scenario $SCENARIO requires a new game (unset SAVE)" >&2; exit 2; }
 fi
 LLM="${LLM:-fake}"
+if [[ "$SCENARIO" == bandit_parley && ( "$LLM" != fake || -n "${SAVE:-}" ) ]]; then
+  echo 'scenario bandit_parley requires LLM=fake and a new game (unset SAVE)' >&2
+  exit 2
+fi
 if [[ "$SCENARIO" == neural-soak && "$LLM" != fake ]]; then
   echo 'scenario neural-soak requires LLM=fake' >&2
   exit 2
@@ -437,6 +445,10 @@ report_game_exit() {
   else
     echo "game exited: code $game_rc ($1)"
   fi
+  if [[ ( "$1" == unexpected || "$1" == exited ) && "$game_rc" == 137 ]] &&
+     ! grep -Fq "scenario $SCENARIO: checks started" "$LOG_DIR/server.log"; then
+    echo "game killed before checks at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  fi
   GAME=""
 }
 
@@ -445,15 +457,20 @@ cleanup() {
   # Reap our exact child PID, including a game killed before the first poll.
   # `|| true` preserves the scenario status if a child has already finished.
   if [[ -n "$GAME" ]]; then
-    kill "$GAME" 2>/dev/null || true
-    # A signal during the fork/exec handoff can miss the game. Bound the wait
-    # without touching another run's process or relying on its executable name.
-    for attempt in $(seq 1 20); do
-      kill -0 "$GAME" 2>/dev/null || break
-      sleep 0.1
-    done
-    kill -KILL "$GAME" 2>/dev/null || true
-    report_game_exit cleanup
+    if ! kill -0 "$GAME" 2>/dev/null; then
+      # The server may have finished before the poll noticed the dead game.
+      report_game_exit exited
+    else
+      kill "$GAME" 2>/dev/null || true
+      # A signal during the fork/exec handoff can miss the game. Bound the wait
+      # without touching another run's process or relying on its executable name.
+      for attempt in $(seq 1 20); do
+        kill -0 "$GAME" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -KILL "$GAME" 2>/dev/null || true
+      report_game_exit cleanup
+    fi
   fi
   kill "$SRV" 2>/dev/null || true
   if [[ -n "$ASR_PID" ]]; then kill "$ASR_PID" 2>/dev/null || true; fi

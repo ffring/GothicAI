@@ -89,6 +89,7 @@ from .npc_crimes import NpcCrimes
 from .npc_will import NpcWill
 from .occasions import Occasions
 from .orders import Orders
+from .parley import Parley
 from .people_knowledge import PeopleKnowledge
 from .perception import PerceptionDesk
 from .persona import MOOD_DELIVERY, PersonaProvider, habits_of
@@ -256,6 +257,7 @@ class ServerState:
         self.consequences: LieConsequences | None = None
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
+        self.parley: Parley | None = None
         self.chests: ChestDesk | None = None
         self.interject: Interjections | None = None
         self.bodies: Bodies | None = None
@@ -981,6 +983,12 @@ async def serve(args: argparse.Namespace) -> int:
         state.people_knowledge = PeopleKnowledge(state.chronicle)
         state.dialogue.extensions.append(state.people_knowledge)
         state.dialogue.extensions.append(trust)
+        if not args.no_parley:
+            state.parley = Parley(
+                link, state.dialogue, state.chronicle,
+                perception=perception, companion=orders.companion, places=place_book, lead=state.talk.lead,
+            )
+            state.dialogue.extensions.append(state.parley)
         # deals the npc's offer the hero in conversation: a window, the player accepts (docs/npc-tools.md)
         if graph is not None and not args.no_gates:
             state.gates = Gates(link, state.dialogue, state.chronicle, graph, crimes=state.crimes)
@@ -998,6 +1006,7 @@ async def serve(args: argparse.Namespace) -> int:
             gates=state.gates,
         )
         state.deals.roster = lambda: talk.people
+        state.deals.parley = state.parley
         state.deals.contracts.roster = lambda: talk.people
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
@@ -1013,6 +1022,7 @@ async def serve(args: argparse.Namespace) -> int:
             state.wrath = Wrath(link, state.dialogue, journal=journal)
             state.dialogue.extensions.append(state.wrath)
         debts = asyncio.create_task(state.deals.run())  # a debt not paid back by its day is a broken word
+        parley_clock = asyncio.create_task(state.parley.run()) if state.parley is not None else None
         # what each npc has on its mind about the hero, and what may come of it (wave 2 step 1)
         state.bodies = Bodies(link)
         state.concerns = Concerns(link, state.chronicle, state.deals)
@@ -1387,6 +1397,8 @@ async def serve(args: argparse.Namespace) -> int:
                 await asyncio.gather(body_task, return_exceptions=True)
             lies.cancel()
             debts.cancel()
+            if parley_clock is not None:
+                parley_clock.cancel()
             asks.cancel()
             if meets is not None:
                 meets.cancel()
@@ -1424,6 +1436,8 @@ async def serve(args: argparse.Namespace) -> int:
         if args.scenario is None:
             return
         try:
+            await link.wait_world()
+            log.info("scenario %s: checks started", args.scenario)
             if args.scenario == "memprobe":
                 where = Path(os.environ.get("LOG_DIR") or Path(args.trace_dir).parent)
                 assert state.bodies is not None
@@ -1437,6 +1451,14 @@ async def serve(args: argparse.Namespace) -> int:
             elif args.scenario == "neural-soak":
                 results = await scenarios.neural_soak_scenario(
                     link, state.dialogue, bodypilot, log_dir=Path(args.memory_db).parent
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "bandit_parley":
+                assert state.parley is not None and state.deals is not None and state.talk is not None
+                results = await scenarios.bandit_parley(
+                    link, state.dialogue, state.talk, state.deals, state.parley
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -2714,6 +2736,7 @@ def main() -> None:
             "neural-companion",
             "neural-group",
             "neural-talk",
+            "bandit_parley",
             "neural-load",
             "neural-soak",
             "memprobe",
@@ -2865,6 +2888,7 @@ def main() -> None:
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
     p.add_argument("--no-gates", action="store_true", help="disable conversational gate admission")
     p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
+    p.add_argument("--no-parley", action="store_true", help="bandits may attack the hero without a cause")
     p.add_argument(
         "--no-crimes", action="store_true", help="disable crimes and law patches; scripts own law entirely"
     )

@@ -13,6 +13,7 @@ from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.memory import MemoryStore
+from gothic_ai.parley import Parley
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.talk import Talk, TalkDesk
 from gothic_ai.trust import Trust
@@ -20,6 +21,7 @@ from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import XARDAS, _until
 
 POTION, GOLD = "ITPO_HEALTH_01", "ITMI_GOLD"
+BRAGO = "BDT_1014_BANDIT_L"
 
 
 def _offer(npc_gives: int, gold: int, call_id: str = "c1") -> ToolCall:
@@ -800,7 +802,139 @@ async def test_a_tool_not_offered_in_the_turn_is_rejected():
         await link_cm.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("hours", [1, 24])
+async def test_bandit_truce_is_a_real_deal_accepted_with_y(hours):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    dialogue.guild_of = lambda npc: 9 if npc == BRAGO else 0
+    parley = Parley(dialogue.link, dialogue, chronicle)
+    deals.parley = parley
+    try:
+        snap = await dialogue.link.snapshot(BRAGO)
+        conv = dialogue.open(BRAGO, "Браго")
+        outcome = await parley.handle(
+            dialogue,
+            conv,
+            ToolCall("ultimatum", {"demand": "Заплати сто золотых", "seconds": 30}, "u1"),
+            snap,
+        )
+        assert outcome is not None and outcome.status == "accepted"
+        fake.hero_items = {GOLD: 200}
+        result = await deals.propose(
+            BRAGO,
+            "Браго",
+            {"hero_gives": [{"item": GOLD, "count": 100}], "truce": {"hours": hours}},
+            snap,
+        )
+        assert result.status == "accepted" and parley.truce(BRAGO) is None
+        assert parley.ultimatum(BRAGO) is not None
+        offer = deals.open[BRAGO]
+        await _until(lambda: _shown(fake) != [])
+        assert any("Перемирие" in t["text"] for t in _shown(fake)[-1]["npc_gives"])
+        await fake.send(type="deal_accept", deal=offer.id, version=offer.version)
+        await _until(lambda: bool(chronicle.facts("deal")))
+        assert fake.hero_items[GOLD] == 100 and fake.npc_items[BRAGO][GOLD] == 100
+        assert chronicle.facts("deal")[0]["truce"] == {"hours": hours}
+        assert parley.ultimatum(BRAGO) is None and parley.truce(BRAGO) is not None
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_truce_without_a_clock_fails_before_any_exchange():
+    fake = FakeGame(branch="A")
+    fake.hero_items = {GOLD: 200}
+    link_cm, dialogue, chronicle, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:")
+    )
+    dialogue.guild_of = lambda npc: 9
+    deals.parley = Parley(dialogue.link, dialogue, chronicle)
+    try:
+        snap = await dialogue.link.snapshot(BRAGO, fresh=True)
+        result = await deals.propose(
+            BRAGO,
+            "Браго",
+            {"hero_gives": [{"item": GOLD, "count": 100}], "truce": {"hours": 1}},
+            snap,
+        )
+        assert result.status == "accepted"
+        offer = deals.open[BRAGO]
+        dialogue.link.snapshots.clear()
+        deals.parley._minute = None
+        assert deals.parley.now() is None
+        with pytest.raises(ValueError, match="truce needs the game clock"):
+            await deals.accept(offer.id, offer.version)
+        assert offer.state == "open"
+        assert fake.hero_items[GOLD] == 200 and fake.npc_items.get(BRAGO, {}).get(GOLD, 0) == 0
+        assert not chronicle.facts("deal") and not chronicle.facts("truce")
+        assert not any(msg["type"] == "story_effect" for msg in fake.story)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("truce", [{"hours": 0}, {"hours": 25}, {"hours": True}, {"hours": 1.5}, {}])
+async def test_invalid_truce_term_is_rejected(truce):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    dialogue.guild_of = lambda npc: 9
+    deals.parley = Parley(dialogue.link, dialogue, chronicle)
+    try:
+        result = await deals.propose(XARDAS, "Ксардас", {"truce": truce}, None)
+        assert result.status == "rejected" and "truce" in result.output
+        assert not deals.open and not chronicle.facts("deal")
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_truce_requires_bandit_and_enabled_parley():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    try:
+        assert "truce" not in deals.all_tools[0].parameters["properties"]
+        result = await deals.propose(XARDAS, "Ксардас", {"truce": {"hours": 1}}, None)
+        assert result.status == "rejected" and "выключено" in result.output
+        deals.parley = Parley(dialogue.link, dialogue, chronicle)
+        assert "truce" in deals.all_tools[0].parameters["properties"]
+        result = await deals.propose(XARDAS, "Ксардас", {"truce": {"hours": 1}}, None)
+        assert result.status == "rejected" and "только бандит" in result.output
+        assert not deals.open
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_accepting_any_deal_clears_bandit_ultimatum():
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, deals = await _setup(fake, FakeBackend("…", delay=0), store)
+    dialogue.guild_of = lambda npc: 9 if npc == BRAGO else 0
+    parley = Parley(dialogue.link, dialogue, chronicle)
+    deals.parley = parley
+    try:
+        snap = await dialogue.link.snapshot(BRAGO)
+        conv = dialogue.open(BRAGO, "Браго")
+        await parley.handle(
+            dialogue,
+            conv,
+            ToolCall("ultimatum", {"demand": "Дай мне пять золотых", "seconds": 30}, "u1"),
+            snap,
+        )
+        assert parley.ultimatum(BRAGO) is not None
+        fake.hero_items = {GOLD: 5}
+        outcome = await deals.propose(
+            BRAGO, "Браго", {"hero_gives": [{"item": GOLD, "count": 5}]}, snap
+        )
+        assert outcome.status == "accepted" and parley.ultimatum(BRAGO) is not None
+        offer = deals.open[BRAGO]
+        await deals.accept(offer.id, offer.version)
+        assert parley.ultimatum(BRAGO) is None and parley.truce(BRAGO) is None
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 @pytest.mark.parametrize("cover", [False, True])
+@pytest.mark.parametrize("parley_enabled", [False, True])
 @pytest.mark.parametrize(
     "enabled,npc,on_post",
     [
@@ -810,13 +944,16 @@ async def test_a_tool_not_offered_in_the_turn_is_rejected():
         (True, XARDAS, False),
     ],
 )
-async def test_gate_deal_request_schema_is_available_only_on_post(enabled, npc, on_post, cover):
+async def test_gate_deal_request_schema_is_available_only_on_post(
+    enabled, npc, on_post, cover, parley_enabled
+):
     fake = FakeGame(branch="A")
     gates = SimpleNamespace(on_post=lambda _: on_post) if enabled else None
     link_cm, dialogue, chronicle, deals = await _setup(
         fake, FakeBackend("…", delay=0), MemoryStore(":memory:"), gates=gates
     )
     deals.crimes = Crimes(dialogue.link, chronicle) if cover else None
+    deals.parley = Parley(dialogue.link, dialogue, chronicle) if parley_enabled else None
     try:
         [tool] = [
             tool for tool in dialogue._request_tools(dialogue._offered(npc))
@@ -826,6 +963,9 @@ async def test_gate_deal_request_schema_is_available_only_on_post(enabled, npc, 
         assert ("let_pass" in tool.parameters["required"]) is (enabled and on_post)
         assert ("Пропуск через ворота" in tool.description) is (enabled and on_post)
         assert ("cover" in tool.parameters["properties"]) is cover
+        assert ("truce" in tool.parameters["properties"]) is parley_enabled
+        assert ("truce" in tool.parameters["required"]) is parley_enabled
+        assert ("Только бандитам" in tool.description) is parley_enabled
     finally:
         await link_cm.__aexit__(None, None, None)
 
