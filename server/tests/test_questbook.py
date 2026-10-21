@@ -15,6 +15,7 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.places import PlaceBook
 from gothic_ai.questbook import Goal, Ground, Quest, QuestBook, Stage, Talk, build, problems
 from gothic_ai.story import QUEST, StoryPatches
+from gothic_ai.triggers import Triggers
 from gothic_ai.validator import LOG_FAILED, LOG_OBSOLETE, LOG_RUNNING, LOG_SUCCESS, Patches, Story, WorldState
 from tests.fake_game import FakeGame, connected
 from tests.test_authoring import BOOK, graph  # noqa: F401 - the graph fixture
@@ -1158,6 +1159,50 @@ async def test_amending_advances_the_current_stage_and_survives_the_saved_branch
         await link_cm.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("completion", ["trigger", "dialog_var"])
+async def test_completed_goals_of_the_current_stage_cannot_be_amended(graph, completion):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, _, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _quest()
+        if completion == "dialog_var":
+            q.stages[0].goals[0] = Goal("talk", npc=LOBART, talk=_talk("Ты видел вора?"))
+        q.stages[0].goals.append(Goal("wait", days=1))
+        assert await book.make(q) == []
+        fake.vars.update({q.id: LOG_RUNNING, "DIR_Q1_STAGE": 1, "DIR_Q1_S1G1": 0})
+        book._fact(q, "story_quest_given")
+        if completion == "trigger":
+            Triggers(book.link, chronicle)
+            await fake.send(type="trigger_fired", id="DIR_Q1_S1G1", count=1, npc="PC_HERO", other="PC_HERO")
+            await _until(lambda: chronicle.facts("triggered"))
+        else:
+            fake.vars["DIR_Q1_S1G1"] = 1
+            await book.prepare(HILDA)
+        assert book.progress(q.id).stage == 1
+        situation = book.situation(HILDA)
+        assert "DIR_Q1_S1G1 —" not in situation
+        assert "DIR_Q1_S1G2 — подождать 1 дн." in situation
+        conv = SimpleNamespace(npc=HILDA, persona=SimpleNamespace(name="Хильда"))
+        result = await book.handle(
+            None, conv,
+            ToolCall("amend_quest", {"quest": q.id, "drop": ["DIR_Q1_S1G1"], "why": "Передумала"}, "a1"),
+            None,
+        )
+        assert result.status == "rejected" and "эта цель уже выполнена" in result.output
+        assert not chronicle.facts("quest_terms") and not fake.story
+        result = await book.handle(
+            None, conv,
+            ToolCall("amend_quest", {"quest": q.id, "drop": ["DIR_Q1_S1G2"], "why": "Не жди"}, "a2"),
+            None,
+        )
+        assert result.status == "accepted"
+        assert fake.story[-1]["effects"] == [{"do": "set", "var": "DIR_Q1_S1G2", "value": 1}]
+        assert chronicle.facts("quest_terms")[0]["drop"] == ["DIR_Q1_S1G2"]
+    finally:
+        await book.close()
+        await link_cm.__aexit__(None, None, None)
+
+
 @pytest.mark.parametrize("goal, reason", [
     ("DIR_Q1_S1G1", "этот пункт не снимается"),
     ("DIR_Q1_S3G1", "этот пункт не снимается"),
@@ -1230,8 +1275,18 @@ async def test_the_giver_or_repair_successor_can_amend_and_drop_a_given_quest(gr
         dialogue = SimpleNamespace(after_speech=lambda conv, job: pending.append(job))
         result = await book.handle(dialogue, conv, call, None)
         assert result.status == "accepted" and len(pending) == 1
+        result = await book.handle(dialogue, conv, call, None)
+        assert result.status == "rejected" and "поручение уже отменяется" in result.output
+        result = await book.handle(
+            dialogue, conv,
+            ToolCall("amend_quest", {"quest": q.id, "drop": ["DIR_Q1_S1G1"], "why": "Не ходи"}, "a2"),
+            None,
+        )
+        assert result.status == "rejected" and "поручение уже отменяется" in result.output
+        assert len(pending) == 1
         assert not chronicle.facts("quest_outcome")
         effects = book.link.story_effect
+        calls = len(fake.story)
 
         async def apply(npc, changes, **kwargs):
             await effects(npc, changes, **kwargs)
@@ -1240,6 +1295,7 @@ async def test_the_giver_or_repair_successor_can_amend_and_drop_a_given_quest(gr
         monkeypatch.setattr(book.link, "story_effect", apply)
         _, ok = await pending[0]()
         assert ok and fake.vars[q.id] == LOG_OBSOLETE
+        assert len(fake.story) == calls + 1
         assert fake.story[-1]["effects"] == [
             {"do": "set", "var": q.id, "value": LOG_OBSOLETE},
             {"do": "journal", "topic": q.title, "text": "", "status": "LOG_OBSOLETE"},
@@ -1254,6 +1310,38 @@ async def test_the_giver_or_repair_successor_can_amend_and_drop_a_given_quest(gr
         assert book.progress(q.id).state == "obsolete"
         assert len(chronicle.facts("story_quest_obsolete")) == 1
         assert book.tools(npc) == []
+    finally:
+        await book.close()
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("error", [GameError("no game"), TimeoutError("no answer")])
+async def test_a_failed_drop_can_be_retried(graph, monkeypatch, error):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, _, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _quest()
+        assert await book.make(q) == []
+        book._fact(q, "story_quest_given")
+        conv = SimpleNamespace(npc=HILDA, persona=SimpleNamespace(name="Хильда"))
+        pending = []
+        dialogue = SimpleNamespace(after_speech=lambda conv, job: pending.append(job))
+        call = ToolCall("drop_quest", {"quest": q.id, "why": "Вино нашлось"}, "d1")
+        effects = book.link.story_effect
+
+        async def unavailable(*args, **kwargs):
+            raise error
+
+        monkeypatch.setattr(book.link, "story_effect", unavailable)
+        assert (await book.handle(dialogue, conv, call, None)).status == "accepted"
+        _, ok = await pending[0]()
+        assert not ok and not chronicle.facts("quest_outcome") and not fake.story
+        monkeypatch.setattr(book.link, "story_effect", effects)
+        assert (await book.handle(dialogue, conv, call, None)).status == "accepted"
+        assert len(pending) == 2
+        _, ok = await pending[1]()
+        assert ok and len(fake.story) == 1
+        assert [f["how"] for f in chronicle.facts("quest_outcome")] == ["dropped"]
     finally:
         await book.close()
         await link_cm.__aexit__(None, None, None)
