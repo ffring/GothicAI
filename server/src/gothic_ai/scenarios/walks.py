@@ -37,7 +37,14 @@ async def check_walk(link: GameLink, dialogue: DialogueManager) -> dict[str, str
             return _logged(results)
 
         started = time.monotonic()
-        went = await link.act(CAVALORN, "go_to_npc", npc=BRAGO, radius=vanilla.LOOK_CM)
+        went = await link.act(
+            CAVALORN,
+            "go_to_npc",
+            npc=BRAGO,
+            radius=vanilla.LOOK_CM,
+            timeout_ms=vanilla.WALK_TIMEOUT_MS,
+            timeout=vanilla.WALK_TIMEOUT_MS / 1000 + 10,
+        )
         elapsed = time.monotonic() - started
         await link.act(CAVALORN, "turn_to", npc=BRAGO)
         body = (await link.story_state(npcs=[BRAGO], near=CAVALORN))["npcs"][BRAGO]
@@ -52,7 +59,14 @@ async def check_walk(link: GameLink, dialogue: DialogueManager) -> dict[str, str
             return _logged(results)
 
         started = time.monotonic()
-        back = await link.act(CAVALORN, "go_to_npc", npc="PLAYER", radius=vanilla.BACK_CM)
+        back = await link.act(
+            CAVALORN,
+            "go_to_npc",
+            npc="PLAYER",
+            radius=vanilla.BACK_CM,
+            timeout_ms=vanilla.WALK_TIMEOUT_MS,
+            timeout=vanilla.WALK_TIMEOUT_MS / 1000 + 10,
+        )
         results["came_back"] = (
             f"{'done' if back.ok and back.distance is not None and back.distance <= 300 else 'failed'} "
             f"(status={back.status}, detail={back.detail}, distance={back.distance} cm, "

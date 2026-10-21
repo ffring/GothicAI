@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 
 #include "game/gamescript.h"
 #include "game/inventory.h"
@@ -42,6 +43,8 @@ constexpr float    FollowLost       = 6000;  // give up
 constexpr uint64_t FollowStepMs     = 500;
 constexpr uint64_t FollowStuckMs    = 2000;  // walking, but it has not moved FollowMovedCm in this long: stuck
 constexpr float    FollowMovedCm    = 75;
+constexpr float    WalkSameSpotCm   = 100;   // a replanned waynet route got stuck here again
+constexpr uint64_t WalkProgressMs   = 5000;
 constexpr float    TakeRange        = 2000;  // cm: take_item picks up the nearest such thing within this
 constexpr float    ChestNear        = 300;   // cm: use_chest walks to the chest's waypoint from farther
 constexpr uint64_t StateStartMs     = 3000;  // fight/flee: the script state must begin within this
@@ -682,6 +685,7 @@ void NpcController::planNpcWalk(World& world, Controlled& c, Action& a, Npc& tar
   Npc& npc = *c.npc;
   a.byWay     = wp!=nullptr;
   a.movedFrom = npc.position();
+  a.plannedFrom = a.movedFrom;
   a.movedAt   = world.tickCount();
   a.distance  = std::sqrt(double(npc.qDistTo(target)));
   if(a.replans>0)
@@ -727,20 +731,40 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
     if(target!=nullptr) {
       a.distance = std::sqrt(double(c.npc->qDistTo(*target)));
       const auto pos = c.npc->position();
-      if(c.npc->haveOutput() || a.movedAt==0 || (pos-a.movedFrom).quadLength()>=FollowMovedCm*FollowMovedCm) {
+      const bool seen = c.npc->canSeeNpc(*target,true);
+      if(now>=a.nextProgress) {
+        const auto wp = c.npc->currentGoToPoint();
+        char progress[128];
+        std::snprintf(progress,sizeof(progress)," progress t=%.1fs pos=[%.0f,%.0f,%.0f] d=%.1fm moved=%.0fcm idle=%.1fs",
+                      double(now-a.start)/1000.,double(pos.x),double(pos.y),double(pos.z),a.distance/100.,
+                      double((pos-a.movedFrom).length()),double(now-a.movedAt)/1000.);
+        Tempest::Log::i("[ai] ",c.symbol," go_to_npc ",a.id,progress," point=",wp!=nullptr ? wp->name : "-",
+                        " walk=",uint32_t(c.npc->walkMode())," body=",uint32_t(c.npc->bodyStateMasked()),
+                        " busy=",int(c.npc->isAiBusy())," queue=",c.npc->aiQueueSize(),
+                        " los=",int(seen));
+        a.nextProgress = now + WalkProgressMs;
+        }
+      // Initial item animations and turning are not a stuck walk; ignore vertical settling too.
+      const auto moved = pos-a.movedFrom;
+      const bool firstStep = !a.walkStarted && moved.x*moved.x+moved.z*moved.z>1.f;
+      if(firstStep)
+        a.walkStarted = true;
+      if(c.npc->haveOutput() || firstStep || a.movedAt==0 || moved.quadLength()>=FollowMovedCm*FollowMovedCm) {
         a.movedFrom = pos;
         a.movedAt   = now;
         }
       if(c.npc->isAiBusy() && !c.npc->haveOutput()) {
         // Stop close enough to see the target, never on the other side of a wall.
-        if(a.distance<=a.radius && c.npc->canSeeNpc(*target,true)) {
+        if(a.distance<=a.radius && seen) {
           c.npc->clearAiQueue();
           c.npc->clearGoTo();
-          } else if(a.distance>a.radius && now>=a.movedAt+FollowStuckMs) {
+          } else if(a.walkStarted && now>=a.movedAt+FollowStuckMs) {
+          const bool repeated = a.byWay && a.replans>0 &&
+                                (pos-a.plannedFrom).quadLength()<=WalkSameSpotCm*WalkSameSpotCm;
           c.npc->clearAiQueue();
           c.npc->clearGoTo();
           ++a.replans;
-          planNpcWalk(world,c,a,*target,!a.byWay);
+          planNpcWalk(world,c,a,*target,!seen && !repeated);
           }
         }
       }

@@ -60,11 +60,14 @@ class NpcController final {
       bool            toPlayer = false;
       float           radius   = 0;     // success radius for movement, cm
       Tempest::Vec3    movedFrom;        // go_to_npc: last movement anchor for stuck detection
+      Tempest::Vec3    plannedFrom;      // where the previous route was planned
       uint64_t        movedAt  = 0;
+      uint64_t        nextProgress = 0;
       uint64_t        updatedAt = 0;     // last known tick/distance, safe even after the world is gone
       double          distance = -1;
       size_t          replans  = 0;
       bool            byWay    = false;
+      bool            walkStarted = false;
       size_t          item     = 0;     // give_item, take_item: item instance and count (take: what it had)
       size_t          count    = 0;
       ScriptFn        state;            // fight/flee: the script state that runs it

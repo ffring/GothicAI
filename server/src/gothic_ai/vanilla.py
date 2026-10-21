@@ -59,6 +59,7 @@ EXPOSE = "expose_lie"
 GIVE = "give_quest"
 CHECK_CM = 6000  # how far an npc goes to see for itself
 LOOK_CM = 1800  # how close it comes to what it goes to see
+WALK_TIMEOUT_MS = 120_000
 BACK_CM = 300  # how close it comes back to the hero to tell him
 LOG_RUNNING, LOG_SUCCESS = 1, 2
 QUEST_REWARDS: dict[str, dict[str, int]] = json.loads(
@@ -914,7 +915,14 @@ class VanillaQuests:
         """The npc's body walks until it is `radius` cm from someone; what went wrong, or ''."""
         log.info("vanilla: %s go_to_npc start target=%s radius=%s", conv.npc, npc, radius)
         try:
-            res = await self.link.act(conv.npc, "go_to_npc", npc=npc, radius=radius)
+            res = await self.link.act(
+                conv.npc,
+                "go_to_npc",
+                npc=npc,
+                radius=radius,
+                timeout_ms=WALK_TIMEOUT_MS,
+                timeout=WALK_TIMEOUT_MS / 1000 + 10,
+            )
             log.info(
                 "vanilla: %s go_to_npc end target=%s radius=%s status=%s detail=%s distance=%s",
                 conv.npc,

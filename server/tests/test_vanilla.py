@@ -348,7 +348,10 @@ async def test_the_npc_goes_to_see_and_catches_the_lie(graph):
         await _until(lambda: LOBART not in vanilla.checking)
         go = [m["args"] for m in fake.received if m["type"] == "action" and m["action"] == "go_to_npc"]
         # there, to see; back to the hero, to say it to his face
-        assert go == [{"npc": BANDIT, "radius": 1800}, {"npc": "PLAYER", "radius": 300}]
+        assert go == [
+            {"npc": BANDIT, "radius": 1800, "timeout_ms": 120_000},
+            {"npc": "PLAYER", "radius": 300, "timeout_ms": 120_000},
+        ]
         assert "сходил проверить и увидел: Бандит жив, в 18 м" in chronicle.facts("caught")[0]["how"]
         await _until(lambda: len(llm.calls) >= 2)  # he says what he thinks of it
         assert "Он тебе солгал" in str(llm.calls[-1][1])
@@ -383,7 +386,7 @@ async def test_a_check_in_progress_cannot_start_another_walk(graph):
         )
         go = [m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_npc"]
         assert len(go) == 1
-        assert go[0]["args"] == {"npc": BANDIT, "radius": 1800}
+        assert go[0]["args"] == {"npc": BANDIT, "radius": 1800, "timeout_ms": 120_000}
 
         await fake.send(
             type="action_result",
