@@ -705,6 +705,8 @@ async def test_vanilla_summary_includes_latest_quest_outcome_when_present(graph,
             "fact": "vanilla_quest", "quest": SCRIPT_QUEST, "title": "Убрать поле репы",
             "from": "running", "to": "success", "giver": LOBART,
         }
+        started = {**event, "from": "open", "to": "running"}
+        w.chronicle.record(started)
         w.chronicle.record(event)
         expected = dict(event)
         if has_outcome:
@@ -723,12 +725,12 @@ async def test_vanilla_summary_includes_latest_quest_outcome_when_present(graph,
                 "why": outcome["why"], "pay": "none",
             }
         brief = await w.showrunner.brief(occasion(kind="vanilla", vanilla=event))
-        assert brief.vanilla == [expected]
+        assert brief.vanilla == [started, expected]
         assert brief.occasion["vanilla"] == expected
         summary = next(s for s in brief.text().splitlines() if s.startswith("Последние ванильные"))
-        assert json.loads(summary.split(": ", 1)[1]) == [expected]
-        assert w.chronicle.facts("vanilla_quest") == [event]
-        assert "outcome" not in event
+        assert json.loads(summary.split(": ", 1)[1]) == [started, expected]
+        assert w.chronicle.facts("vanilla_quest") == [started, event]
+        assert "outcome" not in started and "outcome" not in event
 
 
 def test_proposal_parses_follows_and_all_three_requirements_and_keeps_old_defaults():

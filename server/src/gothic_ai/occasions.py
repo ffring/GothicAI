@@ -53,7 +53,9 @@ async def with_quest_outcomes(
     events: list[Fact], facts: list[Fact], link: GameLink, names: dict[str, str],
 ) -> list[Fact]:
     outcomes = {f["quest"]: f for f in facts if f.get("fact") == "quest_outcome"}
-    relevant = [outcomes[e["quest"]] for e in events if e.get("quest") in outcomes]
+    relevant = [
+        outcomes[e["quest"]] for e in events if e.get("to") != "running" and e.get("quest") in outcomes
+    ]
     if not relevant:
         return events
     dropped = sorted({n for outcome in relevant for n in outcome["drop"]})
@@ -72,7 +74,7 @@ async def with_quest_outcomes(
                 "why": outcome["why"],
                 "pay": outcome["pay"],
             },
-        } if (outcome := outcomes.get(event.get("quest"))) else event
+        } if event.get("to") != "running" and (outcome := outcomes.get(event.get("quest"))) else event
         for event in events
     ]
 
