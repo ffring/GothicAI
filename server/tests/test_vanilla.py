@@ -482,6 +482,80 @@ async def test_a_check_in_progress_is_not_offered_or_started_again(graph):
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_a_check_in_progress_blocks_another_check_but_not_another_acceptance(graph):
+    other_quest = "MIS_KILLSECONDBANDIT"
+    other_npc = "BDT_2_BANDIT"
+    ending = copy.deepcopy(graph.nodes["DIA_LOBART_BANDITDEAD"])
+    ending.id = "DIA_LOBART_SECONDBANDITDEAD"
+    ending.condition = ["==", ["var", other_quest], ["int", 1]]
+    ending.effects[0]["var"] = other_quest
+    for effect in ending.effects:
+        effect["when"] = ["call", "NPC_ISDEAD", ["inst", "SECOND_BANDIT"]]
+    graph.nodes[ending.id] = ending
+    quest = copy.deepcopy(graph.quests[KILL])
+    quest.var = other_quest
+    quest.topics = {"TOPIC_SECOND_BANDIT": "Второй бандит у фермы"}
+    quest.success = {ending.id}
+    graph.quests[other_quest] = quest
+    graph.instances["SECOND_BANDIT"] = other_npc
+
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    check = FakeStep("Пойду проверю.", [ToolCall("check_claim", {"quest": KILL}, "c1")])
+    llm = FakeBackend(script=[check, FakeStep("Правда. Молодец.")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.instances["SECOND_BANDIT"] = other_npc
+    fake.vars.update({QUEST: 2, KILL: 1, other_quest: 1})
+    for npc in (BANDIT, other_npc):
+        fake.npc_states[npc] = {
+            "state": "dead", "name": "Бандит", "distance": 4000, "seen": False,
+        }
+    fake.slow_actions = {"go_to_npc"}
+    try:
+        await vanilla.link.attach(LOBART)
+        conv = dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert set(vanilla.offers[LOBART]) == {KILL, other_quest}
+        await dialogue.say_as_player(LOBART, "Бандит мёртв.")
+        await _until(lambda: LOBART in fake.long_running)
+        offer = vanilla.checking[LOBART]
+        action = fake.long_running[LOBART]
+
+        await vanilla.prepare(LOBART)
+        assert set(vanilla.offers[LOBART]) == {other_quest}
+        assert vanilla.offers[LOBART][other_quest].reachable().npc == other_npc
+        tools = {t.name for t in vanilla.tools(LOBART)}
+        assert "check_claim" not in tools and "accept_quest" in tools
+        result = await vanilla.handle(
+            dialogue, conv, ToolCall("check_claim", {"quest": other_quest}, "again"), None
+        )
+        assert result.status == "rejected" and result.output == (
+            "Отклонено: ты уже идёшь посмотреть сам; что увидишь, то и решит."
+        )
+        assert vanilla.checking[LOBART] is offer and offer.quest == KILL
+        assert [
+            m["args"]["npc"]
+            for m in fake.received
+            if m["type"] == "action" and m["action"] == "go_to_npc"
+        ] == [BANDIT]
+
+        result = await vanilla.handle(
+            dialogue, conv, ToolCall("accept_quest", {"quest": other_quest}, "accept"), None
+        )
+        assert result.status == "accepted"
+        await _until(lambda: any(f["quest"] == other_quest for f in chronicle.facts("claim")))
+        assert vanilla.checking[LOBART] is offer and fake.long_running[LOBART] == action
+
+        fake.slow_actions.clear()
+        fake.npc_states[BANDIT].update(distance=1800, seen=True)
+        fake.long_running.pop(LOBART)
+        await fake.send(type="action_result", id=action, npc=LOBART, status="done")
+        await _until(lambda: any(f["quest"] == KILL for f in chronicle.facts("claim")))
+        await _until(lambda: LOBART not in vanilla.checking)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_loading_after_a_check_is_cancelled_before_speech_ends_offers_it_again(graph):
     fake = FakeGame(branch="A")
     store = MemoryStore(":memory:")

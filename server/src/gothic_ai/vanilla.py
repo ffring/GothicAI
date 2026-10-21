@@ -650,7 +650,7 @@ class VanillaQuests:
         npc = npc.upper()
         offers = list(self.offers.get(npc, {}).values())
         tools = [ACCEPT_TOOL] if any(self._refusal(npc, o) is None for o in offers) else []
-        if any(o.reachable() for o in offers):
+        if npc not in self.checking and any(o.reachable() for o in offers):
             tools.append(CHECK_TOOL)
         if any(o.seen_false() for o in offers):
             tools.append(EXPOSE_TOOL)
@@ -675,7 +675,9 @@ class VanillaQuests:
             return None
         quest = str(call.arguments.get("quest", "")).upper()
         checking = self.checking.get(conv.npc)
-        if checking is not None and checking.quest == quest and call.name in (CHECK, ACCEPT):
+        if checking is not None and (
+            call.name == CHECK or (call.name == ACCEPT and checking.quest == quest)
+        ):
             return ToolOutcome(
                 "Отклонено: ты уже идёшь посмотреть сам; что увидишь, то и решит.", "rejected"
             )
