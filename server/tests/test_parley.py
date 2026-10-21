@@ -1,0 +1,440 @@
+import asyncio
+from contextlib import asynccontextmanager
+
+import pytest
+
+from gothic_ai.chronicle import Chronicle
+from gothic_ai.dialogue import DialogueManager
+from gothic_ai.executor import Intent
+from gothic_ai.llm import FakeBackend, FakeStep, ToolCall, ToolResult
+from gothic_ai.memory import MemoryStore
+from gothic_ai.parley import AGREEMENT, NO_REASON, Parley
+from gothic_ai.perception import PerceptionDesk
+from gothic_ai.persona import PersonaProvider
+from gothic_ai.protocol import HeroDeed, NpcEvent, NpcRoster, NpcView, NpcViews, Perception, Session
+from tests.fake_game import FakeGame, connected
+
+BRAGO, MATE, OTHER = "BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L", "VLK_414_RUPERT"
+COMPANION = "PC_THIEF"
+FIGHT = ToolCall("set_intent", {"goal": "fight", "target": "PLAYER", "attitude": "hostile"})
+
+
+@asynccontextmanager
+async def world(script=None):
+    fake = FakeGame()
+    fake.nearby = [{"id": MATE, "name": "Бандит", "distance": 350, "guild": 9}]
+    async with connected(fake) as link:
+        store = MemoryStore(":memory:")
+        dialogue = DialogueManager(
+            link, FakeBackend(script=script, delay=0), PersonaProvider(None), memory=store
+        )
+        dialogue.guild_of = lambda npc: 9 if npc in {BRAGO, MATE} else 3
+        chronicle = Chronicle(link, store)
+        perception = PerceptionDesk(link)
+        await link.attach(BRAGO)
+        await link.snapshot(BRAGO, fresh=True)
+        dialogue.open(BRAGO, "Браго", warm=False)
+        parley = Parley(
+            link,
+            dialogue,
+            chronicle,
+            perception=perception,
+            companion=lambda npc: npc == COMPANION,
+            lead=lambda npc: 10 if npc == BRAGO else 2,
+        )
+        dialogue.extensions.append(parley)
+        perception._store(
+            NpcView(
+                npc=BRAGO,
+                name="Браго",
+                hero={
+                    "id": "PLAYER",
+                    "name": "Герой",
+                    "distance": 100,
+                    "seen": True,
+                },
+            )
+        )
+        yield fake, link, dialogue, chronicle, parley
+
+
+async def demand(dialogue, parley, seconds=10, npc=BRAGO):
+    conv = dialogue.open(npc, "Браго" if npc == BRAGO else "Бандит", warm=False)
+    return await parley.handle(
+        dialogue,
+        conv,
+        ToolCall(
+            "ultimatum",
+            {
+                "demand": "One hundred gold, or leave",
+                "seconds": seconds,
+            },
+        ),
+        dialogue.link.snapshots.get(npc),
+    )
+
+
+def armed(parley, weapon):
+    view = parley.perception.view(BRAGO)
+    parley.perception._store(
+        view.model_copy(update={"hero": view.hero.model_copy(update={"weapon": weapon})})
+    )
+
+
+async def test_no_reason_rejects_the_bandit_but_not_a_citizen():
+    async with world() as (_, link, dialogue, _, parley):
+        conv = dialogue.conversations[BRAGO]
+        result = dialogue._set_intent(conv, FIGHT, link.snapshots[BRAGO])
+        assert result.status == "rejected" and NO_REASON in result.output
+        citizen = dialogue.open(OTHER, "Горожанин", warm=False)
+        assert dialogue._set_intent(citizen, FIGHT, None).status == "accepted"
+        assert citizen.intent.goal == "fight"
+        assert parley.tools(OTHER) == [] and parley.situation(OTHER) is None
+
+
+async def test_rejected_fight_can_be_replaced_with_an_ultimatum_in_the_same_turn():
+    script = [
+        FakeStep("Стоять!", [FIGHT]),
+        FakeStep(
+            "Сто золотых или уходи.",
+            [
+                ToolCall(
+                    "ultimatum",
+                    {"demand": "One hundred gold, or leave", "seconds": 30},
+                )
+            ],
+        ),
+    ]
+    async with world(script) as (fake, _, dialogue, _, parley):
+        await dialogue.say_as_player(BRAGO, "Вечер в хату")
+        assert len(dialogue.llm.calls) == 2
+        rejected = next(i for i in dialogue.llm.calls[1][1] if isinstance(i, ToolResult))
+        assert NO_REASON in rejected.output
+        assert parley.ultimatum(BRAGO)["status"] == "active"
+        assert not any(op.get("do") == "attack" for msg in fake.story for op in msg.get("effects", []))
+
+
+@pytest.mark.parametrize("weapon", ["melee", "ranged", "magic"])
+async def test_drawn_weapon_is_a_current_reason(weapon):
+    async with world() as (_, link, dialogue, _, parley):
+        armed(parley, weapon)
+        assert (
+            dialogue._set_intent(dialogue.conversations[BRAGO], FIGHT, link.snapshots[BRAGO]).status
+            == "accepted"
+        )
+        armed(parley, "none")
+        parley._on_message(
+            Perception(type="perception", npc=BRAGO, perc="DRAWWEAPON", other="PLAYER", distance=100)
+        )
+        assert parley.fight_reason(BRAGO) == NO_REASON
+
+
+@pytest.mark.parametrize(
+    ("perc", "culprit", "victim"),
+    [
+        ("ASSESSDAMAGE", "PLAYER", None),
+        ("ASSESSDAMAGE", COMPANION, None),
+        ("ASSESSOTHERSDAMAGE", "PLAYER", MATE),
+        ("ASSESSOTHERSDAMAGE", COMPANION, MATE),
+        ("ASSESSMURDER", "PLAYER", MATE),
+        ("ASSESSMURDER", COMPANION, MATE),
+    ],
+)
+async def test_witnessed_attack_or_murder_by_hero_or_companion_is_a_reason(perc, culprit, victim):
+    async with world() as (_, link, dialogue, _, parley):
+        if perc == "ASSESSMURDER":
+            snap = link.snapshots[BRAGO]
+            link.snapshots[BRAGO] = snap.model_copy(
+                update={
+                    "nearby_npcs": [o.model_copy(update={"dead": True}) for o in snap.nearby_npcs],
+                }
+            )
+        parley._on_message(
+            Perception(type="perception", npc=BRAGO, perc=perc, other=culprit, victim=victim, distance=100)
+        )
+        assert (
+            dialogue._set_intent(dialogue.conversations[BRAGO], FIGHT, link.snapshots[BRAGO]).status
+            == "accepted"
+        )
+        link.snapshots[BRAGO].nearby_npcs.clear()
+        assert parley.fight_reason(BRAGO) is None  # the witness remembers after the victim has left
+
+
+async def test_chronicle_requires_a_witness_and_caught_requires_this_npc():
+    async with world() as (_, _, _, chronicle, parley):
+        chronicle.record({"fact": "died", "npc": MATE, "killer": "PLAYER"})
+        chronicle.record({"fact": "caught", "npc": MATE, "quest": "lie"})
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        chronicle.record({"fact": "crime", "id": "hit", "kind": "attack", "victim": MATE})
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        chronicle.record({"fact": "crime_seen", "npc": BRAGO, "crime": "hit"})
+        assert parley.fight_reason(BRAGO) is None
+    async with world() as (_, _, _, chronicle, parley):
+        chronicle.record({"fact": "caught", "npc": BRAGO, "quest": "lie"})
+        assert parley.fight_reason(BRAGO) is None
+
+
+async def test_raw_hero_deed_keeps_bandit_self_defence_even_if_crimes_does_not():
+    async with world() as (_, _, _, _, parley):
+        deed = HeroDeed(
+            type="hero_deed",
+            id="hit-bandit",
+            kind="attack",
+            victim=MATE,
+            victim_guild=9,
+            position={"x": 0, "y": 0, "z": 0},
+            witnesses=[BRAGO],
+        )
+        parley._on_message(deed)
+        assert parley.fight_reason(BRAGO) is None
+        assert parley.fight_reason(MATE) == NO_REASON
+
+
+async def test_picking_up_own_dropped_item_does_not_break_a_truce():
+    async with world() as (_, _, _, _, parley):
+        await parley.accept_deal(BRAGO, 4)
+        parley._on_message(
+            HeroDeed(
+                type="hero_deed",
+                id="own-item",
+                kind="take_item",
+                owner="PLAYER",
+                item_dropped=True,
+                item="ITMI_GOLD",
+                count=1,
+                position={"x": 0, "y": 0, "z": 0},
+                witnesses=[BRAGO],
+            )
+        )
+        assert parley.fight_reason(BRAGO) == AGREEMENT
+        assert parley.truce(MATE)
+
+
+@pytest.mark.parametrize("seconds", [9, 61, True, 10.5, "10"])
+async def test_ultimatum_seconds_are_checked(seconds):
+    async with world() as (_, _, dialogue, _, parley):
+        assert (await demand(dialogue, parley, seconds)).status == "rejected"
+        assert parley.ultimatum(BRAGO) is None
+
+
+async def test_ultimatum_expires_once_and_gives_a_turn_and_permission():
+    async with world() as (_, _, dialogue, _, parley):
+        turns = []
+        dialogue.event_turn = lambda npc, cue, **kw: turns.append((npc, cue, kw)) or True
+        await demand(dialogue, parley)
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        parley._on_message(NpcViews(type="npc_views", t=11000, views=[]))
+        parley.tick()
+        parley.tick()
+        assert parley.ultimatum(BRAGO)["status"] == "expired"
+        assert parley.fight_reason(BRAGO) is None
+        assert len(turns) == 1 and turns[0][1] == "[Time is up: the hero did not comply]"
+        assert turns[0][2]["relevant"]()
+        await parley.accept_deal(BRAGO)
+        assert not turns[0][2]["relevant"]()
+
+
+async def test_expiry_waits_for_a_busy_turn_instead_of_losing_the_turn():
+    async with world() as (_, _, dialogue, _, parley):
+        turns = []
+        dialogue.event_turn = lambda npc, cue, **kw: turns.append(cue) or True
+        await demand(dialogue, parley)
+        conv = dialogue.conversations[BRAGO]
+        busy = asyncio.create_task(asyncio.Event().wait())
+        conv.reply = busy
+        parley._on_message(NpcViews(type="npc_views", t=11000, views=[]))
+        parley.tick()
+        assert not turns
+        busy.cancel()
+        await asyncio.gather(busy, return_exceptions=True)
+        parley.tick()
+        parley.tick()
+        assert len(turns) == 1
+
+
+async def test_a_restored_ultimatum_opens_its_npc_for_the_expiry_turn():
+    async with world() as (_, _, dialogue, _, parley):
+        await demand(dialogue, parley)
+        dialogue.conversations.clear()  # a load opens conversations lazily again
+        turns = []
+        dialogue.event_turn = lambda npc, cue, **kw: turns.append(cue) or True
+        parley._on_message(NpcViews(type="npc_views", t=11000, views=[]))
+        parley.tick()
+        assert BRAGO in dialogue.conversations and len(turns) == 1
+
+
+async def test_answer_or_nearby_leaders_ultimatum_allows_fight_but_a_subordinates_does_not():
+    async with world() as (_, _, dialogue, _, parley):
+        await demand(dialogue, parley)
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        dialogue.overheard(BRAGO, "Браго", "Сколько?", None)
+        assert parley.fight_reason(BRAGO) is None
+        # The mate has no snapshot yet, but is present in Brago's snapshot.
+        snap = parley.link.snapshots[BRAGO]
+        parley.link.snapshots[MATE] = snap.model_copy(
+            update={
+                "npc": snap.npc.model_copy(update={"id": MATE}),
+                "nearby_npcs": [snap.nearby_npcs[0].model_copy(update={"id": BRAGO})],
+            }
+        )
+        assert parley.fight_reason(MATE) is None
+        await parley.accept_deal(BRAGO)
+        await demand(dialogue, parley, npc=MATE)
+        parley.hero_said(MATE)
+        assert parley.fight_reason(BRAGO) == NO_REASON
+
+
+async def test_leaving_beyond_fifteen_metres_or_accepting_a_deal_clears_ultimatum():
+    async with world() as (_, _, dialogue, _, parley):
+        await demand(dialogue, parley)
+        parley._on_message(
+            NpcRoster(
+                type="npc_roster",
+                t=2000,
+                npcs=[
+                    {
+                        "id": BRAGO,
+                        "name": "Браго",
+                        "guild": 9,
+                        "distance": 1501,
+                    }
+                ],
+            )
+        )
+        parley.tick()
+        assert parley.ultimatum(BRAGO) is None
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        await demand(dialogue, parley)
+        await parley.accept_deal(BRAGO)
+        assert parley.ultimatum(BRAGO) is None
+
+
+async def test_a_bandit_missing_from_the_roster_keeps_the_gate_and_loses_his_ultimatum():
+    async with world() as (_, _, dialogue, _, parley):
+        await demand(dialogue, parley)
+        parley.hero_said(BRAGO)
+        assert parley.fight_reason(BRAGO) is None
+        dialogue.guild_of = lambda npc: None
+        parley._on_message(NpcRoster(type="npc_roster", t=2000, npcs=[]))
+        assert parley.bandit(BRAGO)
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        assert parley.ultimatum(BRAGO) is None
+
+
+async def test_truce_covers_the_band_and_ignores_old_violence_lies_and_ultimatums():
+    async with world() as (_, _, dialogue, chronicle, parley):
+        parley._on_message(
+            Perception(type="perception", npc=BRAGO, perc="ASSESSDAMAGE", other="PLAYER", distance=100)
+        )
+        chronicle.record({"fact": "caught", "npc": BRAGO, "quest": "lie"})
+        await demand(dialogue, parley)
+        parley.hero_said(BRAGO)
+        await parley.accept_deal(BRAGO, 4)
+        assert parley.ultimatum(BRAGO) is None
+        assert parley.fight_reason(BRAGO) == AGREEMENT
+        assert parley.fight_reason(MATE) == AGREEMENT
+        chronicle.record({"fact": "caught", "npc": BRAGO, "quest": "new-lie"})
+        assert parley.fight_reason(BRAGO) == AGREEMENT
+        assert "truce with the hero until" in parley.situation(BRAGO)
+
+
+@pytest.mark.parametrize("kind", ["attack", "murder", "theft", "weapon"])
+async def test_new_cause_breaks_truce_for_the_whole_band(kind):
+    async with world() as (_, _, _, _, parley):
+        await parley.accept_deal(BRAGO, 4)
+        parley._on_message(
+            NpcEvent(
+                type="npc_event",
+                npc=BRAGO,
+                kind={
+                    "attack": "attack",
+                    "murder": "murder",
+                    "theft": "theft",
+                    "weapon": "weapon_drawn",
+                }[kind],
+                other="PLAYER",
+                detail="you",
+            )
+        )
+        assert parley.fight_reason(MATE) is None  # no prior gate/lookup for Brago is needed
+        assert parley.truce(BRAGO) is None and parley.truce(MATE) is None
+        assert parley.fight_reason(BRAGO) is None
+
+
+async def test_theft_is_a_reason_after_breaking_a_truce_and_does_not_grant_one_before():
+    async with world() as (_, _, _, _, parley):
+        event = NpcEvent(type="npc_event", npc=BRAGO, kind="theft", other="PLAYER")
+        parley._on_message(event)
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        await parley.accept_deal(BRAGO, 1)
+        assert parley.fight_reason(BRAGO) == AGREEMENT
+        parley._on_message(event)
+        assert parley.fight_reason(BRAGO) is None
+        assert parley.fight_reason(BRAGO) is None
+
+
+async def test_truce_ends_on_the_game_clock_and_the_save_branch_rolls_it_back():
+    async with world() as (_, link, _, chronicle, parley):
+        before = chronicle.memory.head(chronicle.branch)
+        await parley.accept_deal(BRAGO, 1)
+        assert parley.truce(BRAGO)
+        parley._minute = 9 * 60
+        assert parley.truce(BRAGO) is None
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        session = Session(type="session", branch="before-truce", parent=chronicle.branch, parent_seq=before)
+        chronicle._on_message(session)
+        parley._on_message(session)
+        assert parley.truce(BRAGO) is None
+        assert link.snapshots[BRAGO].world.hour == 8
+
+
+async def test_a_deferred_attack_rechecks_a_deal_accepted_while_the_npc_spoke():
+    async with world() as (fake, _, dialogue, _, parley):
+        conv = dialogue.conversations[BRAGO]
+        fight = Intent("fight", "PLAYER", "hostile")
+        conv.intent = fight
+        await parley.accept_deal(BRAGO, 4)
+        conv.intent = fight  # recheck the side effect even if a stale intent survives another callback
+        note, ok = await dialogue._attack_hero(conv, fight)
+        assert not ok and "agreement" in note
+        assert conv.intent.goal != "fight"
+        assert not any(op.get("do") == "attack" for msg in fake.story for op in msg.get("effects", []))
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_truce_immediately_ends_its_own_or_a_band_members_native_fight(native):
+    async with world() as (fake, _, dialogue, _, parley):
+        target = MATE if native else BRAGO
+        if native:
+            dialogue.fights_hero = lambda npc: npc == MATE
+            assert MATE not in dialogue.conversations
+        else:
+            conv = dialogue.conversations[BRAGO]
+            conv.intent = Intent("fight", "PLAYER", "hostile")
+            conv.voice = asyncio.Queue()
+            conv.voice.put_nowait(None)  # an unfinished line must not hold up the accepted peace
+        await asyncio.wait_for(parley.accept_deal(BRAGO, 4), 1)
+        assert any(
+            msg["npc"] == target and op.get("do") == "calm"
+            for msg in fake.story
+            for op in msg.get("effects", [])
+        )
+        assert dialogue.conversations[target].intent.goal == "none"
+        assert parley.fight_reason(BRAGO) == AGREEMENT
+        assert parley.fight_reason(MATE) == AGREEMENT
+
+
+async def test_balance_uses_visible_equipment_health_and_people_not_levels():
+    async with world() as (_, link, _, _, parley):
+        line = parley.situation(BRAGO)
+        assert "he is weaker than you" in line and "your band standing 2" in line
+        assert "First press with words" in line
+        snap = link.snapshots[BRAGO]
+        link.snapshots[BRAGO] = snap.model_copy(
+            update={
+                "player": snap.player.model_copy(update={"armor": "ITAR_PAL_H"}),
+                "nearby_npcs": [],
+            }
+        )
+        assert "he is dangerous" in parley.situation(BRAGO)
+        assert "level" not in parley.situation(BRAGO)
