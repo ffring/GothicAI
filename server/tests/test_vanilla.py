@@ -17,6 +17,7 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.questlog import QuestLog
 from gothic_ai.story import freed
+from gothic_ai.trust import WORD_BROKEN, Record
 from gothic_ai.vanilla import VanillaQuests, _bridge, _claim, _takes
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
@@ -636,6 +637,50 @@ async def test_checking_another_body_keeps_the_death_already_witnessed(two_bandi
             if m["type"] == "action" and m["action"] == "go_to_npc"
         ]
         assert go == ["BDT_2_BANDIT", "PLAYER"]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def test_broken_trust_reason_lists_every_cause_in_order():
+    record = Record(lied=["lie"], broke=["debt"], crimes=["theft", "attack"])
+    assert record.broken_reason() == (
+        "он уже лгал тебе; он не сдержал слово; "
+        "его дела подорвали твоё доверие (theft; attack)"
+    )
+    assert Record().broken_reason() == ""
+
+
+@pytest.mark.parametrize("lied", [False, True])
+async def test_accept_quest_names_the_actual_trust_reason(graph, lied):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    llm = FakeBackend(delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "alive", "name": "Бандит", "distance": 4000}
+    try:
+        chronicle.record({"fact": "gate_vouch_broken", "npc": LOBART, "crime_kind": "theft"})
+        if lied:
+            chronicle.record({"fact": "caught", "npc": LOBART, "quest": QUEST})
+        record = vanilla.trust.of(LOBART)
+        assert record.crimes and not record.broke
+        assert bool(record.lied) is lied
+        conv = dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        result = await vanilla.handle(dialogue, conv, ToolCall("accept_quest", {"quest": KILL}, "c1"), None)
+        assert result is not None and result.status == "rejected"
+        reason = (
+            "его дела подорвали твоё доверие "
+            "(ты поручился за него, а он совершил преступление: «theft»)"
+        )
+        if lied:
+            reason = f"он уже лгал тебе; {reason}"
+        else:
+            assert "лгал" not in result.output
+        assert result.output == (
+            f"Отклонено: {reason}. {WORD_BROKEN} Можешь сходить и посмотреть сам (check_claim)."
+        )
+        assert chronicle.facts("claim") == []
     finally:
         await link_cm.__aexit__(None, None, None)
 

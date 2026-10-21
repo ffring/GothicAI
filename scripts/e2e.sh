@@ -55,6 +55,8 @@
 #       for his words while he holds the talk key, is soothed, sits, lets him pass and be; hostility, «Стой!»,
 #       walking right up to a calm one, a threat, a failed roll, and one talked down mid-bite (the tone is the
 #       quick model's with QUICK_URL, the rules' else; the dice are the scenario's)
+#   wolf_load: rewind a save by 30 game seconds, then young wolves (growling and biting), wargs,
+#       ice wolves and black wolves hear the hero and calm down; tone as in wolf, fixed scenario dice
 #   orders: immediate companion orders, then Cavalorn hears «Бей волка!» with no focus: he fights the
 #       visible wolf before it attacks the hero; the wolf never hears the phrase or asks its tone model.
 #       Scripted with LLM=fake; TIMEOUT=360

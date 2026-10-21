@@ -537,7 +537,9 @@ class VanillaQuests:
             )
         if self.trust.broken(conv.npc) and not offer.seen_true():
             hint = f" Можешь сходить и посмотреть сам ({CHECK})." if offer.reachable() else ""
-            return ToolOutcome(f"Отклонено: он уже лгал тебе. {WORD_BROKEN}{hint}", "rejected")
+            return ToolOutcome(
+                f"Отклонено: {self.trust.of(conv.npc).broken_reason()}. {WORD_BROKEN}{hint}", "rejected"
+            )
         offers.pop(quest)
 
         async def job() -> tuple[str, bool]:
