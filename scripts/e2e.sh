@@ -434,7 +434,7 @@ report_game_exit() {
   else
     echo "game exited: code $game_rc ($1)"
   fi
-  if [[ "$1" == unexpected && "$game_rc" == 137 ]] &&
+  if [[ ( "$1" == unexpected || "$1" == exited ) && "$game_rc" == 137 ]] &&
      ! grep -Fq "scenario $SCENARIO: checks started" "$LOG_DIR/server.log"; then
     echo "game killed before checks at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   fi
@@ -448,7 +448,7 @@ cleanup() {
   if [[ -n "$GAME" ]]; then
     if ! kill -0 "$GAME" 2>/dev/null; then
       # The server may have finished before the poll noticed the dead game.
-      report_game_exit unexpected
+      report_game_exit exited
     else
       kill "$GAME" 2>/dev/null || true
       # A signal during the fork/exec handoff can miss the game. Bound the wait

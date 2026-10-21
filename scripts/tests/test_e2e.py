@@ -42,6 +42,8 @@ elif mode == "term":
     os.kill(os.getpid(), signal.SIGTERM)
 elif mode == "failure":
     sys.exit(3)
+elif mode == "exited":
+    sys.exit(0)
 while True:
     time.sleep(1)
 ''')
@@ -89,7 +91,13 @@ while True:
         done = self.run_game("kill", server_finishes=True)
         self.assertEqual(done.returncode, 23, done.stderr)
         self.assertEqual(done.stdout.count("game killed before checks at "), 1, done.stdout)
-        self.assertIn("status 137 (unexpected)", done.stdout)
+        self.assertIn("status 137 (exited)", done.stdout)
+
+    def test_game_already_exited_is_reported_without_unexpected(self):
+        done = self.run_game("exited", server_finishes=True)
+        self.assertEqual(done.returncode, 23, done.stderr)
+        self.assertIn("game exited: code 0 (exited)", done.stdout)
+        self.assertNotIn("unexpected", done.stdout)
 
     def test_cleanup_sigkill_is_not_retriable_and_preserves_server_status(self):
         done = self.run_game("cleanup", server_finishes=True)
