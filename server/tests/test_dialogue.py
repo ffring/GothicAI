@@ -462,6 +462,48 @@ async def test_a_fragmented_tool_call_drops_its_arguments_after_a_short_sentence
     )
 
 
+@pytest.mark.parametrize(
+    ("leak", "suffix"),
+    [
+        ('give_item({"reason": "Ты помог. Бери."})', ""),
+        ('give_item({"reason": "Ты помог. Бери."})', " Ну, бывай."),
+        (
+            'give_item({"reasons": ["Ты помог.",\n"Забирай обещанное золото."]})',
+            " Ну, бывай.",
+        ),
+        ('give_item "Ты помог. Бери.', ""),
+    ],
+    ids=["reason", "reason-before-speech", "multiline-array-before-speech", "unclosed-quote"],
+)
+async def test_a_tool_call_does_not_end_inside_its_arguments(leak, suffix, caplog, monkeypatch):
+    clean = "Держи." + suffix
+    fake = FakeGame()
+    entries: list[dict] = []
+    monkeypatch.setattr(dialogue_module, "CHAT_TEXT_EVERY", 0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link,
+            FakeBackend("Держи. " + leak + suffix, chunk=3, delay=0),
+            PersonaProvider(None),
+            journal=Journal(entries.append),
+        )
+        conv = dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дашь золота?")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert " ".join(fake.said) == clean
+    texts = [m["text"] for m in fake.received if m["type"] == "chat_text"]
+    assert texts[-1] == clean
+    assert all(clean.startswith(text.strip()) for text in texts)
+    assert conv.history[-1] == Message("assistant", clean)
+    assert dialogue.memory.load("test-branch", XARDAS).entries[-1].content == clean
+    assert [entry["text"] for entry in entries if entry["kind"] == "npc"] == [clean]
+    assert any(
+        leak in r.getMessage() and XARDAS in r.getMessage() and r.levelname == "WARNING"
+        for r in caplog.records
+    )
+
+
 async def test_a_late_tool_marker_keeps_the_spoken_clause_and_removes_the_pending_sentence(caplog):
     prefix = "Ты вернулся из храма,"
     leak = "пока ждал тебя function give_item(item=ITMI_GOLD)?"

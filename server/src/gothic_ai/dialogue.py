@@ -2060,7 +2060,13 @@ class DialogueManager:
                     return
             else:
                 state.discarded_text += word
-            if "\n" in state.discarded_text or _SENTENCE_END.search(state.discarded_text):
+            balanced = state.discarded_text.count('"') % 2 == 0 and all(
+                state.discarded_text.count(opening) <= state.discarded_text.count(closing)
+                for opening, closing in ("()", "{}", "[]")
+            )
+            if balanced and (
+                "\n" in state.discarded_text or _SENTENCE_END.search(state.discarded_text)
+            ):
                 log.warning("%s: discarded tool text: %s", conv.npc, state.discarded_text.strip())
                 state.discarded_text = ""
 
