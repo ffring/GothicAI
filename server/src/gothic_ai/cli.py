@@ -1419,6 +1419,8 @@ async def serve(args: argparse.Namespace) -> int:
         if args.scenario is None:
             return
         try:
+            await link.wait_world()
+            log.info("scenario %s: checks started", args.scenario)
             if args.scenario == "memprobe":
                 where = Path(os.environ.get("LOG_DIR") or Path(args.trace_dir).parent)
                 assert state.bodies is not None
