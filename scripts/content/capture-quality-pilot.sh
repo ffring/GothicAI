@@ -20,9 +20,12 @@ SCENARIO=quality-pilot.bench
 [[ "$TASK" != gothic-ai/harbour-house ]] || SCENARIO=harbour-house.bench
 [[ "$TASK" != gothic-ai/harbour-hut ]] || SCENARIO=harbour-hut.bench
 [[ "$TASK" != gothic-ai/remaster-* ]] || SCENARIO="${TASK#gothic-ai/remaster-}.bench"
+# Remaster assets share one engine build; each keeps its own scripts, content and runs.
+BUILD_TASK="$TASK"
+[[ "$TASK" != gothic-ai/remaster-* ]] || BUILD_TASK=gothic-ai/remaster-engine
 
 if [[ "${1:-}" == --remote-prepare ]]; then
-  task="$HOME/$TASK"
+  task="$HOME/$BUILD_TASK"
   export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
   export PATH="$HOME/.local/bin:$VULKAN_SDK/bin:$PATH"
   mkdir -p "$task/build"
@@ -103,7 +106,7 @@ PYGAME
     game="$task/game"
   fi
   rc=0
-  (cd "$out/run" && timeout 240 "$task/build/opengothic/Gothic2Notr" \
+  (cd "$out/run" && timeout 240 "$HOME/$BUILD_TASK/build/opengothic/Gothic2Notr" \
     -g "$game" -g2 -window -devmode -save 1) >"$out/game.log" 2>&1 || rc=$?
   printf '%s\n' "$rc" >"$out/exit.txt"
   [[ "$rc" == 0 ]] || { tail -30 "$out/game.log"; exit "$rc"; }
@@ -122,9 +125,9 @@ if [[ "${1:-}" == --compose || "${1:-}" == --compose-2 || "${1:-}" == --compose-
 fi
 
 if [[ "${1:-}" == --prepare ]]; then
-  ssh -T "$HOST" "mkdir -p ~/$TASK/source/OpenGothic ~/$TASK/scripts ~/$TASK/content/original/materials ~/$TASK/runs; df -h ~"
+  ssh -T "$HOST" "mkdir -p ~/$BUILD_TASK/source/OpenGothic ~/$TASK/scripts ~/$TASK/content/original/materials ~/$TASK/runs; df -h ~"
   rsync -a --delete --exclude=.git --exclude=build --exclude=__pycache__ \
-    "$ROOT/OpenGothic/" "$HOST:$TASK/source/OpenGothic/"
+    "$ROOT/OpenGothic/" "$HOST:$BUILD_TASK/source/OpenGothic/"
   rsync -a "$ROOT/scripts/content/capture-quality-pilot.sh" "$ROOT/scripts/content/capture-quality-pilot.py" \
     "$ROOT/scripts/content/$SCENARIO" "$HOST:$TASK/scripts/"
   common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
@@ -132,6 +135,16 @@ if [[ "${1:-}" == --prepare ]]; then
   GQ_OWNER="${TASK##*/}" "$ROOT/scripts/gq" --host "$HOST" run --class quick \
     --threads 8 --mem 10G --max 25m --wait-max 900 --name 'pilot engine build' -- \
     env QUALITY_PILOT_TASK="$TASK" bash "$TASK/scripts/capture-quality-pilot.sh" --remote-prepare
+  exit 0
+fi
+
+if [[ "${1:-}" == --scenario ]]; then
+  # Refresh only the scenario and checker of a task: new cameras need no engine rebuild.
+  ssh -T "$HOST" "mkdir -p ~/$TASK/scripts ~/$TASK/content/original/materials ~/$TASK/runs"
+  common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
+  rsync -a "${SAVE:-$(dirname "$common")/save_slot_1.sav}" "$HOST:$TASK/save_slot_1.sav"
+  rsync -a "$ROOT/scripts/content/capture-quality-pilot.sh" "$ROOT/scripts/content/capture-quality-pilot.py" \
+    "$ROOT/scripts/content/$SCENARIO" "$HOST:$TASK/scripts/"
   exit 0
 fi
 
@@ -158,5 +171,5 @@ if [[ "${1:-}" == --capture ]]; then
   rsync -a "$HOST:$TASK/runs/$variant/" "$out/$variant/"
   exit "$rc"
 fi
-echo 'usage: capture-quality-pilot.sh --prepare | --capture original|<staging set> OUTPUT | --compose|--compose-2|--compose-3|--compose-house|--compose-house-2 CAPTURES OUTPUT' >&2
+echo 'usage: capture-quality-pilot.sh --prepare | --scenario | --capture original|<staging set> OUTPUT | --compose|--compose-2|--compose-3|--compose-house|--compose-house-2 CAPTURES OUTPUT' >&2
 exit 2
