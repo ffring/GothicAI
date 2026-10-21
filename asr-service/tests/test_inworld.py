@@ -249,6 +249,33 @@ async def test_inworld_server_error_is_asr_error(inworld_server) -> None:
         await stream.finish()
 
 
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param([], id="event-list"),
+        pytest.param({"result": []}, id="result-list"),
+        pytest.param({"result": {"transcription": []}}, id="transcription-list"),
+        pytest.param({"error": []}, id="error-list"),
+        pytest.param({"result": {"transcription": {"transcript": []}}}, id="transcript-list"),
+    ],
+)
+async def test_inworld_malformed_response_fails_without_reader_exception(inworld_server, event) -> None:
+    server = inworld_server
+    server.reply = None
+    provider = server.provider()
+    stream = await provider.open_stream("ru")
+    await stream.feed(tone())
+    await server.next_config()
+    assert isinstance((await server.next_message())[1], bytes)
+    reader = provider._reader
+    assert reader is not None
+    await server.connections[0].send(json.dumps(event))
+
+    with pytest.raises(AsrError, match="invalid response"):
+        await asyncio.wait_for(stream.finish(), 0.25)
+    assert reader.done() and not reader.cancelled() and reader.exception() is None
+
+
 async def test_inworld_missing_final_is_an_error(inworld_server) -> None:
     server = inworld_server
     server.reply = None
@@ -404,3 +431,30 @@ async def test_inworld_explicit_empty_final_is_success(inworld_server) -> None:
     await stream.feed(tone())
     result = await stream.finish()
     assert (result.text, result.provider) == ("", "inworld")
+
+
+async def test_inworld_final_without_transcript_is_immediately_empty(inworld_server) -> None:
+    server = inworld_server
+    server.reply = None
+    stream = await server.provider().open_stream("ru")
+    await stream.feed(tone())
+    await server.next_config()
+    assert isinstance((await server.next_message())[1], bytes)
+    finishing = asyncio.create_task(stream.finish())
+    assert await server.next_message() == (0, {"endTurn": {}})
+    await server.connections[0].send(json.dumps({"result": {"transcription": {"isFinal": True}}}))
+
+    result = await asyncio.wait_for(finishing, 0.25)
+    assert (result.text, result.provider) == ("", "inworld")
+
+
+async def test_inworld_missing_is_final_defaults_to_interim(inworld_server) -> None:
+    server = inworld_server
+    partials: asyncio.Queue[str] = asyncio.Queue()
+    stream = await server.provider().open_stream("ru", partials.put_nowait)
+    await stream.feed(tone())
+    await server.next_config()
+    await server.connections[0].send(json.dumps({"result": {"transcription": {"transcript": "Кава"}}}))
+
+    assert await asyncio.wait_for(partials.get(), 0.25) == "Кава"
+    assert (await stream.finish()).text == "Кавалорн."

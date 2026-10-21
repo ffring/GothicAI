@@ -3,6 +3,7 @@
 The connection is configured once for a language and name prompts. `endTurn` flushes a phrase;
 `closeStream` retires the connection. Opening runs in the background so audio can arrive immediately.
 With server VAD disabled, each turn must fit Inworld's roughly 30-second limit.
+With `vadThreshold: 0`, finals arrive only after `endTurn`, except at that turn limit.
 """
 
 from __future__ import annotations
@@ -151,6 +152,8 @@ class InworldRealtime:
         try:
             async for raw in ws:
                 event = json.loads(raw)
+                if not isinstance(event, dict):
+                    raise TypeError("expected a JSON object")
                 if "error" in event:
                     error = event["error"]
                     raise AsrError(f"inworld: {error.get('code')}: {error.get('message', error)}")
@@ -158,7 +161,9 @@ class InworldRealtime:
                 stream = self._active
                 if transcription is not None and stream is not None and stream._ws is ws:
                     stream._transcription(transcription)
-        except (OSError, WebSocketException, ValueError, AsrError) as err:
+        except (ValueError, KeyError, TypeError, AttributeError) as err:
+            failure = AsrError(f"inworld: invalid response ({type(err).__name__}): {err}")
+        except (OSError, WebSocketException, AsrError) as err:
             failure = err if isinstance(err, AsrError) else AsrError(f"inworld connection lost: {err}")
         else:
             failure = AsrError("inworld connection closed before the final transcript")
@@ -227,8 +232,8 @@ class _Stream:
     def _transcription(self, transcription: dict) -> None:
         if self._done.done():
             return
-        text = transcription["transcript"].strip()
-        final = transcription["isFinal"]
+        text = transcription.get("transcript", "").strip()
+        final = transcription.get("isFinal", False)
         if final:
             if text:
                 self._finals.append(text)
