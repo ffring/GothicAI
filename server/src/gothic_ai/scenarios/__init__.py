@@ -22,6 +22,7 @@ from .companions import neural_scenario as neural_scenario
 from .companions import neural_talk_scenario as neural_talk_scenario
 from .companions import orders_scenario as orders_scenario
 from .companions import rescue as rescue
+from .companions import wolf_load_scenario as wolf_load_scenario
 from .companions import wolf_scenario as wolf_scenario
 from .conversation import gossip_demo as gossip_demo
 from .conversation import gossip_scenario as gossip_scenario
