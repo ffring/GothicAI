@@ -898,7 +898,13 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.on_calm.append(orders.truce)
         if asr is not None and source is not None:
             state.voice = VoiceInput(
-                link, state.talk.hear, source, asr, journal=journal, files=args.voice_files
+                link,
+                state.talk.hear,
+                source,
+                asr,
+                journal=journal,
+                files=args.voice_files,
+                hints=state.talk.asr_hints,
             )
         if graph is not None and not args.no_knowledge:
             # what each npc knows of the world as far as the story has got: its dialogs, quests, talk (M6)
