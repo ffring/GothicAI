@@ -505,10 +505,10 @@ async def vanilla_spare(
     vanilla: VanillaQuests,
     npc: str = "BAU_4300_ADDON_CAVALORN",
 ) -> dict[str, str]:
-    """Cavalorn remembers his own kills and a witnessed death, even after leaving the bodies.
+    """Cavalorn spares one bandit and accepts the others' deaths on his own evidence.
 
     New game, LLM=fake: give his native bandit quest in conversation, break his trust with a prior
-    caught lie, then complete it on his own evidence without check_claim or a false letter quest start.
+    caught lie, then amend and complete it without check_claim or a false letter quest start.
     """
     results: dict[str, str] = {}
 
@@ -523,10 +523,12 @@ async def vanilla_spare(
         await wait_message(link, Session, timeout=10)
     await asyncio.sleep(1)
     quest, letter = "MIS_ADDON_CAVALORN_KILLBRAGO", "MIS_ADDON_CAVALORN_LETTER2VATRAS"
-    killed = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L")
-    witnessed = "BDT_1013_BANDIT_L"
-    bandits = (*killed, witnessed)
-    park = "NW_XARDAS_TOWER_VALLEY_01"
+    killed = "BDT_1014_BANDIT_L"
+    witnessed = "BDT_1015_BANDIT_L"
+    spared = "BDT_1013_BANDIT_L"
+    bandits = (killed, witnessed, spared)
+    why = "Пощадил его по просьбе героя."
+    park = "NW_XARDAS_TOWER_VALLEY_09"  # flat ground; _01 drops sharply in front of its waypoint
     facts = vanilla.chronicle.facts
     hero = ["inst", "HERO"]
     async def var(name: str) -> int | None:
@@ -550,6 +552,9 @@ async def vanilla_spare(
         said=[
             ("помогу", FakeStep("Поможешь? Ну, пошли, вдвоём управимся.", [
                 ToolCall("give_quest", {"quest": quest}),
+            ])),
+            ("отпусти его", FakeStep("За упрямство я его убивать не стану. Пусть идёт.", [
+                ToolCall("amend_quest", {"quest": quest, "drop": [spared], "why": why}),
             ])),
             ("с ними покончено", FakeStep("Сам видел. Держи награду. Есть ещё дело с письмом.", [
                 ToolCall("accept_quest", {"quest": quest}),
@@ -591,9 +596,8 @@ async def vanilla_spare(
         return _logged({**results, "released": "failed (Cavalorn is still attached)"})
 
     # The instance path credits a native killer; debug kill's npc path has no killer.
-    for target in killed:
-        await link.debug("kill", instance=target, near=npc, by=npc)
-    remembered = await _until(lambda: set(killed) <= seen("killed"), 10)
+    await link.debug("kill", instance=killed, near=npc, by=npc)
+    remembered = await _until(lambda: killed in seen("killed"), 10)
     if not check("killed", remembered, [f for f in facts("seen_dead") if f.get("npc") == npc]):
         return _logged(results)
 
@@ -615,11 +619,42 @@ async def vanilla_spare(
     )
     await link.debug("player_goto", to=npc, distance=250)
     await _until(lambda: npc in talk.people and talk.people[npc].distance < 600, 20)
-    bodies = (await link.story_state(npcs=list(bandits), near=npc)).get("npcs", {})
-    distances = {target: bodies.get(target, {}).get("distance") for target in bandits}
+    # Hold both while they negotiate: the spared bandit must remain alive before Cavalorn's eyes.
+    if not await talk.hold(npc, "scenario"):
+        return _logged({**results, "held": "failed (Cavalorn could not stop to listen)"})
+    await link.debug("npc_goto", npc=spared, to=npc, distance=150, face=npc)
+    await link.attach(spared)
+    await link.act(npc, "turn_to", npc=spared)
+    visible = await _until_async(
+        lambda: link.story_state(npcs=[spared], near=npc),
+        lambda state: bool(state.get("npcs", {}).get(spared, {}).get("seen")),
+        10,
+    )
+    nearby = (await link.story_state(npcs=[npc, spared], near=npc)).get("npcs", {})
+    before_spare = nearby.get(spared, {})
+    if not check(
+        "spared_in_view", visible and before_spare.get("state") == "alive" and bool(before_spare.get("seen")),
+        nearby,
+    ):
+        return _logged(results)
+
+    answered = await say("Кавалорн, отпусти его.")
+    amended = await _until(
+        lambda: any(f.get("quest") == quest and f.get("drop") == [spared] for f in facts("quest_terms")),
+        15,
+    )
+    bodies = (await link.story_state(npcs=[killed, witnessed], near=npc)).get("npcs", {})
+    distances = {target: bodies.get(target, {}).get("distance") for target in (killed, witnessed)}
     await vanilla.prepare(npc)
     offer = vanilla.offers.get(npc, {}).get(quest)
     situation = vanilla.situation(npc) or ""
+    if not check(
+        "amended",
+        bool(answered and amended and offer is not None and spared not in offer.claim.dead
+             and "Бандит ×2" not in offer.needs and "Снято тобой:" in situation and why in situation),
+        f"terms={facts('quest_terms')}; {situation}",
+    ):
+        return _logged(results)
     tools = [tool.name for tool in vanilla.tools(npc)]
     own_evidence = offer.evidence() if offer is not None else ""
     away = bool(
@@ -653,6 +688,8 @@ async def vanilla_spare(
         await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]),
     )
     claim = next((f for f in facts("claim") if f.get("quest") == quest), {})
+    outcome = next((f for f in facts("quest_outcome") if f.get("quest") == quest), {})
+    alive = (await link.story_state(npcs=[spared], near=npc)).get("npcs", {}).get(spared, {})
     calls = [
         call
         for path in dialogue.trace.directory.glob("*.jsonl")
@@ -669,9 +706,16 @@ async def vanilla_spare(
             answered
             and claimed
             and after == (2, 1, exp + 100, gold + 50)
-            and claim.get("truth") is True
+            and claim.get("truth") is False
             and claim.get("checked") is False
             and not facts("lie")
+            and alive.get("state") == "alive"
+            and outcome.get("npc") == npc
+            and outcome.get("how") == "amended"
+            and outcome.get("drop") == [spared]
+            and outcome.get("why") == [why]
+            and outcome.get("pay") == "full"
+            and any(call["name"] == "amend_quest" and call.get("outcome") == "accepted" for call in calls)
             and any(call["name"] == "accept_quest" and call.get("outcome") == "accepted" for call in calls)
             and "check_claim" not in actions
             and all(
@@ -679,8 +723,11 @@ async def vanilla_spare(
                 for _, _, offered in script.calls[claim_calls:]
             )
         ),
-        f"exp/gold {(exp, gold)} -> {after}; claim={claim}; actions={actions}",
+        f"exp/gold {(exp, gold)} -> {after}; claim={claim}; outcome={outcome}; "
+        f"alive={alive}; actions={actions}",
     )
+    await link.detach(spared)
+    talk.free(npc, "scenario")
     return _logged(results)
 
 
