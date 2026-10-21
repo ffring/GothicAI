@@ -32,6 +32,8 @@ The terms are what the code can carry out and check (step 2: deals in the story)
   his word to come, and not coming breaks it.
 - a bandit's truce (`truce`, parley.py): its gang leaves the hero alone for the agreed game hours,
   unless he gives a new cause for violence.
+- a bandit's secret (`secret`, bounty.py): the hero pays for a name or a hideout; the npc may then
+  reveal it with `tell_secret`.
 """
 
 from __future__ import annotations
@@ -82,6 +84,7 @@ from .protocol import (
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
+    from .bounty import Bounty
     from .characters import Card
     from .crimes import Crimes
     from .dialogue import Conversation, DialogueManager
@@ -157,6 +160,12 @@ _GATE_DESCRIPTION = (
     "Пропуск через ворота (let_pass: true): только на своём посту, за золото героя сейчас; "
     "без других условий. Герой согласится — код одновременно возьмёт плату и разрешит проход. "
 )
+_SECRET_DESCRIPTION = (
+    "Продать известную тебе тайну охоты на героя (secret): client_name — имя заказчика, client_place — "
+    "его логово. Плату золотом сейчас проси в hero_gives, не ниже цены в «Охота на героя». "
+    "После принятия сделки раскрой проданную тайну через tell_secret. "
+)
+_SECRETS = {"client_name": "имя заказчика", "client_place": "логово заказчика"}
 
 PROPOSE_TOOL = Tool(
     PROPOSE_DEAL,
@@ -192,6 +201,7 @@ PROPOSE_TOOL = Tool(
     "герой даёт слово прийти, и ты придёшь туда сам к этому часу. "
     + _TRUCE_DESCRIPTION
     + _GATE_DESCRIPTION
+    + _SECRET_DESCRIPTION
     + "Сначала договоритесь о сути словами, потом предлагай и скажи, что предлагаешь. Ненужные списки — "
     "пустые, ненужные числа — 0, ненужные строки — пустые.",
     {
@@ -306,6 +316,11 @@ PROPOSE_TOOL = Tool(
                 "additionalProperties": False,
                 "description": "только бандитам: перемирие с твоей шайкой на 1–24 игровых часа; иначе null",
             },
+            "secret": {
+                "type": "string",
+                "enum": ["", *_SECRETS],
+                "description": "тайна, которую продаёшь; пусто — без тайны",
+            },
         },
         "required": [
             "npc_gives",
@@ -324,6 +339,7 @@ PROPOSE_TOOL = Tool(
             "lead",
             "meet",
             "truce",
+            "secret",
         ],
         "additionalProperties": False,
     },
@@ -356,6 +372,17 @@ for _tool in (PROPOSE_TOOL, NO_COVER_TOOL, NO_GATES_TOOL, NO_COVER_NO_GATES_TOOL
     _parameters["required"].remove("truce")
     _NO_TRUCE_TOOLS[_tool.description] = Tool(
         PROPOSE_DEAL, _tool.description.replace(_TRUCE_DESCRIPTION, ""), _parameters
+    )
+
+_NO_SECRET_TOOLS = {}
+for _tool in (
+    PROPOSE_TOOL, NO_COVER_TOOL, NO_GATES_TOOL, NO_COVER_NO_GATES_TOOL, *_NO_TRUCE_TOOLS.values()
+):
+    _parameters = deepcopy(_tool.parameters)
+    del _parameters["properties"]["secret"]
+    _parameters["required"].remove("secret")
+    _NO_SECRET_TOOLS[_tool.description] = Tool(
+        PROPOSE_DEAL, _tool.description.replace(_SECRET_DESCRIPTION, ""), _parameters
     )
 
 WITHDRAW_TOOL = Tool(
@@ -512,6 +539,7 @@ class Deal:
     npc_later: NpcLater | None = None
     truce: int | None = None  # agreed game hours, only bandits (parley.py)
     let_pass: bool = False
+    secret: str = ""
 
     def same(self, other: Deal) -> bool:
         return self.terms() == other.terms()
@@ -540,6 +568,8 @@ class Deal:
             mine.append(f"ведёшь его — {self.lead.title()}")
         if self.truce is not None:
             mine.append(f"перемирие с твоей шайкой на {self.truce} ч.")
+        if self.secret:
+            mine.append(f"раскроешь {_SECRETS[self.secret]}")
         his = [f"возвращает долг — {d.give.text()}" for d in self.repay]
         his += [f"отдаст позже {x.give.text()} до конца дня {x.due + 1}" for x in self.later]
         if self.task:
@@ -573,6 +603,8 @@ class Deal:
             mine.append(DealTerm(item="", count=0, text=f"Проводит: {self.lead.title()}"))
         if self.truce is not None:
             mine.append(DealTerm(item="", count=0, text=f"Перемирие с шайкой на {self.truce} ч."))
+        if self.secret:
+            mine.append(DealTerm(item="", count=0, text=f"Раскроет: {_SECRETS[self.secret]}"))
         his = [g.term() for g in self.hero_gives]
         his += [d.give.term(f"Долг: {d.give.text()}") for d in self.repay]
         his += [DealTerm(item="", count=0, text=f"Позже: {x.text()}") for x in self.later]
@@ -617,6 +649,7 @@ class Deals:
         cheat: bool = True,
         parley: Parley | None = None,
         gates: Gates | None = None,
+        bounty: Bounty | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
@@ -630,6 +663,7 @@ class Deals:
         self.cheat = cheat
         self.parley = parley
         self.gates = gates
+        self.bounty = bounty
         self.chronicle.npc_cheat_enabled = cheat
         self.roster: Callable[[], Mapping[str, RosterEntry]] = dict
         self.stash = Stash(chronicle)
@@ -759,6 +793,8 @@ class Deals:
         tool = NO_GATES_TOOL if self.cover and self.crimes is not None else NO_COVER_NO_GATES_TOOL
         if self.parley is None:
             tool = _NO_TRUCE_TOOLS[tool.description]
+        if self.bounty is None:
+            tool = _NO_SECRET_TOOLS[tool.description]
         return (tool, WITHDRAW_TOOL)
 
     def tools(self, npc: str) -> list[Tool]:
@@ -768,6 +804,8 @@ class Deals:
             tool = NO_GATES_TOOL if self.cover and self.crimes is not None else NO_COVER_NO_GATES_TOOL
         if self.parley is None:
             tool = _NO_TRUCE_TOOLS[tool.description]
+        if self.bounty is None:
+            tool = _NO_SECRET_TOOLS[tool.description]
         return [tool, WITHDRAW_TOOL] if npc.upper() in self.open else [tool]
 
     async def handle(
@@ -800,6 +838,11 @@ class Deals:
             return ToolOutcome("Отклонено: let_pass — true или false.", "rejected")
         if let_pass and self.gates is None:
             return ToolOutcome("Отклонено: пропуск через ворота выключен.", "rejected")
+        secret = args.get("secret", "")
+        if not isinstance(secret, str) or (secret and secret not in _SECRETS):
+            return ToolOutcome("Отклонено: secret — client_name, client_place или пустая строка.", "rejected")
+        if secret and self.bounty is None:
+            return ToolOutcome("Отклонено: продажа тайн выключена.", "rejected")
         npc_gives, why = self._npc_gives(npc, args.get("npc_gives"), snap)
         if npc_gives is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
@@ -870,6 +913,8 @@ class Deals:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
         wanted = _swapped(wanted, swaps)
         hero_gives = tuple(Give(i, c, things[i]) for i, c in wanted.items())
+        if secret and (why := self.bounty.validate_sale(npc, secret, hero_gives, npc_gives)):
+            return ToolOutcome(f"Отклонено: {why}", "rejected")
         if why := self._crime_payment(crime_repay, hero_gives):
             return ToolOutcome(f"Отклонено: {why}", "rejected")
         later = tuple(Later(Give(i, c, things[i]), day + d) for i, c, d in later_raw)
@@ -899,6 +944,7 @@ class Deals:
             cover,
             npc_later,
             truce,
+            secret,
         )
         if let_pass:
             if any(given[:1] + given[2:]):
@@ -942,6 +988,7 @@ class Deals:
             npc_later=npc_later,
             truce=truce,
             let_pass=let_pass,
+            secret=secret,
         )
         if current is not None and current.same(deal):
             return ToolOutcome(f"Эти условия герой уже видит: {current.terms()}.", "accepted")
@@ -1250,9 +1297,13 @@ class Deals:
             await self._notice("Условия изменились — посмотри ещё раз")
             await self._send(deal.show())
             return
-        if deal.truce is not None and self.parley is not None and self.parley.now() is None:
+        truce_now = self.parley.now() if self.parley is not None else None
+        if deal.truce is not None and self.parley is not None and truce_now is None:
             raise ValueError("truce needs the game clock")
         deal.state = "accepting"
+        day = await _day(self.link)
+        if "day" in day:
+            self._set_day(day["day"])
         effects = deal.effects()
         try:
             if deal.let_pass:
@@ -1270,14 +1321,6 @@ class Deals:
         except (GameError, TimeoutError) as err:
             await self._failed(deal, str(err))
             return
-        deal.state = "done"
-        if self.open.get(deal.npc) is deal:
-            del self.open[deal.npc]
-        await self._send(DealHideCmd(deal=deal.id))
-        await self._notice("Сделка заключена")
-        day = await _day(self.link)
-        if "day" in day:
-            self._set_day(day["day"])
         debts = [Debt(uuid.uuid4().hex[:6], deal.npc, deal.name, x.give, x.due) for x in deal.later]
         how = []
         for term, present in (
@@ -1320,11 +1363,17 @@ class Deals:
                 **({"cover": deal.cover.fact()} if deal.cover else {}),
                 **({"npc_later": deal.npc_later.fact()} if deal.npc_later else {}),
                 **({"truce": {"hours": deal.truce}} if deal.truce is not None else {}),
+                **({"secret": deal.secret} if deal.secret else {}),
                 **day,
             }
         )
         if self.parley is not None:
-            await self.parley.accept_deal(deal.npc, deal.truce)
+            await self.parley.accept_deal(deal.npc, deal.truce, now=truce_now)
+        deal.state = "done"
+        if self.open.get(deal.npc) is deal:
+            del self.open[deal.npc]
+        await self._send(DealHideCmd(deal=deal.id))
+        await self._notice("Сделка заключена")
         repaid = {ref.key for ref in deal.crime_repay}
         forgiven = {ref.key: ref for ref in (*deal.forgive, *deal.crime_repay) if isinstance(ref, CrimeRef)}
         for ref in forgiven.values():
