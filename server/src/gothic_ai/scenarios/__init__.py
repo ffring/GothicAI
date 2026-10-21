@@ -1,3 +1,4 @@
+from .bandit_parley import bandit_parley as bandit_parley
 from .basics import m0_smoke as m0_smoke
 from .basics import m1_chat as m1_chat
 from .basics import m2_actions as m2_actions
