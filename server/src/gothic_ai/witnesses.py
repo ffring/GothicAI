@@ -561,7 +561,13 @@ class Witnesses:
                 await self._act(c.npc, "turn_to", npc=npc)
             else:
                 await self._soft(c.npc, "turn_to", npc=npc)
-            t = await self._testify(None, npc, name, c.npc, c.name, said, c.tier, at, about, about_name)
+            try:
+                t = await self._testify(None, npc, name, c.npc, c.name, said, c.tier, at, about, about_name)
+            except (GameError, TimeoutError) as err:
+                log.info("witness %s: no answer: %s", c.npc, err)
+                if c.tier == "walk":
+                    await self._act(npc, "go_to_npc", npc=HERO, radius=BACK_CM)
+                return f"Ты не смог получить ответ: {c.name}. Слова героя пока не проверены.", False
             await self._speak(wconv, t)
             if c.tier == "walk":
                 await self._act(npc, "go_to_npc", npc=HERO, radius=BACK_CM)
@@ -997,11 +1003,13 @@ class Witnesses:
                 return  # a load: the new branch's questions are taken at the next tick
             if q.npc in dead or q.witness in dead:
                 self._lapse(q, "dead")
-            elif self.now >= q.meets and self.inquiries.pop(q.id, None) is not None:
-                await self._testify(
+            elif self.now >= q.meets and q.id in self.inquiries:
+                t = await self._testify(
                     q.id, q.npc, q.name, q.witness, q.witness_name, q.said, "far", q.minute,
                     q.about, q.about_name,
                 )
+                if t is not None and self.chronicle.branch == branch:
+                    self.inquiries.pop(q.id, None)
         for npc in self._expire():
             for listener in self.on_change:
                 listener(npc)

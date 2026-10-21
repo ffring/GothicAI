@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+import pytest
+
 from gothic_ai.game import GameError
 from gothic_ai.llm import ToolCall
 from tests.test_gates import CITY, GOLD, GatesFake, setup_gate
@@ -98,3 +100,44 @@ async def test_lost_result_after_trigger_timeout_keeps_payment_unknown_and_block
         deals.end(CITY)
         assert deals.open[CITY] is deal and fake.hero_items[GOLD] == 100
         assert len(fake.executed) == 1
+
+
+@pytest.mark.parametrize("completes_before_removal", [False, True])
+async def test_unfired_program_is_resolved_after_removing_trigger(monkeypatch, completes_before_removal):
+    fake = GatesFake()
+    fake.trigger_events = False
+    fake.hero_items[GOLD] = 200
+    async with setup_gate(fake) as system:
+        link, _, chronicle, _, deals, _ = system
+        patch_graph = link.patch_graph
+        pending = None
+
+        async def delay_program(ops, *args, **kwargs):
+            nonlocal pending
+            delayed = copy.deepcopy(ops)
+            for op in delayed:
+                if op.get("op") != "trigger":
+                    continue
+                if op.get("steps") is not None:
+                    pending = copy.deepcopy(op)
+                    op["when"] = ["int", 0]
+                elif pending is not None:
+                    if completes_before_removal:
+                        fake.execute(pending["steps"], pending["npc"])
+                        fake.vars[pending["id"]] = 1
+                        fake.executed.append(pending)
+                    pending = None
+            await patch_graph(delayed, *args, **kwargs)
+
+        monkeypatch.setattr(link, "patch_graph", delay_program)
+        args = {"hero_gives": [{"item": GOLD, "count": 100}], "let_pass": True}
+        offered = await deals.propose(CITY, "Стражник", args, link.snapshots[CITY])
+        assert offered.status == "accepted"
+        deal = deals.open[CITY]
+        await deals.accept(deal.id, deal.version)
+        assert deal.state == ("done" if completes_before_removal else "withdrawn")
+        assert CITY not in deals.open
+        assert fake.hero_items[GOLD] == (100 if completes_before_removal else 200)
+        assert len(chronicle.facts("deal")) == int(completes_before_removal)
+        deals.end(CITY)
+        assert deals.tools(CITY)

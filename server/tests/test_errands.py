@@ -7,6 +7,7 @@ import pytest
 import gothic_ai.errands
 from gothic_ai.bodies import BodyOutcome
 from gothic_ai.errands import Errands, checked_items
+from gothic_ai.gates import Gates
 from gothic_ai.journal import Journal
 from gothic_ai.meetings import DAY
 from gothic_ai.protocol import InventoryItem, RosterEntry
@@ -279,6 +280,29 @@ async def test_gate_news_uses_the_existing_plan_and_saved_goal(how):
     assert rumors.told == []
     assert chronicle.facts("goal_done")[0]["to"] == ANDRE
     assert chronicle.facts("goal_done")[0]["how"] == how
+
+
+async def test_delivered_vouch_does_not_hide_vouchers_other_news_to_that_guard():
+    guard = "MIL_310_STADTWACHE"
+    errands, link, _, _, rumors, chronicle, _ = _desk([
+        {"fact": "gate_vouch", "id": "andre-vouch", "npc": ANDRE, "name": "Андре",
+         "at": NOW, "expires": NOW + 2 * DAY},
+        {"fact": "gate_vouch_heard", "vouch": "andre-vouch", "from": ANDRE, "to": guard},
+    ])
+    gates = Gates.__new__(Gates)
+    gates.chronicle, gates._now = chronicle, NOW
+    errands.gate_news = gates.news
+    rumors.social.names[guard] = "Стражник"
+    rumors.social.guilds[guard] = MIL
+    rumors.social.days[guard] = _all_day("ZS_STAND_GUARDING", "GATE_POST", BARRACKS)
+    rumors.social.ties[ANDRE] = {guard: object()}
+    [rumor] = rumors.rumors.values()
+    rumor.known[ANDRE] = 1
+
+    goal, why = await errands.plan(ANDRE, "Андре", {**DAWN, "who": guard}, link.snapshots[LOBART])
+
+    assert goal is not None and not why
+    assert (goal.rumor, goal.title) == (rumor.key, rumor.title)
 
 
 async def test_gate_news_near_waits_for_its_exact_addressee_instead_of_another_guard():

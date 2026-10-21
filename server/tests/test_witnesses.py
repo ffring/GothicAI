@@ -14,6 +14,7 @@ from gothic_ai.crimes import Crimes
 from gothic_ai.deals import Deals, LieRef
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.fear import knows_violence
+from gothic_ai.game import GameError
 from gothic_ai.llm import Message, ToolCall
 from gothic_ai.llm.fake import FakeStep
 from gothic_ai.memory import MemoryStore
@@ -426,6 +427,65 @@ async def test_gate_claim_is_checked_when_a_far_inquiry_reaches_the_named_witnes
         await w.witnesses.tick()
         assert heard == [(ANDRE, LOBART, q.said)]
         assert w.chronicle.facts("testimony")[0]["gate_claim"].startswith("Отрицаю")
+
+
+@pytest.mark.parametrize("error", [GameError, TimeoutError])
+async def test_gate_claim_error_keeps_far_inquiry_until_an_answer(error):
+    fake = FakeGame(branch="A")
+    attempts = 0
+
+    async def gate_claim(witness, asker, said):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise error("Game unavailable")
+        return "Отрицаю: у героя нет связи со мной."
+
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        w.witnesses.gate_claim = gate_claim
+        q = Inquiry("gate-question", LOBART, "Лобарт", ANDRE, "Андре", "Андре ждёт меня", AT_8, DAY + 18 * 60)
+        w.witnesses._inquire(q)
+        fake.hour = 18
+        with pytest.raises(error):
+            await w.witnesses.tick()
+        assert q.id in w.witnesses.inquiries
+        assert not w.chronicle.facts("testimony")
+        assert not w.chronicle.facts("inquiry_lapsed")
+
+        await w.witnesses.tick()
+        assert attempts == 2 and not w.witnesses.inquiries
+        assert len(w.chronicle.facts("testimony")) == 1
+        assert w.chronicle.facts("testimony")[0]["id"] == q.id
+
+
+@pytest.mark.parametrize("error", [GameError, TimeoutError])
+@pytest.mark.parametrize("tier", ["near", "walk"])
+async def test_gate_claim_error_reports_unanswered_near_question(error, tier):
+    fake = FakeGame(branch="A")
+
+    async def gate_claim(witness, asker, said):
+        raise error("Game unavailable")
+
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        w.witnesses.gate_claim = gate_claim
+        if tier == "walk":
+            fake.npc_states[HILDA]["distance"] = 3000
+        conv = w.dialogue.open(LOBART, "Лобарт")
+        await w.witnesses.prepare(LOBART)
+        c = next(c for c in w.witnesses._near[LOBART] if c.npc == HILDA)
+        assert c.tier == tier
+
+        text, success = await w.witnesses._ask(conv, c, "Хильда ждёт меня", AT_8, None)
+        assert not success and "Хильда" in text and "пока не проверены" in text
+        assert not w.chronicle.facts("testimony")
+        if tier == "walk":
+            assert any(
+                m["type"] == "action" and m["npc"] == LOBART
+                and m["action"] == "go_to_npc" and m.get("args", {}).get("npc") == "PLAYER"
+                for m in fake.received
+            )
 
 
 async def test_who_may_be_asked_and_when_not():

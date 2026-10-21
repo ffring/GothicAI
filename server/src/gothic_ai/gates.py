@@ -198,6 +198,14 @@ class Gates:
             "отвечаешь за это сам. "
             "Истории про драконов сами по себе не основание, как и в родном разговоре."
         )
+        for claim in self.chronicle.facts("gate_claim"):
+            if (claim.get("npc") == npc and claim.get("about")
+                    and not any(f.get("claim") == _claim_id(claim) and f.get("truth") is not None
+                                for f in self.chronicle.facts("gate_claim_checked"))):
+                lines.append(
+                    f"Принятое заявление: «{claim['claim']}»; назван {claim['about']}. "
+                    "Для его проверки через ask_witness скопируй заявление в said дословно."
+                )
         return "\n".join(lines)
 
     def tools(self, npc: str) -> list[Tool]:
@@ -287,11 +295,14 @@ class Gates:
         """Only the sponsor's word and the claim its actual listener knows can be carried."""
         npc, to = npc.upper(), to.upper()
         if to in KEEPERS:
+            heard = {f["vouch"] for f in self.chronicle.facts("gate_vouch_heard") if f.get("to") == to}
             for v in reversed(self._active(self._now)):
-                if v["npc"] == npc:
+                if v["npc"] == npc and v["id"] not in heard:
                     return f"gate:vouch:{v['id']}", f"{v['name']} поручился за героя"
         for claim in reversed(self.chronicle.facts("gate_claim")):
-            if claim.get("about") == to and claim.get("npc") == npc:
+            if (claim.get("about") == to and claim.get("npc") == npc
+                    and not any(f.get("claim") == _claim_id(claim) and f.get("truth") is not None
+                                for f in self.chronicle.facts("gate_claim_checked"))):
                 return f"gate:claim:{_claim_id(claim)}", claim["claim"]
         return None
 
@@ -313,9 +324,13 @@ class Gates:
                 await self._check_claim(claim, to, npc)
 
     async def claim_heard(self, witness: str, asker: str, said: str) -> str | None:
+        said = said.strip().strip("«»\"' .")  # ask_witness strips these before calling its hooks
+        checked = {f["claim"] for f in self.chronicle.facts("gate_claim_checked")
+                   if f.get("truth") is not None}
         claims = [f for f in self.chronicle.facts("gate_claim")
                   if f.get("about") == witness.upper()
-                  and (f.get("claim") == said or f.get("npc") == asker.upper())]
+                  and f.get("claim", "").strip().strip("«»\"' .") == said
+                  and _claim_id(f) not in checked]
         if not claims:
             return None
         answer = None
@@ -324,6 +339,9 @@ class Gates:
         return answer
 
     async def _check_claim(self, claim: Fact, witness: str, asker: str) -> str:
+        if any(f.get("claim") == _claim_id(claim) and f.get("truth") is not None
+               for f in self.chronicle.facts("gate_claim_checked")):
+            return ""
         session = self.link.session
         truth = claim.get("truth")
         if truth is None:
@@ -340,6 +358,9 @@ class Gates:
         if not truth:
             await self._expose(claim, f"проверил заявление у {witness}")
         if session is not self.link.session:
+            return ""
+        if any(f.get("claim") == _claim_id(claim) and f.get("truth") is not None
+               for f in self.chronicle.facts("gate_claim_checked")):
             return ""
         self.chronicle.record({
             "fact": "gate_claim_checked", "claim": _claim_id(claim), "npc": witness.upper(),
@@ -392,14 +413,16 @@ class Gates:
 
     async def check_claims(self, state: dict[str, Any] | None = None) -> None:
         session = self.link.session
+        checked = {f.get("claim") for f in self.chronicle.facts("gate_claim_checked")}
+        pending = [f for f in self.chronicle.facts("gate_claim")
+                   if f.get("about") and _claim_id(f) not in checked]
+        if not pending:
+            return
         state = state if state is not None else await self.link.story_state()
         if session is not self.link.session:
             return
         self._now = game_minutes(state) or 0
-        checked = {f.get("claim") for f in self.chronicle.facts("gate_claim_checked")}
-        claims = [f for f in self.chronicle.facts("gate_claim") if f.get("about")
-                  and _claim_id(f) not in checked
-                  and self._now >= (f["day"] + 1) * DAY_MINUTES + 6 * 60]
+        claims = [f for f in pending if self._now >= (f["day"] + 1) * DAY_MINUTES + 6 * 60]
         if not claims:
             return
         people = {p["npc"]: p for p in await self.link.story_people()}
@@ -410,11 +433,19 @@ class Gates:
             person = people.get(about, {})
             if (not self._city_person(person)
                     or not any(r.get("waypoint") and r.get("pos") for r in person.get("routine", []))):
+                self.chronicle.record({
+                    "fact": "gate_claim_checked", "claim": _claim_id(claim), "npc": about,
+                    "truth": None, "skipped": "not a reachable city person",
+                })
                 continue
             live = (await self.link.story_state(npcs=[about])).get("npcs", {}).get(about, {})
             if session is not self.link.session:
                 return
             if live.get("state") in (None, "dead", "absent"):
+                self.chronicle.record({
+                    "fact": "gate_claim_checked", "claim": _claim_id(claim), "npc": about,
+                    "truth": None, "skipped": "named person is dead or absent",
+                })
                 continue
             await self._check_claim(claim, about, claim["npc"])
 
@@ -500,6 +531,8 @@ class Gates:
                 return ToolOutcome("Rejected: this ground is not currently verified by code.", "rejected")
 
         async def admit() -> tuple[str, bool]:
+            session = self.link.session
+            claim_fact: Fact | None = None
             try:
                 if reason := await self._allowed(npc):
                     return f"Passage refused: {reason}.", False
@@ -507,6 +540,12 @@ class Gates:
                 if vouch and not await self._known_vouches(npc):
                     return "Passage refused: the vouch expired or has not reached you.", False
                 truth = await self.claim_truth(about) if about and not vouch and node is None else None
+                if node is None and not vouch:
+                    claim_fact = {
+                        "fact": "gate_claim", "id": uuid.uuid4().hex, "npc": npc,
+                        "claim": claim, "about": about, "believed": True, "truth": truth,
+                        **{k: int(state[k]) for k in ("day", "hour", "minute")},
+                    }
                 if node is not None:
                     program = await self.link.story_program(node.id, own=True)
                     await _run(
@@ -515,19 +554,14 @@ class Gates:
                     await self.link.story_effect(npc, [{"do": "knows", "info": node.id}])
                 else:
                     await _run(self.link, npc, _admission(npc), ["int", 1], _post(self.graph, npc))
-                    if not vouch:
-                        self.chronicle.record(
-                            {
-                                "fact": "gate_claim",
-                                "id": uuid.uuid4().hex,
-                                "npc": npc,
-                                "claim": claim,
-                                "about": about,
-                                "believed": True,
-                                "truth": truth,
-                                **{k: int(state[k]) for k in ("day", "hour", "minute")},
-                            }
-                        )
+                    if claim_fact is not None and session is self.link.session:
+                        self.chronicle.record(claim_fact)
+            except GateResultUnknown as error:
+                kept = ""
+                if claim_fact is not None and session is self.link.session:
+                    self.chronicle.record({**claim_fact, "admission": "unknown"})
+                    kept = " Your accepted claim has been kept."
+                return f"Passage outcome is unknown: {error}.{kept}", False
             except (GameError, TimeoutError) as error:
                 return f"Passage refused: {error}", False
             return "Ты разрешил герою проход.", True
@@ -742,8 +776,16 @@ async def _run(
             if session is not link.session:
                 raise GameError("world reloaded")
             values = await link.story_eval(npc, [["var", trigger], ["var", result]])
+            if values == [0, 0]:
+                # The program can still fire between this read and its removal.
+                await link.patch_graph([{"op": "trigger", "id": trigger, "steps": None}])
+                values = await link.story_eval(npc, [["var", trigger], ["var", result]])
+                if session is not link.session:
+                    raise GameError("world reloaded")
         except (GameError, TimeoutError) as error:
             raise GateResultUnknown(f"gate admission outcome is unknown: {error}") from error
+        if values == [0, 0]:
+            raise GameError("passage refused: gate program did not run")
         if not values or values[0] != 1:
             raise GateResultUnknown("gate admission outcome is unknown: program completion unconfirmed")
         if values != [1, 1]:

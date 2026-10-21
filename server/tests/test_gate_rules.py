@@ -7,10 +7,12 @@ from typing import Any
 
 import pytest
 
+import gothic_ai.gates as gate_code
 from gothic_ai.gamedata.storygraph import Node, Quest
 from gothic_ai.llm import ToolCall
 from gothic_ai.trust import Trust
 from tests.test_gates import CITY, PAIR, GatesFake, _has_pass, _until, setup_gate
+from tests.test_witnesses import World, lobart
 
 LOTHAR = "PAL_203_LOTHAR"
 HARAD = "VLK_412_HARAD"
@@ -245,12 +247,23 @@ async def test_next_morning_exposes_lie_revokes_pair_and_doubles_that_guards_min
         assert len(chronicle.facts("caught")) == 1
 
 
-@pytest.mark.parametrize("reason", ["truth", "unnamed", "not-citizen", "dead", "absent"])
-async def test_morning_rule_does_not_expose_true_unnamed_or_unreachable_claims(reason):
+@pytest.mark.parametrize("reason", ["truth", "unnamed", "not-citizen", "no-routine", "dead", "absent"])
+async def test_morning_rule_does_not_expose_true_unnamed_or_unreachable_claims(monkeypatch, reason):
     fake = GatesFake()
     _reachable(fake, guild=8 if reason == "not-citizen" else 3,
                state=reason if reason in {"dead", "absent"} else "alive")
+    if reason == "no-routine":
+        fake.people[0]["routine"] = []
     async with setup_gate(fake) as system:
+        people_calls = 0
+        story_people = system[0].story_people
+
+        async def read_people():
+            nonlocal people_calls
+            people_calls += 1
+            return await story_people()
+
+        monkeypatch.setattr(system[0], "story_people", read_people)
         if reason == "truth":
             system[2].record({"fact": "contract", "id": "C1", "npc": HARAD})
         about = "" if reason == "unnamed" else HARAD
@@ -258,6 +271,12 @@ async def test_morning_rule_does_not_expose_true_unnamed_or_unreachable_claims(r
         fake.day += 1
         fake.hour, fake.minute = 6, 0
         await system[3].check_claims()
+        calls = people_calls
+        await system[3].check_claims()
+        assert people_calls == calls == (0 if reason == "unnamed" else 1)
+        if reason not in {"truth", "unnamed"}:
+            [checked] = system[2].facts("gate_claim_checked")
+            assert checked["truth"] is None and checked["skipped"]
         assert system[2].facts("caught") == []
         assert _has_pass(fake, CITY) and _has_pass(fake, PAIR)
 
@@ -332,13 +351,78 @@ async def test_step_one_claim_without_id_is_checked_only_once():
         assert len(chronicle.facts()) == count
 
 
-async def test_guard_can_ask_named_npc_using_a_shortened_claim():
+async def test_guard_must_identify_the_gate_claim_when_asking_named_npc():
     fake = GatesFake()
     _reachable(fake)
     async with setup_gate(fake) as system:
         await _admit(system, basis="claim", about=HARAD)
         answer = await system[3].claim_heard(HARAD, CITY, "Гарад ждёт героя")
+        assert answer is None and system[2].facts("caught") == []
+        assert "Меня ждёт Гарад." in system[3].situation(CITY)
+        answer = await system[3].claim_heard(HARAD, CITY, "Меня ждёт Гарад")
         assert answer and len(system[2].facts("caught")) == 1
+
+
+@pytest.mark.parametrize("already_checked", [False, True])
+async def test_old_gate_claim_does_not_replace_unrelated_witness_testimony(monkeypatch, already_checked):
+    fake = GatesFake()
+    async with setup_gate(fake) as system:
+        world = World(system[0], fake, lobart())
+        _reachable(fake)
+        gates, chronicle = system[3], system[2]
+        world.witnesses.gate_claim = gates.claim_heard
+        await _admit(system, basis="claim", about=HARAD)
+        if already_checked:
+            assert await gates.claim_heard(HARAD, CITY, "Меня ждёт Гарад.")
+        notes = len(gates.dialogue.conversations.get(HARAD).memory.entries) if already_checked else 0
+        world.chronicle.record({
+            "fact": "covered", "npc": HARAD, "deal": "cover-theft", "day": fake.day,
+            "vouch": "Герой был со мной.",
+        })
+        testimony = await world.witnesses._testify(
+            None, CITY, "Привратник", HARAD, "Гарад", "он украл у меня кошелёк", "near", 0,
+        )
+        assert testimony is not None and testimony.gate_claim == ""
+        assert testimony.cover == "cover-theft" and testimony.vouch == "Герой был со мной."
+        reactions = []
+        monkeypatch.setattr(world.dialogue, "event_turn", lambda npc, cue, **kw: reactions.append(kw))
+        world.witnesses._react(CITY, testimony)
+        assert "catch_lie" in reactions[0]["tools"]
+        assert len(chronicle.facts("gate_claim_checked")) == int(already_checked)
+        if already_checked:
+            assert await gates.claim_heard(HARAD, CITY, "Меня ждёт Гарад.") is None
+            assert len(gates.dialogue.conversations[HARAD].memory.entries) == notes
+
+
+async def test_unknown_claim_admission_keeps_claim_and_can_be_exposed_next_morning(monkeypatch):
+    fake = GatesFake()
+    _reachable(fake)
+    async with setup_gate(fake) as system:
+        link, dialogue, chronicle, gates, _, conv = system
+        run = gate_code._run
+
+        async def unconfirmed(*args):
+            fake.fields[(CITY, "AIVAR", 14)] = fake.fields[(PAIR, "AIVAR", 14)] = 1
+            raise gate_code.GateResultUnknown("lost result read")
+
+        jobs = []
+        monkeypatch.setattr(gate_code, "_run", unconfirmed)
+        monkeypatch.setattr(dialogue, "after_speech", lambda conv, job: jobs.append(job))
+        outcome = await gates.handle(dialogue, conv, ToolCall("let_pass", {
+            "basis": "claim", "claim": "Меня ждёт Гарад.", "about": HARAD,
+        }), link.snapshots[CITY])
+        assert outcome.status == "accepted"
+        note, ok = await jobs[0]()
+        assert not ok and "unknown" in note and "refused" not in note.lower()
+        [claim] = chronicle.facts("gate_claim")
+        assert claim["admission"] == "unknown" and claim["truth"] is False
+        assert _has_pass(fake, CITY) and _has_pass(fake, PAIR)
+        monkeypatch.setattr(gate_code, "_run", run)
+        fake.day += 1
+        fake.hour, fake.minute = 6, 0
+        await gates.check_claims()
+        assert chronicle.facts("caught")[0]["gate_claim"] == claim["id"]
+        assert not _has_pass(fake, CITY) and not _has_pass(fake, PAIR)
 
 
 @pytest.mark.parametrize("during", ["vouch_hearing", "caught_clock"])
