@@ -146,6 +146,19 @@ SUMMARY_INSTRUCTIONS = (
 
 _MARKDOWN = re.compile(r"[*_#`~]+")
 _SPACES = re.compile(r"\s+")
+_TOOL_SYNTAX = re.compile(
+    r"\b(?:functions?|protoc)\b|to\s*=\s*tools\.|[\"']arguments[\"']|\bcall_id\b|"
+    r"</?tool_call\b|\{\s*[\"']name[\"']",
+    re.IGNORECASE,
+)
+
+
+def tool_leak(text: str, names: Collection[str]) -> bool:
+    """Whether text contains a tool name or a call written out as speech."""
+    known = {name.casefold() for name in names}
+    return bool(_TOOL_SYNTAX.search(text)) or any(
+        word.casefold() in known for word in re.findall(r"\w+", text)
+    )
 
 
 def to_game_text(text: str) -> str:
@@ -461,8 +474,9 @@ class Conversation:
     pending: list[str] = field(default_factory=list)  # events that came while a turn was running
     calm: Intent | None = None  # the intent before an incident goal replaced it
     overlay_free_at: float = 0.0  # lines said on the move: when the last one is over
+    overlay_reset: asyncio.Event = field(default_factory=asyncio.Event)
     reply_id: str = ""  # the latest turn's reply (its subtitle entry)
-    hushed: set[str] = field(default_factory=set)  # lines cut off by the hero: never sent
+    hushed: set[str] = field(default_factory=set)  # lines cut off before they started: never sent
     cut: str | None = None  # the hero interrupted the running turn: what the npc had said of it
     trigger: Message | None = None  # what started the running turn (remembered when it ends)
     acting: bool = False  # the running turn's line is said (the quick model's): it only acts on it now
@@ -678,6 +692,7 @@ class DialogueManager:
         self._line_ids = itertools.count(1)
         self._reply_ids = itertools.count(1)
         self._lines: dict[str, tuple[str, float | None]] = {}  # line id -> (text, started at)
+        self._line_replies: dict[str, str] = {}  # line id -> the reply whose subtitle it belongs to
         self._sent: dict[str, float] = {}  # line id -> when it was sent (a line that never starts is lost)
         self._audio: dict[str, float] = {}  # line id -> how long its voice is, once it is known
         # scenes (play_scene): how long a line lasts without a voice (tests make it short), the lines
@@ -943,10 +958,12 @@ class DialogueManager:
             conv.reply.cancel()
         conv.reply = None
 
-    def _drop_unvoiced(self, conv: Conversation) -> None:
-        if conv.voice is not None:  # lines of the interrupted reply that were not voiced yet
-            while not conv.voice.empty():
-                conv.voice.get_nowait()
+    def _drop_unvoiced(self, conv: Conversation, lines: Collection[str] | None = None) -> None:
+        if conv.voice is not None:
+            for _ in range(conv.voice.qsize()):
+                item = conv.voice.get_nowait()
+                if lines is not None and item[0] not in lines:
+                    conv.voice.put_nowait(item)
                 conv.voice.task_done()
 
     def _start_reply(
@@ -1030,11 +1047,50 @@ class DialogueManager:
             conv.cut = spoken  # the turn remembers only this (see _turn)
         self._cancel(conv)
         self._drop_unvoiced(conv)
+        self._reset_overlay(conv)
         log.info("%s interrupted after %d line(s)", conv.npc, len(said))
         self._spawn(self.link.send(HushCmd(npc=conv.npc, reply=conv.reply_id or None, said=spoken or None)))
         if not running:
             self._note(conv, f"Герой перебил тебя{f'; ты успел сказать: «{spoken}»' if spoken else ''}")
         return True
+
+    def _reset_overlay(self, conv: Conversation) -> None:
+        conv.overlay_free_at = time.monotonic()
+        conv.overlay_reset.set()
+
+    async def _wait_overlay(self, conv: Conversation) -> None:
+        while (delay := conv.overlay_free_at - time.monotonic()) > 0:
+            conv.overlay_reset.clear()
+            try:
+                await asyncio.wait_for(conv.overlay_reset.wait(), delay)
+            except TimeoutError:
+                pass
+
+    async def _hush_earlier(self, conv: Conversation, reply: str | None) -> None:
+        """An overlay cuts off unheard earlier turns just before its first sound reaches the game."""
+        now = time.monotonic()
+        lines = [
+            line
+            for line in conv.earlier_lines
+            if self._line_replies.get(line) != reply and self._to_hear(conv, line, now)
+        ]
+        if not lines:
+            return
+        replies = dict.fromkeys(self._line_replies[line] for line in lines)
+        conv.hushed.update(line for line in lines if self._lines[line][1] is None)
+        self._drop_unvoiced(conv, lines)
+        conv.earlier_lines = [
+            line for line in conv.earlier_lines if self._line_replies.get(line) not in replies
+        ]
+        self._reset_overlay(conv)
+        for earlier in replies:
+            said = " ".join(
+                self._lines[line][0]
+                for line, owner in self._line_replies.items()
+                if owner == earlier and self._lines[line][1] is not None
+            )
+            await self.link.send(HushCmd(npc=conv.npc, reply=earlier, said=said or None))
+            self._note(conv, f"Ты оборвал себя на полуслове{f'; успел сказать: «{said}»' if said else ''}")
 
     def remember(self, npc: str, name: str, text: str) -> None:
         """A remark in the memory of any npc, also one nobody talks to (a rumor, something it saw)."""
@@ -1219,6 +1275,7 @@ class DialogueManager:
         line = f"AIB_{next(self._line_ids)}"
         if reply is not None:  # first words and answers to orders are not the reply's: no gesture is too late
             conv.last_lines.append(line)
+            self._line_replies[line] = reply
         self._lines[line] = (text, None)
         self._sent[line] = time.monotonic()
         if self.floor is not None:
@@ -1226,10 +1283,13 @@ class DialogueManager:
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
             await self._wait_floor(conv, line)
+            await self._wait_overlay(conv)
             if line in conv.hushed:
                 return  # the hero spoke while it waited to be heard
             if overlay:  # the game does not order lines said on the move
-                await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
+                await self._hush_earlier(conv, reply)
+                if line in conv.hushed:
+                    return
                 conv.overlay_free_at = time.monotonic() + line_duration(text)
             await self.link.send(
                 SayCmd(
@@ -1252,16 +1312,15 @@ class DialogueManager:
     async def _voice(self, conv: Conversation, queue: asyncio.Queue[QueuedLine]) -> None:
         """Voices the lines one by one and streams them to the game: `say` goes out with the first
         audio, chunks follow as they are generated, `say_end` gives the length. A line that gets no
-        audio still goes out, silent. Lines said on the move are not ordered by the game: the next one
-        waits until the previous has been said."""
+        audio still goes out, silent. The game does not order overlays: every line waits for the
+        preceding overlay, and an overlay cuts off unheard earlier turns before its first sound."""
         assert self.tts is not None
         while True:
             line, text, reply, overlay, mood, filler, to = await queue.get()
             started = False
             spoken_at = 0.0
             await self._wait_floor(conv, line)
-            if overlay:
-                await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
+            await self._wait_overlay(conv)
             try:
                 if line in conv.hushed:
                     continue  # the hero interrupted the npc before this line
@@ -1281,6 +1340,10 @@ class DialogueManager:
                         nonlocal started, spoken_at
                         if line in conv.hushed:
                             return  # interrupted while its voice was being made
+                        if overlay:
+                            await self._hush_earlier(conv, reply)
+                            if line in conv.hushed:
+                                return
                         started = True
                         spoken_at = time.monotonic()
                         await self.link.send(
@@ -1318,7 +1381,8 @@ class DialogueManager:
                         await self.link.send(
                             SayEndCmd(npc=conv.npc, line=line, audio_s=round(speech.audio_s, 3))
                         )
-                        if overlay:
+                        # An interruption while TTS streamed reset the clock: do not restore it.
+                        if overlay and conv.overlay_free_at <= spoken_at:
                             conv.overlay_free_at = spoken_at + speech.audio_s + 0.25
                         log.info(
                             "%s voice %s: first audio after %.2fs, %.2fs of audio in %.2fs (%s)",
@@ -1335,6 +1399,9 @@ class DialogueManager:
                             await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
                 if not started and line not in conv.hushed:
                     if overlay:
+                        await self._hush_earlier(conv, reply)
+                        if line in conv.hushed:
+                            continue
                         conv.overlay_free_at = time.monotonic() + line_duration(text)
                     await self.link.send(
                         SayCmd(
@@ -1925,8 +1992,8 @@ class DialogueManager:
         quick: bool = False,
         speak: bool = True,
     ) -> Done:
-        """One model call. Its text continues the turn's reply: the chat shows it as it is written, voice
-        and animation follow line by line; what is left of the last sentence is said at the end. `quick`:
+        """One model call. Its text continues the turn's reply in the chat as words complete; voice and
+        animation follow line by line. What is left of the last sentence is said at the end. `quick`:
         the quick model's line, without tools, up to its first blank line (after it the model may go on
         with a tool call written out, seen in the history, or loop); `speak` False: the text is not said
         (the quick model's was)."""
@@ -1971,8 +2038,8 @@ class DialogueManager:
                     first = first if first is not None else now - started
                     if state.first_delta is None:
                         state.first_delta = now - state.started
-                    pieces = self._spoken(state, state.moods.feed(text))
-                    # the chat shows the reply as it is written
+                    pieces = self._spoken(conv, state, state.moods.feed(text))
+                    # The chat shows checked words as they arrive, before their subtitle lines.
                     if (
                         now - state.shown_at >= CHAT_TEXT_EVERY
                         and (shown := to_game_text(state.text)) != state.shown
@@ -1998,23 +2065,87 @@ class DialogueManager:
 
     async def _say_rest(self, conv: Conversation, state: TurnState) -> None:
         """What is left of the step's text once its stream is over: the last sentence."""
-        await self._feed_lines(conv, state, self._spoken(state, state.moods.flush()))
+        await self._feed_lines(conv, state, self._spoken(conv, state, state.moods.flush(), flush=True))
         for line in state.splitter.flush():
             await self._line(conv, state, line)
 
-    @staticmethod
-    def _spoken(state: TurnState, pieces: list[str | MoodTag]) -> list[str | MoodTag]:
-        """What the model wrote, without its tags, goes to the turn's text (what is shown and remembered)."""
+    def _spoken(
+        self,
+        conv: Conversation,
+        state: TurnState,
+        pieces: list[str | MoodTag],
+        *,
+        flush: bool = False,
+    ) -> list[str | MoodTag]:
+        """Hold only unfinished words; a tool marker discards the unsaid rest of its sentence."""
+        names = {t.name for t in self._request_tools([*npc_tools.TOOLS, *state.tools])}
         out: list[str | MoodTag] = []
+
+        def accept(word: str) -> None:
+            if not state.discarded_text:
+                # Include this chunk's words, which have not reached the splitter yet.
+                pending = state.splitter._buf + "".join(p for p in out if isinstance(p, str))
+                start = 0
+                for end in _SENTENCE_END.finditer(pending):
+                    start = end.end()
+                prefix = pending[max(start, pending.rfind("\n") + 1) :]
+                if tool_leak(prefix + word, names):
+                    # Keep completed sentences waiting in the splitter, and any clause already said.
+                    remove = len(prefix)
+                    if remove:
+                        state.text = state.text[:-remove]
+                    for i in range(len(out) - 1, -1, -1):
+                        if isinstance(p := out[i], str):
+                            cut = min(remove, len(p))
+                            out[i] = p[: len(p) - cut]
+                            remove -= cut
+                    if remove:
+                        state.splitter._buf = state.splitter._buf[:-remove]
+                    state.discarded_text = prefix + word
+                else:
+                    if not state.text or state.text[-1].isspace():
+                        word = word.lstrip()  # no double space after a tag or discarded text
+                    if word:
+                        state.text += word
+                        if out and isinstance(out[-1], str):
+                            out[-1] += word
+                        else:
+                            out.append(word)
+                    return
+            else:
+                state.discarded_text += word
+            balanced = state.discarded_text.count('"') % 2 == 0 and all(
+                state.discarded_text.count(opening) <= state.discarded_text.count(closing)
+                for opening, closing in ("()", "{}", "[]")
+            )
+            if balanced and (
+                "\n" in state.discarded_text or _SENTENCE_END.search(state.discarded_text)
+            ):
+                log.warning("%s: discarded tool text: %s", conv.npc, state.discarded_text.strip())
+                state.discarded_text = ""
+
+        def finish_word() -> None:
+            if state.pending_text:
+                accept(state.pending_text)
+                state.pending_text = ""
+
         for p in pieces:
-            if isinstance(p, str):
-                if not state.text or state.text[-1].isspace():
-                    p = p.lstrip()  # no double space where a tag was taken out
-                if not p:
-                    continue
-                state.text += p
-            out.append(p)
-        return out
+            if isinstance(p, MoodTag):
+                finish_word()
+                out.append(p)
+                continue
+            state.pending_text += p
+            end = 0
+            for word in re.finditer(r"\S*\s+", state.pending_text):
+                accept(word.group())
+                end = word.end()
+            state.pending_text = state.pending_text[end:]
+        if flush:
+            finish_word()
+            if state.discarded_text:
+                log.warning("%s: discarded tool text: %s", conv.npc, state.discarded_text.strip())
+                state.discarded_text = ""
+        return [p for p in out if p != ""]
 
     async def _feed_lines(self, conv: Conversation, state: TurnState, pieces: list[str | MoodTag]) -> None:
         """Lines as they complete. A new mood starts a new line: what was said before the tag goes out
@@ -2348,6 +2479,8 @@ class TurnState:
     moods: MoodTags = field(default_factory=MoodTags)
     mood: Mood | None = None  # of the lines being said (the model's last tag)
     text: str = ""  # everything said in the turn, all steps
+    pending_text: str = ""  # only the last unfinished word, held across stream chunks
+    discarded_text: str = ""  # a tool leak, skipped through its sentence's end or the end of the step
     shown: str = ""
     shown_at: float = 0.0
     first_delta: float | None = None

@@ -19,6 +19,7 @@
 #include "utils/fileutil.h"
 #include "commandline.h"
 #include "gothic.h"
+#include "navdemos.h"
 
 using namespace Tempest;
 
@@ -1475,6 +1476,10 @@ void GameScript::useInteractive(const std::shared_ptr<zenkit::INpc>& hnpc, std::
   }
 
 Attitude GameScript::guildAttitude(const Npc &p0, const Npc &p1) const {
+  // The approach stand's single target must wander without becoming a combat
+  // encounter. Preserve its real guild, including all locomotion parameters.
+  if(NavDemos::nonhostileTarget(p0) || NavDemos::nonhostileTarget(p1))
+    return ATT_NEUTRAL;
   auto selfG = std::min<size_t>(gilCount-1,p0.guild());
   auto npcG  = std::min<size_t>(gilCount-1,p1.guild());
   auto ret   = gilAttitudes[selfG*gilCount+npcG];
@@ -1482,6 +1487,8 @@ Attitude GameScript::guildAttitude(const Npc &p0, const Npc &p1) const {
   }
 
 Attitude GameScript::personAttitude(const Npc &p0, const Npc &p1) const {
+  if(NavDemos::nonhostileTarget(p0) || NavDemos::nonhostileTarget(p1))
+    return ATT_NEUTRAL;
   if(!p0.isPlayer() && !p1.isPlayer())
     return guildAttitude(p0,p1);
 
