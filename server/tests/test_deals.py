@@ -919,14 +919,14 @@ async def test_deal_clears_ultimatum_and_keeps_truce_before_any_post_payment_req
             assert bool(parley.truce(BRAGO)) is truce
             await send(msg)
 
-        async def day_after_peace(_):
-            assert parley.ultimatum(BRAGO) is None
-            assert bool(parley.truce(BRAGO)) is truce
+        async def day_before_exchange(_):
+            assert fake.hero_items[GOLD] == 200
+            assert parley.ultimatum(BRAGO) is not None
             return {}
 
         monkeypatch.setattr(dialogue.link, "story_effect", exchange_then_lose_clock)
         monkeypatch.setattr(deals, "_send", send_after_peace)
-        monkeypatch.setattr(gothic_ai.deals, "_day", day_after_peace)
+        monkeypatch.setattr(gothic_ai.deals, "_day", day_before_exchange)
         await deals.accept(offer.id, offer.version)
         assert offer.state == "done" and len(chronicle.facts("deal")) == 1
         if truce:
@@ -1025,6 +1025,51 @@ async def test_bandit_secret_sale_requires_its_real_price_and_records_the_paid_s
         assert fake.hero_items[GOLD] == 300 - minimum
         assert chronicle.facts("deal")[0]["secret"] == secret
     finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_paid_secret_is_available_before_post_payment_game_requests(monkeypatch):
+    fake = FakeGame(branch="A")
+    fake.hero_items = {GOLD: 300}
+    link_cm, dialogue, chronicle, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:")
+    )
+    dialogue.guild_of = lambda _: 9
+    bounty = deals.bounty = Bounty(dialogue.link, dialogue, chronicle)
+    waiting, resume = asyncio.Event(), asyncio.Event()
+    accepting = None
+    try:
+        snap = await dialogue.link.snapshot(BRAGO)
+        result = await deals.propose(
+            BRAGO, "Браго",
+            {"secret": "client_name", "hero_gives": [{"item": GOLD, "count": 150}]}, snap,
+        )
+        assert result.status == "accepted"
+        offer = deals.open[BRAGO]
+        await _until(lambda: bool(_shown(fake)))
+        send = deals._send
+
+        async def delayed_hide(command):
+            if command.type == "deal_hide":
+                waiting.set()
+                await resume.wait()
+            await send(command)
+
+        monkeypatch.setattr(deals, "_send", delayed_hide)
+        accepting = asyncio.create_task(deals.accept(offer.id, offer.version))
+        await asyncio.wait_for(waiting.wait(), timeout=2)
+        assert fake.hero_items[GOLD] == 150
+        outcome = await bounty.handle(
+            dialogue, dialogue.open(BRAGO, "Браго", warm=False),
+            ToolCall("tell_secret", {"secret": "client_name"}), snap,
+        )
+        assert outcome.status == "accepted" and "paid" in outcome.output
+        assert chronicle.facts("deal")[0]["secret"] == "client_name"
+        assert len(chronicle.facts("bounty_secret")) == 1
+    finally:
+        resume.set()
+        if accepting is not None:
+            await accepting
         await link_cm.__aexit__(None, None, None)
 
 

@@ -1301,6 +1301,9 @@ class Deals:
         if deal.truce is not None and self.parley is not None and truce_now is None:
             raise ValueError("truce needs the game clock")
         deal.state = "accepting"
+        day = await _day(self.link)
+        if "day" in day:
+            self._set_day(day["day"])
         effects = deal.effects()
         try:
             if deal.let_pass:
@@ -1318,16 +1321,6 @@ class Deals:
         except (GameError, TimeoutError) as err:
             await self._failed(deal, str(err))
             return
-        if self.parley is not None:
-            await self.parley.accept_deal(deal.npc, deal.truce, now=truce_now)
-        deal.state = "done"
-        if self.open.get(deal.npc) is deal:
-            del self.open[deal.npc]
-        await self._send(DealHideCmd(deal=deal.id))
-        await self._notice("Сделка заключена")
-        day = await _day(self.link)
-        if "day" in day:
-            self._set_day(day["day"])
         debts = [Debt(uuid.uuid4().hex[:6], deal.npc, deal.name, x.give, x.due) for x in deal.later]
         how = []
         for term, present in (
@@ -1374,6 +1367,13 @@ class Deals:
                 **day,
             }
         )
+        if self.parley is not None:
+            await self.parley.accept_deal(deal.npc, deal.truce, now=truce_now)
+        deal.state = "done"
+        if self.open.get(deal.npc) is deal:
+            del self.open[deal.npc]
+        await self._send(DealHideCmd(deal=deal.id))
+        await self._notice("Сделка заключена")
         repaid = {ref.key for ref in deal.crime_repay}
         forgiven = {ref.key: ref for ref in (*deal.forgive, *deal.crime_repay) if isinstance(ref, CrimeRef)}
         for ref in forgiven.values():

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -160,6 +161,81 @@ async def test_a_paid_name_does_not_authorize_the_place():
         assert (await disclose(dialogue, bounty)).status == "accepted"
 
 
+@pytest.mark.parametrize("second_npc,second_secret", [(BRAGO, "client_place"), (LURE, "client_name")])
+async def test_new_disclosures_do_not_repeat_native_effects_or_reopen_the_quest(second_npc, second_secret):
+    async with world() as (fake, _, dialogue, chronicle, bounty):
+        for npc, secret in ((BRAGO, "client_name"), (second_npc, second_secret)):
+            chronicle.record({"fact": "deal", "npc": npc, "secret": secret})
+        assert (await disclose(dialogue, bounty)).status == "accepted"
+        fake.vars["MIS_STECKBRIEFE"] = 2
+        before = list(fake.story)
+        assert (await disclose(dialogue, bounty, second_npc, second_secret)).status == "accepted"
+        assert len(chronicle.facts("bounty_secret")) == 2
+        assert fake.story == before and fake.vars["MIS_STECKBRIEFE"] == 2
+        assert sum(e.get("do") == "journal" for msg in fake.story for e in msg["effects"]) == 1
+
+
+@pytest.mark.parametrize("status", [2, 3, 4])
+async def test_late_first_disclosure_preserves_a_closed_vanilla_quest(status):
+    async with world() as (fake, _, dialogue, chronicle, bounty):
+        fake.vars["MIS_STECKBRIEFE"] = status
+        chronicle.record({"fact": "deal", "npc": BRAGO, "secret": "client_name"})
+        assert (await disclose(dialogue, bounty)).status == "accepted"
+        assert fake.vars["MIS_STECKBRIEFE"] == status
+        assert fake.story[-1]["effects"] == [
+            {"do": "set", "var": "BDT13_DEXTER_VERRATEN", "value": 1},
+        ]
+
+
+async def test_vanilla_disclosure_also_prevents_repeating_native_effects():
+    async with world() as (fake, _, dialogue, chronicle, bounty):
+        fake.vars.update(BDT13_DEXTER_VERRATEN=1, MIS_STECKBRIEFE=2)
+        chronicle.record({"fact": "deal", "npc": BRAGO, "secret": "client_name"})
+        assert (await disclose(dialogue, bounty)).status == "accepted"
+        assert not fake.story and fake.vars["MIS_STECKBRIEFE"] == 2
+        assert len(chronicle.facts("bounty_secret")) == 1
+
+
+@pytest.mark.parametrize("error", [GameError("game busy"), TimeoutError()])
+@pytest.mark.parametrize("operation", ["bond", "guard", "effect"])
+async def test_game_failures_reject_the_tool_without_crashing_the_turn(monkeypatch, error, operation):
+    async with world() as (_, link, dialogue, chronicle, bounty):
+        npc = LURE if operation == "bond" else BRAGO
+        if operation != "bond":
+            chronicle.record({"fact": "deal", "npc": npc, "secret": "client_name"})
+
+        async def fail(*args, **kwargs):
+            raise error
+
+        monkeypatch.setattr(link, "story_effect" if operation == "effect" else "story_state", fail)
+        conv = dialogue.open(npc, "Бандит", warm=False)
+        result = await dialogue._tool(
+            conv, ToolCall("tell_secret", {"secret": "client_name"}),
+            SimpleNamespace(tools=bounty.tools(npc)),
+        )
+        assert result.status == "rejected" and "игра не подтвердила" in result.output
+        assert not chronicle.facts("bounty_secret")
+
+
+async def test_retry_after_applied_effect_timeout_does_not_repeat_the_journal(monkeypatch):
+    async with world() as (fake, link, dialogue, chronicle, bounty):
+        chronicle.record({"fact": "deal", "npc": BRAGO, "secret": "client_name"})
+        apply = link.story_effect
+
+        async def applied_then_timeout(*args, **kwargs):
+            await apply(*args, **kwargs)
+            raise TimeoutError()
+
+        monkeypatch.setattr(link, "story_effect", applied_then_timeout)
+        assert (await disclose(dialogue, bounty)).status == "rejected"
+        assert not chronicle.facts("bounty_secret")
+        assert fake.vars["BDT13_DEXTER_VERRATEN"] == 1
+        monkeypatch.setattr(link, "story_effect", apply)
+        assert (await disclose(dialogue, bounty)).status == "accepted"
+        assert len(chronicle.facts("bounty_secret")) == 1
+        assert sum(e.get("do") == "journal" for msg in fake.story for e in msg["effects"]) == 1
+
+
 async def test_vanilla_friendship_is_live_and_belongs_only_to_the_lure():
     async with world() as (fake, _, dialogue, chronicle, bounty):
         fake.vars["BDT13_FRIEND"] = 1
@@ -210,6 +286,35 @@ async def test_exactly_half_health_is_not_a_defeat():
             position={"x": 0, "y": 0, "z": 0},
         ))
         health(link, bounty, 50)
+        assert (await calm(dialogue))[1]
+        assert (await disclose(dialogue, bounty)).status == "rejected"
+
+
+async def test_repeated_hits_and_duplicate_damage_signals_do_not_repeat_defeat_facts():
+    async with world() as (_, link, _, chronicle, bounty):
+        health(link, bounty, 40)
+        for number in range(5):
+            bounty._on_message(HeroDeed(
+                type="hero_deed", id=f"hit-{number}", kind="attack", victim=BRAGO,
+                position={"x": 0, "y": 0, "z": 0},
+            ))
+            bounty._on_message(Perception(
+                type="perception", npc=BRAGO, perc="ASSESSDAMAGE", other="PLAYER", distance=100,
+            ))
+        assert [f["state"] for f in chronicle.facts("bounty_fight")] == ["hit", "lost"]
+
+
+@pytest.mark.parametrize("end", ["recovered", "other_attacker"])
+async def test_an_old_defeat_cannot_authorize_a_later_unrelated_calm(end):
+    async with world() as (_, link, dialogue, _, bounty):
+        bounty._on_message(NpcEvent(type="npc_event", npc=BRAGO, kind="attack", detail="you"))
+        health(link, bounty, 49)
+        if end == "recovered":
+            health(link, bounty, 100)
+        else:
+            bounty._on_message(Perception(
+                type="perception", npc=BRAGO, perc="ASSESSDAMAGE", other=MATE, distance=100,
+            ))
         assert (await calm(dialogue))[1]
         assert (await disclose(dialogue, bounty)).status == "rejected"
 

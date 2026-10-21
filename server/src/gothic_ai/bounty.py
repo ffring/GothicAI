@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from .chronicle import Chronicle, Fact
 from .contracts import GOLD, Give
-from .game import GameLink
+from .game import GameError, GameLink
 from .llm import Tool, ToolCall
 from .protocol import (
     Detached,
@@ -106,7 +106,8 @@ class Bounty:
 
     def _hit(self, npc: str) -> None:
         if self.tier(npc):
-            self._state(npc, "hit")
+            if not (fight := self._fight(npc)) or fight["state"] != "lost":
+                self._state(npc, "hit")
             self._hurt(npc)
 
     def _calmed(self, npc: str) -> None:
@@ -125,8 +126,15 @@ class Bounty:
             case NpcEvent(kind="attack", other="PLAYER"):
                 if msg.detail in (None, "you") or msg.victim == msg.npc:
                     self._hit(msg.npc)
+            case Perception(perc="ASSESSDAMAGE") | NpcEvent(kind="attack" | "npc_attack"):
+                if (fight := self._fight(msg.npc)) and fight["state"] in {"hit", "lost"}:
+                    self._state(msg.npc, "ended")
             case Snapshot():
-                self._hurt(msg.npc.id)
+                if ((fight := self._fight(msg.npc.id)) and fight["state"] == "lost"
+                        and msg.npc.hp == msg.npc.hp_max):
+                    self._state(msg.npc.id, "ended")
+                else:
+                    self._hurt(msg.npc.id)
             case Detached(reason="down"):
                 self._hurt(msg.npc, down=True)
             case NpcRoster():
@@ -213,19 +221,30 @@ class Bounty:
                    for f in self.chronicle.facts("deal"))
         fight = self._fight(npc)
         leverage = "paid" if paid else ("beaten" if fight and fight["state"] == "calm" else "")
-        if not leverage and npc == LURE and await self._bond():
-            leverage = "bond"
-        if not leverage:
+        try:
+            if not leverage and npc == LURE and await self._bond():
+                leverage = "bond"
+            if not leverage:
+                return ToolOutcome(
+                    "Отклонено: нет рычага — нужна оплаченная сделка secret, поражение герою и calm "
+                    "или дружба BDT13_FRIEND у зазывалы.", "rejected",
+                )
+            if not self.chronicle.facts("bounty_secret"):
+                # Read the native guard too: an earlier request may have applied but timed out.
+                state = await self.link.story_state(vars=["BDT13_DEXTER_VERRATEN", "MIS_STECKBRIEFE"])
+                variables = state.get("vars", {})
+                if variables.get("BDT13_DEXTER_VERRATEN", 0) != 1:
+                    effects = [{"do": "set", "var": "BDT13_DEXTER_VERRATEN", "value": 1}]
+                    if variables.get("MIS_STECKBRIEFE", 0) <= 1:
+                        effects.extend([
+                            {"do": "set", "var": "MIS_STECKBRIEFE", "value": 1},
+                            {"do": "journal", **self.data["journal"]},
+                        ])
+                    await self.link.story_effect(npc, effects)
+        except (GameError, TimeoutError) as err:
             return ToolOutcome(
-                "Отклонено: нет рычага — нужна оплаченная сделка secret, поражение герою и calm "
-                "или дружба BDT13_FRIEND у зазывалы.", "rejected",
+                f"Отклонено: игра не подтвердила раскрытие ({str(err) or type(err).__name__}).", "rejected",
             )
-        # These are native save data, just as in DIA_1013_BANDIT_NAME/DEXTER.
-        await self.link.story_effect(npc, [
-            {"do": "set", "var": "BDT13_DEXTER_VERRATEN", "value": 1},
-            {"do": "set", "var": "MIS_STECKBRIEFE", "value": 1},
-            {"do": "journal", **self.data["journal"]},
-        ])
         self.chronicle.record({"fact": "bounty_secret", "npc": npc, "name": conv.persona.name,
                                "secret": secret, "leverage": leverage})
         if not any(f.get("npc") == npc for f in self.chronicle.facts("bounty_betrayal")):
