@@ -434,6 +434,10 @@ report_game_exit() {
   else
     echo "game exited: code $game_rc ($1)"
   fi
+  if [[ "$1" == unexpected && "$game_rc" == 137 ]] &&
+     ! grep -Fq "scenario $SCENARIO: checks started" "$LOG_DIR/server.log"; then
+    echo "game killed before checks at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  fi
   GAME=""
 }
 
@@ -442,15 +446,20 @@ cleanup() {
   # Reap our exact child PID, including a game killed before the first poll.
   # `|| true` preserves the scenario status if a child has already finished.
   if [[ -n "$GAME" ]]; then
-    kill "$GAME" 2>/dev/null || true
-    # A signal during the fork/exec handoff can miss the game. Bound the wait
-    # without touching another run's process or relying on its executable name.
-    for attempt in $(seq 1 20); do
-      kill -0 "$GAME" 2>/dev/null || break
-      sleep 0.1
-    done
-    kill -KILL "$GAME" 2>/dev/null || true
-    report_game_exit cleanup
+    if ! kill -0 "$GAME" 2>/dev/null; then
+      # The server may have finished before the poll noticed the dead game.
+      report_game_exit unexpected
+    else
+      kill "$GAME" 2>/dev/null || true
+      # A signal during the fork/exec handoff can miss the game. Bound the wait
+      # without touching another run's process or relying on its executable name.
+      for attempt in $(seq 1 20); do
+        kill -0 "$GAME" 2>/dev/null || break
+        sleep 0.1
+      done
+      kill -KILL "$GAME" 2>/dev/null || true
+      report_game_exit cleanup
+    fi
   fi
   kill "$SRV" 2>/dev/null || true
   if [[ -n "$ASR_PID" ]]; then kill "$ASR_PID" 2>/dev/null || true; fi
