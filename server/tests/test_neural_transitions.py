@@ -77,7 +77,7 @@ def test_empty_local_state_requires_confirmed_release_and_unwatch(released_episo
 
 @pytest.mark.parametrize(("cue", "expected"), [
     ("Бандит, проверим твою шпагу.", "ultimatum"),
-    ("[Time is up: the hero did not comply]", "set_intent"),
+    ("[Срок вышел: герой не подчинился]", "set_intent"),
     ("Бандит, я вернулся. Поговорим?", None),
 ])
 async def test_neural_talk_bandit_waits_for_ultimatum_before_fighting(cue, expected):
@@ -91,6 +91,6 @@ async def test_neural_talk_bandit_waits_for_ultimatum_before_fighting(cue, expec
 
     assert [call.name for call in calls] == ([expected] if expected else [])
     if expected == "ultimatum":
-        assert calls[0].arguments == {"demand": "Leave this place", "seconds": 10}
+        assert calls[0].arguments == {"demand": "Уходи отсюда", "seconds": 10}
     if expected == "set_intent":
         assert calls[0].arguments == attack.arguments

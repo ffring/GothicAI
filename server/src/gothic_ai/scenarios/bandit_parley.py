@@ -46,8 +46,8 @@ def _bandit_script() -> ClaimScript:
             (MATE_CHALLENGE, FakeStep("А ну-ка, иди сюда!", [attack])),
             (ARMED_CHALLENGE, FakeStep("За оружие взялся? Сам напросился!", [attack])),
         ],
-        told=[("without a reason", FakeStep("Сто золотых за проход. Десять секунд на ответ.", [ToolCall(
-            "ultimatum", {"demand": "Pay one hundred gold for passage", "seconds": 10},
+        told=[("Без повода", FakeStep("Сто золотых за проход. Десять секунд на ответ.", [ToolCall(
+            "ultimatum", {"demand": "Заплати сто золотых за проход", "seconds": 10},
         )]))],
         default="Жду твоего решения.",
     )
@@ -136,7 +136,7 @@ async def bandit_parley(
 
         talk.hear(GREETING, BRAGO, {"via": "scenario"})
         required = await _until(lambda: parley.ultimatum(BRAGO) is not None, 20)
-        rejected = any("without a reason" in output for output in script.outputs)
+        rejected = any("Без повода" in output for output in script.outputs)
         if not check("first_fight_rejected", rejected and required and not attacks() and not native_attacks,
                      f"rejected={rejected}, ultimatum={required}, attacks={len(attacks())}"):
             return _logged(results)
@@ -169,7 +169,7 @@ async def bandit_parley(
 
         mark = len(script.outputs)
         talk.hear(MATE_CHALLENGE, MATE, {"via": "scenario"})
-        refused = await _until(lambda: any("you have an agreement" in output.lower()
+        refused = await _until(lambda: any("у вас уговор" in output.lower()
                                               for output in script.outputs[mark:]), 15)
         if not check("gang_fight_rejected", refused, script.outputs[mark:]):
             return _logged(results)

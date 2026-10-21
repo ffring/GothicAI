@@ -64,9 +64,9 @@ async def neural_companion_scenario(link: GameLink, pilot: BodyPilot | None) -> 
 def _neural_talk_bandit(attack: ToolCall) -> _OnWords:
     return _OnWords([
         ("проверим твою шпагу", FakeStep("Убирайся. Десять секунд тебе даю.", [ToolCall(
-            "ultimatum", {"demand": "Leave this place", "seconds": 10},
+            "ultimatum", {"demand": "Уходи отсюда", "seconds": 10},
         )])),
-        ("Time is up", FakeStep("Не ушёл? Тогда сам напросился!", [attack])),
+        ("Срок вышел", FakeStep("Не ушёл? Тогда сам напросился!", [attack])),
     ], FakeStep("Опять ты. Что тебе?"))
 
 

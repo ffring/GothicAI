@@ -47,9 +47,9 @@ def test_intent_targets_must_be_around():
 
 def test_hero_fight_reason_is_checked_after_target_normalisation():
     intent, reason = executor.check_intent(
-        Intent("fight", target="player"), SNAP, fight_reason=lambda: "first make a demand — ultimatum",
+        Intent("fight", target="player"), SNAP, fight_reason=lambda: "сначала потребуй — ultimatum",
     )
-    assert intent is None and reason == "first make a demand — ultimatum"
+    assert intent is None and reason == "сначала потребуй — ultimatum"
     intent, reason = executor.check_intent(Intent("fight", target="PLAYER"), SNAP, fight_reason=lambda: None)
     assert intent is not None and reason is None
     intent, reason = executor.check_intent(

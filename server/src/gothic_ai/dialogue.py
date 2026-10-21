@@ -2285,7 +2285,7 @@ class DialogueManager:
                 self._change_intent(
                     conv, conv.calm or Intent(), self.link.snapshots.get(conv.npc), body=False
                 )
-                return f"You did not attack: {why}", False
+                return f"Ты не напал: {why}", False
         reason = "AR_SUDDENENEMYINFERNO" if self.guild_of(conv.npc) in KILLERS else "AR_NONE"
         try:
             await self.link.story_effect(conv.npc, [{"do": "attack", "reason": reason}])

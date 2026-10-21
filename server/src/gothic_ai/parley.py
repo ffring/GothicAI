@@ -35,21 +35,21 @@ NEAR_CM = 1500
 ULTIMATUM = "ultimatum"
 ULTIMATUM_TOOL = Tool(
     ULTIMATUM,
-    "Give the hero an ultimatum: demand payment, sheathing his weapon, leaving, or coming with you. "
-    "Allow 10–60 seconds. If he moves more than 15 m away, this demand no longer justifies a fight.",
+    "Поставить герою ультиматум: потребовать плату, убрать оружие, уйти или пойти с вами. "
+    "Срок 10–60 секунд. Если он отойдёт дальше 15 м, это требование уже не повод для драки.",
     {
         "type": "object",
         "properties": {
-            "demand": {"type": "string", "description": "What you demand from the hero."},
+            "demand": {"type": "string", "description": "Что ты требуешь от героя."},
             "seconds": {"type": "integer", "minimum": 10, "maximum": 60},
         },
         "required": ["demand", "seconds"],
         "additionalProperties": False,
     },
 )
-NO_REASON = "without a reason, you do not attack at once: first make a demand — ultimatum."
-AGREEMENT = "you have an agreement: leave the hero alone unless there is a new cause."
-EXPIRY_CUE = "[Time is up: the hero did not comply]"
+NO_REASON = "Без повода сразу не нападаешь: сначала потребуй — ultimatum."
+AGREEMENT = "У вас уговор: героя не трогать без нового повода."
+EXPIRY_CUE = "[Срок вышел: герой не подчинился]"
 DRAWN = frozenset({"melee", "ranged", "magic"})
 
 
@@ -365,20 +365,20 @@ class Parley:
         own_health = snap.npc.hp / max(1, snap.npc.hp_max)
         band_strength = max(0, count - 1) + max(0, own_health)
         verdict = (
-            "he is dangerous"
+            "он опасен"
             if hero_strength > band_strength * 1.3
             else (
-                "he is weaker than you"
+                "он слабее вас"
                 if hero_strength < band_strength * 0.7
-                else "the sides are evenly matched"
+                else "силы равны"
             )
         )
-        state = "wounded" if health < 0.5 else "on his feet"
+        state = "ранен" if health < 1 else "цел"
         return (
-            f"Balance of forces: {verdict}; your band standing {count}, "
-            f"hero's companions {len(companions)}; "
-            f"the hero is {state}, {'armoured' if hero.armor else 'unarmoured'}, "
-            f"{'armed' if armed else 'unarmed'}."
+            f"Силы: {verdict}; вас на ногах {count}, "
+            f"спутников у героя {len(companions)}; "
+            f"герой {state}, {'в доспехе' if hero.armor else 'без доспеха'}, "
+            f"{'с оружием' if armed else 'без оружия'}."
         )
 
     def situation(self, npc: str) -> str | None:
@@ -390,18 +390,18 @@ class Parley:
         if truce := self.truce(npc):
             until = truce["until"]
             lines.append(
-                f"Your band has a truce with the hero until day {until // 1440 + 1}, "
+                f"У вашей шайки уговор с героем до дня {until // 1440 + 1}, "
                 f"{until % 1440 // 60:02d}:{until % 60:02d}: "
-                "leave him alone unless there is a new cause."
+                "не трогать его без нового повода."
             )
         if threat := self.ultimatum(npc):
             left = max(0, math.ceil((threat["deadline"] - self._ticks) / 1000))
             lines.append(
-                f"Your ultimatum: {threat['demand']}; "
-                + ("time is up." if threat["status"] == "expired" else f"{left} seconds left.")
+                f"Твой ультиматум: {threat['demand']}; "
+                + ("срок вышел." if threat["status"] == "expired" else f"осталось {left} с.")
             )
         if reason == NO_REASON:
-            lines.append("First press with words: demand, bargain, intimidate; fight when you have a cause.")
+            lines.append("Сначала давишь словами: требуешь, торгуешься, пугаешь; дерёшься, когда есть повод.")
         return "\n".join(lines) or None
 
     all_tools = (ULTIMATUM_TOOL,)
@@ -420,11 +420,11 @@ class Parley:
             return None
         demand, seconds = call.arguments.get("demand"), call.arguments.get("seconds")
         if not self.bandit(conv.npc):
-            return ToolOutcome("Rejected: ultimatum is available only to bandits.", "rejected")
+            return ToolOutcome("Отклонено: ultimatum доступен только бандитам.", "rejected")
         if not isinstance(demand, str) or not demand.strip():
-            return ToolOutcome("Rejected: state your demand.", "rejected")
+            return ToolOutcome("Отклонено: укажи своё требование.", "rejected")
         if type(seconds) is not int or not 10 <= seconds <= 60:
-            return ToolOutcome("Rejected: seconds must be an integer from 10 to 60.", "rejected")
+            return ToolOutcome("Отклонено: seconds — целое число от 10 до 60.", "rejected")
         if snap:
             self._ticks = max(self._ticks, snap.t)
         self.chronicle.record(
@@ -441,7 +441,7 @@ class Parley:
             }
         )
         return ToolOutcome(
-            "Accepted: the demand is set; let the hero answer or wait for the deadline.", "accepted"
+            "Принято: требование поставлено; дай герою ответить или дождись срока.", "accepted"
         )
 
     def _victim(self, npc: str, name: str | None) -> str:

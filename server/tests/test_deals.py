@@ -814,7 +814,7 @@ async def test_bandit_truce_is_a_real_deal_accepted_with_y(hours):
         outcome = await parley.handle(
             dialogue,
             conv,
-            ToolCall("ultimatum", {"demand": "Pay one hundred gold", "seconds": 30}, "u1"),
+            ToolCall("ultimatum", {"demand": "Заплати сто золотых", "seconds": 30}, "u1"),
             snap,
         )
         assert outcome is not None and outcome.status == "accepted"
@@ -861,11 +861,11 @@ async def test_truce_requires_bandit_and_enabled_parley():
     try:
         assert "truce" not in deals.all_tools[0].parameters["properties"]
         result = await deals.propose(XARDAS, "Ксардас", {"truce": {"hours": 1}}, None)
-        assert result.status == "rejected" and "disabled" in result.output
+        assert result.status == "rejected" and "выключено" in result.output
         deals.parley = Parley(dialogue.link, dialogue, chronicle)
         assert "truce" in deals.all_tools[0].parameters["properties"]
         result = await deals.propose(XARDAS, "Ксардас", {"truce": {"hours": 1}}, None)
-        assert result.status == "rejected" and "only a bandit" in result.output
+        assert result.status == "rejected" and "только бандит" in result.output
         assert not deals.open
     finally:
         await link_cm.__aexit__(None, None, None)
@@ -884,7 +884,7 @@ async def test_accepting_any_deal_clears_bandit_ultimatum():
         await parley.handle(
             dialogue,
             conv,
-            ToolCall("ultimatum", {"demand": "Give me five gold", "seconds": 30}, "u1"),
+            ToolCall("ultimatum", {"demand": "Дай мне пять золотых", "seconds": 30}, "u1"),
             snap,
         )
         assert parley.ultimatum(BRAGO) is not None

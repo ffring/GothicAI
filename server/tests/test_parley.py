@@ -66,7 +66,7 @@ async def demand(dialogue, parley, seconds=10, npc=BRAGO):
         ToolCall(
             "ultimatum",
             {
-                "demand": "One hundred gold, or leave",
+                "demand": "Сто золотых или уходи",
                 "seconds": seconds,
             },
         ),
@@ -100,7 +100,7 @@ async def test_rejected_fight_can_be_replaced_with_an_ultimatum_in_the_same_turn
             [
                 ToolCall(
                     "ultimatum",
-                    {"demand": "One hundred gold, or leave", "seconds": 30},
+                    {"demand": "Сто золотых или уходи", "seconds": 30},
                 )
             ],
         ),
@@ -228,7 +228,7 @@ async def test_ultimatum_expires_once_and_gives_a_turn_and_permission():
         parley.tick()
         assert parley.ultimatum(BRAGO)["status"] == "expired"
         assert parley.fight_reason(BRAGO) is None
-        assert len(turns) == 1 and turns[0][1] == "[Time is up: the hero did not comply]"
+        assert len(turns) == 1 and turns[0][1] == "[Срок вышел: герой не подчинился]"
         assert turns[0][2]["relevant"]()
         await parley.accept_deal(BRAGO)
         assert not turns[0][2]["relevant"]()
@@ -335,7 +335,7 @@ async def test_truce_covers_the_band_and_ignores_old_violence_lies_and_ultimatum
         assert parley.fight_reason(MATE) == AGREEMENT
         chronicle.record({"fact": "caught", "npc": BRAGO, "quest": "new-lie"})
         assert parley.fight_reason(BRAGO) == AGREEMENT
-        assert "truce with the hero until" in parley.situation(BRAGO)
+        assert "уговор с героем до дня" in parley.situation(BRAGO)
 
 
 @pytest.mark.parametrize("kind", ["attack", "murder", "theft", "weapon"])
@@ -396,7 +396,7 @@ async def test_a_deferred_attack_rechecks_a_deal_accepted_while_the_npc_spoke():
         await parley.accept_deal(BRAGO, 4)
         conv.intent = fight  # recheck the side effect even if a stale intent survives another callback
         note, ok = await dialogue._attack_hero(conv, fight)
-        assert not ok and "agreement" in note
+        assert not ok and "У вас уговор" in note
         assert conv.intent.goal != "fight"
         assert not any(op.get("do") == "attack" for msg in fake.story for op in msg.get("effects", []))
 
@@ -427,8 +427,8 @@ async def test_truce_immediately_ends_its_own_or_a_band_members_native_fight(nat
 async def test_balance_uses_visible_equipment_health_and_people_not_levels():
     async with world() as (_, link, _, _, parley):
         line = parley.situation(BRAGO)
-        assert "he is weaker than you" in line and "your band standing 2" in line
-        assert "First press with words" in line
+        assert "он слабее вас" in line and "вас на ногах 2" in line
+        assert "Сначала давишь словами" in line
         snap = link.snapshots[BRAGO]
         link.snapshots[BRAGO] = snap.model_copy(
             update={
@@ -436,5 +436,5 @@ async def test_balance_uses_visible_equipment_health_and_people_not_levels():
                 "nearby_npcs": [],
             }
         )
-        assert "he is dangerous" in parley.situation(BRAGO)
+        assert "он опасен" in parley.situation(BRAGO)
         assert "level" not in parley.situation(BRAGO)

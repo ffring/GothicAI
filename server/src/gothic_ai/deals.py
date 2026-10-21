@@ -149,8 +149,8 @@ _COVER_DESCRIPTION = (
     "Хотя бы одно поле; только vouch — за сегодня. "
 )
 _TRUCE_DESCRIPTION = (
-    "Bandits only: a truce with your gang (truce) for 1–24 game hours; for a payoff, ask for gold or "
-    "items in hero_gives and offer truce. The agreement takes effect when the hero accepts the deal. "
+    "Только бандитам: перемирие с твоей шайкой (truce) на 1–24 игровых часа. Для откупа проси золото "
+    "или вещи в hero_gives, а взамен предложи truce. Уговор действует, когда герой примет сделку. "
 )
 
 PROPOSE_TOOL = Tool(
@@ -297,7 +297,7 @@ PROPOSE_TOOL = Tool(
                 "properties": {"hours": {"type": "integer", "minimum": 1, "maximum": 24}},
                 "required": ["hours"],
                 "additionalProperties": False,
-                "description": "bandits only: a truce with your gang for 1–24 game hours; otherwise null",
+                "description": "только бандитам: перемирие с твоей шайкой на 1–24 игровых часа; иначе null",
             },
         },
         "required": [
@@ -757,7 +757,7 @@ class Deals:
             return ToolOutcome("Отклонено: герой уже согласился на прежние условия.", "rejected")
         truce, why = self._truce(npc, args.get("truce"))
         if why:
-            return ToolOutcome(f"Rejected: {why}", "rejected")
+            return ToolOutcome(f"Отклонено: {why}", "rejected")
         npc_gives, why = self._npc_gives(npc, args.get("npc_gives"), snap)
         if npc_gives is None:
             return ToolOutcome(f"Отклонено: {why}", "rejected")
@@ -1017,16 +1017,16 @@ class Deals:
         if raw is None:
             return None, ""
         if self.parley is None:
-            return None, "truce is disabled."
+            return None, "truce выключено."
         from .dialogue import KILLERS
 
         if self.dialogue.guild_of(npc) not in KILLERS:
-            return None, "only a bandit can offer a truce with its gang."
+            return None, "только бандит может предложить перемирие со своей шайкой."
         if not isinstance(raw, dict) or set(raw) != {"hours"}:
-            return None, "truce must be {hours}, from 1 to 24 game hours."
+            return None, "truce — объект {hours}, от 1 до 24 игровых часов."
         hours = raw["hours"]
         if type(hours) is not int or not 1 <= hours <= 24:
-            return None, "truce.hours must be an integer from 1 to 24 game hours."
+            return None, "truce.hours — целое число от 1 до 24 игровых часов."
         return hours, ""
 
     def _lies(

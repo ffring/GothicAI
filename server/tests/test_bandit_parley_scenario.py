@@ -17,10 +17,12 @@ async def test_parley_script_repairs_first_attack_in_same_turn():
     assert [call.name for call in first] == ["set_intent"]
     assert first[0].arguments["target"] == "PLAYER"
 
-    repaired = await calls(model, ToolResult("first", "Rejected: without a reason, issue an ultimatum first"))
+    repaired = await calls(model, ToolResult(
+        "first", "Отклонено: Без повода сразу не нападаешь: сначала потребуй — ultimatum.",
+    ))
     assert [call.name for call in repaired] == ["ultimatum"]
     assert repaired[0].arguments["seconds"] == 10
-    assert not await calls(model, Message("user", "[Time is up: the hero did not comply]"))
+    assert not await calls(model, Message("user", "[Срок вышел: герой не подчинился]"))
 
 
 async def test_parley_script_offers_truce_for_gold_and_respects_its_rejection():
@@ -29,4 +31,6 @@ async def test_parley_script_offers_truce_for_gold_and_respects_its_rejection():
     assert [call.name for call in offered] == ["propose_deal"]
     assert offered[0].arguments["hero_gives"] == [{"item": "ITMI_GOLD", "count": 100}]
     assert offered[0].arguments["truce"] == {"hours": 4}
-    assert not await calls(model, ToolResult("mate", "Rejected: you have an agreement"))
+    assert not await calls(model, ToolResult(
+        "mate", "Отклонено: У вас уговор: героя не трогать без нового повода.",
+    ))
