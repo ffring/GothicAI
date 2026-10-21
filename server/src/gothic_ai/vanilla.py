@@ -91,12 +91,13 @@ ACCEPT_TOOL = Tool(
         "properties": {
             **_QUEST_ARG["properties"],
             "pay": {
-                "type": "string",
-                "enum": ["full", "none"],
+                "type": ["string", "null"],
+                "enum": ["full", "none", None],
                 "description": "full — отдаёшь обещанное; none — своего ничего не даёшь (например, дело "
-                "сделал не он). Опыт за решённое дело герой получит в любом случае.",
+                "сделал не он). Опыт за решённое дело герой получит в любом случае. null — как full.",
             },
         },
+        "required": ["quest", "pay"],
     },
 )
 CHECK_TOOL = Tool(
@@ -644,6 +645,8 @@ class VanillaQuests:
         if call.name == EXPOSE:
             return self._expose(conv, offer)
         pay = call.arguments.get("pay", "full")
+        if pay is None:
+            pay = "full"
         if pay not in ("full", "none"):
             return ToolOutcome("Отклонено: pay должен быть full или none.", "rejected")
         # what it sees for itself, it does not take on his word

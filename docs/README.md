@@ -204,6 +204,7 @@
 | Что | Как |
 |---|---|
 | pytest одного модуля | `cd server && uv run pytest tests/test_<модуль>.py -q`; на Ryzen — `scripts/ryzen.sh pytest tests/test_<модуль>.py` |
+| Строгие схемы всех инструментов сервера | `cd server && uv run pytest tests/test_tool_schemas.py -q`; обход модулей `gothic_ai`, проверка всех вложенных объектов |
 | Один сценарий e2e | `SCENARIO=<имя> scripts/ryzen.sh e2e`; на Mac — `SCENARIO=<имя> LLM=fake scripts/e2e.sh` |
 | SIGKILL игры при загрузке e2e на Ryzen | До маркера `scenario <name>: checks started` — до четырёх запусков с отдельными логами; четыре убийства подряд дают код 76 и времена, [правила](ryzen.md#как-работает-сейчас) |
 | Частота кадров e2e | На Ryzen и Mac по умолчанию `E2E_MAX_FPS=30`; `0` снимает лимит, `60` задаёт 60 FPS. `OPENGOTHIC_FPS_LOG=1` включён в e2e по умолчанию; bench и живая игра не меняются. [Настройки](ryzen.md), [приёмка 12 сценариев](../reports/compute/2026-10-19-e2e-fps-cap/README.md) |
