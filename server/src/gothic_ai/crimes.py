@@ -684,6 +684,25 @@ class Crimes:
                 if ownership is None:
                     return self._noncrime(deed.id)
                 owner, guild, npctype = ownership
+                if deed.owner:
+                    deaths = [
+                        fact for fact in self.chronicle.facts("died")
+                        if self._npc(fact.get("npc", "")) == owner
+                    ]
+                    violence = {
+                        fact.get("kind") for fact in self.facts()
+                        if self._npc(fact.get("victim", "")) == owner
+                    }
+                    if (
+                        deed.owner_npc_guild > 16
+                        or any(fact.get("monster") is True for fact in deaths)
+                        or (deaths and "murder" not in violence)
+                        or (
+                            not violence.intersection({"attack", "murder"})
+                            and self.sides.fought_hero_group(owner, deed)
+                        )
+                    ):
+                        return self._noncrime(deed.id)
                 victim = owner
                 community = self.community(guild, npctype)
                 kind = "theft"

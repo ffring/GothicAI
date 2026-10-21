@@ -9,6 +9,7 @@ import pytest
 from gothic_ai.characters import Card
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.commands import Order
+from gothic_ai.crime_sides import FIGHT_MEMORY_SECONDS
 from gothic_ai.crimes import COMMUNITIES, Crimes, pickpocket_outcome
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.executor import Intent
@@ -92,6 +93,131 @@ async def test_own_public_and_dropped_items_are_not_crimes(system, ownership):
     assert system.crimes.record(deed(**ownership)) is None
     assert system.crimes.classified_noncrime("deed-1")
     assert system.chronicle.facts() == []
+
+
+@pytest.mark.parametrize("monster_source", ["guild", "death"])
+async def test_monster_loot_with_a_companion_witness_is_not_a_crime(system, monster_source):
+    owner = "YGOBBO_GREEN"
+    if monster_source == "death":
+        system.chronicle.record({"fact": "died", "npc": owner, "killer": "PLAYER", "monster": True})
+    assert system.crimes.record(deed(
+        owner=owner,
+        owner_npc_guild=37 if monster_source == "guild" else -1,
+        witnesses=[HILDA],
+        witnesses_metadata=[{"npc": HILDA, "guild": 8, "npctype": 2}],
+    )) is None
+    assert system.crimes.classified_noncrime("deed-1")
+    for kind in ("crime", "crime_seen", "crime_attitude"):
+        assert system.chronicle.facts(kind) == []
+
+
+@pytest.mark.parametrize("prior_crime", [None, "attack", "murder"])
+async def test_dead_owners_loot_is_lawful_unless_the_hero_murdered_them(system, prior_crime):
+    if prior_crime:
+        result = system.crimes.record(deed(
+            id="violence", kind=prior_crime, victim=LOBART, victim_guild=8,
+        ))
+        assert result is not None and result["kind"] == prior_crime
+    system.chronicle.record({"fact": "died", "npc": LOBART, "killer": "PLAYER", "monster": False})
+    result = system.crimes.record(deed(owner=LOBART, owner_npc_guild=8, witnesses=[HILDA]))
+    if prior_crime == "murder":
+        assert result is not None and result["kind"] == "theft"
+        assert system.crimes.facts()[0]["kind"] == "murder"
+    else:
+        assert result is None
+        assert [fact["kind"] for fact in system.crimes.facts()] == ([prior_crime] if prior_crime else [])
+    assert system.crimes.classified_noncrime("deed-1") is (prior_crime != "murder")
+
+
+async def test_monster_death_allows_loot_even_with_an_existing_murder_record(system):
+    system.crimes.record(deed(id="murder", kind="murder", victim=LOBART, victim_guild=8))
+    system.chronicle.record({"fact": "died", "npc": LOBART, "killer": "PLAYER", "monster": True})
+    assert system.crimes.record(deed(owner=LOBART, witnesses=[HILDA])) is None
+    assert system.crimes.classified_noncrime("deed-1")
+    assert [fact["kind"] for fact in system.crimes.facts()] == ["murder"]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("member", ["PLAYER", "order", "intent", "metadata", "people"])
+async def test_recent_fight_with_the_hero_or_a_companion_makes_bandit_loot_lawful(system, member, reverse):
+    owner = "BDT_1015_BANDIT_L"
+    fields = {}
+    fighter = "PLAYER" if member == "PLAYER" else HILDA
+    if member == "order":
+        system.crimes.sides.orders = SimpleNamespace(
+            standing={HILDA: SimpleNamespace(kind="follow")}, fights={},
+        )
+    elif member == "intent":
+        system.crimes.dialogue = SimpleNamespace(conversations={
+            HILDA: SimpleNamespace(intent=Intent(goal="follow_hero")),
+        })
+    elif member == "metadata":
+        fields["witnesses_metadata"] = [{"npc": HILDA, "guild": 8, "npctype": 2}]
+    elif member == "people":
+        system.crimes.people[HILDA] = {"guild": 8, "npctype": 2}
+    pair = (fighter, owner) if reverse else (owner, fighter)
+    system.crimes.sides.note_fight(*pair)
+    assert system.crimes.record(deed(owner=owner, owner_npc_guild=9, witnesses=[HILDA], **fields)) is None
+    assert system.crimes.classified_noncrime("deed-1")
+    assert system.crimes.facts() == []
+
+
+@pytest.mark.parametrize("fight", ["missing", "expired", "outsider", "other_owner"])
+async def test_loot_requires_a_recent_fight_between_the_owner_and_the_hero_group(system, fight):
+    owner = "BDT_1015_BANDIT_L"
+    if fight == "expired":
+        system.crimes.sides.clock = lambda: 0.0
+        system.crimes.sides.note_fight(owner, "PLAYER")
+        system.crimes.sides.clock = lambda: FIGHT_MEMORY_SECONDS + 1
+    elif fight == "outsider":
+        system.crimes.sides.note_fight(owner, HILDA)
+    elif fight == "other_owner":
+        system.crimes.sides.note_fight("OTHER_BANDIT", "PLAYER")
+    result = system.crimes.record(deed(owner=owner, owner_npc_guild=9, witnesses=[HILDA]))
+    assert result is not None and result["kind"] == "theft"
+    assert not system.crimes.classified_noncrime("deed-1")
+
+
+@pytest.mark.parametrize("source", ["conversation", "order"])
+async def test_current_fight_sources_are_read_before_classifying_loot(system, source):
+    system.crimes.sides.clock = lambda: 0.0
+    system.crimes.sides.note_fight(LOBART, "PLAYER")
+    system.crimes.sides.clock = lambda: FIGHT_MEMORY_SECONDS + 1
+    if source == "conversation":
+        system.crimes.dialogue = SimpleNamespace(conversations={
+            LOBART: SimpleNamespace(intent=Intent(goal="fight", target="PC_HERO")),
+        })
+    else:
+        system.crimes.sides.orders = SimpleNamespace(
+            standing={HILDA: SimpleNamespace(kind="follow")},
+            fights={HILDA: SimpleNamespace(target=LOBART)},
+        )
+    assert system.crimes.record(deed(owner=LOBART, owner_npc_guild=8)) is None
+    assert system.crimes.classified_noncrime("deed-1")
+
+
+@pytest.mark.parametrize("prior_crime", ["attack", "murder"])
+async def test_loot_after_the_heros_criminal_fight_is_still_theft(system, prior_crime):
+    result = system.crimes.record(deed(
+        id="violence", kind=prior_crime, victim=LOBART, victim_guild=8,
+    ))
+    assert result is not None and result["kind"] == prior_crime
+    system.crimes.sides.note_fight(LOBART, "PLAYER")
+    result = system.crimes.record(deed(owner=LOBART, owner_npc_guild=8))
+    assert result is not None and result["kind"] == "theft"
+    assert not system.crimes.classified_noncrime("deed-1")
+
+
+@pytest.mark.parametrize("ownership", [
+    {"chest": "CHEST_LOBART", "chest_owner": LOBART, "chest_owner_guild": 8},
+    {"room_owner": LOBART, "room_owner_guild": 8},
+])
+async def test_dead_owners_chest_and_room_remain_private_property(system, ownership):
+    system.chronicle.record({"fact": "died", "npc": LOBART, "killer": "PLAYER", "monster": False})
+    system.crimes.sides.note_fight(LOBART, "PLAYER")
+    result = system.crimes.record(deed(**ownership, witnesses=[HILDA]))
+    assert result is not None and result["kind"] == "theft" and result["owner"] == LOBART
+    assert not system.crimes.classified_noncrime("deed-1")
 
 
 @pytest.mark.parametrize("cover", [True, False])
@@ -327,7 +453,7 @@ async def test_community_uses_lifted_helpers_and_lawkeepers_use_the_graph(system
         functions={
             "C_NPCBELONGSTOFARM": {
                 "params": 1,
-                "body": ["==", field, ["int", 42]],
+                "body": ["==", field, ["int", 10]],
                 "lifted": True,
             }
         },
@@ -336,12 +462,12 @@ async def test_community_uses_lifted_helpers_and_lawkeepers_use_the_graph(system
         quests={},
     )
     system.crimes.graph = graph
-    assert system.crimes.community(42) == "farm"
+    assert system.crimes.community(10) == "farm"
     assert system.crimes.community(8) is None
     assert system.crimes.lawkeepers("farm") == (LEE,)
     assert system.crimes.lawkeepers("bl") == ()
     assert system.crimes.lawkeepers("city") == ()  # no such PETZMASTER in this graph
-    result = system.crimes.record(deed(owner="LOBART", owner_npc_guild=42))
+    result = system.crimes.record(deed(owner="LOBART", owner_npc_guild=10))
     assert result is not None and result["owner"] == LOBART and result["community"] == "farm"
     assert set(COMMUNITIES) == {"city", "farm", "monastery", "oldcamp", "bl"}
 
