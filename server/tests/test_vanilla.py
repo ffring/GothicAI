@@ -1771,6 +1771,26 @@ async def test_dropping_a_quest_closes_its_journal_without_an_ending_or_reward(g
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_dropping_a_quest_leaves_a_shared_journal_topic_open(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    drop = FakeStep(
+        "Больше не нужно.", [ToolCall("drop_quest", {"quest": QUEST, "why": "Урожай пропал"}, "d1")]
+    )
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, FakeBackend(script=[drop], delay=0), graph, store)
+    for topic in graph.quests[QUEST].topics:
+        vanilla._topic_uses[topic] = 2  # another quest writes to it too
+    try:
+        dialogue.open(LOBART, "Лобарт")
+        await dialogue.say_as_player(LOBART, "Что с репой?")
+        await _until(lambda: chronicle.facts("quest_outcome") != [])
+        effects = _effects(fake, LOBART)[0]
+        assert {"do": "set", "var": QUEST, "value": 4} in effects
+        assert not any(e["do"] == "journal" for e in effects)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 @pytest.mark.parametrize("drop_all", [False, True])
 async def test_an_old_check_uses_terms_amended_during_its_walk(two_bandits, monkeypatch, drop_all):
     fake = FakeGame(branch="A")

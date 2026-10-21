@@ -748,7 +748,8 @@ class VanillaQuests:
         effects = [{"do": "set", "var": offer.quest, "value": LOG_OBSOLETE}]
         effects += [
             {"do": "journal", "topic": title, "text": "", "status": "LOG_OBSOLETE"}
-            for title in self.graph.quests[offer.quest].topics.values()
+            for topic, title in self.graph.quests[offer.quest].topics.items()
+            if title and self._topic_uses.get(topic, 0) == 1  # a shared topic (the militia's) stays open
         ]
         try:
             await self.link.story_effect(offer.npc, effects)
