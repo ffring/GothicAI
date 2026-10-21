@@ -838,10 +838,13 @@ async def vanilla_check(
     check("not_on_word", not any(f.get("quest") == RUEBEN for f in facts("claim")), facts("claim")[-1:])
     if script is not None:
         situation = vanilla.situation(giver) or ""
+        offer = vanilla.offers.get(giver, {}).get(RUEBEN)
         offered = [[tool.name for tool in tools] for _, _, tools in script.calls[claim_calls:]]
         check(
             "refused",
-            vanilla._refusal(giver, vanilla.offers[giver][RUEBEN]) is not None
+            offer is not None
+            and vanilla._refusal(giver, offer) is not None
+            and "Засчитать сейчас нельзя" in situation
             and bool(offered)
             and all("accept_quest" not in tools for tools in offered)
             and not any(f.get("quest") == RUEBEN for f in facts("claim")),

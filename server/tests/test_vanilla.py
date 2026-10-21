@@ -482,7 +482,8 @@ async def test_a_check_in_progress_is_not_offered_or_started_again(graph):
         await link_cm.__aexit__(None, None, None)
 
 
-async def test_a_check_in_progress_blocks_another_check_but_not_another_acceptance(graph):
+@pytest.mark.parametrize("distrust", [False, True])
+async def test_a_check_in_progress_blocks_another_check_but_not_another_acceptance(graph, distrust):
     other_quest = "MIS_KILLSECONDBANDIT"
     other_npc = "BDT_2_BANDIT"
     ending = copy.deepcopy(graph.nodes["DIA_LOBART_BANDITDEAD"])
@@ -512,10 +513,16 @@ async def test_a_check_in_progress_blocks_another_check_but_not_another_acceptan
         }
     fake.slow_actions = {"go_to_npc"}
     try:
+        if distrust:
+            chronicle.record({
+                "fact": "caught", "quest": KILL, "npc": LOBART,
+                "title": "Бандит у фермы", "how": "видел сам",
+            })
         await vanilla.link.attach(LOBART)
         conv = dialogue.open(LOBART, "Лобарт")
         await vanilla.prepare(LOBART)
         assert set(vanilla.offers[LOBART]) == {KILL, other_quest}
+        assert ("accept_quest" in {t.name for t in vanilla.tools(LOBART)}) is not distrust
         await dialogue.say_as_player(LOBART, "Бандит мёртв.")
         await _until(lambda: LOBART in fake.long_running)
         offer = vanilla.checking[LOBART]
@@ -525,7 +532,14 @@ async def test_a_check_in_progress_blocks_another_check_but_not_another_acceptan
         assert set(vanilla.offers[LOBART]) == {other_quest}
         assert vanilla.offers[LOBART][other_quest].reachable().npc == other_npc
         tools = {t.name for t in vanilla.tools(LOBART)}
-        assert "check_claim" not in tools and "accept_quest" in tools
+        assert "check_claim" not in tools
+        assert ("accept_quest" in tools) is not distrust
+        situation = vanilla.situation(LOBART)
+        assert "(check_claim)" not in situation
+        if distrust:
+            assert (
+                "Засчитать сейчас нельзя: на слово ты ему не веришь, а своими глазами видел не всё."
+            ) in situation
         result = await vanilla.handle(
             dialogue, conv, ToolCall("check_claim", {"quest": other_quest}, "again"), None
         )
@@ -539,6 +553,12 @@ async def test_a_check_in_progress_blocks_another_check_but_not_another_acceptan
             if m["type"] == "action" and m["action"] == "go_to_npc"
         ] == [BANDIT]
 
+        if distrust:
+            chronicle.record({"fact": "died", "npc": other_npc, "killer": LOBART})
+            await _until(lambda: any(f["dead"] == other_npc for f in chronicle.facts("seen_dead")))
+            await vanilla.prepare(LOBART)
+            assert vanilla.offers[LOBART][other_quest].seen_true()
+            assert "accept_quest" in {t.name for t in vanilla.tools(LOBART)}
         result = await vanilla.handle(
             dialogue, conv, ToolCall("accept_quest", {"quest": other_quest}, "accept"), None
         )

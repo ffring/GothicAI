@@ -568,6 +568,8 @@ class VanillaQuests:
         lines = []
         for o in self.offers.get(npc, {}).values():
             seen = o.evidence()
+            if seen and npc in self.checking:
+                seen = seen.replace(f": можешь сходить и посмотреть сам ({CHECK})", "")
             refusal = self._refusal(npc, o)
             lines.append(
                 (
@@ -614,7 +616,7 @@ class VanillaQuests:
                 )
                 hint = (
                     f" Можешь сходить и посмотреть сам ({CHECK})."
-                    if o.reachable()
+                    if npc not in self.checking and o.reachable()
                     else f" Можешь уличить его во лжи ({EXPOSE})." if o.seen_false() else ""
                 )
                 lines.append(
