@@ -56,6 +56,8 @@ class GatesFake(FakeGame):
 
     def evaluate(self, expr: Any, npc: str | None = None) -> Any:
         match expr:
+            case ["&&" | "||", *terms]:
+                assert len(terms) >= 2, "the bridge requires at least two logical terms"
             case ["inst", "SELF"]:
                 return npc
             case ["inst", "OTHER" | "HERO"]:

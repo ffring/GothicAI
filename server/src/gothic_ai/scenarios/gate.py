@@ -70,12 +70,21 @@ async def gate_scenario(
         views = await link.npc_view([GUARD])
         return bool(views) and views[0].state != "ZS_ATTACK"
 
+    async def outside_post() -> list[Any]:
+        return await link.story_eval(GUARD, [
+            ["call", "NPC_GETDISTTOWP", ["inst", "HERO"], ["str", CHECKPOINT]],
+            ["call", "HLP_STRCMP", ["call", "NPC_GETNEARESTWP", ["inst", "SELF"]],
+             ["field", ["inst", "SELF"], "WP"]],
+        ])
+
     if not isinstance(dialogue.llm, FakeBackend):
         return _logged({"scripted_model": "failed (gate requires LLM=fake)"})
     await link.wait_world()
     if link.session is None:
         await wait_message(link, Session, timeout=10)
-    if not check("new_game", link.session is not None and link.session.reason == "new_game"):
+    # The initial connection may be processed after the new world has loaded; the bridge then
+    # reports that same fresh session as "connect". No SAVE is used for this scenario.
+    if not check("new_game", link.session is not None and link.session.reason in {"new_game", "connect"}):
         return _logged(results)
     await asyncio.sleep(1)
     link.listeners.append(record)
@@ -86,12 +95,8 @@ async def gate_scenario(
         await link.debug("teleport", near=GUARD, distance=1200)
         if not check("guard_hears", await _until_async(ready, bool, 20)):
             return _logged(results)
-        position = await link.story_eval(GUARD, [
-            ["call", "NPC_GETDISTTOWP", ["inst", "HERO"], ["str", CHECKPOINT]],
-            ["call", "HLP_STRCMP", ["call", "NPC_GETNEARESTWP", ["inst", "SELF"]],
-             ["field", ["inst", "SELF"], "WP"]],
-        ])
-        if not check("outside_post", position[0] > 700 and bool(position[1]), position):
+        settled = await _until_async(outside_post, lambda value: value[0] > 700 and bool(value[1]), 30)
+        if not check("outside_post", settled, await outside_post()):
             return _logged(results)
         before_gold = await gold()
         if before_gold != 100:
@@ -111,7 +116,8 @@ async def gate_scenario(
             })]))],
             told=[], default="Проходи.", only=name,
         )
-        await link.debug("type", text="Я заплачу сто золотых. Позволишь пройти в город?")
+        # Both guards have the same display name; supply the intended focus as voice input does.
+        talk.hear("Я заплачу сто золотых. Позволишь пройти в город?", GUARD)
         offered = await _until(lambda: GUARD in deals.open, 30)
         window = await link.deal_window()
         if not check("bribe_offered", offered and window is not None, window):
@@ -165,7 +171,7 @@ async def gate_scenario(
             })]))],
             told=[], default="Проходи.", only=name,
         )
-        await link.debug("type", text=CLAIM)
+        talk.hear(CLAIM, GUARD)
         admitted = await _until_async(passage, lambda value: value == [1, 1], 20)
         check("claim_passes_both", admitted, await passage())
         await _until(lambda: bool(gates.chronicle.facts("gate_claim")), 10)

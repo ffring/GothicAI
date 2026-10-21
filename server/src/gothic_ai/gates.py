@@ -339,7 +339,10 @@ def _effects(effects: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[
                     steps.append({"do": "call", "call": ["fn", "B_LOGENTRY", topic, ["str", e["text"]]]})
             case _:
                 raise GameError(f"unsupported gate effect: {e['do']}")
-    return steps, ["&&", *checks] if checks else ["int", 1], after
+    enough = ["int", 1]
+    if checks:
+        enough = checks[0] if len(checks) == 1 else ["&&", *checks]
+    return steps, enough, after
 
 
 async def play_gate_effects(link: GameLink, npc: str, effects: list[dict[str, Any]]) -> None:
