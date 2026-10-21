@@ -896,7 +896,7 @@ async def serve(args: argparse.Namespace) -> int:
             )
         if graph is not None and not args.no_knowledge:
             # what each npc knows of the world as far as the story has got: its dialogs, quests, talk (M6)
-            state.knowledge = Knowledge(link, graph)
+            state.knowledge = Knowledge(link, graph, state.story)
             state.dialogue.extensions.append(state.knowledge)
 
         def knows_hero(npc: str, dialogue: DialogueManager = state.dialogue) -> bool:
@@ -2042,6 +2042,13 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario vgive: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "greg":
+                dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
+                assert dialogue is not None and talk is not None and vanilla is not None
+                results = await scenarios.greg(link, dialogue, talk, vanilla)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario greg: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario in ("amends", "amends_deal"):
                 dialogue, talk, amends = state.dialogue, state.talk, state.amends
                 assert dialogue is not None and talk is not None and amends is not None
@@ -2754,6 +2761,7 @@ def main() -> None:
             "character",
             "vlie",
             "vgive",
+            "greg",
             "vcheck",
             "rumor",
             "amends",
