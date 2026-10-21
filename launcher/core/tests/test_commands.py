@@ -38,6 +38,7 @@ def by_name(procs):
 
 
 def test_services_get_their_settings_and_find_each_other(config, tmp_path):
+    config.set("voice.provider", "voxtral")
     config.set("voice.voxtral_url", "http://gpu:47830")
     config.set("tts.provider", "voxcpm")
     config.set("tts.fallback", "none")
@@ -78,6 +79,34 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     assert args[args.index("--game-dir") + 1] == "/games/G2"
     for p in procs:  # keys never in argv: they would end up in logs and `ps`
         assert not any("secret" in a for a in p.argv)
+
+
+@pytest.mark.parametrize("key", [None, "iw-secret"])
+def test_inworld_asr_gets_the_shared_key_when_set(config, tmp_path, key):
+    config.set("voice.provider", "inworld")
+    config.set("secrets.inworld_api_key", key)
+    procs = by_name(services(config, LAYOUT, PORTS, tmp_path))
+    asr = procs["asr"]
+    assert asr.argv[5:] == ["serve", "--port", "50002", "--provider", "inworld", "--fallback", "chatgpt"]
+    for name in ("asr", "tts"):
+        if key:
+            assert procs[name].env["INWORLD_API_KEY"] == key
+        else:
+            assert "INWORLD_API_KEY" not in procs[name].env
+        assert not any("secret" in arg for arg in procs[name].argv)
+
+
+def test_saved_voxtral_provider_is_not_replaced_or_rewritten(tmp_path):
+    settings_file = tmp_path / "settings.toml"
+    saved = '[voice]\nprovider = "voxtral"\nvoxtral_url = "http://gpu:47830"\n'
+    settings_file.write_text(saved)
+    config, imported = commands.load_config(tmp_path)
+    assert imported is None
+    assert config.settings.voice.provider == "voxtral"
+    assert settings_file.read_text() == saved
+    asr = by_name(services(config, LAYOUT, PORTS, tmp_path))["asr"]
+    assert asr.argv[asr.argv.index("--provider") + 1] == "voxtral"
+    assert asr.env["GOTHIC_VOXTRAL_URL"] == "http://gpu:47830"
 
 
 def test_voice_and_npc_voices_can_be_off(config, tmp_path):

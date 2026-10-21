@@ -219,8 +219,8 @@
       "type": "boolean"
      },
      "provider": {
-      "default": "voxtral",
-      "description": "voxtral, chatgpt или openai:…",
+      "default": "inworld",
+      "description": "inworld, voxtral, chatgpt или openai:…",
       "title": "Распознавание",
       "type": "string"
      },

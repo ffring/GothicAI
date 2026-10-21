@@ -16,6 +16,10 @@
   const STEPS = ["Игра", "Мозг NPC", "Голос игрока", "Озвучка NPC"];
   let step = $state(0);
   const s = $derived(launcher.state!);
+  const inworldSelected = $derived(
+    (step === 2 && s.settings.voice.enabled && [s.settings.voice.provider, s.settings.voice.fallback].includes("inworld")) ||
+      (step === 3 && s.settings.tts.enabled && [s.settings.tts.provider, s.settings.tts.fallback].includes("inworld")),
+  );
 
   // step 1: the game folder
   let gameChecks = $state<Check[]>([]);
@@ -154,9 +158,6 @@
       <Setting key="tts.enabled" kind="toggle" title="Озвучка NPC" description="Выключено: только субтитры" />
       {#if s.settings.tts.enabled}
         <Setting key="tts.provider" kind="choice" options={TTS} />
-        {#if s.settings.tts.provider === "inworld" || s.settings.tts.fallback === "inworld"}
-          <Setting key="secrets.inworld_api_key" kind="secret" />
-        {/if}
         {#if s.settings.tts.provider === "voxcpm" || s.settings.tts.fallback === "voxcpm"}
           <Setting key="tts.voxcpm_url" placeholder="ws://gpu-server:47831" mono />
         {/if}
@@ -164,6 +165,9 @@
         <Reach part={launcher.providers?.speech} />
         <SpeechTest />
       {/if}
+    {/if}
+    {#if inworldSelected}
+      <Setting key="secrets.inworld_api_key" kind="secret" />
     {/if}
   </main>
   <footer>

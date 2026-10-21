@@ -38,15 +38,23 @@ def api() -> Inworld:
     return Inworld()
 
 
-def config(tmp_path, key: str | None = "good-key") -> Config:
+@pytest.fixture(params=["voice", "speech"])
+def part(request) -> str:
+    return request.param
+
+
+def config(tmp_path, part: str, key: str | None = "good-key") -> Config:
     settings = Settings()
-    settings.tts.provider, settings.tts.fallback = "inworld", "none"
+    settings.voice.provider, settings.voice.fallback = "chatgpt", "none"
+    settings.tts.provider, settings.tts.fallback = "openai", "none"
+    selected = settings.voice if part == "voice" else settings.tts
+    selected.provider = "inworld"
     return Config(settings, Secrets(inworld_api_key=key), tmp_path)
 
 
-async def speech(api: Inworld, cfg: Config) -> dict:
+async def provider(api: Inworld, cfg: Config, part: str) -> dict:
     found = await checks.providers(cfg, transport=httpx.MockTransport(api))
-    [inworld] = found["speech"]["providers"]
+    [inworld] = found[part]["providers"]
     return inworld
 
 
@@ -54,8 +62,8 @@ def inworld_requests(api: Inworld) -> list[httpx.Request]:
     return [r for r in api.requests if r.url.host == "api.inworld.ai"]
 
 
-async def test_inworld_with_credits_is_available(api, tmp_path):
-    assert await speech(api, config(tmp_path)) == {
+async def test_inworld_with_credits_is_available(api, tmp_path, part):
+    assert await provider(api, config(tmp_path, part), part) == {
         "id": "inworld",
         "ok": True,
         "title": "Inworld",
@@ -66,24 +74,24 @@ async def test_inworld_with_credits_is_available(api, tmp_path):
     assert json.loads(request.content)["voiceId"] == checks.INWORLD_CHECK["voiceId"]
 
 
-async def test_inworld_without_credits_says_so(api, tmp_path):
+async def test_inworld_without_credits_says_so(api, tmp_path, part):
     """The free voice list still answers 200 on an empty account; the check line gets 402."""
     api.credits = False
-    found = await speech(api, config(tmp_path))
+    found = await provider(api, config(tmp_path, part), part)
     assert not found["ok"]
     assert found["detail"].startswith("Нет кредитов")
     assert [r.method for r in inworld_requests(api)] == ["POST"]  # not saved by the voice list
 
 
-async def test_inworld_wrong_key(api, tmp_path):
-    found = await speech(api, config(tmp_path, key="old-key"))
+async def test_inworld_wrong_key(api, tmp_path, part):
+    found = await provider(api, config(tmp_path, part, key="old-key"), part)
     assert (found["ok"], found["detail"]) == (False, "Ключ не подходит")
     assert [r.method for r in inworld_requests(api)] == ["POST"]
 
 
-async def test_inworld_unknown_answer_falls_back_to_the_voice_list(api, tmp_path):
+async def test_inworld_unknown_answer_falls_back_to_the_voice_list(api, tmp_path, part):
     api.stream = (400, {"code": 3, "message": "something new"})
-    found = await speech(api, config(tmp_path))
+    found = await provider(api, config(tmp_path, part), part)
     assert (found["ok"], found["detail"]) == (True, "Доступен")
     assert [(r.method, r.url.path) for r in inworld_requests(api)] == [
         ("POST", "/tts/v1/voice:stream"),
@@ -91,14 +99,36 @@ async def test_inworld_unknown_answer_falls_back_to_the_voice_list(api, tmp_path
     ]
 
 
-async def test_inworld_down(api, tmp_path):
+async def test_inworld_down(api, tmp_path, part):
     api.stream = (503, {"message": "unavailable"})
-    found = await speech(api, config(tmp_path))
+    found = await provider(api, config(tmp_path, part), part)
     assert (found["ok"], found["detail"]) == (False, "Ответил 503")
     assert len(inworld_requests(api)) == 1
 
 
-async def test_inworld_without_key_asks_nothing(api, tmp_path):
-    found = await speech(api, config(tmp_path, key=None))
+async def test_inworld_without_key_asks_nothing(api, tmp_path, part):
+    found = await provider(api, config(tmp_path, part, key=None), part)
     assert (found["ok"], found["detail"]) == (False, "Ключ не задан")
     assert inworld_requests(api) == []
+
+
+async def test_voxtral_checks_health_at_the_configured_address(tmp_path):
+    cfg = Config.load(tmp_path)
+    cfg.set("voice.provider", "voxtral")
+    cfg.set("voice.voxtral_url", "http://gpu:47830/")
+    cfg.set("voice.fallback", "none")
+    cfg.set("tts.provider", "openai")
+    cfg.set("tts.fallback", "none")
+    requests = []
+
+    def health(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    found = await checks.providers(cfg, transport=httpx.MockTransport(health))
+    assert found["voice"]["providers"] == [
+        {"id": "voxtral", "ok": True, "title": "Voxtral на своём сервере", "detail": "Доступен"}
+    ]
+    [request] = requests
+    assert request.method == "GET"
+    assert str(request.url) == "http://gpu:47830/health"
