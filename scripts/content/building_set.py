@@ -2,8 +2,9 @@
 """Build a building's texture set from its remaster asset spec (stage 5 of docs/remaster-pipeline.md).
 
 Input: `reports/content/remaster/<asset>/build.json` and the sources selected in the
-asset's `asset.json`. Per texture: one Lanczos resize to 1024², narrow seam cuts on the
-permitted axes, then colour by material:
+asset's `asset.json`. Per texture: one Lanczos resize to 1024² (or `size`, a power of two up to
+2048, for a wide texture whose detail would not fit), narrow seam cuts on the permitted axes, then
+colour by material:
 
 - `target` — linear RGB gains so the texture's mean matches its own `target_oklab`;
 - `group`  — one shared set of gains for several textures of one material, toward
@@ -73,6 +74,8 @@ def load_spec(asset: str) -> dict:
             raise ValueError(f'{name}: colour.to must name another texture of this set')
         if item.get('maps', 'filter') not in ('filter', 'source'):
             raise ValueError(f'{name}: maps must be "filter" or "source"')
+        if item.get('size', 1024) not in (256, 512, 1024, 2048):
+            raise ValueError(f'{name}: size must be 256, 512, 1024 or 2048')
     return spec
 
 
@@ -193,10 +196,11 @@ def load_model_maps(source: dict, texture: dict) -> dict:
         path = remaster.sources_root() / meta['file']
         if remaster.sha256(path) != meta['sha256']:
             raise ValueError(f'{path}: SHA-256 differs from asset.json')
+        size = texture.get('size', 1024)
         with Image.open(path) as image:
             image = image.convert('RGB' if name == 'normal' else 'L')
-            if image.size != (1024, 1024):
-                image = image.resize((1024, 1024), Image.Resampling.LANCZOS)
+            if image.size != (size, size):
+                image = image.resize((size, size), Image.Resampling.LANCZOS)
             value = np.asarray(image, dtype=np.float64) / 255
         if name == 'normal':
             vector = value * 2 - 1
@@ -228,7 +232,8 @@ def prepare(asset: str, spec: dict) -> tuple[list[dict], dict]:
             band = None
             if spec['textures'][name].get('crop') == 'band':
                 image, band = crop_band(image)
-            resized = image.resize((1024, 1024), Image.Resampling.LANCZOS)
+            size = spec['textures'][name].get('size', 1024)
+            resized = image.resize((size, size), Image.Resampling.LANCZOS)
             joined, seam = seamless(resized, axes=axes, overlap_fraction=1/64)
         images[name] = np.asarray(joined)
         record = recipes[name]
@@ -239,7 +244,7 @@ def prepare(asset: str, spec: dict) -> tuple[list[dict], dict]:
             input='image_gen edit of the accepted remaster concept; no original texture pixels',
             colour_policy=f"remaster building_set: {spec['textures'][name]['colour']['mode']}", source_band=band,
             luminance_policy='guard rail only: ratio to the original target is recorded, not enforced',
-            source_size_policy='one Lanczos resize to 1024 square, then narrow permitted-axis seam cuts')
+            source_size_policy=f'one Lanczos resize to {size} square, then narrow permitted-axis seam cuts')
         record['generation'] = dict(outcome='complete', attempts=source_attempts(manifest, name),
             selected_attempt=source['attempt'], selection_reason=chosen.get('reason'),
             source_policy='image_gen edits of the accepted concept; immutable PNGs with C2PA',

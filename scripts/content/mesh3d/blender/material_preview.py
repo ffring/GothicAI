@@ -4,7 +4,7 @@ with roughness.
 
     Blender -b --factory-startup -P material_preview.py -- ALBEDO NORMAL ROUGHNESS SIZE_M OUT_PREFIX
 
-SIZE_M is the edge of one texture square in metres. Two images are written: OUT_PREFIX-front.png with
+SIZE_M is the edge of one texture square in metres, or WxH for a texture that is not square. Two images are written: OUT_PREFIX-front.png with
 the sun behind the viewer, and OUT_PREFIX-against.png with the sun high behind the roof, where wet,
 smooth parts glint. The normal map is OpenGL style (X right, Y up), as the pipeline writes it.
 """
@@ -20,8 +20,10 @@ EAVES = 4.            # metres above the street
 SAMPLES = 48
 
 albedo, normal, roughness, size_m, out_prefix = sys.argv[sys.argv.index('--') + 1:]
-size_m = float(size_m)
-width = TILES * size_m
+size_x, size_y = (float(v) for v in size_m.split('x')) if 'x' in size_m else (float(size_m),) * 2
+# a plane of TILES texture heights up the slope and as many texture widths as make it about square
+tiles_x = max(1, round(TILES * size_y / size_x))
+width, length = tiles_x * size_x, TILES * size_y
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
@@ -75,10 +77,10 @@ links.new(image(normal, False).outputs['Color'], nmap.inputs['Color'])
 links.new(nmap.outputs['Normal'], bsdf.inputs['Normal'])
 
 bm = bmesh.new()
-corners = [bm.verts.new(c) for c in ((0, 0, 0), (width, 0, 0), (width, width, 0), (0, width, 0))]
+corners = [bm.verts.new(c) for c in ((0, 0, 0), (width, 0, 0), (width, length, 0), (0, length, 0))]
 face = bm.faces.new(corners)
 uv = bm.loops.layers.uv.new('UVMap')
-for loop, coord in zip(face.loops, ((0, 0), (TILES, 0), (TILES, TILES), (0, TILES))):
+for loop, coord in zip(face.loops, ((0, 0), (tiles_x, 0), (tiles_x, TILES), (0, TILES))):
     loop[uv].uv = coord
 mesh = bpy.data.meshes.new('roof')
 bm.to_mesh(mesh)
@@ -93,7 +95,7 @@ camera = bpy.data.cameras.new('eye')
 camera.lens = 35
 eye = bpy.data.objects.new('eye', camera)
 eye.location = (1.5, -9, 1.7)
-target = (0, width * math.cos(PITCH) * .35, EAVES + width * math.sin(PITCH) * .35)
+target = (0, length * math.cos(PITCH) * .35, EAVES + length * math.sin(PITCH) * .35)
 direction = [t - e for t, e in zip(target, eye.location)]
 eye.rotation_euler = (math.atan2(math.hypot(direction[0], direction[1]), -direction[2]), 0,
                       math.atan2(direction[1], direction[0]) - math.pi / 2)

@@ -7,7 +7,8 @@
   "namespaces": [
     "city-roofs",
     "city-roofs-concept",
-    "city-roofs-slate"
+    "city-roofs-slate",
+    "city-roofs-shingle"
   ],
   "sources": [
     {
@@ -442,6 +443,128 @@
           "sha256": "424cead9d1456a6107cfcc6caa5ece9d8cf28cf5aca4eb9d0b7bb27d81967b3a"
         }
       }
+    },
+    {
+      "file": "city-roofs-shingle/reference-attempt-1.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 1,
+      "sha256": "34372bd0cf7552967650c598ed74240c03c96b74d537b5feda43188b4873c482",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T21:55:08Z",
+      "thread": "01a16075-e96d-7c13-ab7e-0d131277aceb",
+      "parent": null
+    },
+    {
+      "file": "city-roofs-shingle/reference-attempt-2.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 2,
+      "sha256": "59af91088eca4d20b1d6e5d285d9daedae1013ef1f10351853e150b0675b8039",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T21:55:47Z",
+      "thread": "01a16075-e96d-7c13-ab7e-0d131277aceb",
+      "parent": null
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_01-attempt-2.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_01.TGA",
+      "attempt": 2,
+      "sha256": "a05768bad837744c0fe224d0e11c568d2112dda3ae568ac58dae0bbb7d025afa",
+      "c2pa": null,
+      "model": "derived: scripts/content/shingle_bake.py",
+      "utc": "2026-10-21T22:15:34Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png city-roofs-shingle/reference-attempt-2.png",
+      "tool": "scripts/content/shingle_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_01-attempt-2.normal.png",
+          "sha256": "c4a6d14c224f5fe7b0742beb8fabfed26f4fa47a7c495e09251aa01797948bf8"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_01-attempt-2.roughness.png",
+          "sha256": "b532a61d50fd62a6f7853460f0fec4ac3d0406b638f203707432780531871d9d"
+        }
+      }
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_01-attempt-3.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_01.TGA",
+      "attempt": 3,
+      "sha256": "ee4df0d09266e32a895c7bae1f89fa7c4e6f2bf12453aa3cd3fd9db3044704ba",
+      "c2pa": null,
+      "model": "derived: scripts/content/shingle_bake.py",
+      "utc": "2026-10-21T22:34:58Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png city-roofs-shingle/reference-attempt-2.png",
+      "tool": "scripts/content/shingle_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_01-attempt-3.normal.png",
+          "sha256": "27c1be05645016f9bff569681e4a7c8fb3794ea2151d1d49ba0c938ba5412c99"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_01-attempt-3.roughness.png",
+          "sha256": "fc23f9f0fb1e0ed777f14c38570753a2cbcc5ca43fe515c16601bbbf3617fea7"
+        }
+      }
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_01-attempt-4.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_01.TGA",
+      "attempt": 4,
+      "sha256": "e257e163b76cb4826f6108ebc15f8a226fd067c2d8eba9ff4e70ad2f1100b628",
+      "c2pa": null,
+      "model": "derived: scripts/content/shingle_bake.py",
+      "utc": "2026-10-21T22:52:21Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png city-roofs-shingle/reference-attempt-2.png",
+      "tool": "scripts/content/shingle_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_01-attempt-4.normal.png",
+          "sha256": "dc9d2a8e061b5c8027dc3a8444183954a4a1aa02b701bdd89baa98ce362903e0"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_01-attempt-4.roughness.png",
+          "sha256": "1701d7bcd2e0e2512dc84d8355f581d2547b9826f8b40b74ef5d3e36e503101c"
+        }
+      }
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_INSIDE_01-attempt-2.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_INSIDE_01.TGA",
+      "attempt": 2,
+      "sha256": "038c083d11c830de74de1e991d112516275853a666c88b4dd5b77914c01f03c4",
+      "c2pa": null,
+      "model": "derived: scripts/content/inside_bake.py",
+      "utc": "2026-10-21T23:03:27Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png city-roofs-shingle/reference-attempt-2.png",
+      "tool": "scripts/content/inside_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_INSIDE_01-attempt-2.normal.png",
+          "sha256": "40bedfb319228e297e8731d59931b828319ecc8a13dadcc101ce509dc1f1ffee"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_INSIDE_01-attempt-2.roughness.png",
+          "sha256": "d5be860ffe7efa9161e8a5ea449b4a4b9a1922494639364c0aa0edf51020ad22"
+        }
+      }
     }
   ],
   "selected": {
@@ -456,8 +579,8 @@
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_01.TGA": {
-      "file": "city-roofs/NW_CITY_ROOF_01-attempt-1.png",
-      "reason": "texture edit of concept 3: green moss, stepped gaps",
+      "file": "city-roofs/NW_CITY_ROOF_01-attempt-4.png",
+      "reason": "shingle from the model; the big hole a cross of wood in the dark like the original's; middle tones and moss matched",
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_04.TGA": {
@@ -466,8 +589,8 @@
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_INSIDE_01.TGA": {
-      "file": "city-roofs/NW_CITY_ROOF_INSIDE_01-attempt-1.png",
-      "reason": "texture edit of concept 2",
+      "file": "city-roofs/NW_CITY_ROOF_INSIDE_01-attempt-2.png",
+      "reason": "underside from the Blender model: spaced sheathing on hewn rafters as the original, soot and stains",
       "date": "2026-10-21"
     }
   },
@@ -548,13 +671,13 @@
     }
   ],
   "build": {
-    "set": "roofs-3",
+    "set": "roofs-7",
     "base": "original",
     "date": "2026-10-21",
     "albedo_sha256": {
-      "NW_CITY_ROOF_01.TGA": "87fee9fcafecec6b86b40b2486753d016e2a47ab0d46c85e40d3c68064bdc47d",
+      "NW_CITY_ROOF_01.TGA": "7551e0022a5bb41a5c0ba88927183601dcf56931dea2e24aa2659c0dfe4f3d8d",
       "NW_CITY_ROOF_04.TGA": "a4993c5463b05cf11d73f27ca3d7652153d1771417e3f3f4e8c0b71d74013278",
-      "NW_CITY_ROOF_INSIDE_01.TGA": "c1da15b15b93d11739beb5ebe6edf2c47cc071e46c81b197c932f55e90361cf4"
+      "NW_CITY_ROOF_INSIDE_01.TGA": "c4f52f434e2147f0cfd67f715710032ba6f823ae8e87b443c324073b93b7eea3"
     },
     "entries": 3,
     "replaced": [

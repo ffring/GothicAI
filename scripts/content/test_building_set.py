@@ -79,6 +79,9 @@ def test_load_spec_validates(tmp_path, monkeypatch):
     (folder / 'build.json').write_text(json.dumps(spec({'A.TGA': {'colour': {'mode': 'match', 'to': 'X.TGA'}}})))
     with pytest.raises(ValueError, match='colour.to'):
         building_set.load_spec('hut')
+    (folder / 'build.json').write_text(json.dumps(spec({'A.TGA': {'colour': {'mode': 'target'}, 'size': 1500}})))
+    with pytest.raises(ValueError, match='size'):
+        building_set.load_spec('hut')
     (folder / 'build.json').write_text(json.dumps(spec({'A.TGA': {'colour': {'mode': 'target'}}})))
     assert building_set.load_spec('hut')['set'] == 's'
     assert remaster.asset_dir('hut') == folder
@@ -155,6 +158,8 @@ def test_model_maps_line_up_with_the_albedo(tmp_path, monkeypatch):
     vector = loaded['normal'] * 2 - 1
     np.testing.assert_allclose(np.linalg.norm(vector, axis=-1), 1, atol=1e-6)
     assert abs(loaded['roughness'].mean() - 77 / 255) < 1e-3
+    wide = building_set.load_model_maps(source, {'axes': '', 'size': 2048})   # a wide texture keeps its detail
+    assert wide['normal'].shape == (2048, 2048, 3) and wide['roughness'].shape == (2048, 2048)
     Image.fromarray(np.full((512, 512), 78, np.uint8)).save(folder / 'S-attempt-1.roughness.png')
     with pytest.raises(ValueError, match='SHA-256'):
         building_set.load_model_maps(source, {'axes': ''})
