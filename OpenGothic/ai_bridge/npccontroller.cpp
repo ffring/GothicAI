@@ -42,6 +42,7 @@ constexpr float    FollowCatchUp    = 800;   // farther than this it runs, whate
 constexpr float    FollowLost       = 6000;  // give up
 constexpr uint64_t FollowStepMs     = 500;
 constexpr uint64_t FollowStuckMs    = 2000;  // walking, but it has not moved FollowMovedCm in this long: stuck
+constexpr uint64_t WalkStartMs      = 3000;  // arm stuck detection even if it cannot take its first step
 constexpr float    FollowMovedCm    = 75;
 constexpr float    WalkSameSpotCm   = 100;   // a replanned waynet route got stuck here again
 constexpr uint64_t WalkProgressMs   = 5000;
@@ -745,12 +746,13 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
                         " los=",int(seen));
         a.nextProgress = now + WalkProgressMs;
         }
-      // Initial item animations and turning are not a stuck walk; ignore vertical settling too.
+      // Allow initial item animations and turning a short grace; ignore vertical settling too.
       const auto moved = pos-a.movedFrom;
-      const bool firstStep = !a.walkStarted && moved.x*moved.x+moved.z*moved.z>1.f;
-      if(firstStep)
+      const bool startClock = !a.walkStarted &&
+                              (moved.x*moved.x+moved.z*moved.z>1.f || now>=a.start+WalkStartMs);
+      if(startClock)
         a.walkStarted = true;
-      if(c.npc->haveOutput() || firstStep || a.movedAt==0 || moved.quadLength()>=FollowMovedCm*FollowMovedCm) {
+      if(c.npc->haveOutput() || startClock || a.movedAt==0 || moved.quadLength()>=FollowMovedCm*FollowMovedCm) {
         a.movedFrom = pos;
         a.movedAt   = now;
         }
