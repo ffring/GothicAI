@@ -210,7 +210,9 @@ class QuestBoard:
         if d is not None and d <= SEE_CM:
             return ToolOutcome(f"Отклонено: одно из них живо — у тебя на глазах, в {_m(d)} м.", "rejected")
         if self.trust.broken(q.giver) and not self.done(q):
-            return ToolOutcome(f"Отклонено: он уже лгал тебе. {WORD_BROKEN}", "rejected")
+            return ToolOutcome(
+                f"Отклонено: {self.trust.of(q.giver).broken_reason()}. {WORD_BROKEN}", "rejected"
+            )
         # never more than the giver has
         args, reason = executor.check_give({"item": q.reward_item, "count": q.reward_count}, snap)
         if args is None:
