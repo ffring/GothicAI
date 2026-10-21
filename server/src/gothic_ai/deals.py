@@ -1250,6 +1250,8 @@ class Deals:
             await self._notice("Условия изменились — посмотри ещё раз")
             await self._send(deal.show())
             return
+        if deal.truce is not None and self.parley is not None and self.parley.now() is None:
+            raise ValueError("truce needs the game clock")
         deal.state = "accepting"
         effects = deal.effects()
         try:

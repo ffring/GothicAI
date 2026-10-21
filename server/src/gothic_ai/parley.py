@@ -23,6 +23,7 @@ from .protocol import (
     Perception,
     Session,
     Snapshot,
+    WorldLoaded,
 )
 from .turn import ToolOutcome
 
@@ -50,7 +51,6 @@ ULTIMATUM_TOOL = Tool(
 NO_REASON = "Без повода сразу не нападаешь: сначала потребуй — ultimatum."
 AGREEMENT = "У вас уговор: героя не трогать без нового повода."
 EXPIRY_CUE = "[Срок вышел: герой не подчинился]"
-UNKNOWN_GUILD = "Твоя гильдия ещё не известна: дождись обстановки."
 DRAWN = frozenset({"melee", "ranged", "magic"})
 
 
@@ -218,7 +218,7 @@ class Parley:
     def fight_reason(self, npc: str, snap: Snapshot | None = None) -> str | None:
         npc = npc.upper()
         if not self.bandit(npc):
-            return None if npc in self._guilds else UNKNOWN_GUILD
+            return None
         self.tick()
         truce = self.truce(npc)
         if truce:
@@ -493,7 +493,12 @@ class Parley:
         match msg:
             case Loading():
                 self._loading = True
-            case Session():
+            case Session() | WorldLoaded():
+                if isinstance(msg, WorldLoaded) and self._loading:
+                    # No Session means a portal: the hero left the old world's demands behind.
+                    for npc in {f["npc"] for f in self.chronicle.facts("parley_ultimatum")}:
+                        if threat := self.ultimatum(npc):
+                            self.chronicle.record({**threat, "status": "cleared", "why": "left"})
                 self._ticks, self._minute, self._roster = 0, None, {}
                 self._roster_complete = False
                 self._loading = False

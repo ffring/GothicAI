@@ -841,6 +841,37 @@ async def test_bandit_truce_is_a_real_deal_accepted_with_y(hours):
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_truce_without_a_clock_fails_before_any_exchange():
+    fake = FakeGame(branch="A")
+    fake.hero_items = {GOLD: 200}
+    link_cm, dialogue, chronicle, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:")
+    )
+    dialogue.guild_of = lambda npc: 9
+    deals.parley = Parley(dialogue.link, dialogue, chronicle)
+    try:
+        snap = await dialogue.link.snapshot(BRAGO, fresh=True)
+        result = await deals.propose(
+            BRAGO,
+            "Браго",
+            {"hero_gives": [{"item": GOLD, "count": 100}], "truce": {"hours": 1}},
+            snap,
+        )
+        assert result.status == "accepted"
+        offer = deals.open[BRAGO]
+        dialogue.link.snapshots.clear()
+        deals.parley._minute = None
+        assert deals.parley.now() is None
+        with pytest.raises(ValueError, match="truce needs the game clock"):
+            await deals.accept(offer.id, offer.version)
+        assert offer.state == "open"
+        assert fake.hero_items[GOLD] == 200 and fake.npc_items.get(BRAGO, {}).get(GOLD, 0) == 0
+        assert not chronicle.facts("deal") and not chronicle.facts("truce")
+        assert not any(msg["type"] == "story_effect" for msg in fake.story)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 @pytest.mark.parametrize("truce", [{"hours": 0}, {"hours": 25}, {"hours": True}, {"hours": 1.5}, {}])
 async def test_invalid_truce_term_is_rejected(truce):
     fake = FakeGame(branch="A")
