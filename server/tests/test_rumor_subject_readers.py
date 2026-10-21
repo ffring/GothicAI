@@ -91,6 +91,27 @@ async def test_npc_news_cannot_supply_a_title_for_the_heros_claim_or_lie(systems
     assert record.lied == [f"«{QUEST}»"]
 
 
+async def test_broken_gate_vouch_breaks_only_vouchers_trust_and_keeps_crime_distrust(systems):
+    crime(systems)
+    systems.chronicle.record({"fact": "crime_seen", "crime": "theft-1", "npc": LOBART})
+    existing = systems.crimes.distrust(LOBART)
+    assert existing
+    systems.chronicle.record({
+        "fact": "gate_vouch_broken", "id": "V1:theft-1", "vouch": "V1", "npc": LOBART,
+        "name": "Лобарт", "crime": "theft-1", "title": "Кража хлеба",
+    })
+    record = systems.trust.of(LOBART)
+    assert record.broken and len(record.crimes) == len(existing) + 1
+    assert "Кража хлеба" in record.crimes[0] and record.crimes[1:] == existing
+    assert "ты поручился за него" in systems.trust.situation(LOBART)
+    assert not systems.trust.of(VINO).broken
+    systems.chronicle.record(rumor(
+        kind="gate_vouch_broken", subject=LOBART, subject_name="Лобарт", to=VINO,
+        quest="gate_vouch_broken:V1:theft-1",
+    ))
+    assert not systems.trust.of(VINO).broken
+
+
 async def test_npc_news_never_teaches_a_hero_crime_or_native_memory_or_law(systems):
     crime(systems)
     systems.chronicle.record(rumor(kind="theft", crime="theft-1", to=ANDRE, at=5000))

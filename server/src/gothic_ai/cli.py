@@ -851,8 +851,6 @@ async def serve(args: argparse.Namespace) -> int:
         static = static if args.free_bandits else []
         if graph is not None and not args.no_crimes:
             static += crime_law_ops(graph)
-        elif graph is not None and not args.no_gates:
-            static += crime_law_ops(graph)[:1]
         state.story = StoryPatches(link, memory, static=static)
         # npc's we control: the body's instant reactions (behavioral model) and words for incidents
         reflexes = Reflexes(decider, apply_threats=args.apply_threats) if decider is not None else None
@@ -985,7 +983,7 @@ async def serve(args: argparse.Namespace) -> int:
         state.dialogue.extensions.append(trust)
         # deals the npc's offer the hero in conversation: a window, the player accepts (docs/npc-tools.md)
         if graph is not None and not args.no_gates:
-            state.gates = Gates(link, state.dialogue, state.chronicle, graph)
+            state.gates = Gates(link, state.dialogue, state.chronicle, graph, crimes=state.crimes)
         state.deals = Deals(
             link,
             state.dialogue,
@@ -1080,6 +1078,9 @@ async def serve(args: argparse.Namespace) -> int:
                 journal=journal,
             )
             state.dialogue.extensions.append(state.errands)
+            if state.gates is not None:
+                state.errands.gate_news = state.gates.news
+                state.errands.gate_told = state.gates.told
             state.concerns.extra.append(state.errands.concerns)  # a thing it was to take and did not
             errand_clock = asyncio.create_task(state.errands.run())
         # the npc checks the hero's words by asking a witness it knows (wave 2 step 3)
@@ -1104,6 +1105,8 @@ async def serve(args: argparse.Namespace) -> int:
             npc_crimes=not args.no_crimes and not args.no_npc_crimes,
         )
         # its lines right after what the npc saw itself
+        if state.gates is not None:
+            witnesses.gate_claim = state.gates.claim_heard
         state.dialogue.extensions.insert(state.dialogue.extensions.index(state.sightings) + 1, witnesses)
         state.concerns.extra.append(witnesses.concerns)
         witnesses.on_change.append(state.concerns.changed)  # a far answer's time on its mind is over
@@ -1118,6 +1121,8 @@ async def serve(args: argparse.Namespace) -> int:
         )
         lies = asyncio.create_task(state.quests.run())
         directing: list[asyncio.Task[None]] = []
+        if state.gates is not None:
+            directing.append(asyncio.create_task(state.gates.run()))
         if state.crime_law is not None:
             directing.append(asyncio.create_task(state.crime_law.run()))
         if state.crime_memory is not None:
@@ -2050,6 +2055,14 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario gate: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "gate_vouch":
+                assert state.dialogue and state.talk and state.gates
+                results = await scenarios.gate_vouch_scenario(
+                    link, state.dialogue, state.talk, state.gates
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario gate_vouch: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "vgive":
                 dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
                 assert dialogue is not None and talk is not None and vanilla is not None
@@ -2777,6 +2790,7 @@ def main() -> None:
             "vlie",
             "vgive",
             "gate",
+            "gate_vouch",
             "greg",
             "vcheck",
             "rumor",

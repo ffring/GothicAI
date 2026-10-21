@@ -252,6 +252,78 @@ async def test_far_the_fork_by_the_routines():
     assert rumors.told == [(LOBART, PECK)] and chronicle.facts("goal_done")[0]["instead_of"] == ANDRE
 
 
+@pytest.mark.parametrize("how", ["near", "far"])
+async def test_gate_news_uses_the_existing_plan_and_saved_goal(how):
+    errands, link, _, _, rumors, chronicle, _ = _desk()
+    delivered = []
+    errands.gate_news = lambda npc, to: ("gate:vouch:lothar:1", "Я поручился за героя")
+
+    async def gate_told(key, npc, to):
+        delivered.append((key, npc, to))
+
+    errands.gate_told = gate_told
+    goal, why = await errands.plan(LOBART, "Лобарт", DAWN, link.snapshots[LOBART])
+    assert goal is not None and not why
+    assert (goal.rumor, goal.title) == ("gate:vouch:lothar:1", "Я поручился за героя")
+    restored, *_ = _desk(chronicle.facts())
+    assert restored.goals[goal.id].rumor == goal.rumor
+    if how == "near":
+        await errands._near(goal, ANDRE)
+    else:
+        goal.arrive = goal.start + 300
+        goal.state = "away"
+        errands.tick(goal.arrive)
+        errands.tick(goal.arrive + 1)
+        await _until(lambda: goal.state == "done")
+    assert delivered == [(goal.rumor, LOBART, ANDRE)]
+    assert rumors.told == []
+    assert chronicle.facts("goal_done")[0]["to"] == ANDRE
+    assert chronicle.facts("goal_done")[0]["how"] == how
+
+
+async def test_gate_news_near_waits_for_its_exact_addressee_instead_of_another_guard():
+    errands, link, _, bodies, rumors, chronicle, _ = _desk()
+    delivered = []
+    errands.gate_news = lambda npc, to: ("gate:claim:guard:1", "Герой сослался на тебя")
+
+    async def gate_told(key, npc, to):
+        delivered.append((key, npc, to))
+
+    errands.gate_told = gate_told
+    goal, _ = await errands.plan(LOBART, "Лобарт", DAWN, link.snapshots[LOBART])
+    assert goal is not None
+    errands.tick(goal.start)
+    await _until(lambda: bodies.end is not None)
+    link.nearby[LOBART] = [{"npc": PECK, "name": "Пек", "distance": 400, "guild": MIL}]
+    assert bodies.end is not None
+    bodies.end.set_result("arrived")
+    await _until(lambda: goal.state == "there")
+    errands.tick(goal.start + 30)
+    await _until(lambda: goal.state == "failed")
+    assert not delivered and not rumors.told and not chronicle.facts("goal_done")
+
+
+async def test_gate_news_far_cannot_be_delivered_to_a_substitute_guard():
+    errands, link, talk, _, rumors, chronicle, _ = _desk()
+    delivered = []
+    errands.gate_news = lambda npc, to: ("gate:vouch:lothar:1", "Я поручился за героя")
+
+    async def gate_told(key, npc, to):
+        delivered.append((key, npc, to))
+
+    errands.gate_told = gate_told
+    rumors.social.days[ANDRE] = _all_day("ZS_SLEEP", "NW_CITY_KASERN_01", BARRACKS)
+    goal, _ = await errands.plan(LOBART, "Лобарт", DAWN, link.snapshots[LOBART])
+    assert goal is not None
+    link.player = SimpleNamespace(pos=(-90000.0, 0.0, 0.0))
+    talk.people.clear()
+    errands.tick(goal.start)
+    await _until(lambda: goal.state == "away")
+    errands.tick(goal.arrive)
+    assert goal.state == "failed"
+    assert not delivered and not rumors.told and not chronicle.facts("goal_done")
+
+
 async def test_hilda_takes_lobart_the_gold_and_never_a_mission_item():
     graph = SimpleNamespace(
         nodes={"DIA_LOBART_RUEBEN": SimpleNamespace(

@@ -27,6 +27,7 @@ from gothic_ai.social import Tie
 from gothic_ai.storyguard import StoryGuard
 from gothic_ai.trust import Trust
 from gothic_ai.witnesses import ASK_TOOL, Inquiry, Witnesses
+from gothic_ai.witnesses import Testimony as WitnessTestimony
 from tests.fake_game import FakeGame, connected
 from tests.test_crimes import deed
 from tests.test_dialogue import _until
@@ -371,6 +372,60 @@ async def test_a_witness_that_did_not_see_him_can_not_catch_him():
     # it saw nothing: nothing to catch him with, the lie stands
     assert any(o == "Отклонено: со слов: Хильда — героя не видели, уличить нечем." for o in llm.outputs)
     assert w.chronicle.facts("caught") == []
+
+
+@pytest.mark.parametrize("answer", [
+    "Подтверждаю: у героя есть поручение от меня.", "Отрицаю: герой мне солгал.",
+])
+async def test_gate_claim_answer_uses_code_truth_and_survives_the_testimony_fact(answer):
+    fake = FakeGame(branch="A")
+    llm = lobart(hilda=[("спрашивает тебя", FakeStep(answer))])
+    heard = []
+
+    async def gate_claim(witness, asker, said):
+        heard.append((witness, asker, said))
+        return answer
+
+    async with connected(fake) as link:
+        w = World(link, fake, llm)
+        w.witnesses.gate_claim = gate_claim
+        w.chronicle.record({
+            "fact": "covered", "npc": HILDA, "deal": "cover-gate", "day": 1,
+            "vouch": "Герой был со мной.",
+        })
+        said = "Хильда ждёт меня"
+        t = await w.witnesses._testify(None, LOBART, "Лобарт", HILDA, "Хильда", said, "near", 0)
+        assert t is not None
+        assert heard == [(HILDA, LOBART, said)]
+        assert t.gate_claim == answer and not t.cover and not t.vouch
+        fact = w.chronicle.facts("testimony")[0]
+        assert WitnessTestimony.of(fact).gate_claim == answer
+        assert answer in (w.witnesses.situation(LOBART) or "")
+        assert "героя не видели за сутки до того" not in w.witnesses._told(t)
+        await w.witnesses._speak(w.dialogue.open(HILDA, "Хильда"), t)
+        cue = str(llm.others.calls[-1][1][-1].content)
+        assert answer in cue and "ложное заявление отрицай" in cue
+
+
+async def test_gate_claim_is_checked_when_a_far_inquiry_reaches_the_named_witness():
+    fake = FakeGame(branch="A")
+    heard = []
+
+    async def gate_claim(witness, asker, said):
+        heard.append((witness, asker, said))
+        return "Отрицаю: у героя нет связи со мной."
+
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        w.witnesses.gate_claim = gate_claim
+        q = Inquiry("gate-question", LOBART, "Лобарт", ANDRE, "Андре", "Андре ждёт меня", AT_8, DAY + 18 * 60)
+        w.witnesses._inquire(q)
+        await w.witnesses.tick()
+        assert not heard
+        fake.hour = 18
+        await w.witnesses.tick()
+        assert heard == [(ANDRE, LOBART, q.said)]
+        assert w.chronicle.facts("testimony")[0]["gate_claim"].startswith("Отрицаю")
 
 
 async def test_who_may_be_asked_and_when_not():

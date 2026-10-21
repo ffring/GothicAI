@@ -60,6 +60,7 @@ from .contracts import (
     split,
 )
 from .game import GameError, GameLink
+from .gates import GateResultUnknown
 from .journal import Journal
 from .llm import Tool, ToolCall
 from .npc_cheat import INTENT_LABELS, breach, decide, hearers, keeps
@@ -460,7 +461,7 @@ class Debt:
         return f"{self.give.text()} до конца дня {self.due + 1}"
 
 
-DealState = Literal["open", "accepting", "done", "withdrawn", "declined", "expired"]
+DealState = Literal["open", "accepting", "unknown", "done", "withdrawn", "declined", "expired"]
 
 
 @dataclass
@@ -682,7 +683,10 @@ class Deals:
                 missing = f"; {later.missing}" if later.missing else ""
                 lines.append(f"Ты обещал герою отдать потом: {later.text()} ({later.deal}){missing}.")
         if (deal := self.open.get(npc)) is not None:
-            lines.append(f"Твоё предложение герою ждёт его согласия: {deal.terms()}.")
+            if deal.state == "unknown":
+                lines.append("Исход принятой сделки за проход неизвестен. Повторно брать плату нельзя.")
+            else:
+                lines.append(f"Твоё предложение герою ждёт его согласия: {deal.terms()}.")
         known, forgiven, silent = self.lies_of(npc)
         open_lies = {k: lie for k, lie in known.items() if k not in forgiven}
         if open_lies:
@@ -728,6 +732,8 @@ class Deals:
         return (tool, WITHDRAW_TOOL)
 
     def tools(self, npc: str) -> list[Tool]:
+        if (deal := self.open.get(npc.upper())) is not None and deal.state == "unknown":
+            return []
         if self.gates is not None and self.gates.on_post(npc):
             tool = PROPOSE_TOOL if self.cover and self.crimes is not None else NO_COVER_TOOL
         else:
@@ -743,7 +749,7 @@ class Deals:
             deal = self.open.get(conv.npc)
             if deal is None:
                 return ToolOutcome("Отклонено: ты ничего не предлагал.", "rejected")
-            if deal.state == "accepting":
+            if deal.state in ("accepting", "unknown"):
                 return ToolOutcome(
                     "Отклонено: герой уже согласился, вещи переходят из рук в руки.", "rejected"
                 )
@@ -754,7 +760,7 @@ class Deals:
     async def propose(self, npc: str, name: str, args: dict[str, Any], snap: Snapshot | None) -> ToolOutcome:
         npc = npc.upper()
         current = self.open.get(npc)
-        if current is not None and current.state == "accepting":
+        if current is not None and current.state in ("accepting", "unknown"):
             return ToolOutcome("Отклонено: герой уже согласился на прежние условия.", "rejected")
         let_pass = args.get("let_pass", False)
         if type(let_pass) is not bool:
@@ -877,7 +883,7 @@ class Deals:
         if not any(given):
             return ToolOutcome("Отклонено: в сделке ничего нет.", "rejected")
         current = self.open.get(npc)  # he may have accepted the shown terms meanwhile
-        if current is not None and current.state == "accepting":
+        if current is not None and current.state in ("accepting", "unknown"):
             return ToolOutcome("Отклонено: герой уже согласился на прежние условия.", "rejected")
         deal_id, version = (current.id, current.version + 1) if current else (f"D{next(self._ids)}", 1)
         deal = Deal(
@@ -1208,6 +1214,15 @@ class Deals:
                 await self.gates.bribe(deal.npc, effects=effects)
             elif effects:
                 await self.link.story_effect(deal.npc, effects, check=True)
+        except GateResultUnknown as err:
+            deal.state = "unknown"
+            await self._send(DealHideCmd(deal=deal.id))
+            await self._notice("Исход сделки за проход неизвестен")
+            self.dialogue.note(
+                deal.npc,
+                f"Исход принятой сделки за проход неизвестен: {err}. Повторно брать плату нельзя.",
+            )
+            return
         except (GameError, TimeoutError) as err:
             await self._failed(deal, str(err))
             return

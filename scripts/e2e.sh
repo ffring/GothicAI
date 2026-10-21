@@ -162,6 +162,9 @@
 #   gate: new game, LLM=fake: the city guard sells passage for 100 gold through Y; both gate guards
 #       get AIV_PASSGATE and the hero crosses without SECONDWARN/ATTACK. Loading the outside save,
 #       a believed let_pass claim grants passage and records its text, reference and game time.
+#   gate_vouch: new game, LLM=fake: nearby Lothar vouches and the guard admits the hero; a loaded
+#       branch admits a real pass without a native menu or lines. Another loaded branch believes
+#       a false Harad claim; the next morning catches it and revokes both guards' passage.
 #   crime_react: rule reactions at the deed (docs/crime.md, layer 4a), LLM=fake; SAVE=save_slot_1.sav.
 #       Hilda's retained theft witness and own SVM shout; Lobart courage 2 demands restitution, then
 #       a temporary scenario card with courage 3 fights through native AR_THEFT to a living knockout

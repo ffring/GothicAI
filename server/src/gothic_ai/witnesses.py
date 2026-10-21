@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -158,6 +158,7 @@ class Testimony:
     vouch: str = ""
     about: str = HERO  # the person asked about; old facts used about as a timestamp
     about_name: str = ""
+    gate_claim: str = ""  # code's answer when this witness was named at the gates
 
     @classmethod
     def of(cls, f: Fact) -> Testimony:
@@ -180,6 +181,7 @@ class Testimony:
             str(f.get("vouch", "")),
             str(f.get("about") or HERO).upper() if isinstance(f.get("about"), str) else HERO,
             str(f.get("about_name", "")),
+            str(f.get("gate_claim", "")),
         )
 
 
@@ -224,6 +226,7 @@ class Witnesses:
         cards: Mapping[str, Card] | None = None,
         people_knowledge: PeopleKnowledge | None = None,
         npc_crimes: bool = True,
+        gate_claim: Callable[[str, str, str], Coroutine[Any, Any, str | None]] | None = None,
     ) -> None:
         self.link = link
         self.dialogue = dialogue
@@ -242,6 +245,7 @@ class Witnesses:
         self.crimes = crimes if crimes is not None else sightings.crimes
         self.cover_enabled = cover
         self.npc_crimes_enabled = npc_crimes
+        self.gate_claim = gate_claim
         self.all_tools = (ASK_TOOL if npc_crimes else HERO_ASK_TOOL,)
         self.cards = cards if cards is not None else {}
         self.people_knowledge = people_knowledge or PeopleKnowledge(chronicle)
@@ -618,6 +622,12 @@ class Witnesses:
                 + (f"Остальное, о чём можешь рассказать: {saw}. " if saw else "")
                 + "Ответь коротко тому, кто спрашивает, своими словами и в своём характере.]"
             )
+        if t.gate_claim:
+            cue = (
+                f"[{t.name} спрашивает тебя о заявлении героя у ворот: «{t.said}». "
+                f"Установленный факт: {t.gate_claim}. Ответь коротко своими словами и в своём характере. "
+                "Подтверждай только установленную кодом правду; ложное заявление отрицай.]"
+            )
         # a free witness answers on the move; one held for this stands and talks
         task = self.dialogue.event_turn(wconv.npc, cue, overlay=not self.controlled(wconv.npc), tools=())
         if task is None:
@@ -648,9 +658,17 @@ class Witnesses:
                 "Показание — строки С1… в «Что тебе рассказали другие». "
                 "Кого считать виновным и что сказать герою — решай сам.]"
             )
+        if t.gate_claim:
+            cue = (
+                f"[Ответ: {self._told(t)}. Правда заявления у ворот установлена кодом, "
+                "последствия уже применены. Что сказать герою — решай сам.]"
+            )
         if self.budget is None or self.budget.allow(npc):
+            tools = ("set_intent",) if t.gate_claim else (
+                "catch_lie" if t.about == HERO else "blame", "set_intent"
+            )
             self.dialogue.event_turn(
-                npc, cue, tools=(("catch_lie" if t.about == HERO else "blame"), "set_intent"), kind="witness"
+                npc, cue, tools=tools, kind="witness"
             )
         else:
             self.dialogue.note(npc, cue.strip("[]"))
@@ -675,6 +693,10 @@ class Witnesses:
             id or f"{npc}:{witness}:{about}:{now}", npc, name, witness, wname, said, tier, now, at, saw,
             about=about, about_name=about_name,
         )
+        if about == HERO and self.gate_claim is not None:
+            t.gate_claim = await self.gate_claim(witness, npc, said) or ""
+            if self.chronicle.branch != branch:
+                return None
         t.told = list(saw)
         if self.crimes is not None and about == HERO:
             deeds = [
@@ -687,7 +709,7 @@ class Witnesses:
             t.crime_told = [crime for crime in t.crime_saw if crime not in silent]
         if about != HERO:
             self._npc_evidence(t)
-        elif self.cover_enabled:
+        elif self.cover_enabled and not t.gate_claim:
             self._cover(t)
         crime_excuses = {}
         if self.crimes is not None and about == HERO:
@@ -716,6 +738,7 @@ class Witnesses:
                 **({"crime_saw": t.crime_saw, "crime_told": t.crime_told} if t.crime_saw else {}),
                 **({"crime_excuses": crime_excuses} if crime_excuses else {}),
                 **({"cover": t.cover, "vouch": t.vouch} if t.cover else {}),
+                **({"gate_claim": t.gate_claim} if t.gate_claim else {}),
                 "minute": now,
                 **({"day": int(state["day"])} if "day" in state else {}),
             }
@@ -1072,6 +1095,11 @@ class Witnesses:
         now = max(self._now(), t.minute)
         if t.about != HERO:
             return self._npc_told(t, crime, now)
+        if t.gate_claim:
+            return (
+                f"{t.witness_name}, {self._day(t.minute, now)}, "
+                f"о его словах «{t.said}»: {t.gate_claim}"
+            )
         spoke = f" (он сказал их {self._day(t.at, now)})" if t.minute - t.at > 30 else ""
         seen = "; ".join(self.sightings.words(s, now) for s in t.told)
         parts = [f"героя видели {seen}"] if seen and not crime else []
