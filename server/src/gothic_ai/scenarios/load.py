@@ -14,7 +14,7 @@ async def load_rewind(link: GameLink) -> dict[str, str]:
     """Rewind at least 20 game seconds and require bridge pushes within two seconds."""
     await link.wait_world()
     npc, slot = "NONE_100_XARDAS", 7
-    tag, point = "load_rewind", "NW_XARDAS_TOWER_VALLEY_09"
+    tag, point = "load_rewind", "NW_XARDAS_TOWER_IN1_26"
     if await _save(link, slot) is None:
         raise GameError("load_rewind preparation: save failed")
     saved_t = (await link.snapshot(npc, fresh=True)).t
