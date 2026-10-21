@@ -390,7 +390,9 @@ async def _run(
             raise GameError("world reloaded")
         values = await link.story_eval(npc, [["var", result]])
         if values != [1]:
-            raise GameError("passage refused: unpaid crime, invalid ground, guard off post or insufficient gold")
+            raise GameError(
+                "passage refused: unpaid crime, invalid ground, guard off post or insufficient gold"
+            )
     finally:
         link.listeners.remove(hear)
         if session is link.session:

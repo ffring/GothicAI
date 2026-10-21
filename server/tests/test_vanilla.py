@@ -617,14 +617,19 @@ def test_bridge_translates_native_gate_fields_and_checklog(graph):
     }
 
 
-async def test_constantino_herbs_accept_quest_keeps_native_passage_and_checklog():
-    from tests.test_gates import GatesFake
-
+@pytest.fixture(scope="module")
+def real_graph():
     data = Path(os.environ.get("GOTHIC_AI_DATA", Path.home() / ".local/share/gothic-ai"))
     path = Path(os.environ.get("GOTHIC_STORY_GRAPH", data / "story.json"))
     if not path.exists():
         pytest.skip("needs actual storygraph export (GOTHIC_STORY_GRAPH)")
-    graph = load(path)
+    return load(path)
+
+
+async def test_constantino_herbs_accept_quest_keeps_native_passage_and_checklog(real_graph):
+    from tests.test_gates import GatesFake
+
+    graph = real_graph
     npc, partner = "MIL_310_STADTWACHE", "MIL_333_STADTWACHE"
     quest, ending = "MIS_ADDON_LESTER_PICKFORCONSTANTINO", "DIA_ADDON_MIL_310_STADTWACHE_CONSTANTINO"
     fake = GatesFake(branch="A")
