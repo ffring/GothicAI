@@ -21,6 +21,7 @@ from ..quests import SEE_CM, QuestBoard
 from ..sightings import Sightings
 from ..social import TICK_S, Rumors
 from ..talk import TalkDesk
+from ..trace import read as read_trace
 from ..trust import Trust
 from ..vanilla import CHECK_CM, VanillaQuests
 from ..witnesses import Witnesses
@@ -495,6 +496,240 @@ async def vanilla_given(
     menu = await link.offered_dialogs(npc)
     check("once", ended not in menu and helfen not in menu, " ".join(menu))
     return _logged(results)
+
+
+async def vanilla_spare(
+    link: GameLink,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    vanilla: VanillaQuests,
+    npc: str = "BAU_4300_ADDON_CAVALORN",
+) -> dict[str, str]:
+    """Cavalorn spares one bandit and accepts the others' deaths on his own evidence.
+
+    New game, LLM=fake: give his native bandit quest in conversation, break his trust with a prior
+    caught lie, then amend and complete it without check_claim or a false letter quest start.
+    """
+    results: dict[str, str] = {}
+
+    def check(name: str, ok: bool, detail: object = "") -> bool:
+        results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
+        return ok
+
+    if not isinstance(dialogue.llm, FakeBackend):
+        return _logged({"scripted_model": "failed (vspare requires LLM=fake and a new game)"})
+    await link.wait_world()
+    if link.session is None:
+        await wait_message(link, Session, timeout=10)
+    await asyncio.sleep(1)
+    quest, letter = "MIS_ADDON_CAVALORN_KILLBRAGO", "MIS_ADDON_CAVALORN_LETTER2VATRAS"
+    killed = "BDT_1014_BANDIT_L"
+    witnessed = "BDT_1015_BANDIT_L"
+    spared = "BDT_1013_BANDIT_L"
+    bandits = (killed, witnessed, spared)
+    why = "Пощадил его по просьбе героя."
+    park = "NW_XARDAS_TOWER_VALLEY_09"  # flat ground; _01 drops sharply in front of its waypoint
+    facts = vanilla.chronicle.facts
+    hero = ["inst", "HERO"]
+    async def var(name: str) -> int | None:
+        return (await link.story_state(vars=[name])).get("vars", {}).get(name)
+
+    def seen(how: str) -> set[str]:
+        return {f["dead"] for f in facts("seen_dead") if f.get("npc") == npc and f.get("how") == how}
+
+    async def say(text: str) -> bool:
+        conv = dialogue.conversations.get(npc)
+        before = conv.reply if conv else None
+        talk.hear(text, npc, {"via": "scenario"})
+
+        def answered() -> bool:
+            conv = dialogue.conversations.get(npc)
+            return bool(conv and conv.reply and conv.reply is not before and conv.reply.done())
+
+        return await _until(answered, 60)
+
+    script = ClaimScript(
+        said=[
+            ("помогу", FakeStep("Поможешь? Ну, пошли, вдвоём управимся.", [
+                ToolCall("give_quest", {"quest": quest}),
+            ])),
+            ("отпусти его", FakeStep("За упрямство я его убивать не стану. Пусть идёт.", [
+                ToolCall("amend_quest", {"quest": quest, "drop": [spared], "why": why}),
+            ])),
+            ("с ними покончено", FakeStep("Сам видел. Держи награду. Есть ещё дело с письмом.", [
+                ToolCall("accept_quest", {"quest": quest}),
+            ])),
+        ],
+        told=[],
+        default="Хм.",
+    )
+    dialogue.llm = _ByNpc({"Кавалорн": script}, FakeBackend("Хм.", delay=0))
+    talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+    for who in (npc, *bandits):
+        await link.debug("skip_important", near=who)
+    for _ in range(2):
+        try:
+            await link.debug("kill", instance="YGOBBO_GREEN", near=npc, by=npc)
+        except GameError as err:
+            log.info("vspare: goblin: %s", err)
+    await link.debug("player_goto", to=npc, distance=300)
+    if not check("roster", await _until(lambda: npc in talk.people, 20), npc):
+        return _logged(results)
+    answered = await say("Кавалорн, давай я помогу тебе с бандитами.")
+    given = await _until(lambda: any(f.get("quest") == quest for f in facts("quest_given")), 15)
+    if not check("given", answered and given and await var(quest) == 1, facts("quest_given")[-1:]):
+        return _logged(results)
+
+    vanilla.chronicle.record(
+        {
+            "fact": "caught",
+            "npc": npc,
+            "quest": "VSPARE_PRIOR_CLAIM",
+            "title": "Прежняя ложь",
+            "how": "уличил героя в прежней лжи",
+        }
+    )
+    if not check("distrust", vanilla.trust.broken(npc), vanilla.trust.situation(npc)):
+        return _logged(results)
+    talk.end("scenario")
+    if not await _until(lambda: npc not in talk.attached, 20):
+        return _logged({**results, "released": "failed (Cavalorn is still attached)"})
+
+    # The instance path credits a native killer; debug kill's npc path has no killer.
+    await link.debug("kill", instance=killed, near=npc, by=npc)
+    remembered = await _until(lambda: killed in seen("killed"), 10)
+    if not check("killed", remembered, [f for f in facts("seen_dead") if f.get("npc") == npc]):
+        return _logged(results)
+
+    await link.debug("teleport", near=npc, distance=300)
+    await link.debug("npc_goto", npc=witnessed, to=npc, distance=300, face=npc)
+    before_death = (await link.story_state(npcs=[witnessed], near=npc)).get("npcs", {}).get(witnessed, {})
+    if not check(
+        "staged", before_death.get("state") == "alive" and bool(before_death.get("seen")), before_death
+    ):
+        return _logged(results)
+    await link.debug("kill", instance=witnessed, near=npc, by="PLAYER")
+    remembered = await _until(lambda: witnessed in seen("saw_die"), 10)
+    if not check("saw_die", remembered, [f for f in facts("seen_dead") if f.get("dead") == witnessed]):
+        return _logged(results)
+
+    await link.debug("npc_goto", npc=npc, waypoint=park)
+    await link.npc_act(
+        npc, "start_activity", state="ZS_STAND_WP", waypoint=park, minutes=120, place=False
+    )
+    await link.debug("player_goto", to=npc, distance=250)
+    await _until(lambda: npc in talk.people and talk.people[npc].distance < 600, 20)
+    # Hold both while they negotiate: the spared bandit must remain alive before Cavalorn's eyes.
+    if not await talk.hold(npc, "scenario"):
+        return _logged({**results, "held": "failed (Cavalorn could not stop to listen)"})
+    await link.debug("npc_goto", npc=spared, to=npc, distance=150, face=npc)
+    await link.attach(spared)
+    await link.act(npc, "turn_to", npc=spared)
+    visible = await _until_async(
+        lambda: link.story_state(npcs=[spared], near=npc),
+        lambda state: bool(state.get("npcs", {}).get(spared, {}).get("seen")),
+        10,
+    )
+    nearby = (await link.story_state(npcs=[npc, spared], near=npc)).get("npcs", {})
+    before_spare = nearby.get(spared, {})
+    if not check(
+        "spared_in_view", visible and before_spare.get("state") == "alive" and bool(before_spare.get("seen")),
+        nearby,
+    ):
+        return _logged(results)
+
+    answered = await say("Кавалорн, отпусти его.")
+    amended = await _until(
+        lambda: any(f.get("quest") == quest and f.get("drop") == [spared] for f in facts("quest_terms")),
+        15,
+    )
+    bodies = (await link.story_state(npcs=[killed, witnessed], near=npc)).get("npcs", {})
+    distances = {target: bodies.get(target, {}).get("distance") for target in (killed, witnessed)}
+    await vanilla.prepare(npc)
+    offer = vanilla.offers.get(npc, {}).get(quest)
+    situation = vanilla.situation(npc) or ""
+    if not check(
+        "amended",
+        bool(answered and amended and offer is not None and spared not in offer.claim.dead
+             and "Бандит ×2" not in offer.needs and "Снято тобой:" in situation and why in situation),
+        f"terms={facts('quest_terms')}; {situation}",
+    ):
+        return _logged(results)
+    tools = [tool.name for tool in vanilla.tools(npc)]
+    own_evidence = offer.evidence() if offer is not None else ""
+    away = bool(
+        all(distance is not None and distance > 2000 for distance in distances.values())
+        and offer is not None
+        and offer.seen_true()
+        and all(target.seen_dead and not target.seen for target in offer.targets)
+        and own_evidence
+        and "ты убил его сам" in own_evidence
+        and "ты видел, как он умер" in own_evidence
+        and "check_claim" not in tools
+    )
+    if not check("away", away, f"cm={distances}; tools={tools}; {situation}"):
+        return _logged(results)
+    check(
+        "no_letter_start",
+        letter not in vanilla.starts.get(npc, {})
+        and not any(letter in line and "дать герою поручение" in line for line in situation.splitlines()),
+        situation,
+    )
+
+    exp = await link.evaluate(["field", hero, "EXP"])
+    gold = await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]])
+    claim_calls = len(script.calls)
+    answered = await say("Кавалорн, с ними покончено.")
+    claimed = await _until(lambda: any(f.get("quest") == quest for f in facts("claim")), 15)
+    after = (
+        await var(quest),
+        await var(letter),
+        await link.evaluate(["field", hero, "EXP"]),
+        await link.evaluate(["call", "NPC_HASITEMS", hero, ["sym", "ITMI_GOLD"]]),
+    )
+    claim = next((f for f in facts("claim") if f.get("quest") == quest), {})
+    outcome = next((f for f in facts("quest_outcome") if f.get("quest") == quest), {})
+    alive = (await link.story_state(npcs=[spared], near=npc)).get("npcs", {}).get(spared, {})
+    calls = [
+        call
+        for path in dialogue.trace.directory.glob("*.jsonl")
+        for row in read_trace(path)
+        if row.get("type") == "turn" and row.get("npc") == npc
+        and row.get("branch") == vanilla.chronicle.branch
+        for step in row.get("steps", [])
+        for call in step.get("calls", [])
+    ] if dialogue.trace is not None else []
+    actions = [call["name"] for call in calls]
+    check(
+        "ended",
+        bool(
+            answered
+            and claimed
+            and after == (2, 1, exp + 100, gold + 50)
+            and claim.get("truth") is False
+            and claim.get("checked") is False
+            and not facts("lie")
+            and alive.get("state") == "alive"
+            and outcome.get("npc") == npc
+            and outcome.get("how") == "amended"
+            and outcome.get("drop") == [spared]
+            and outcome.get("why") == [why]
+            and outcome.get("pay") == "full"
+            and any(call["name"] == "amend_quest" and call.get("outcome") == "accepted" for call in calls)
+            and any(call["name"] == "accept_quest" and call.get("outcome") == "accepted" for call in calls)
+            and "check_claim" not in actions
+            and all(
+                "check_claim" not in [tool.name for tool in offered]
+                for _, _, offered in script.calls[claim_calls:]
+            )
+        ),
+        f"exp/gold {(exp, gold)} -> {after}; claim={claim}; outcome={outcome}; "
+        f"alive={alive}; actions={actions}",
+    )
+    await link.detach(spared)
+    talk.free(npc, "scenario")
+    return _logged(results)
+
 
 
 async def vanilla_check(

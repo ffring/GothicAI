@@ -414,7 +414,8 @@ AiBridge::Impl::Impl() {
         if(v.drainedAt==0)
           return true;
       // still thinking of the answer: the "Хм..." said at once was not it
-      if(auto w = Gothic::inst().world(); w!=nullptr && !thinker.empty() && w->tickCount()<thinkUntil)
+      if(auto w = Gothic::inst().world(); w!=nullptr && !thinker.empty() &&
+         w->tickCount()<thinkUntil && thinkUntil<=w->tickCount()+ThinkMax)
         return true;
       return lines.pending();
       };
@@ -614,9 +615,14 @@ void AiBridge::Impl::onStartLoading() {
   originalLines.clear();
   originalTo.clear();
   lines.clear();
+  listener.clear();
+  thinker.clear();
+  pttHeld = false;
+  listenUntil = thinkUntil = 0;
   if(auto world = Gothic::inst().world())
     observer.cancelDeeds(*world);
   observer.clear();
+  view.clear();
   Log::i("[story] ",graph.status(),"; ",triggers.status());
   // the server sends the patches of the new branch
   graph.clear();
@@ -2553,7 +2559,7 @@ void AiBridge::Impl::tickListener(World& world) {
   Npc*           pl  = world.player();
   if(!listener.empty()) {
     Npc* npc = npcBySymbol(world,listener);
-    if(npc!=nullptr && pl!=nullptr && (pttHeld || now<listenUntil)) {
+    if(npc!=nullptr && pl!=nullptr && (pttHeld || (now<listenUntil && listenUntil<=now+ListenAfter))) {
       npc->listenTo(500);
       // the two look at each other while he speaks
       npc->setTalkPartner(pl,1000);
@@ -2566,7 +2572,7 @@ void AiBridge::Impl::tickListener(World& world) {
     }
   if(!thinker.empty()) {
     Npc* npc = npcBySymbol(world,thinker);
-    if(npc!=nullptr && pl!=nullptr && now<thinkUntil) {
+    if(npc!=nullptr && pl!=nullptr && now<thinkUntil && thinkUntil<=now+ThinkMax) {
       npc->thinkOfAnswer(500);
       npc->setTalkPartner(pl,1000);  // the eyes go aside from him, he stays the one it talks to
       } else {

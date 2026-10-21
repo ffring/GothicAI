@@ -245,6 +245,7 @@ void NpcController::detachAll(World& world, std::string_view reason) {
     auto symbol = npcs.back().symbol;
     detach(world,symbol,reason,err);
     }
+  percThrottle.clear();
   }
 
 void NpcController::dropAll(std::string_view reason) {
@@ -890,7 +891,7 @@ void NpcController::updateFollow(World& world, Controlled& c, uint64_t now) {
       }
     f.byWay = false;  // stuck on the waynet too: straight again
     }
-  if(d<=FollowNear || now<f.nextStep || c.npc->isAiBusy())
+  if(d<=FollowNear || (now<f.nextStep && f.nextStep<=now+FollowStepMs) || c.npc->isAiBusy())
     return;
   f.nextStep = now + FollowStepMs;
   f.byWay    = false;
@@ -1006,7 +1007,7 @@ void NpcController::tick(World& world) {
       updateAction(world,c,now);
     else if(c.follow)
       updateFollow(world,c,now);
-    if(now>=c.nextSnapshot) {
+    if(now>=c.nextSnapshot || c.nextSnapshot>now+SnapshotPeriodMs) {
       emitSnapshot(world,c);
       c.nextSnapshot = now + SnapshotPeriodMs;
       }
@@ -1024,7 +1025,7 @@ void NpcController::perception(World& world, Npc& self, Npc& other, Npc* victim,
   const uint64_t now = world.tickCount();
   const uint64_t key = (uint64_t(it->instance)<<40) ^ (uint64_t(other.instanceSymbol())<<8) ^ uint64_t(perc);
   auto& last = percThrottle[key];
-  if(last!=0 && now<last+PercThrottleMs)
+  if(last!=0 && last<=now && now<last+PercThrottleMs)
     return;
   last = now;
 

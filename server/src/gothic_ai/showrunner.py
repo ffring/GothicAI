@@ -26,7 +26,7 @@ from .crimes import Crimes
 from .game import GameError
 from .gamedata.storygraph import QUEST_STATES
 from .llm import LLMBackend, LLMError, Message, Tool, ToolCall, open_ahead
-from .occasions import DEEDS, NEAREST, OccasionFailed, Occasions
+from .occasions import DEEDS, NEAREST, OccasionFailed, Occasions, with_quest_outcomes
 from .people_knowledge import PeopleKnowledge, rumor_subject
 from .protocol import GameMessage, Loading, Session
 from .questbook import Ground, _vanilla
@@ -69,6 +69,9 @@ INSTRUCTIONS = """\
 закрывает этот квест скриптов: они перечислены в сводке. Не продолжай и не заканчивай работу скриптов,
 не обещай их наград, не требуй их квестовых вещей. Опирайся на записи журнала, которые уже видел герой,
 а не на будущие развязки. Предпочитай небольшое дело рядом, доступное при текущем ванильном состоянии.
+Поле outcome ванильного события — решение заказчика: how — done (без правок), amended (уговор изменён)
+или dropped (поручение отменено), drop — снятые пункты, why — его слова, pay — full (вся обещанная плата)
+или none (без платы).
 Дела героя: ты знаешь правду, люди — только своё знание из сводки. Знание режиссёра не передавай людям.
 Пострадавший может попросить вернуть вещь или найти вора, если знает о деле или заметил пропажу.
 Пострадавший от кражи может заметить пропажу, не зная вора. Вором может быть сам герой: он вправе
@@ -474,6 +477,18 @@ class Showrunner:
                 quests.append(f"{q.id}: «{q.title}», {progress.state}, стадия {progress.stage}")
         facts = self.chronicle.facts()
         vanilla = [f for f in facts if f.get("fact") == "vanilla_quest"][-RECENT_DEEDS:]
+        members = occasion_members(occasion)
+        events = await with_quest_outcomes(
+            [*vanilla, *(m["vanilla"] for m in members if "vanilla" in m)],
+            facts, self.link,
+            {n: node.description for n, node in self.author.graph.nodes.items() if node.description},
+        )
+        enriched = iter(events[len(vanilla):])
+        vanilla = events[:len(vanilla)]
+        members = [
+            {**m, "vanilla": next(enriched)} if "vanilla" in m else m for m in members
+        ]
+        occasion = {**members[0], **({"also": members[1:]} if "also" in occasion else {})}
         event_quests = {
             f.get("quest") for f in [*vanilla, *(o.get("vanilla", {}) for o in occasion_members(occasion))]
         }

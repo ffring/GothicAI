@@ -360,27 +360,70 @@ void selfTest() {
     }
   ++tests;
 
-  input=target(0,1,230);teacher.reset();
+  input=target(0,1,390);teacher.reset();
   keys=teacher.decide(input);input.previous=keys;
-  input.roads.goalDistanceCm=250;input.roads.carrotDistanceCm=250;
+  float previousDistance=390;
+  const std::array<float,9> distances={410,390,350,310,290,310,350,390,410};
+  const std::array<bool,9> walking={false,false,false,false,true,true,true,true,false};
+  for(size_t i=0;i<distances.size();++i) {
+    // A target walking at 100 cm/s; changes in separation also contain the
+    // learner's own translation. Gait must not confuse the two velocities.
+    input.body.velocityCmS={0,0,100.f-(distances[i]-previousDistance)*10.f};
+    input.roads.goalDistanceCm=distances[i];input.roads.carrotDistanceCm=distances[i];
+    keys=teacher.decide(input);noNativeAction(keys);
+    require(keys.walk==walking[i],"moving target gait did not retain the recorded walk/run hysteresis");
+    input.previous=keys;previousDistance=distances[i];
+    }
+  ++tests;
+
+  input=target(0,1,320);teacher.reset();
+  keys=teacher.decide(input);input.previous=keys;
+  input.roads.goalDistanceCm=350;input.roads.carrotDistanceCm=350;
+  keys=teacher.decide(input);noNativeAction(keys);
+  require(!keys.walk,"an observed running target inside four metres must be matched at a run");
+  input.previous=keys;input.roads.goalDistanceCm=280;input.roads.carrotDistanceCm=280;
+  keys=teacher.decide(input);noNativeAction(keys);
+  require(keys.walk,"a running target must not retain running below three metres");
+  teacher.reset();input=target(0,1,350);
+  keys=teacher.decide(input);noNativeAction(keys);
+  require(keys.walk,"an episode reset retained a previous target's running observation");
+  ++tests;
+
+  input=target(0,1,230);input.roads.beyondKnown=false;input.roads.carrotDistanceCm=0;teacher.reset();
+  keys=teacher.decide(input);input.previous=keys;
+  input.roads.goalDistanceCm=250;
   keys=teacher.decide(input);noNativeAction(keys);
   require(keys.forward==0 && keys.strafe==0 && keys.turn==0,"a nearby moving target must retain following distance");
   input.previous=keys;
-  for(unsigned tick=1;tick<=5;++tick) {
+  for(unsigned tick=1;tick<=6;++tick) {
     keys=teacher.decide(input);noNativeAction(keys);
-    if(tick<5)
-      require(keys.forward==0 && keys.strafe==0,"nearby target motion must persist for five decisions");
-    else
-      require(keys.forward>0 && keys.walk,"a now stationary point must resume approach after five decisions");
+    require(keys.forward==0 && keys.strafe==0,"a reached follow carrot must remain stopped when the target pauses");
     input.previous=keys;
     }
   ++tests;
 
-  input=target(0,1,210);teacher.reset();
+  input=target(0,1,210);input.roads.beyondKnown=false;input.roads.carrotDistanceCm=0;teacher.reset();
   keys=teacher.decide(input);input.previous=keys;
-  input.roads.goalDistanceCm=190;input.roads.carrotDistanceCm=190;
+  input.roads.goalDistanceCm=190;
   keys=teacher.decide(input);noNativeAction(keys);
   require(keys.forward<0 || keys.strafe!=0,"a moving target approaching inside two metres must trigger a safe retreat");
+  ++tests;
+
+  input=target(2,1,210);input.roads.beyondKnown=false;input.roads.carrotDistanceCm=0;
+  // Both target components point forward/right. A left-side remembered wall
+  // blocks the first away axis, while straight backwards remains clear.
+  for(int z=30;z<33;++z)hazard(input,29,z);
+  teacher.reset();keys=teacher.decide(input);input.previous=keys;
+  input.roads.goalDistanceCm=190;
+  keys=teacher.decide(input);noNativeAction(keys);
+  require(keys.forward<0 && keys.strafe==0,"following retreat did not try a clear alternate away axis");
+  ++tests;
+
+  input=target(0,1,230);teacher.reset();
+  keys=teacher.decide(input);input.previous=keys;
+  input.roads.goalDistanceCm=250;input.roads.carrotDistanceCm=250;
+  keys=teacher.decide(input);noNativeAction(keys);
+  require(keys.forward>0,"approaching a nearby moving target must not inherit following stand-off");
   ++tests;
 
   input=target(0,1,600);input.body.velocityCmS={0,0,100};teacher.reset();

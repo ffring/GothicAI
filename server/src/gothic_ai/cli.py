@@ -1460,6 +1460,11 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "load_rewind":
+                results = await scenarios.load_rewind(link)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "neural-soak":
                 results = await scenarios.neural_soak_scenario(
                     link, state.dialogue, bodypilot, log_dir=Path(args.memory_db).parent
@@ -2130,6 +2135,13 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario vgive: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "vspare":
+                dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
+                assert dialogue is not None and talk is not None and vanilla is not None
+                results = await scenarios.vanilla_spare(link, dialogue, talk, vanilla)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario vspare: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "greg":
                 dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
                 assert dialogue is not None and talk is not None and vanilla is not None
@@ -2180,6 +2192,13 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.deal_debt(link, dialogue, talk, deals)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario debt: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "xardas_money":
+                dialogue, talk, deals = state.dialogue, state.talk, state.deals
+                assert dialogue is not None and talk is not None and deals is not None
+                results = await scenarios.xardas_money(link, dialogue, talk, deals)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario xardas_money: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "initiative":
                 dialogue, talk, deals, concerns = state.dialogue, state.talk, state.deals, state.concerns
@@ -2780,6 +2799,7 @@ def main() -> None:
             "neural-load",
             "neural-soak",
             "memprobe",
+            "load_rewind",
             "m5c",
             "m5e",
             "orders",
@@ -2854,6 +2874,7 @@ def main() -> None:
             "character",
             "vlie",
             "vgive",
+            "vspare",
             "gate",
             "gate_vouch",
             "greg",
@@ -2864,6 +2885,7 @@ def main() -> None:
             "deal_demo",
             "contract",
             "debt",
+            "xardas_money",
             "initiative",
             "gossip",
             "gossip_demo",
