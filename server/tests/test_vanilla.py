@@ -1777,7 +1777,8 @@ async def test_dropping_a_quest_leaves_a_shared_journal_topic_open(graph):
     drop = FakeStep(
         "Больше не нужно.", [ToolCall("drop_quest", {"quest": QUEST, "why": "Урожай пропал"}, "d1")]
     )
-    link_cm, dialogue, chronicle, vanilla = await _setup(fake, FakeBackend(script=[drop], delay=0), graph, store)
+    llm = FakeBackend(script=[drop], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
     for topic in graph.quests[QUEST].topics:
         vanilla._topic_uses[topic] = 2  # another quest writes to it too
     try:
