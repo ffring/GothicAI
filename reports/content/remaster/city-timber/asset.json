@@ -233,6 +233,81 @@
       "utc": "2026-10-21T16:33:42Z",
       "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
       "parent": null
+    },
+    {
+      "file": "city-timber-concept/concept-NW_CITY_WOODBEAM_02-attempt-2.png",
+      "role": "concept",
+      "texture": "NW_CITY_WOODBEAM_02.TGA",
+      "attempt": 2,
+      "sha256": "31ff52480d9e1512520ab21e898275b6bd3e780f72eb47eddf260b9ef205b481",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:40:53Z",
+      "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
+      "parent": "city-timber-concept/concept-NW_CITY_WOODBEAM_02-attempt-1.png"
+    },
+    {
+      "file": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_01-attempt-2.png",
+      "role": "concept",
+      "texture": "NW_CITY_WOOD_ORNAMENT_01.TGA",
+      "attempt": 2,
+      "sha256": "8f59d5d859f92084535e3b15760ad7de162ddda3db3d894e866b1d19e792e87e",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:42:02Z",
+      "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
+      "parent": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_01-attempt-1.png"
+    },
+    {
+      "file": "city-timber-concept/concept-NW_CITY_WOOD_01-attempt-2.png",
+      "role": "concept",
+      "texture": "NW_CITY_WOOD_01.TGA",
+      "attempt": 2,
+      "sha256": "316e2765040fbd94d89f0eb551258aaf098e1c40b8aab8b4b0794b831456484f",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:42:59Z",
+      "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
+      "parent": "city-timber-concept/concept-NW_CITY_WOOD_01-attempt-1.png"
+    },
+    {
+      "file": "city-timber-concept/concept-NW_CITY_WOODBEAM_02-attempt-3.png",
+      "role": "concept",
+      "texture": "NW_CITY_WOODBEAM_02.TGA",
+      "attempt": 3,
+      "sha256": "0e09fb86db07e57ffdb99fc6734501b2592a52711bda24fc24d2c4e07506771c",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T17:02:49Z",
+      "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
+      "parent": "city-timber-concept/concept-NW_CITY_WOODBEAM_02-attempt-1.png"
+    },
+    {
+      "file": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_01-attempt-3.png",
+      "role": "concept",
+      "texture": "NW_CITY_WOOD_ORNAMENT_01.TGA",
+      "attempt": 3,
+      "sha256": "97bce67b77055343ad20a01ebdcdce4d4c13cddc7e7887119ed5f9c3e4682ea1",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T17:05:44Z",
+      "thread": "01a15f4c-09fd-7072-934c-9b2a8f7b008f",
+      "parent": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_01-attempt-1.png"
     }
   ],
   "selected": {},
@@ -265,8 +340,25 @@
       "id": "r1-concept-r3",
       "stage": "concept",
       "mode": "reference",
-      "verdict": "pending",
-      "date": "2026-10-21"
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-r3/merged.json"
+    },
+    {
+      "id": "r1-concept-r3e",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-r3e/merged.json"
+    },
+    {
+      "id": "r1-concept-r4",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-r4/merged.json"
     }
   ],
   "gates": [

@@ -173,6 +173,96 @@
       "utc": "2026-10-21T16:28:58Z",
       "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
       "parent": null
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_01-attempt-2.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_01.TGA",
+      "attempt": 2,
+      "sha256": "666de46081216c540949fc263d52f5de45caf7953273ce0dc5963e8771e35a9a",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:38:44Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": "city-roofs-concept/concept-NW_CITY_ROOF_01-attempt-1.png"
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_04-attempt-2.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 2,
+      "sha256": "a45dedc78c90193c0cda2cd84eec48ce7d68b45e4a27a6c2ddb4e9395c09f1fc",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:40:05Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": "city-roofs-concept/concept-NW_CITY_ROOF_04-attempt-1.png"
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_INSIDE_01-attempt-2.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_INSIDE_01.TGA",
+      "attempt": 2,
+      "sha256": "fd487985061dae3e2de1296e120f14753562c55b3a4b9af5a4e67f9c15ca8ae1",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:41:51Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": "city-roofs-concept/concept-NW_CITY_ROOF_INSIDE_01-attempt-1.png"
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_04-attempt-3.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 3,
+      "sha256": "00d5ea997b03c7f9c701380b816d9917c74cf1e1faa7961f24500bc8530d99b8",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T17:02:54Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": null
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_01-attempt-3.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_01.TGA",
+      "attempt": 3,
+      "sha256": "6a6192389c823a06c405a49fe30860a7a005a99c6ba96e3dd32cb51c809b86d0",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T17:05:24Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": "city-roofs-concept/concept-NW_CITY_ROOF_01-attempt-2.png"
+    },
+    {
+      "file": "city-roofs-concept/concept-NW_CITY_ROOF_INSIDE_01-attempt-3.png",
+      "role": "concept",
+      "texture": "NW_CITY_ROOF_INSIDE_01.TGA",
+      "attempt": 3,
+      "sha256": "f86de013cfe3722b2a6d254c6cadac214b11977b0adb394a01b34d2c8407159b",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T17:07:43Z",
+      "thread": "01a15f49-26e4-7c92-b13e-3098e516f564",
+      "parent": "city-roofs-concept/concept-NW_CITY_ROOF_INSIDE_01-attempt-2.png"
     }
   ],
   "selected": {},
@@ -205,8 +295,25 @@
       "id": "r1-concept-r3",
       "stage": "concept",
       "mode": "reference",
-      "verdict": "pending",
-      "date": "2026-10-21"
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-r3/merged.json"
+    },
+    {
+      "id": "r1-concept-r3e",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-r3e/merged.json"
+    },
+    {
+      "id": "r1-concept-r4",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-r4/merged.json"
     }
   ],
   "gates": [
