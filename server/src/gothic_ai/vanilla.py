@@ -657,7 +657,11 @@ class VanillaQuests:
         if self.starts.get(npc):
             tools.append(GIVE_TOOL)
         checking = [self.checking[npc]] if npc in self.checking else []
-        mutable = [o for o in [*offers, *checking] if o.asked and o.quest not in self.plot_vars]
+        mutable = [
+            o for o in [*offers, *checking]
+            if o.asked and o.quest not in self.plot_vars
+            and not any(f.get("quest") == o.quest for f in self.chronicle.facts("quest_outcome"))
+        ]
         if any(o.claim.removable for o in mutable):
             tools.append(AMEND_TOOL)
         if mutable:
@@ -688,7 +692,10 @@ class VanillaQuests:
         offers = self.offers.get(conv.npc, {})
         offer = offers.get(quest)
         if offer is None and call.name in (AMEND, DROP) and checking is not None:
-            offer = checking if checking.quest == quest else None
+            if checking.quest == quest and not any(
+                f.get("quest") == quest for f in self.chronicle.facts("quest_outcome")
+            ):
+                offer = checking
         if offer is None:
             return ToolOutcome("Отклонено: такого дела ты от героя не ждёшь.", "rejected")
         if call.name in (AMEND, DROP):
@@ -758,10 +765,15 @@ class VanillaQuests:
         self.chronicle.record(fact)
         self.journal.add("quest_amended", **{k: v for k, v in fact.items() if k != "fact"})
         self._apply_terms(offer)
+        next_step = (
+            "Ты уже идёшь посмотреть сам; что увидишь, то и решит"
+            if offer.all_removed and self.checking.get(conv.npc) is offer
+            else offer.needs if not offer.all_removed else "Можешь засчитать (accept_quest)"
+        )
         return ToolOutcome(
             "Принято: ты снял пункты: "
             + ", ".join(offer.term_names.get(d, d) for d in ids)
-            + f". {offer.needs if not offer.all_removed else 'Можешь засчитать (accept_quest)'}.",
+            + f". {next_step}.",
             "accepted",
         )
 
@@ -1361,6 +1373,7 @@ class VanillaQuests:
         """The claims of the branch, from its facts (after a load: as they were at that save)."""
         self.told.clear()
         self.offers.clear()
+        self.checking.clear()
         self.seen_dead.clear()
         self.terms.clear()
         self.unpaid.clear()

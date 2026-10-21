@@ -482,6 +482,41 @@ async def test_a_check_in_progress_is_not_offered_or_started_again(graph):
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_loading_after_a_check_is_cancelled_before_speech_ends_offers_it_again(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    check = FakeStep("Сам посмотрю.", [ToolCall("check_claim", {"quest": KILL}, "c1")])
+    llm = FakeBackend(script=[check], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars.update({QUEST: 2, KILL: 1})
+    fake.npc_states[BANDIT] = {
+        "state": "dead", "name": "Бандит", "distance": 4000, "seen": False,
+    }
+    try:
+        conv = dialogue.open(LOBART, "Лобарт")
+        conv.voice = asyncio.Queue()
+        conv.voice.put_nowait(("held", "Сам посмотрю.", None, False, None, False, None))
+        conv.voice.get_nowait()  # a line is being voiced: join waits until task_done
+        await dialogue.say_as_player(LOBART, "Бандит мёртв.")
+        await _until(lambda: bool(conv.actions) and LOBART in vanilla.checking)
+        task = next(iter(conv.actions))
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert task.cancelled()
+        assert not any(
+            m["type"] == "action" and m["action"] == "go_to_npc" for m in fake.received
+        )
+        assert chronicle.facts("claim") == []
+
+        vanilla._load()
+        await vanilla.prepare(LOBART)
+        assert LOBART not in vanilla.checking
+        assert KILL in vanilla.offers[LOBART]
+        assert "check_claim" in {t.name for t in vanilla.tools(LOBART)}
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_once_lied_to_it_takes_his_word_no_more(graph):
     fake = FakeGame(branch="A")
     store = MemoryStore(":memory:")
@@ -2010,6 +2045,11 @@ async def test_an_old_check_uses_terms_amended_during_its_walk(two_bandits, monk
                     None,
                 )
                 assert result.status == "accepted"
+                assert "accept_quest" not in result.output and "Можешь засчитать" not in result.output
+                if drop_all:
+                    assert "Ты уже идёшь посмотреть сам; что увидишь, то и решит." in result.output
+                else:
+                    assert old.needs in result.output
                 assert old.claim.dead == ([] if drop_all else ["BDT_2_BANDIT"])
             return ""
 
@@ -2037,6 +2077,8 @@ async def test_an_old_check_does_not_play_an_ending_after_the_quest_was_dropped(
     fake.vars.update({QUEST: 2, KILL: 1})
     fake.npc_states[BANDIT] = {"state": "alive", "name": "Бандит", "distance": 4000, "seen": False}
     cues = []
+    entries = []
+    vanilla.journal = Journal(entries.append)
     monkeypatch.setattr(vanilla, "_react", lambda conv, cue: cues.append(cue))
     try:
         await vanilla.link.attach(LOBART)
@@ -2055,6 +2097,15 @@ async def test_an_old_check_does_not_play_an_ending_after_the_quest_was_dropped(
             )
             assert result.status == "accepted"
             await _until(lambda: chronicle.facts("quest_outcome") != [])
+            await vanilla.prepare(LOBART)
+            assert {t.name for t in vanilla.tools(LOBART)}.isdisjoint({"amend_quest", "drop_quest"})
+            for name in ("drop_quest", "amend_quest"):
+                repeated = await vanilla.handle(
+                    dialogue, conv,
+                    ToolCall(name, {"quest": KILL, "drop": [BANDIT], "why": "Нужда отпала"}, "again"),
+                    None,
+                )
+                assert repeated.status == "rejected"
             return ""
 
         monkeypatch.setattr(vanilla, "_go", walk)
@@ -2064,8 +2115,12 @@ async def test_an_old_check_does_not_play_an_ending_after_the_quest_was_dropped(
         assert chronicle.facts("lie") == [] and cues == []
         assert len(chronicle.facts("quest_outcome")) == 1
         assert chronicle.facts("quest_outcome")[0]["how"] == "dropped"
+        assert len([e for e in entries if e["kind"] == "quest_dropped"]) == 1
         effects = _effects(fake, LOBART)
         assert len(effects) == 1 and {"do": "set", "var": KILL, "value": 4} in effects[0]
+        assert effects[0].count({
+            "do": "journal", "topic": "Бандит у фермы", "text": "", "status": "LOG_OBSOLETE",
+        }) == 1
         assert not any(e["do"] in ("xp", "give") for e in effects[0])
         assert LOBART not in vanilla.checking
     finally:
