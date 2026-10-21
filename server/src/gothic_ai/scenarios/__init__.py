@@ -39,6 +39,7 @@ from .deals import deal_debt as deal_debt
 from .deals import deal_demo as deal_demo
 from .deals import deal_window as deal_window
 from .deals import haggle as haggle
+from .deals import xardas_money as xardas_money
 from .frame import frame as frame
 from .gate import gate_scenario as gate_scenario
 from .gate import gate_vouch_scenario as gate_vouch_scenario
