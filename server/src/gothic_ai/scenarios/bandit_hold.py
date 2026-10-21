@@ -137,30 +137,42 @@ async def bandit_hold(link: GameLink, dialogue: DialogueManager) -> dict[str, st
         # Keep the initialized native state and verified party flag when entering the gang's sight.
         await link.debug("npc_goto", npc=CAVALORN, to="PC_HERO", distance=-250, face=PRIMARY)
         party_ready = await _until_async(party_marked, bool, 5)
-        primary, party = await link.snapshot(PRIMARY, fresh=True), await link.snapshot(CAVALORN, fresh=True)
-        hero_distance = primary.player.distance if primary.player else -1
-        party_distance = party.player.distance if party.player else -1
-        sight, hostility, party_sight, party_hostility, party_flag = await link.story_eval(PRIMARY, [
-            ["call", "NPC_CANSEENPC", ["inst", PRIMARY], ["inst", "HERO"]],
-            ["==", ["call", "NPC_GETATTITUDE", ["inst", PRIMARY], ["inst", "HERO"]],
-             ["var", "ATT_HOSTILE"]],
-            ["call", "NPC_CANSEENPC", ["inst", CAVALORN], ["inst", PRIMARY]],
-            ["==", ["call", "NPC_GETATTITUDE", ["inst", CAVALORN], ["inst", PRIMARY]],
-             ["var", "ATT_HOSTILE"]],
-            ["field", ["inst", CAVALORN], "AIVAR", party_index],
-        ])
-        if not check("scene", bool(
-            party_ready and 1000 <= hero_distance <= 1400 and 0 <= party_distance <= 500
-            and sight and hostility and party_sight and party_hostility and party_flag
-            and 8 <= primary.world.hour < 23 and PRIMARY in roster and CAVALORN in roster
-            and GANG <= roster.keys()
-            and all(roster[npc].activity == "routine" for npc in (*present, CAVALORN))
-        ), f"hero={hero_distance:.0f} cm, Cavalorn={party_distance:.0f} cm, "
-           f"sight={sight}/{party_sight}, hostile={hostility}/{party_hostility}, "
-           f"party={party_flag}, gang={sorted(present)}, "
-           f"holds={dict(Counter(message.kind for _, message in holds))}, "
-           f"ZS_ATTACK={dict(Counter(npc for _, npc in native_attacks))}"):
+        # Native alignment and animated sight rays can settle after the placement command returns.
+        scene = {}
+
+        async def scene_ready() -> bool:
+            primary = await link.snapshot(PRIMARY, fresh=True)
+            party = await link.snapshot(CAVALORN, fresh=True)
+            hero_distance = primary.player.distance if primary.player else -1
+            party_distance = party.player.distance if party.player else -1
+            sight, hostility, party_sight, party_hostility, party_flag = await link.story_eval(PRIMARY, [
+                ["call", "NPC_CANSEENPC", ["inst", PRIMARY], ["inst", "HERO"]],
+                ["==", ["call", "NPC_GETATTITUDE", ["inst", PRIMARY], ["inst", "HERO"]],
+                 ["var", "ATT_HOSTILE"]],
+                ["call", "NPC_CANSEENPC", ["inst", CAVALORN], ["inst", PRIMARY]],
+                ["==", ["call", "NPC_GETATTITUDE", ["inst", CAVALORN], ["inst", PRIMARY]],
+                 ["var", "ATT_HOSTILE"]],
+                ["field", ["inst", CAVALORN], "AIVAR", party_index],
+            ])
+            scene.update(primary=primary, party=party, detail=(
+                f"hero={hero_distance:.0f} cm, Cavalorn={party_distance:.0f} cm, "
+                f"sight={sight}/{party_sight}, hostile={hostility}/{party_hostility}, "
+                f"party={party_flag}, gang={sorted(present)}, "
+                f"holds={dict(Counter(message.kind for _, message in holds))}, "
+                f"ZS_ATTACK={dict(Counter(npc for _, npc in native_attacks))}"
+            ))
+            return bool(
+                party_ready and 1000 <= hero_distance <= 1400 and 0 <= party_distance <= 500
+                and sight and hostility and party_sight and party_hostility and party_flag
+                and 8 <= primary.world.hour < 23 and PRIMARY in roster and CAVALORN in roster
+                and GANG <= roster.keys()
+                and all(roster[npc].activity == "routine" for npc in (*present, CAVALORN))
+            )
+
+        ready = await _until_async(scene_ready, bool, 5)
+        if not check("scene", ready, scene["detail"]):
             return _logged(results)
+        primary, party = scene["primary"], scene["party"]
 
         bandit_seen = await _until(lambda: any(
             message.kind == "bandit_enemy" and message.other == "PLAYER" for _, message in holds
