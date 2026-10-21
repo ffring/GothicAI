@@ -169,10 +169,12 @@ struct Seen final {
   };
 
 Seen classify(World& world, Npc& self, Npc& other, Npc* victim, PercType perc, bool bandits = false) {
-  if(bandits && (perc==PERC_ASSESSENEMY || (perc==PERC_ASSESSPLAYER && other.isPlayer())) &&
+  if(bandits && (perc==PERC_ASSESSENEMY ||
+                (perc==PERC_ASSESSPLAYER && other.isPlayer() &&
+                 HeroDeed::aivar(self,"AIV_EnemyOverride")==0)) &&
      !other.isDead() && !other.isDown() &&
      world.script().personAttitude(self,other)==ATT_HOSTILE) {
-    // B_AssessPlayer also calls B_AssessEnemy before its room and weapon checks.
+    // Without EnemyOverride, B_AssessPlayer can attack through B_AssessEnemy.
     if(self.guild()==GIL_BDT && (other.isPlayer() || HeroDeed::aivar(other,"AIV_PARTYMEMBER")!=0))
       return Seen{"bandit_enemy"};
     if(perc==PERC_ASSESSENEMY && HeroDeed::aivar(self,"AIV_PARTYMEMBER")!=0 && other.guild()==GIL_BDT)
@@ -458,8 +460,8 @@ bool NpcObserver::intercept(World& world, Npc& self, Npc& other, Npc* victim, Pe
   const bool bandit = seen.kind=="bandit_enemy" || seen.kind=="party_enemy";
   if(bandit && BodyController::owns(self))
     return false;
-  // Bandit sight precedes any deed and ignores AIV_EnemyOverride: even a
-  // script-silenced bandit must tell the server that its gang sees the hero.
+  // ASSESSENEMY ignores AIV_EnemyOverride: even a script-silenced bandit
+  // must tell the server that its gang sees the hero.
   if(!bandit && hero) {
     seen = Seen{};
     if(!holdDeeds)
