@@ -8,7 +8,7 @@ from gothic_ai.dialogue import DialogueManager
 from gothic_ai.executor import Intent
 from gothic_ai.llm import FakeBackend, FakeStep, ToolCall, ToolResult
 from gothic_ai.memory import MemoryStore
-from gothic_ai.parley import AGREEMENT, NO_REASON, Parley
+from gothic_ai.parley import AGREEMENT, NO_REASON, UNKNOWN_GUILD, Parley
 from gothic_ai.perception import PerceptionDesk
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.protocol import HeroDeed, NpcEvent, NpcRoster, NpcView, NpcViews, Perception, Session
@@ -82,7 +82,7 @@ def armed(parley, weapon):
 
 
 async def test_no_reason_rejects_the_bandit_but_not_a_citizen():
-    async with world() as (_, link, dialogue, _, parley):
+    async with world() as (fake, link, dialogue, _, parley):
         conv = dialogue.conversations[BRAGO]
         result = dialogue._set_intent(conv, FIGHT, link.snapshots[BRAGO])
         assert result.status == "rejected" and NO_REASON in result.output
@@ -90,6 +90,11 @@ async def test_no_reason_rejects_the_bandit_but_not_a_citizen():
         assert dialogue._set_intent(citizen, FIGHT, None).status == "accepted"
         assert citizen.intent.goal == "fight"
         assert parley.tools(OTHER) == [] and parley.situation(OTHER) is None
+        assert await dialogue._attack_hero(citizen, citizen.intent) == ("Ты напал на героя.", True)
+        assert any(
+            msg.get("npc") == OTHER and msg.get("effects") == [{"do": "attack", "reason": "AR_NONE"}]
+            for msg in fake.story
+        )
 
 
 async def test_rejected_fight_can_be_replaced_with_an_ultimatum_in_the_same_turn():
@@ -264,11 +269,12 @@ async def test_a_restored_ultimatum_opens_its_npc_for_the_expiry_turn():
 
 
 async def test_answer_or_nearby_leaders_ultimatum_allows_fight_but_a_subordinates_does_not():
-    async with world() as (_, _, dialogue, _, parley):
+    async with world([FakeStep("Сам напросился.", [FIGHT])]) as (_, _, dialogue, _, parley):
         await demand(dialogue, parley)
         assert parley.fight_reason(BRAGO) == NO_REASON
-        dialogue.overheard(BRAGO, "Браго", "Сколько?", None)
+        await dialogue.say_as_player(BRAGO, "Сколько?")
         assert parley.fight_reason(BRAGO) is None
+        assert dialogue.conversations[BRAGO].intent.goal == "fight"
         # The mate has no snapshot yet, but is present in Brago's snapshot.
         snap = parley.link.snapshots[BRAGO]
         parley.link.snapshots[MATE] = snap.model_copy(
@@ -282,6 +288,17 @@ async def test_answer_or_nearby_leaders_ultimatum_allows_fight_but_a_subordinate
         await demand(dialogue, parley, npc=MATE)
         parley.hero_said(MATE)
         assert parley.fight_reason(BRAGO) == NO_REASON
+
+
+@pytest.mark.parametrize("group", [False, True])
+async def test_only_words_addressed_to_the_bandit_answer_his_ultimatum(group):
+    async with world() as (_, _, dialogue, _, parley):
+        await demand(dialogue, parley, seconds=30)
+        if group:
+            dialogue.told_all(BRAGO, "Браго", "Ребята, денег нет", "Бандит")
+        else:
+            dialogue.overheard(BRAGO, "Браго", "Кавалорн, пошли", "Кавалорн")
+        assert parley.fight_reason(BRAGO) == (None if group else NO_REASON)
 
 
 async def test_leaving_beyond_fifteen_metres_or_accepting_a_deal_clears_ultimatum():
@@ -319,6 +336,67 @@ async def test_a_bandit_missing_from_the_roster_keeps_the_gate_and_loses_his_ult
         assert parley.bandit(BRAGO)
         assert parley.fight_reason(BRAGO) == NO_REASON
         assert parley.ultimatum(BRAGO) is None
+
+
+async def test_a_known_bandit_keeps_the_gate_after_a_session_before_the_roster():
+    async with world() as (_, _, dialogue, chronicle, parley):
+        assert parley.bandit(BRAGO)
+        parley._on_message(Session(type="session", branch=chronicle.branch))
+        dialogue.guild_of = lambda npc: 3 if npc == OTHER else None
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        assert parley.fight_reason(OTHER) is None
+
+
+async def test_an_unknown_guild_waits_for_the_roster_before_fighting():
+    async with world() as (_, _, dialogue, _, parley):
+        dialogue.guild_of = lambda npc: None
+        citizen = dialogue.open(OTHER, "Горожанин", warm=False)
+        result = dialogue._set_intent(citizen, FIGHT, None)
+        assert result.status == "rejected" and UNKNOWN_GUILD in result.output
+        parley._on_message(
+            NpcRoster(
+                type="npc_roster",
+                t=2000,
+                npcs=[{"id": OTHER, "name": "Горожанин", "guild": 3, "distance": 100}],
+            )
+        )
+        assert dialogue._set_intent(citizen, FIGHT, None).status == "accepted"
+
+
+@pytest.mark.parametrize("restart", [False, True])
+async def test_truce_facts_keep_the_gate_before_the_roster_after_session_or_restart(restart):
+    async with world() as (_, link, dialogue, chronicle, parley):
+        await parley.accept_deal(BRAGO, 1)
+        until = parley.truce(BRAGO)["until"]
+        if restart:
+            parley = Parley(link, dialogue, chronicle, perception=parley.perception)
+        else:
+            parley._on_message(Session(type="session", branch=chronicle.branch))
+        dialogue.guild_of = lambda npc: 3 if npc == OTHER else None
+        assert parley.fight_reason(BRAGO) == AGREEMENT
+        assert parley.fight_reason(MATE) == AGREEMENT
+        assert parley.fight_reason(OTHER) is None
+        parley._minute = until
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        assert parley.fight_reason(MATE) == NO_REASON
+
+
+async def test_a_restored_bandit_truce_waits_for_the_game_clock_before_fighting():
+    async with world() as (_, link, dialogue, chronicle, parley):
+        chronicle.record({"fact": "caught", "npc": BRAGO})
+        await parley.accept_deal(BRAGO, 1)
+        until = parley.truce(BRAGO)["until"]
+        link.snapshots.clear()
+        dialogue.guild_of = lambda npc: None
+        restored = Parley(link, dialogue, chronicle, perception=parley.perception)
+        assert restored.fight_reason(BRAGO) == AGREEMENT
+        assert restored.fight_reason(MATE) == AGREEMENT
+        restored._minute = until - 1
+        assert restored.fight_reason(BRAGO) == AGREEMENT
+        assert restored.fight_reason(MATE) == AGREEMENT
+        restored._minute = until
+        assert restored.fight_reason(BRAGO) is None
+        assert restored.fight_reason(MATE) == NO_REASON
 
 
 async def test_truce_covers_the_band_and_ignores_old_violence_lies_and_ultimatums():
@@ -371,6 +449,27 @@ async def test_theft_is_a_reason_after_breaking_a_truce_and_does_not_grant_one_b
         parley._on_message(event)
         assert parley.fight_reason(BRAGO) is None
         assert parley.fight_reason(BRAGO) is None
+
+
+@pytest.mark.parametrize("kind", ["weapon_drawn", "theft"])
+@pytest.mark.parametrize("renew", [False, True])
+async def test_broken_truce_reason_ends_with_its_term_or_a_later_truce(kind, renew):
+    async with world() as (_, _, _, _, parley):
+        await parley.accept_deal(BRAGO, 4)
+        now = parley.now()
+        parley._on_message(NpcEvent(type="npc_event", npc=BRAGO, kind=kind, other="PLAYER"))
+        assert parley.fight_reason(BRAGO) is None
+        assert parley.fight_reason(MATE) is None
+        if renew:
+            await parley.accept_deal(BRAGO, 1)
+            assert parley.fight_reason(BRAGO) == AGREEMENT
+            assert parley.fight_reason(MATE) == AGREEMENT
+            parley._minute = now + 60
+        else:
+            parley._minute = now + 3 * 1440
+        assert parley.fight_reason(BRAGO) == NO_REASON
+        assert parley.fight_reason(MATE) == NO_REASON
+        assert "Сначала давишь словами" in parley.situation(BRAGO)
 
 
 async def test_truce_ends_on_the_game_clock_and_the_save_branch_rolls_it_back():

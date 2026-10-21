@@ -50,6 +50,7 @@ ULTIMATUM_TOOL = Tool(
 NO_REASON = "Без повода сразу не нападаешь: сначала потребуй — ultimatum."
 AGREEMENT = "У вас уговор: героя не трогать без нового повода."
 EXPIRY_CUE = "[Срок вышел: герой не подчинился]"
+UNKNOWN_GUILD = "Твоя гильдия ещё не известна: дождись обстановки."
 DRAWN = frozenset({"melee", "ranged", "magic"})
 
 
@@ -82,7 +83,14 @@ class Parley:
         guild = self.dialogue.guild_of(npc)
         if guild is not None:
             self._guilds[npc] = guild
-        return self._guilds.get(npc) in KILLERS
+        if npc in self._guilds:
+            return self._guilds[npc] in KILLERS
+        # Only bandits can create these facts; they identify them before the roster arrives.
+        return any(
+            (f.get("fact") == "truce" and npc in f.get("members", ()))
+            or (f.get("fact") in {"parley_ultimatum", "parley_cause"} and f.get("npc") == npc)
+            for f in self.chronicle.facts()
+        )
 
     def _place(self, npc: str) -> str | None:
         view = self.perception.view(npc) if self.perception else None
@@ -158,8 +166,7 @@ class Parley:
                 for f in reversed(self.chronicle.facts("truce"))
                 if npc.upper() in f.get("members", ())
                 and f.get("id") not in broken
-                and now is not None
-                and now < f["until"]
+                and (now is None or now < f["until"])
             ),
             None,
         )
@@ -211,14 +218,26 @@ class Parley:
     def fight_reason(self, npc: str, snap: Snapshot | None = None) -> str | None:
         npc = npc.upper()
         if not self.bandit(npc):
-            return None
+            return None if npc in self._guilds else UNKNOWN_GUILD
         self.tick()
         truce = self.truce(npc)
         if truce:
             return AGREEMENT
         if self._armed(npc) or any(f.get("kind") in {"attack", "murder"} for f in self._causes(npc)):
             return None
-        if any(npc in f.get("members", ()) for f in self.chronicle.facts("truce_broken")):
+        latest_truce = next(
+            (f for f in reversed(self.chronicle.facts("truce")) if npc in f.get("members", ())),
+            None,
+        )
+        now = self.now()
+        if (
+            latest_truce
+            and now is not None
+            and now < latest_truce["until"]
+            and any(
+                f.get("truce") == latest_truce["id"] for f in self.chronicle.facts("truce_broken")
+            )
+        ):
             return None
         if any(f.get("npc") == npc for f in self.chronicle.facts("caught")):
             return None
@@ -477,7 +496,6 @@ class Parley:
             case Session():
                 self._ticks, self._minute, self._roster = 0, None, {}
                 self._roster_complete = False
-                self._guilds.clear()
                 self._loading = False
             case Snapshot():
                 self._ticks = max(self._ticks, msg.t)

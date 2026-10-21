@@ -1075,8 +1075,6 @@ class DialogueManager:
     def overheard(self, npc: str, name: str, text: str, to_name: str | None) -> None:
         """A witness: the npc heard the hero say something to someone else (no model call, only memory)."""
         conv = self.open(npc, name, warm=False)
-        for listener in self.on_player_said:
-            listener(conv.npc)
         whom = f" собеседнику ({to_name})" if to_name else " вслух"
         self._note(conv, f"Ты слышал, как герой сказал{whom}: «{text}»")
 
