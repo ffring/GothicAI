@@ -9,7 +9,7 @@
 ```
  Mac                                         dev-ubuntu (RTX 3090)
  ┌───────────────────────────┐               ┌──────────────────────────────┐
- │ Gothic2Notr               │               │ Voxtral — распознавание речи │
+ │ Gothic2Notr               │               │ Voxtral — ASR (по выбору)    │
  │  OpenGothic + ai_bridge   │               │ VoxCPM2 — голос (запасной)   │
  │        │ WebSocket JSON   │               │ Strands Decider 2B — решения │
  │        ▼ :47817           │   HTTP / WS   │ Gemma 4 12B — быстрые реплики│
@@ -20,7 +20,8 @@
  └─────────────┬─────────────┘               │ P30 (ядра 0–1); тяжёлые      │
                │                             │ прогоны через scripts/gq     │
                ▼                             └──────────────────────────────┘
- подписка ChatGPT: gpt-6.1-sol (разговор), запасной ASR; Inworld TTS-2 (голос)
+ Inworld STT (основной ASR), Inworld TTS-2 (голос);
+ подписка ChatGPT: gpt-6.1-sol (разговор), запасной ASR
 ```
 
 - **Игра — клиент.** Мост `OpenGothic/ai_bridge/` подключается к серверу по WebSocket, одно JSON-сообщение на кадр. Адрес по умолчанию задан в `aibridge.cpp` (`DefaultUrl`), меняется через `GOTHIC_AI_URL`, мост выключает `GOTHIC_AI=0`.
@@ -56,7 +57,7 @@
 
 ## Путь одной реплики героя
 
-1. Герой держит клавишу разговора. `voice.py` пишет микрофон Mac и стримит звук в `asr-service`. Тот передаёт его Voxtral на dev-ubuntu, запасной вариант — подписка ChatGPT. Промежуточный текст сразу показывается в игре.
+1. Герой держит клавишу разговора. `voice.py` пишет микрофон Mac и стримит звук в `asr-service`. Тот передаёт его Inworld STT (`inworld/inworld-stt-1`), запасной вариант — подписка ChatGPT. Промежуточный текст сразу показывается в игре. ASR-сервис принимает подсказки имён в `start.hints`; при одинаковых языке и подсказках переиспользует соединение Inworld между репликами. Voxtral на dev-ubuntu остаётся доступен по выбору провайдера.
 2. `talk.TalkDesk` выбирает адресата (`talk.addressee`).
 3. Короткий приказ спутнику («За мной!», «Стой!») `commands.py` узнаёт по тексту, а `orders.py` исполняет без разговорной модели.
 4. Быстрая реакция тела — `brain/reflex.Reflexes` через быстрый контур (около 0,1 с).
@@ -177,7 +178,7 @@
 
 | Сервис | Что | Где работает | Как сервер его находит |
 |---|---|---|---|
-| `asr-service/` | распознавание речи: Voxtral (audio.cpp), запасной — подписка ChatGPT | клиент на Mac или Ryzen, модель на dev-ubuntu | `--asr-url`, `GOTHIC_ASR_URL` |
+| `asr-service/` | распознавание речи: Inworld STT, подсказки имён; запасной — подписка ChatGPT; Voxtral (audio.cpp) выбирается явно | клиент на Mac или Ryzen, Inworld API; Voxtral остаётся на dev-ubuntu | `--asr-url`, `GOTHIC_ASR_URL` |
 | `tts-service/` | голос NPC: Inworld TTS-2, запасной — VoxCPM2 (audio.cpp) | клиент на Mac или Ryzen, VoxCPM2 на dev-ubuntu | `--tts-url`, `GOTHIC_TTS_URL` |
 | `decider-service/` | быстрые решения NPC: Strands Decider 2B, полосы urgent и background | dev-ubuntu | `--decider-url`, `GOTHIC_DECIDER_URL` |
 | `server/deploy/gemma/` | Gemma 4 12B (llama.cpp): реплики в бою, первые слова | dev-ubuntu | `--quick-url`, `GOTHIC_QUICK_LLM_URL` |

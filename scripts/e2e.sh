@@ -20,7 +20,7 @@
 #       WebSocket reuse, tool continuation, HTTP fallback and --no-websocket; SAVE=save_slot_1.sav; LLM=fake
 #   m2: npc actions (give_item, follow/stop, gestures)
 #   m3: memory survives save/load and follows the save; push-to-talk from a wav file (streamed at
-#       speaking pace) through the ASR service (ASR=fake|voxtral|chatgpt)
+#       speaking pace) through the ASR service (ASR=fake|inworld|voxtral|chatgpt)
 #   m4: what the npc planner needs from the bridge: npc roster, soft actions (npc_act) and their end
 #       (npc_idle); with DECIDER_URL the planner runs against that decision service too
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),

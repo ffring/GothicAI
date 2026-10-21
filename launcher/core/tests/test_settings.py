@@ -9,7 +9,8 @@ from gothic_launcher.settings import Config, SettingsError
 def test_missing_files_mean_defaults(tmp_path):
     config = Config.load(tmp_path)
     assert config.settings.llm.backend == "chatgpt"
-    assert config.settings.voice.provider == "voxtral" and config.settings.tts.provider == "inworld"
+    assert config.settings.voice.provider == "inworld" and config.settings.tts.provider == "inworld"
+    assert config.settings.voice.fallback == "chatgpt"
     assert config.secrets.inworld_api_key is None
 
 
@@ -47,7 +48,7 @@ def test_unset_goes_back_to_the_default(tmp_path):
     config = Config.load(tmp_path)
     config.set("voice.provider", "chatgpt")
     config.set("voice.provider", None)
-    assert config.settings.voice.provider == "voxtral"
+    assert config.settings.voice.provider == "inworld"
 
 
 def test_import_from_env(tmp_path):
