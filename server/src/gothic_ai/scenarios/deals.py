@@ -448,7 +448,7 @@ async def xardas_money(
             said=[
                 ("немного золота", FakeStep("Возьми тридцать золотых.", [offer(30)])),
                 ("одолжи", FakeStep("Сто пятьдесят. Вернёшь через три дня.", [offer(150, 150)])),
-                ("ещё сто", FakeStep("Дам ещё сто даром.", [offer(100)])),
+                ("сто золотых даром", FakeStep("Дам ещё сто даром.", [offer(100)])),
             ],
             told=[],
             default="Хорошо.",
@@ -515,8 +515,11 @@ async def xardas_money(
         await link.debug("type", text=line)
         if await _until(cash_offer, 45):
             break
+    conv = dialogue.conversations.get(npc)
+    reply = conv.reply if conv else None
+    settled = reply is None or await _until(reply.done, 45)
     deal = deals.open.get(npc)
-    offered = cash_offer()
+    offered = cash_offer() and settled
     check("offered", offered, f"{said()}; {deal.terms() if deal else 'no offer'}")
     if not offered or deal is None:
         return _logged(results)
