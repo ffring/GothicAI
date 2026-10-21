@@ -2187,6 +2187,13 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario debt: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "xardas_money":
+                dialogue, talk, deals = state.dialogue, state.talk, state.deals
+                assert dialogue is not None and talk is not None and deals is not None
+                results = await scenarios.xardas_money(link, dialogue, talk, deals)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario xardas_money: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "initiative":
                 dialogue, talk, deals, concerns = state.dialogue, state.talk, state.deals, state.concerns
                 guard, bodies, perception = state.guard, state.bodies, state.perception
@@ -2871,6 +2878,7 @@ def main() -> None:
             "deal_demo",
             "contract",
             "debt",
+            "xardas_money",
             "initiative",
             "gossip",
             "gossip_demo",
