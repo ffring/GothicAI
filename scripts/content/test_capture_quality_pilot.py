@@ -104,7 +104,8 @@ def test_house_captures_reject_opened_basement_original(tmp_path, variant):
 
 def harbour_check_inputs(tmp_path):
     inputs = capture_check_inputs(tmp_path, "original", capture.HARBOUR_MATERIALS, original=True)
-    spots = tuple(f"harbour-{number}" for number in range(1, 7))
+    spots = tuple(f"B{number:03}-{view}" for number in range(1, 7)
+                  for view in ("front", "three-quarter"))
     inputs[1].write_text("".join(f"shot {spot}\n" for spot in spots))
     (inputs[0] / "game.log").write_text("materials: 0 entries from test\n"
         + "".join(f"[bench] shot {spot}\n" for spot in spots) + "[bench] done\n")
@@ -113,23 +114,52 @@ def harbour_check_inputs(tmp_path):
     return inputs
 
 
-def test_harbour_captures_validate_six_original_frames(tmp_path, capsys):
+def test_harbour_captures_validate_twelve_original_frames(tmp_path, capsys):
     capture.check(*harbour_check_inputs(tmp_path), harbour_house=True)
-    assert "shots=6 materials=0 pilot_replaced=0 pilot_originals=3" in capsys.readouterr().out
+    assert "shots=12 materials=0 pilot_replaced=0 pilot_originals=3" in capsys.readouterr().out
 
 
 def test_harbour_captures_reject_incomplete_scenario(tmp_path):
     inputs = harbour_check_inputs(tmp_path)
-    inputs[1].write_text("shot harbour-1\n")
-    with pytest.raises(SystemExit, match="expected six distinct harbour shots"):
+    inputs[1].write_text("shot B001-front\n")
+    with pytest.raises(SystemExit, match="expected twelve distinct harbour shots"):
+        capture.check(*inputs, harbour_house=True)
+
+
+def test_harbour_captures_reject_twelve_unpaired_views(tmp_path):
+    inputs = harbour_check_inputs(tmp_path)
+    inputs[1].write_text("".join(f"shot B{number:03}-front\n" for number in range(1, 13)))
+    with pytest.raises(SystemExit, match="expected front and three-quarter for six harbour blocks"):
+        capture.check(*inputs, harbour_house=True)
+
+
+def test_harbour_captures_reject_unknown_view(tmp_path):
+    inputs = harbour_check_inputs(tmp_path)
+    inputs[1].write_text(inputs[1].read_text().replace("B001-front", "B001-side"))
+    with pytest.raises(SystemExit, match="expected harbour shot names BLOCK-front or BLOCK-three-quarter"):
         capture.check(*inputs, harbour_house=True)
 
 
 def test_harbour_captures_reject_wrong_frame_size(tmp_path):
     inputs = harbour_check_inputs(tmp_path)
-    Image.new("RGB", (640, 360)).save(inputs[0] / "harbour-3.png")
-    with pytest.raises(SystemExit, match="shot harbour-3: expected 1280x720"):
+    Image.new("RGB", (640, 360)).save(inputs[0] / "B003-three-quarter.png")
+    with pytest.raises(SystemExit, match="shot B003-three-quarter: expected 1280x720"):
         capture.check(*inputs, harbour_house=True)
+
+
+def test_harbour_captures_reject_nonzero_exit(tmp_path):
+    inputs = harbour_check_inputs(tmp_path)
+    (inputs[0] / "exit.txt").write_text("1\n")
+    with pytest.raises(SystemExit, match="nonzero game exit"):
+        capture.check(*inputs, harbour_house=True)
+
+
+def test_harbour_captures_require_original_variant(tmp_path):
+    inputs = harbour_check_inputs(tmp_path)
+    variant = inputs[0].with_name("staging")
+    inputs[0].rename(variant)
+    with pytest.raises(SystemExit, match="harbour survey requires original materials"):
+        capture.check(variant, *inputs[1:], harbour_house=True)
 
 
 def test_harbour_captures_require_port_materials(tmp_path):

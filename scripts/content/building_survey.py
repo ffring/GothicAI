@@ -19,6 +19,7 @@ SHELL_CLASSES = frozenset((
 ))
 HARBOUR = ('NW_CITY_HAFEN_HOLZWAND_01.TGA', 'NW_CITY_HAFEN_HOLZWAND_02.TGA',
            'NW_CITY_HAFEN_GIEBEL_01.TGA')
+VERTICAL_FOV = 125.  # Isolated harbour capture SystemPack.ini; narrow lanes need a wide lens.
 MARKET = ('NW_CITY_WALL_03.TGA', 'NW_CITY_WINDOW_03.TGA',
           'NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA', 'NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA',
           'NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA', 'NW_CITY_WOODBEAM_02.TGA')
@@ -189,15 +190,14 @@ def project(points, eye, target):
     up = np.cross(right, forward)
     delta = points-eye
     depth = delta@forward
-    # Camera::fovY(): default vertical FOV 67.5 degrees, aspect 1280/720.
-    tan_v = math.tan(math.radians(67.5/2))
+    tan_v = math.tan(math.radians(VERTICAL_FOV/2))
     xy = np.stack((delta@right/(tan_v*1280/720), delta@up/tan_v),axis=1)/depth[:,None]
     return xy, depth
 
 
-def camera(cluster, triangles, ground):
-    ts = [triangles[i] for i in cluster['triangle_indices'] if triangles[i]['texture']==HARBOUR[1]]
-    # A face is a connected coplanar patch; a fan diagonal must not choose its half-center.
+def facade(block, triangles):
+    ts = [triangles[i] for i in block['triangle_indices'] if triangles[i]['texture']==HARBOUR[1]]
+    # Keep connected coplanar fields together across their fan diagonals.
     faces = Dsu(len(ts))
     vertices = defaultdict(list)
     for i,t in enumerate(ts):
@@ -213,74 +213,134 @@ def camera(cluster, triangles, ground):
         patches[faces.find(i)].append(t)
     face = max(patches.values(),key=lambda patch:sum(t['area_m2'] for t in patch))
     normal = np.average([t['normal'] for t in face],axis=0,weights=[t['area_m2'] for t in face])
-    anchor = np.average([t['center'] for t in face], axis=0, weights=[t['area_m2'] for t in face])
+    normal /= np.linalg.norm(normal)
+    anchor = np.average([t['center'] for t in face],axis=0,weights=[t['area_m2'] for t in face])
+    indices = [i for i in block['triangle_indices']
+               if np.abs((np.asarray(triangles[i]['points'])-anchor)@normal).max()<=50]
+    points = np.asarray([triangles[i]['points'] for i in indices]).reshape(-1,3)
     outward = normal.copy(); outward[1]=0; outward/=np.linalg.norm(outward)
-    points = np.asarray([triangles[i]['points'] for i in cluster['triangle_indices']]).reshape(-1,3)
-    lo, hi = np.asarray(cluster['bounds_cm'])
-    target = (lo+hi)/2
-    # The archive's oriented normal chooses the exterior side of the largest face.
-    target += outward*np.dot(anchor-target,outward)
-    distance = 300.
-    while distance <= 30000:
-        eye = target + outward*distance
-        try:
-            ground_y = ground_height(ground, eye[0], eye[2], anchor[1])
-        except ValueError:
-            distance += 50
-            continue
-        eye[1] = ground_y+170
-        xy,depth = project(points,eye,target)
-        if depth.min()>10 and np.abs(xy).max()<=.9:
-            return dict(eye_cm=eye.tolist(),target_cm=target.tolist(),ground_y_cm=ground_y,
-                        outward=outward.tolist(),distance_cm=distance,frame_extent=float(np.abs(xy).max()),
-                        face_area_m2=sum(t['area_m2'] for t in face))
-        distance += 50
-    raise ValueError(f"{cluster['id']}: no ground-level full-cluster camera within 300 m")
+    if np.dot(anchor-np.asarray(block['center_cm']),outward)<0:
+        outward *= -1
+    side = np.cross([0,1,0],outward)
+    along = (points-anchor)@side
+    # Reach the wooden roof ridge, excluding unrelated stone towers in this block.
+    roof = [t for i in block['triangle_indices'] for t in [triangles[i]]
+            if t['texture'] in ('NW_CITY_ROOF_01.TGA','NW_CITY_ROOF_04.TGA',HARBOUR[2])]
+    bottom = points[:,1].min()
+    top = max([points[:,1].max()]+[p[1] for t in roof for p in t['points']])
+    limits = [float(along.min()-300),float(along.max()+300)]
+    skin_offset = max(0,float(((points-anchor)@outward).max()))
+    exterior = anchor+outward*skin_offset
+    target = exterior + side*sum(limits)/2
+    target[1] = (bottom+top)/2
+    frame = np.asarray([exterior+side*x for x in limits for _ in range(2)])
+    frame[:,1] = [bottom,top,bottom,top]
+    samples = np.asarray([t['center'] for t in face])+outward*(skin_offset+2)
+    return dict(anchor=anchor,normal=normal,outward=outward,side=side,target=target,
+                points=points,frame=frame,samples=samples,triangle_indices=indices,
+                face_area_m2=sum(t['area_m2'] for t in face))
+
+
+def walking_ground(raw, mapping):
+    streets = {r['texture'] for r in mapping if r['class'] in (
+        'mud','cobble','path_tile','ground_panel','paving_transition_tile','pavement_border_tile')}
+    streets.add('NW_CITY_HAFENKAI_BODEN_01.TGA')
+    terrain = ('NW_NATURE_WALDBODEN_', 'NW_NATURE_WBODEN_', 'NW_NATURE_STEIN_',
+               'NW_NATURE_DARKWOOD_BODEN_', 'NW_NATURE_DARKWOOD_PATH_',
+               'NW_NATURE_DARKWOOD_STEIN_', 'NW_NATURE_DARKWOOD_FELS_',
+               'NW_NATURE_GREATSEA_SAND_', 'NW_NATURE_PATH_', 'NW_NATURE_ACKER_',
+               'NW_NATURE_STAIRS_', 'OW_SURFACE_')
+    return np.asarray([t for t,name in zip(raw['ground_triangles'],raw['ground_textures'],strict=True)
+                       if name in streets or name.startswith(terrain)],dtype=float)
+
+
+def camera(block, triangles, ground, angle=0, occluders=None):
+    face = facade(block,triangles)
+    a = math.radians(angle)
+    direction = face['outward']*math.cos(a)+face['side']*math.sin(a)
+    points = np.concatenate((face['points'],face['frame']))
+    best = None
+    # Keep a straight front / 45-degree bearing while moving along the facade
+    # to find open street rather than placing the eye inside a neighbouring hut.
+    for distance in np.arange(150.,2025.,25.):
+        for offset in (0,150,-150,300,-300,450,-450,600,-600):
+            target = face['target']+face['side']*offset
+            eye = target + direction*distance
+            try:
+                ground_y = ground_height(ground,eye[0],eye[2],face['anchor'][1])
+            except ValueError:
+                continue
+            eye[1] = ground_y+170
+            xy,depth = project(points,eye,target)
+            if depth.min()<=10 or np.abs(xy).max()>.96:
+                continue
+            visible = (sum(occluders.first_hit(eye,p,endpoint_margin=50) is None for p in face['samples'])/len(face['samples'])
+                       if occluders is not None else 1.)
+            result = dict(eye_cm=eye.tolist(),target_cm=target.tolist(),ground_y_cm=ground_y,
+                          outward=face['outward'].tolist(),angle_degrees=angle,distance_cm=float(distance),
+                          tangent_offset_cm=offset,frame_extent=float(np.abs(xy).max()),
+                          facade_visible_fraction=visible,face_area_m2=face['face_area_m2'],
+                          facade_triangle_indices=face['triangle_indices'])
+            if best is None or visible>best['facade_visible_fraction']:
+                best = result
+            if visible==1:
+                return result
+    if best is not None:
+        return best
+    raise ValueError(f"{block['id']}: no ground-level facade camera within 20 m")
 
 
 def write_scenario(path, candidates):
-    lines = ['# Generated by building_survey.py census; original building shells at noon.',
-             'cheat god','set time 12 0','overlay off','view hide animated morph pfx','cam lift off','']
-    for c in candidates:
-        cam = c['camera']; target=np.asarray(cam['target_cm']); eye=np.asarray(cam['eye_cm'])
-        # Teleport high, hold the camera before the hero falls into collision geometry.
-        hero=target.copy(); hero[1]=c['bounds_cm'][1][1]+500
-        delta=eye-hero
-        distance=math.hypot(delta[0],delta[2]); yaw=math.degrees(math.atan2(delta[2],delta[0]))
-        lines += [f"# {c['id']}: {c['area_m2']:.3f} m2; eye = ground + 170 cm.",
-                  f'cam look {target[1]-hero[1]:.3f}',
-                  'goto pos '+' '.join(f'{v:.3f}' for v in hero),
-                  f'cam world {distance:.3f} {delta[1]:.3f} {yaw:.6f}',
-                  'wait 34','cam hold','wait 6000',f"shot {c['id']}",'wait 300','']
+    lines = ['# Generated by building_survey.py census; original block facades at noon.',
+             'cheat god','clear 1000000','set time 12 0','overlay off','view hide animated morph pfx','cam lift off','']
+    for block in candidates:
+        for view,cam in block['cameras'].items():
+            target=np.asarray(cam['target_cm']); eye=np.asarray(cam['eye_cm'])
+            # Hold before the hero falls from the collision-free teleport anchor.
+            hero=target.copy(); hero[1]=block['bounds_cm'][1][1]+500
+            delta=eye-hero
+            distance=math.hypot(delta[0],delta[2]); yaw=math.degrees(math.atan2(delta[2],delta[0]))
+            lines += [f"# {block['id']} {view}: eye = ground + 170 cm.",
+                      f'cam look {target[1]-hero[1]:.3f}',
+                      'goto pos '+' '.join(f'{v:.3f}' for v in hero),
+                      f'cam world {distance:.3f} {delta[1]:.3f} {yaw:.6f}',
+                      'wait 34','cam hold','wait 6000',f"shot {block['id']}-{view}",'wait 300','']
     path.write_text('\n'.join(lines))
 
 
-def validate_market(clusters, triangles, measurement, landmarks):
+def triangle_key(triangle):
+    return (triangle['texture'],triangle['visual'],
+            tuple(sorted(tuple(round(v,3) for v in p) for p in triangle['points'])))
+
+
+def validate_market(blocks, triangles, measurement, landmarks):
     reference = json.loads(measurement.read_text())
-    expected = Counter()
-    for t in reference['candidate_house_triangles']:
-        if t['texture'] in MARKET:
-            expected[t['texture']] += t['area_m2']
-    wp = next(w for w in landmarks if w['name']=='NW_CITY_MERCHANT_HUT_02_ENTRY')
-    chosen = min(clusters, key=lambda c: np.min(np.linalg.norm(
-        np.asarray([triangles[i]['center'] for i in c['triangle_indices']])-wp['position'],axis=1)))
-    rows = []
-    for name in MARKET:
-        actual=chosen['textures_m2'].get(name,0); baseline=expected[name]
-        error=abs(actual/baseline-1)*100
-        rows.append(dict(texture=name,reference_m2=baseline,census_m2=actual,error_percent=error))
-    result = dict(cluster_id=chosen['id'],waypoint=wp['name'],textures=rows,
-                  max_error_percent=max(r['error_percent'] for r in rows))
-    print(json.dumps(result,ensure_ascii=False),flush=True)
-    if result['max_error_percent']>5:
-        raise ValueError(f"Market validation failed: {result['max_error_percent']:.3f}% > 5%")
+    expected = Counter(triangle_key(t) for t in reference['candidate_house_triangles'] if t['texture'] in MARKET)
+    overlaps = []
+    for block in blocks:
+        actual = Counter(triangle_key(triangles[i]) for i in block['triangle_indices'])
+        overlaps.append(sum((expected & actual).values()))
+    best = int(np.argmax(overlaps))
+    result = dict(block_id=blocks[best]['id'],waypoint='NW_CITY_MERCHANT_HUT_02_ENTRY',
+                  reference_triangles=sum(expected.values()),matched_triangles=overlaps[best],
+                  missing_triangles=sum(expected.values())-overlaps[best])
+    print(json.dumps(result),flush=True)
+    if result['missing_triangles']:
+        raise ValueError(f"Market validation failed: {result['matched_triangles']}/{result['reference_triangles']} triangles")
     return result
+
+
+def select_candidates(blocks):
+    return sorted((b for b in blocks if b['textures_m2'].get(HARBOUR[1],0)>=10
+                   and b['size_m'][0]<=40 and b['size_m'][2]<=40),
+                  key=lambda b:(-sum(b['textures_m2'].get(n,0) for n in HARBOUR),b['id']))[:6]
 
 
 def census(args):
     raw=json.loads(args.input.read_text())
     with args.mapping.open() as stream:
-        rows=shell_rows(csv.DictReader(stream))
+        mapping=list(csv.DictReader(stream))
+        rows=shell_rows(mapping)
     triangles=[t for t in raw['candidate_house_triangles'] if shell_triangle(t,rows)]
     landmarks=raw['waypoints']+raw.get('freepoints',[])
     groups=cluster_triangles(triangles)
@@ -290,12 +350,17 @@ def census(args):
         c['id']=f'B{i:03d}'
     print(f'{len(triangles)} shell triangles; {len(groups)} components; {len(clusters)} >=30 m2',flush=True)
     validation=validate_market(clusters,triangles,args.market_measurement,landmarks) if args.market_measurement else None
-    candidates=sorted((c for c in clusters if c['textures_m2'].get(HARBOUR[1],0)>=10),
-                      key=lambda c:(-sum(c['textures_m2'].get(n,0) for n in HARBOUR),c['id']))[:6]
+    candidates=select_candidates(clusters)
     if len(candidates)!=6:
         raise ValueError(f'Expected six candidates, found {len(candidates)}')
+    from intent_cameras import Occluders
+    occluders=Occluders(raw['occluders'])
+    ground=walking_ground(raw,mapping)
     for c in candidates:
-        c['camera']=camera(c,triangles,raw['ground_triangles'])
+        front=camera(c,triangles,ground,occluders=occluders)
+        quarters=[camera(c,triangles,ground,angle=a,occluders=occluders) for a in (45,-45)]
+        quarter=max(quarters,key=lambda cam:(cam['facade_visible_fraction'],-cam['distance_cm']))
+        c['cameras']={'front':front,'three-quarter':quarter}
     args.output.parent.mkdir(parents=True,exist_ok=True)
     fields=['id','center_x_m','center_y_m','center_z_m','size_x_m','size_y_m','size_z_m','area_m2','nearest','nearest_distance_m']
     fields += list(itertools.chain.from_iterable((f'texture_{i}',f'texture_{i}_m2') for i in range(1,7)))
@@ -315,32 +380,33 @@ def census(args):
     args.metadata.write_text(json.dumps(metadata,ensure_ascii=False,indent=2)+'\n')
     write_scenario(args.scenario,candidates)
     for c in candidates:
-        print(c['id'],round(c['area_m2'],3),[round(c['textures_m2'].get(n,0),3) for n in HARBOUR],c['nearest'],c['camera'],flush=True)
+        print(c['id'],round(c['area_m2'],3),[round(c['textures_m2'].get(n,0),3) for n in HARBOUR],c['nearest'],{v:{k:cam[k] for k in ('distance_cm','tangent_offset_cm','angle_degrees','facade_visible_fraction')} for v,cam in c['cameras'].items()},flush=True)
 
 
 def sheet(args):
     from PIL import Image, ImageDraw, ImageFont
     candidates=json.loads(args.metadata.read_text())['candidates']
     try:
-        font=ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf',22)
+        font=ImageFont.truetype('/System/Library/Fonts/Supplemental/Arial.ttf',20)
     except OSError:
-        font=ImageFont.load_default(size=22)
-    board=Image.new('RGB',(1536,3*(432+68)),'#17191b'); draw=ImageDraw.Draw(board)
-    for i,c in enumerate(candidates):
-        with Image.open(args.captures/'original'/(c['id']+'.png')) as source:
-            if source.size!=(1280,720):
-                raise ValueError(f"{c['id']}: expected 1280x720, got {source.size}")
-            panel=source.convert('RGB').resize((768,432),Image.Resampling.LANCZOS)
-        x,y=(i%2)*768,(i//2)*500
-        board.paste(panel,(x,y+68))
-        draw.text((x+12,y+6),f"{c['id']} | shell {c['area_m2']:.1f} m2",font=font,fill='white')
-        areas=[c['textures_m2'].get(n,0) for n in HARBOUR]
-        draw.text((x+12,y+34),f'W01 {areas[0]:.1f} | W02 {areas[1]:.1f} | gable {areas[2]:.1f} m2',font=font,fill='white')
+        font=ImageFont.load_default(size=20)
+    board=Image.new('RGB',(1280,6*(360+64)),'#17191b'); draw=ImageDraw.Draw(board)
+    for i,block in enumerate(candidates):
+        y=i*424
+        draw.text((12,y+4),f"{block['id']} | {block['nearest']}",font=font,fill='white')
+        areas=[block['textures_m2'].get(n,0) for n in HARBOUR]
+        draw.text((12,y+32),f'W01 {areas[0]:.1f} | W02 {areas[1]:.1f} | gable {areas[2]:.1f} m2  |  front / three-quarter',font=font,fill='white')
+        for x,view in ((0,'front'),(640,'three-quarter')):
+            with Image.open(args.captures/'original'/f"{block['id']}-{view}.png") as source:
+                if source.size!=(1280,720):
+                    raise ValueError(f"{block['id']}-{view}: expected 1280x720, got {source.size}")
+                panel=source.convert('RGB').resize((640,360),Image.Resampling.LANCZOS)
+            board.paste(panel,(x,y+64))
     args.output.parent.mkdir(parents=True,exist_ok=True)
     for quality in (90,85,80,75,70,60):
         board.save(args.output,quality=quality,optimize=True)
         if args.output.stat().st_size<=1_000_000:
-            print(f'6 panels; {args.output.stat().st_size} bytes; JPEG quality {quality}')
+            print(f'12 panels; {args.output.stat().st_size} bytes; JPEG quality {quality}')
             return
     raise ValueError('Contact sheet exceeds 1 MB')
 

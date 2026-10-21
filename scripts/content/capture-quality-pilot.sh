@@ -6,7 +6,7 @@
 # --compose-2 CAPTURES OUTPUT writes seven original / city-3 / B / pilot-2 boards.
 # --compose-3 CAPTURES OUTPUT writes seven original / pilot-2 / pilot-3a / pilot-3b boards.
 # QUALITY_PILOT_TASK=gothic-ai/market-house selects market-house.bench (three views).
-# QUALITY_PILOT_TASK=gothic-ai/harbour-house selects harbour-house.bench (six original views).
+# QUALITY_PILOT_TASK=gothic-ai/harbour-house selects harbour-house.bench (twelve original facade views).
 # --compose-house CAPTURES OUTPUT writes original / pilot-3b / house-1 boards.
 # --compose-house-2 CAPTURES OUTPUT writes original / house-1 / house-2 boards.
 set -euo pipefail
@@ -70,9 +70,37 @@ INI
   export OPENGOTHIC_TEXTURES='' OPENGOTHIC_FRACTURE=''
   export OPENGOTHIC_CENSUS="$out/census.json"
   export OPENGOTHIC_BENCH="$task/scripts/$SCENARIO" OPENGOTHIC_BENCH_OUT="$out"
+  game="$HOME/gothic-ai/game"
+  if [[ "$TASK" == gothic-ai/harbour-house ]]; then
+    # Keep the wide survey lens isolated from the shared installation.
+    python3 - "$game" "$task/game" <<'PYGAME'
+from pathlib import Path
+import re
+import sys
+source, target = map(Path, sys.argv[1:])
+target.mkdir(exist_ok=True)
+for entry in source.iterdir():
+    if entry.name.lower() != 'system' and not (target / entry.name).exists():
+        (target / entry.name).symlink_to(entry)
+system = next(entry for entry in source.iterdir() if entry.name.lower() == 'system')
+local_system = target / system.name
+local_system.mkdir(exist_ok=True)
+for entry in system.iterdir():
+    if entry.name.lower() != 'systempack.ini' and not (local_system / entry.name).exists():
+        (local_system / entry.name).symlink_to(entry)
+original = next((p for p in system.iterdir() if p.name.lower() == 'systempack.ini'), None)
+text = original.read_text(errors='replace') if original else '[PARAMETERS]\n'
+text = re.sub(r'(?im)^[ \t]*VerticalFOV[ \t]*=.*$', '', text)
+text, count = re.subn(r'(?im)^[ \t]*\[PARAMETERS\][ \t]*\r?$', '[PARAMETERS]\nVerticalFOV=125', text, count=1)
+if not count:
+    text += '\n[PARAMETERS]\nVerticalFOV=125\n'
+(local_system / 'SystemPack.ini').write_text(text)
+PYGAME
+    game="$task/game"
+  fi
   rc=0
   (cd "$out/run" && timeout 240 "$task/build/opengothic/Gothic2Notr" \
-    -g "$HOME/gothic-ai/game" -g2 -window -devmode -save 1) >"$out/game.log" 2>&1 || rc=$?
+    -g "$game" -g2 -window -devmode -save 1) >"$out/game.log" 2>&1 || rc=$?
   printf '%s\n' "$rc" >"$out/exit.txt"
   [[ "$rc" == 0 ]] || { tail -30 "$out/game.log"; exit "$rc"; }
   check_args=()

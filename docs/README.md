@@ -51,7 +51,7 @@
 
 [House-2: цвет по материалам](../reports/content/2026-10-market-house-concept/README.md#цвет-по-материалам-house-2): `market_house.py prepare/build --set house-2`, отдельный дуб балки, общий камень и дуб/штукатурка по `oak_masks` (Gaussian ln Y + общий Оцу). Все шесть яркостей и дуб в пределах ±25%; тот же бинарник дал три кадра и 12/12 замен. `capture-quality-pilot.sh --compose-house-2` сохраняет прежние JPEG и собирает original / house-1 / house-2.
 
-[Перепись оболочек Хориниса и кандидаты портового дома](../reports/content/2026-10-harbour-house/README.md): `content-textures.sh --triangles` выгружает геометрию/UV без пикселей, `building_survey.py census/sheet` строит связные оболочки, камеры и лист. Получены 69 кластеров ≥30 м²; сверка дома у рынка не прошла из-за общей геометрии соседних зданий. `harbour-house.bench` подготовлен, съёмка ждёт решения о разделении связных блоков.
+[Перепись связных блоков Хориниса и кандидаты портового дома](../reports/content/2026-10-harbour-house/README.md): `content-textures.sh --triangles` выгружает геометрию/UV без пикселей и контекст камеры; `building_survey.py census/sheet` строит 69 блоков ≥30 м², проверяет включение 271/271 треугольников дома у рынка и выбирает шесть блоков с портовой обшивкой и рамкой ≤40 м по X/Z. `harbour-house.bench` и `capture-quality-pilot.sh` сняли 12/12 кадров original через gq; лист — шесть строк front / three-quarter. Отдельный дом пользователь выбирает по кадрам, его обмер будет по ручной рамке.
 
 ## Путь одной реплики героя
 

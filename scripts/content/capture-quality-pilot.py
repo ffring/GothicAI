@@ -55,7 +55,13 @@ def check(directory, scenario, material_index, iteration3=False, market_house=Fa
     shots = [command[5:] for command in commands if command.startswith("shot ")]
     spots = tuple(shots) if harbour_house else HOUSE_SPOTS if market_house else SPOTS
     if harbour_house:
-        require(len(spots) == 6 and len(set(spots)) == 6, "expected six distinct harbour shots")
+        require(len(spots) == 12 and len(set(spots)) == 12, "expected twelve distinct harbour shots")
+        views = [re.fullmatch(r"(B\d+)-(front|three-quarter)", spot) for spot in spots]
+        require(all(views), "expected harbour shot names BLOCK-front or BLOCK-three-quarter")
+        blocks = {view[1] for view in views}
+        require(len(blocks) == 6 and set(spots) == {
+            f"{block}-{view}" for block in blocks for view in ("front", "three-quarter")
+        }, "expected front and three-quarter for six harbour blocks")
     require(tuple(shots) == spots, "unexpected shot list")
     for command in commands:
         if command.startswith(("goto ", "shot ")):

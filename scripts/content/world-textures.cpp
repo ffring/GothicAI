@@ -456,13 +456,16 @@ int trianglesMain(const fs::path& game,const fs::path& destination,const fs::pat
   else f << "null";
   f << ",\"bounds_rule\":\"uncut triangles with intersecting XZ bounding rectangles\",\"candidate_house_triangles\":[";
   size_t triangleCount=0,nextVob=0;
+  std::vector<std::array<Point,3>> occluders;
   auto add=[&](const Geometry& geometry,const zenkit::VirtualObject* v,size_t source,const std::string& visual) {
-    for(const auto& original:geometry) if(textures.contains(original.texture)) {
+    for(const auto& original:geometry) {
       auto t=original;
       for(auto& p:t.p) p=transform(p,v);
       if(!bounds.intersects(t)) continue;
-      t.shadingNormal=transformNormal(t.shadingNormal,v);
       if(!std::isfinite(area(t.p[0],t.p[1],t.p[2]))) throw std::runtime_error("non-finite triangle area");
+      occluders.push_back(t.p);
+      if(!textures.contains(t.texture)) continue;
+      t.shadingNormal=transformNormal(t.shadingNormal,v);
       for(auto uv:t.uv) if(!std::isfinite(uv.x) || !std::isfinite(uv.y)) throw std::runtime_error("non-finite UV");
       if(triangleCount++) f << ',';
       jsonTriangle(f,t,source,visual);
@@ -492,6 +495,12 @@ int trianglesMain(const fs::path& game,const fs::path& destination,const fs::pat
   };
   for(const auto& v:world.world_vobs) if(v) visit(*v);
   if(zenkitErrors) throw std::runtime_error("ZenKit reported "+std::to_string(zenkitErrors)+" errors");
+  f << "],\"occluders\":[";
+  for(size_t i=0;i<occluders.size();++i) {
+    if(i) f << ','; f << '[';
+    for(size_t k=0;k<3;++k) { if(k) f << ','; jsonPoint(f,occluders[i][k]); }
+    f << ']';
+  }
   f << "],\"waypoints\":[";
   size_t pointCount=0;
   if(world.way_net) for(const auto& wp:world.way_net->points) if(wp) {
@@ -514,8 +523,15 @@ int trianglesMain(const fs::path& game,const fs::path& destination,const fs::pat
     for(size_t k=0;k<3;++k) { if(k) f << ','; jsonPoint(f,t.p[k]); }
     f << ']';
   }
+  f << "],\"ground_textures\":[";
+  size_t groundTextureCount=0;
+  for(const auto& t:worldTriangles) if(bounds.intersects(t) && triangleNormal(t).y>0.5) {
+    if(groundTextureCount++) f << ',';
+    jsonString(f,t.texture);
+  }
   f << "]}\n";
   std::cerr << "Triangles: " << triangleCount << " selected, " << groundCount << " upward ground, "
+            << occluders.size() << " occluders, "
             << pointCount << " waypoints, " << freepoints.size() << " freepoints; " << destination << '\n';
   return 0;
 }
