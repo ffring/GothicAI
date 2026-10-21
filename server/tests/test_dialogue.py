@@ -108,6 +108,95 @@ class HiddenQuestTool:
         return []
 
 
+async def test_extensions_share_tool_names_once_and_the_first_definition_wins():
+    class QuestTools(HiddenQuestTool):
+        def __init__(self, description):
+            self.all_tools = (Tool("amend_quest", description),)
+
+        def tools(self, npc):
+            return list(self.all_tools)
+
+    fake = FakeGame()
+    llm = FakeBackend("Ладно.", delay=0)
+    first, second = QuestTools("First definition."), QuestTools("Second definition.")
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.extensions.extend([first, second])
+        offered = dialogue._offered(XARDAS)
+        assert [t.name for t in offered].count("amend_quest") == 1
+        assert next(t for t in offered if t.name == "amend_quest") is first.all_tools[0]
+        request = dialogue._request_tools(
+            [*offered, Tool("turn_signal", "First signal."), Tool("turn_signal", "Second signal.")]
+        )
+        assert [t.name for t in request].count("turn_signal") == 1
+        assert next(t for t in request if t.name == "turn_signal").description == "First signal."
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Не нужно никуда идти.")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+        requested = llm.calls[0][2]
+        assert [t.name for t in requested].count("amend_quest") == 1
+        assert next(t for t in requested if t.name == "amend_quest") is first.all_tools[0]
+
+
+@pytest.mark.parametrize("own", [False, True])
+async def test_amend_quest_routes_to_the_extension_owning_its_id(tmp_path, own):
+    from gothic_ai.gamedata.storygraph import load
+    from gothic_ai.memory import MemoryStore
+    from gothic_ai.questbook import goal_id
+    from gothic_ai.vanilla import VanillaQuests
+    from tests.test_director import GRAPH, QUEST
+    from tests.test_questbook import _book, _quest
+
+    path = tmp_path / "story.json"
+    path.write_text(json.dumps(GRAPH), encoding="utf-8")
+    graph = load(path)
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, book, _, chronicle = await _book(fake, store, graph)
+    try:
+        q = _quest()
+        quest, npc, name, drop = (
+            (q.id, HILDA, "Хильда", goal_id(q, 1, 1)) if own else (QUEST, LOBART, "Лобарт", "ITPL_BEET")
+        )
+        llm = FakeBackend(
+            script=[
+                FakeStep(
+                    "Договорились.",
+                    [
+                        ToolCall(
+                            "amend_quest", {"quest": quest, "drop": [drop], "why": "Больше не нужно."}, "c1"
+                        )
+                    ],
+                )
+            ],
+            delay=0,
+        )
+        dialogue = DialogueManager(book.link, llm, PersonaProvider(None), memory=store)
+        VanillaQuests(book.link, dialogue, chronicle, graph)
+        book.dialogue = dialogue
+        dialogue.extensions.append(book)
+        fake.vars[QUEST] = 1
+        if own:
+            assert await book.make(q) == []
+            fake.vars.update({q.id: 1, "DIR_Q1_STAGE": 1})
+            chronicle.record({"fact": "story_quest_given", "id": q.id})
+        dialogue.open(npc, name)
+        await dialogue.say_as_player(npc, "Не нужно никуда идти.")
+        await _until(lambda: bool(chronicle.facts("quest_terms")))
+        assert chronicle.facts("quest_terms")[0]["quest"] == quest
+        assert chronicle.facts("quest_terms")[0]["drop"] == [drop]
+        if own:
+            assert any(
+                m["type"] == "story_effect"
+                and m["effects"] == [{"do": "set", "var": drop, "value": 1}]
+                for m in fake.story
+            )
+        else:
+            assert fake.vars[QUEST] == 1  # the terms change, the scripts' quest still runs
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 @pytest.mark.parametrize(
     "leak", ["give_item?", "set_intent?", "give_quest?", "turn_signal?", "functions.give_quest({...})"]
 )

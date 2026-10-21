@@ -1603,6 +1603,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario wolf_load: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "check_walk":
+                assert state.dialogue is not None
+                results = await scenarios.check_walk(link, state.dialogue)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario check_walk: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None
                 results = await scenarios.companion_scenario(
@@ -2009,6 +2015,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario lie: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "death_load":
+                assert state.director is not None
+                results = await scenarios.death_load(link, state.director)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario death_load: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "repair":
                 assert state.director is not None and state.story is not None
                 results = await scenarios.repair_after_death(link, state.director, state.story)
@@ -2082,6 +2094,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.book_stages(link, state.book, place_book)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario stages: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "own_amend":
+                assert state.book is not None and place_book is not None and state.dialogue and state.talk
+                results = await scenarios.own_amend(link, state.book, place_book, state.dialogue, state.talk)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario own_amend: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "requires":
                 assert state.book is not None
@@ -2833,6 +2851,7 @@ def main() -> None:
             "lie",
             "wrath",
             "repair",
+            "death_load",
             "authored",
             "occasions",
             "questlog",
@@ -2845,6 +2864,7 @@ def main() -> None:
             "frame",
             "crime_meet",
             "crime_ally",
+            "check_walk",
             "crime_talk",
             "trace_crime",
             "cover",
@@ -2859,6 +2879,7 @@ def main() -> None:
             "own",
             "trigger",
             "stages",
+            "own_amend",
             "requires",
             "chain",
             "own_repair",

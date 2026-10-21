@@ -48,6 +48,7 @@ from .journal import Journal
 from .knowledge import Partial, StoryState
 from .llm import Tool, ToolCall
 from .protocol import GameMessage, Loading, Session, Snapshot
+from .quest_tools import _QUEST_ARG, AMEND, AMEND_TOOL, DROP, DROP_TOOL
 from .quests import SEE_CM, Lie, caught, unmask
 from .trust import WORD_BROKEN, Trust
 from .turn import ToolOutcome
@@ -62,10 +63,9 @@ ACCEPT = "accept_quest"
 CHECK = "check_claim"
 EXPOSE = "expose_lie"
 GIVE = "give_quest"
-AMEND = "amend_quest"
-DROP = "drop_quest"
 CHECK_CM = 6000  # how far an npc goes to see for itself
 LOOK_CM = 1800  # how close it comes to what it goes to see
+WALK_TIMEOUT_MS = 120_000
 BACK_CM = 300  # how close it comes back to the hero to tell him
 LOG_RUNNING, LOG_SUCCESS, LOG_OBSOLETE = 1, 2, 4
 QUEST_REWARDS: dict[str, dict[str, int]] = json.loads(
@@ -81,14 +81,6 @@ COSMETIC_CALLS = ("AI_", "PRINT", "SND_", "WLD_PLAYEFFECT", "MDL_", "B_SAY", "B_
 PARTY = ["int", 15, "AIV_PARTYMEMBER"]
 MAX_SAID = 600  # characters of the scripts' lines of a dialog shown to the npc's model
 
-_QUEST_ARG = {
-    "type": "object",
-    "properties": {
-        "quest": {"type": "string", "description": "id из обстановки, например MIS_LOBART_RUEBEN"}
-    },
-    "required": ["quest"],
-    "additionalProperties": False,
-}
 ACCEPT_TOOL = Tool(
     ACCEPT,
     "Засчитать герою дело, которого ты от него ждёшь (список — в обстановке), и выбрать плату. "
@@ -105,35 +97,6 @@ ACCEPT_TOOL = Tool(
                 "сделал не он). Опыт за решённое дело герой получит в любом случае.",
             },
         },
-    },
-)
-AMEND_TOOL = Tool(
-    AMEND,
-    "Изменить свой уговор с героем: снять пункт, который тебе больше не нужен, — пощадил того, кого "
-    "просил убить; договорились; он ушёл; хватит и того, что есть. Вызывай сразу, как решил, не жди, пока "
-    "герой придёт сдавать дело. Снимать можно только пункты, которые перечислены в обстановке. Мир от "
-    "этого не меняется: пощажённый остаётся жив.",
-    {
-        **_QUEST_ARG,
-        "properties": {
-            **_QUEST_ARG["properties"],
-            "drop": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-            "why": {"type": "string", "description": "Почему ты снимаешь эти пункты"},
-        },
-        "required": ["quest", "drop", "why"],
-    },
-)
-DROP_TOOL = Tool(
-    DROP,
-    "Отменить своё поручение, когда дело потеряло смысл: ты передумал или нужда отпала сама. Квест "
-    "закроется без награды. Не используй это, чтобы наказать героя: для этого есть твоё отношение к нему.",
-    {
-        **_QUEST_ARG,
-        "properties": {
-            **_QUEST_ARG["properties"],
-            "why": {"type": "string", "description": "Почему дело потеряло смысл"},
-        },
-        "required": ["quest", "why"],
     },
 )
 CHECK_TOOL = Tool(
@@ -676,13 +639,6 @@ class VanillaQuests:
         if call.name not in (ACCEPT, CHECK, EXPOSE, GIVE, AMEND, DROP):
             return None
         quest = str(call.arguments.get("quest", "")).upper()
-        checking = self.checking.get(conv.npc)
-        if checking is not None and (
-            call.name == CHECK or (call.name == ACCEPT and checking.quest == quest)
-        ):
-            return ToolOutcome(
-                "Отклонено: ты уже идёшь посмотреть сам; что увидишь, то и решит.", "rejected"
-            )
         if call.name == GIVE:
             start = self.starts.get(conv.npc, {}).pop(quest, None)
             if start is None:
@@ -693,8 +649,15 @@ class VanillaQuests:
 
             dialogue.after_speech(conv, give)
             return ToolOutcome("Принято: поручение будет у него после реплики.", "accepted")
+        if quest not in self.graph.quests:
+            return None
+        checking = self.checking.get(conv.npc)
+        if checking is not None and call.name == ACCEPT and checking.quest == quest:
+            return ToolOutcome(
+                "Отклонено: ты уже идёшь посмотреть сам; что увидишь, то и решит.", "rejected"
+            )
         offers = self.offers.get(conv.npc, {})
-        offer = offers.get(quest)
+        offer = checking if call.name == CHECK and checking is not None else offers.get(quest)
         if offer is None and call.name in (AMEND, DROP) and checking is not None:
             if checking.quest == quest and not any(
                 f.get("quest") == quest for f in self.chronicle.facts("quest_outcome")
@@ -817,6 +780,10 @@ class VanillaQuests:
         return f"Ты отменил поручение «{offer.title}»: оно закрыто без награды.", True
 
     def _go_check(self, conv: Conversation, offer: Offer) -> ToolOutcome:
+        if conv.npc in self.checking:
+            return ToolOutcome(
+                "Отклонено: ты уже идёшь посмотреть сам; что увидишь, то и решит.", "rejected"
+            )
         target = offer.reachable()
         if target is None:
             why = (
@@ -1298,10 +1265,34 @@ class VanillaQuests:
 
     async def _go(self, conv: Conversation, npc: str, radius: int) -> str:
         """The npc's body walks until it is `radius` cm from someone; what went wrong, or ''."""
+        log.info("vanilla: %s go_to_npc start target=%s radius=%s", conv.npc, npc, radius)
         try:
-            res = await self.link.act(conv.npc, "go_to_npc", npc=npc, radius=radius)
+            res = await self.link.act(
+                conv.npc,
+                "go_to_npc",
+                npc=npc,
+                radius=radius,
+                timeout_ms=WALK_TIMEOUT_MS,
+                timeout=WALK_TIMEOUT_MS / 1000 + 10,
+            )
+            log.info(
+                "vanilla: %s go_to_npc end target=%s radius=%s status=%s detail=%s distance=%s",
+                conv.npc,
+                npc,
+                radius,
+                res.status,
+                res.detail,
+                res.distance,
+            )
             return "" if res.status == "done" else res.detail or res.status
         except (GameError, TimeoutError) as err:
+            log.info(
+                "vanilla: %s go_to_npc end target=%s radius=%s status=error detail=%s distance=None",
+                conv.npc,
+                npc,
+                radius,
+                err,
+            )
             return str(err) or type(err).__name__
 
     async def _face(self, conv: Conversation, npc: str) -> None:

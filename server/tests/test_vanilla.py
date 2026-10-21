@@ -94,6 +94,22 @@ async def _setup(fake: FakeGame, llm: FakeBackend, graph: StoryGraph, store: Mem
     return link_cm, dialogue, chronicle, vanilla
 
 
+@pytest.mark.parametrize("tool", ["accept_quest", "amend_quest", "drop_quest", "check_claim", "expose_lie"])
+@pytest.mark.parametrize("checking", [False, True])
+async def test_foreign_quest_ids_are_left_to_the_next_extension(graph, tool, checking):
+    fake = FakeGame(branch="A")
+    link_cm, dialogue, _, vanilla = await _setup(fake, FakeBackend(delay=0), graph, MemoryStore(":memory:"))
+    try:
+        conv = dialogue.open(LOBART, "Лобарт")
+        if checking:
+            fake.vars[KILL] = 1
+            await vanilla.prepare(LOBART)
+            vanilla.checking[LOBART] = vanilla.offers[LOBART].pop(KILL)
+        assert await vanilla.handle(dialogue, conv, ToolCall(tool, {"quest": "DIR_Q1"}, "c1"), None) is None
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 def _effects(fake: FakeGame, npc: str) -> list[list[dict]]:
     return [m["effects"] for m in fake.story if m["type"] == "story_effect" and m["npc"] == npc]
 
@@ -365,11 +381,61 @@ async def test_the_npc_goes_to_see_and_catches_the_lie(graph):
         await _until(lambda: LOBART not in vanilla.checking)
         go = [m["args"] for m in fake.received if m["type"] == "action" and m["action"] == "go_to_npc"]
         # there, to see; back to the hero, to say it to his face
-        assert go == [{"npc": BANDIT, "radius": 1800}, {"npc": "PLAYER", "radius": 300}]
+        assert go == [
+            {"npc": BANDIT, "radius": 1800, "timeout_ms": 120_000},
+            {"npc": "PLAYER", "radius": 300, "timeout_ms": 120_000},
+        ]
         assert "сходил проверить и увидел: Бандит жив, в 18 м" in chronicle.facts("caught")[0]["how"]
         await _until(lambda: len(llm.calls) >= 2)  # he says what he thinks of it
         assert "Он тебе солгал" in str(llm.calls[-1][1])
         assert chronicle.facts("claim") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_check_in_progress_cannot_start_another_walk(graph):
+    fake = FakeGame(branch="A")
+    fake.slow_actions = {"go_to_npc"}
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, _, vanilla = await _setup(fake, FakeBackend(delay=0), graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 4000, "seen": False}
+    try:
+        await vanilla.link.attach(LOBART)
+        conv = dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert "check_claim" in [t.name for t in vanilla.tools(LOBART)]
+
+        first = await vanilla.handle(dialogue, conv, ToolCall("check_claim", {"quest": KILL}, "c1"), None)
+        assert first.status == "accepted"
+        await _until(lambda: LOBART in fake.long_running)
+        await vanilla.prepare(LOBART)  # another turn refreshes the offers while the body is walking
+        assert "check_claim" not in [t.name for t in vanilla.tools(LOBART)]
+
+        second = await vanilla.handle(dialogue, conv, ToolCall("check_claim", {"quest": KILL}, "c2"), None)
+        assert (second.output, second.status) == (
+            "Отклонено: ты уже идёшь посмотреть сам; что увидишь, то и решит.",
+            "rejected",
+        )
+        go = [m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_npc"]
+        assert len(go) == 1
+        assert go[0]["args"] == {"npc": BANDIT, "radius": 1800, "timeout_ms": 120_000}
+
+        await fake.send(
+            type="action_result",
+            id=fake.long_running.pop(LOBART),
+            npc=LOBART,
+            status="timeout",
+            detail="stuck behind a wall",
+            distance=4000,
+        )
+        await _until(lambda: not conv.actions)
+        assert LOBART not in vanilla.checking
+        await vanilla.prepare(LOBART)
+        assert "check_claim" in [t.name for t in vanilla.tools(LOBART)]
+        assert len(
+            [m for m in fake.received if m["type"] == "action" and m["action"] == "go_to_npc"]
+        ) == 1
     finally:
         await link_cm.__aexit__(None, None, None)
 
@@ -1799,7 +1865,10 @@ async def test_a_giver_cannot_change_a_quest_it_did_not_ask_for(cavalorn, tool):
             if tool == "amend_quest":
                 args["drop"] = [BRAGO]
             result = await vanilla.handle(dialogue, conv, ToolCall(tool, args, "a1"), None)
-            assert result.status == "rejected"
+            if quest in cavalorn.quests:
+                assert result.status == "rejected"
+            else:
+                assert result is None  # another extension may own the quest
         assert chronicle.facts("quest_terms") == [] and chronicle.facts("quest_outcome") == []
     finally:
         await link_cm.__aexit__(None, None, None)

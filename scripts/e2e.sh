@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
+#   check_walk: new game, no SAVE, LLM=fake; Cavalorn walks from Xardas's stairs to Brago's
+#       unseen body in the bandit cave using the native waynet, sees it and returns to the hero
 #   load_rewind: load a save at least 20 game seconds earlier; npc_views, story_world and npc_died
 #       must resume within 2 s. New game, no SAVE, LLM=fake.
 #   memprobe: engine RSS after each step (Linux /proc status, macOS RSS and phys_footprint), and after
@@ -92,6 +94,7 @@
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
 #        rumor and has it in mind when the hero speaks to her (story graph, stage 4)
+#   death_load: human deaths before/after older-save load, player credit, and no repeated saved deaths; LLM=fake, no SAVE.
 #   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
 #       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
 #       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)
@@ -123,6 +126,10 @@
 #       stages written in the scenario — come to a place, get a thing put at another, bring it to her; the book
 #       checks and builds it of vars, dialogs and triggers; a save and a load at stage 2 keep it. On a save:
 #       SAVE=save_slot_1.sav
+#   own_amend: Hilda's three-stage quest from `stages`; at the hero's "не нужно никуда идти", her scripted
+#       model calls amend_quest to waive stage 1's destination without a visit. Stage 2 starts, terms survive
+#       save/load, and the normal item pickup and turn-in finish with quest_outcome amended/full.
+#       LLM=fake; SAVE=save_slot_1.sav
 #   crimes: hero deeds and engine witnesses (docs/crime.md, layer 1), LLM=fake on Lobart's farm:
 #       SAVE=save_slot_1.sav; TIMEOUT=420. Theft, chest, unowned item, attack, sheep, both pocket
 #       outcomes, then save/load and a clean branch. Native script reactions remain enabled.
@@ -390,7 +397,7 @@ if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = ne
   [ -z "${SAVE:-}" ] || { echo "scenario $SCENARIO requires a new game (unset SAVE)" >&2; exit 2; }
 fi
 LLM="${LLM:-fake}"
-if [[ ( "$SCENARIO" == bandit_parley || "$SCENARIO" == bandit_bounty || "$SCENARIO" == bandit_hold ) && ( "$LLM" != fake || -n "${SAVE:-}" ) ]]; then
+if [[ ( "$SCENARIO" == bandit_parley || "$SCENARIO" == bandit_bounty || "$SCENARIO" == bandit_hold || "$SCENARIO" == death_load ) && ( "$LLM" != fake || -n "${SAVE:-}" ) ]]; then
   echo "scenario $SCENARIO requires LLM=fake and a new game (unset SAVE)" >&2
   exit 2
 fi
