@@ -801,7 +801,7 @@ async def vanilla_check(
     if isinstance(dialogue.llm, FakeBackend):
         script = ClaimScript(
             said=[
-                ("правда перебил", FakeStep("Посмотрим.", [ToolCall("accept_quest", {"quest": BUGS})])),
+                ("правда перебил", FakeStep("Посмотрим.", [ToolCall("check_claim", {"quest": BUGS})])),
                 (
                     "перебил всех",
                     FakeStep("Перебил, говоришь? Сам посмотрю.", [ToolCall("check_claim", {"quest": BUGS})]),
@@ -832,11 +832,24 @@ async def vanilla_check(
     await settled()  # back to the hero, he says what he thinks of it
 
     # 2. a lie he can't check: not on his word any more
+    claim_calls = len(script.calls) if script is not None else 0
     await say(f"{name}, репа уже в амбаре, все двадцать штук. Давай плату.")
     await asyncio.sleep(2)
     check("not_on_word", not any(f.get("quest") == RUEBEN for f in facts("claim")), facts("claim")[-1:])
     if script is not None:
-        check("refused", any("он уже лгал тебе" in o for o in script.outputs), script.outputs[-1:])
+        situation = vanilla.situation(giver) or ""
+        offer = vanilla.offers.get(giver, {}).get(RUEBEN)
+        offered = [[tool.name for tool in tools] for _, _, tools in script.calls[claim_calls:]]
+        check(
+            "refused",
+            offer is not None
+            and vanilla._refusal(giver, offer) is not None
+            and "Засчитать сейчас нельзя" in situation
+            and bool(offered)
+            and all("accept_quest" not in tools for tools in offered)
+            and not any(f.get("quest") == RUEBEN for f in facts("claim")),
+            f"tools={offered}; {situation}",
+        )
 
     # 3. the truth: he goes to see again, and pays
     for bug in bugs:
