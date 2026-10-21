@@ -61,17 +61,19 @@ DESATURATE = .7         # share of the generated stone's colour removed
 STONE_CONTRAST = .65    # the generated stone is flaky; slates on a roof read smooth and mottled
 TONE = .14              # slates differ in tone (log-normal spread)
 PALE = .07              # share of paler weathered slates
-BLACK = .08             # share of almost black slates, wet or newer replacements
+BLACK = .03             # share of almost black slates, wet or newer replacements, in groups where it is damp
+BLOTS = .9              # black lichen and grime blots over the slates, densest by the gaps (the original's darks)
+BLOT_SHARE = .7         # threshold of the blot field in standard deviations: higher, fewer blots
 SHEEN = .7              # strongest worn, lighter patch on a slate
 DIRT = .75              # darkest dirt smudge
 SKY = 1.                # how strongly the sky light of the model shades the albedo
-SHADE = .9              # darkening under each course edge, where the light from the ridge is blocked
+SHADE = .95             # darkening under each course edge, where the light from the ridge is blocked
 SHADE_ELEVATION = (17., 22., 29.)  # degrees above the roof plane of that light: a soft, broad sky
-MOSS = (.010, .011, .010)  # black moss and dirt packed in the gaps
+MOSS = (.004, .0045, .004)  # black moss and dirt packed in the gaps: as dark as the original's darkest tenth
 JOINT_GRIME = (.012, .045)  # metres: solid grime, then fading, on the left of each joint under the raised neighbour
 JOINT_LINE = (.012, .018)   # metres: a black line along every joint, solid, then fading out
-DRIPS = .35             # share of joints whose tail drips water onto the courses below
-DRIP = .5               # darkening of a fresh drip trail
+DRIPS = .5              # share of joints whose tail drips water onto the courses below
+DRIP = .75              # darkening of a fresh drip trail
 FADE = .35              # washed-out regions
 WET = .7                # darkening of the wet black patches that span several slates
 # Surface (roughness for the engine's GGX: full highlight below 0.5, none above 0.8)
@@ -338,8 +340,8 @@ def drip_trails(spec: dict, size: int, rng) -> np.ndarray:
         height = slate['height']
         col0 = joint(x0, slant, height, 1.) * px
         row0 = (period - slate['y_bottom']) * px
-        length = rng.uniform(.6, 2.2) * height * px
-        width = rng.uniform(.01, .025) * px
+        length = rng.uniform(.8, 3.) * height * px
+        width = rng.uniform(.012, .035) * px
         strength = rng.uniform(.5, 1.)
         bend, phase = rng.uniform(3, 7), rng.uniform(0, 2 * np.pi)
         rows = np.arange(int(row0), int(row0 + length) + 1)
@@ -366,7 +368,16 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     mean = out.mean()
     out = mean + (out - mean) * STONE_CONTRAST
     tone = np.exp(rng.normal(0, TONE, count)) * np.where(rng.random(count) < PALE, 1.45, 1.)
-    tone *= np.where(rng.random(count) < BLACK, rng.uniform(.25, .4, count), 1.)
+    # Almost black slates come in groups where the roof stays damp, not scattered one by one:
+    # scattered, they repeat with the texture as a lattice of dark diamonds (game shots 2026-10-22).
+    damp_field = periodic_noise(np.random.default_rng([seed, 2]), size, 6, 6)
+    centre = np.array([np.mean(s['outline'], axis=0) for s in spec['slates']])
+    period = spec['period']
+    rows = ((period - centre[:, 1]) / period * size).astype(int) % size
+    cols = (centre[:, 0] / period * size).astype(int) % size
+    damp_here = damp_field[rows, cols]
+    black_odds = BLACK * np.exp(1.6 * damp_here) / np.exp(1.6 * damp_here).mean()
+    tone *= np.where(rng.random(count) < black_odds, rng.uniform(.25, .45, count), 1.)
     out *= tone[slate][..., None]
     out *= (1 + .10 * periodic_noise(rng, size, 40, 40))[..., None]       # mottling
 
@@ -397,12 +408,22 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     solid, reach = JOINT_GRIME
     beside = np.clip(((reach - (1 - u) * width) / (reach - solid)), 0, 1) ** .7 * ((v > 0) & (v < 1))
     clumps = np.clip(.55 + .6 * periodic_noise(rng, size, 110, 110), 0, 1)
-    moss = np.clip(gap + 1.3 * shade + beside, 0, 1) * (.55 + .45 * clumps)
+    moss = np.clip(gap + 1.3 * shade + beside, 0, 1) * (.7 + .3 * clumps)
     out = out * (1 - moss[..., None]) + np.array(MOSS) * moss[..., None]
     # every joint reads as a crisp black line, as in the original, whatever the moss does
     core, edge = JOINT_LINE
     line = np.clip((edge - (1 - u) * width) / (edge - core), 0, 1) * ((v > 0) & (v < 1))
     out *= (1 - .85 * line)[..., None]
+
+    # Black lichen and grime in ragged blots over parts of slates, densest by the gaps and the
+    # course edges: in the original most of the dark is this, not whole dark slates.
+    blot_rng = np.random.default_rng([seed, 3])
+    field = .75 * periodic_noise(blot_rng, size, 28, 28) + .45 * periodic_noise(blot_rng, size, 95, 95)
+    near = np.clip(moss * 1.5 + .5 * (np.clip(v, 0, 1) > .55), 0, 1)
+    blots = np.clip((field + .6 * near - BLOT_SHARE) * 1.3, 0, 1) ** 1.4      # soft, ragged edges
+    depth = np.clip(.65 + .35 * periodic_noise(blot_rng, size, 20, 20), .3, 1)  # some blots only grime
+    out *= (1 - BLOTS * blots * depth)[..., None]
+    moss = np.maximum(moss, .6 * blots)          # lichen is matte like moss
 
     # water drips off the tail where a joint ends and leaves a dark trail over the courses below
     streak = drip_trails(spec, size, np.random.default_rng([seed, 1]))

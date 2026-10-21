@@ -1,4 +1,4 @@
-{"set": "roofs-1", "base": "original", "registry": "data/content/remaster/city-roofs.jsonl",
+{"set": "roofs-3", "base": "original", "registry": "data/content/remaster/city-roofs.jsonl",
  "textures": {
   "NW_CITY_ROOF_01.TGA": {"crop": "band", "axes": "u", "colour": {"mode": "target"}, "relief": 0.35},
   "NW_CITY_ROOF_04.TGA": {"axes": "", "colour": {"mode": "target"}, "maps": "source"},

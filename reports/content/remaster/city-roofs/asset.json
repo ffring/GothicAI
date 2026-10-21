@@ -396,6 +396,52 @@
           "sha256": "d0ab214059f0b30ac2e1b50fd5cd0eb3af455051601953092a48093f66ad5af5"
         }
       }
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-5.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 5,
+      "sha256": "98ab58f050b263f10fbd26bb9efbb2240fb01b314002a88d44acf98f3d0fd382",
+      "c2pa": null,
+      "model": "derived: scripts/content/slate_bake.py",
+      "utc": "2026-10-21T21:06:49Z",
+      "thread": "blender",
+      "parent": "city-roofs-slate/reference-attempt-1.png city-roofs-slate/reference-attempt-2.png",
+      "tool": "scripts/content/slate_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-5.normal.png",
+          "sha256": "227221fda8a3be395c296799824fa0a384698bab38ac1877cf720e1afe76228f"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-5.roughness.png",
+          "sha256": "fad09c7647b521f09961afee4e7418aa162dea0eb9b585a2dddcc3975f79961d"
+        }
+      }
+    },
+    {
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-6.png",
+      "role": "texture",
+      "texture": "NW_CITY_ROOF_04.TGA",
+      "attempt": 6,
+      "sha256": "016e951c8eb11ad06b336c0f95e7e683fac3d1df47807fc22b3fa7834a04b2f2",
+      "c2pa": null,
+      "model": "derived: scripts/content/slate_bake.py",
+      "utc": "2026-10-21T21:10:04Z",
+      "thread": "blender",
+      "parent": "city-roofs-slate/reference-attempt-1.png city-roofs-slate/reference-attempt-2.png",
+      "tool": "scripts/content/slate_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-6.normal.png",
+          "sha256": "227221fda8a3be395c296799824fa0a384698bab38ac1877cf720e1afe76228f"
+        },
+        "roughness": {
+          "file": "city-roofs/NW_CITY_ROOF_04-attempt-6.roughness.png",
+          "sha256": "424cead9d1456a6107cfcc6caa5ece9d8cf28cf5aca4eb9d0b7bb27d81967b3a"
+        }
+      }
     }
   ],
   "selected": {
@@ -415,8 +461,8 @@
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_04.TGA": {
-      "file": "city-roofs/NW_CITY_ROOF_04-attempt-4.png",
-      "reason": "slate from the Blender model, variant B: occlusion and sky light in the albedo, no baked sun; normal and roughness from the model",
+      "file": "city-roofs/NW_CITY_ROOF_04-attempt-6.png",
+      "reason": "slate from the Blender model, rule B, darks matched to the original's luminance spread",
       "date": "2026-10-21"
     },
     "NW_CITY_ROOF_INSIDE_01.TGA": {
@@ -502,12 +548,12 @@
     }
   ],
   "build": {
-    "set": "roofs-1",
+    "set": "roofs-3",
     "base": "original",
     "date": "2026-10-21",
     "albedo_sha256": {
       "NW_CITY_ROOF_01.TGA": "87fee9fcafecec6b86b40b2486753d016e2a47ab0d46c85e40d3c68064bdc47d",
-      "NW_CITY_ROOF_04.TGA": "c3d30b8507ac687bd1a7302bf9f9a32cc7880e6217a1d9fbf3fde2471af34a88",
+      "NW_CITY_ROOF_04.TGA": "a4993c5463b05cf11d73f27ca3d7652153d1771417e3f3f4e8c0b71d74013278",
       "NW_CITY_ROOF_INSIDE_01.TGA": "c1da15b15b93d11739beb5ebe6edf2c47cc071e46c81b197c932f55e90361cf4"
     },
     "entries": 3,
