@@ -48,6 +48,7 @@ from .journal import Journal
 from .knowledge import Partial, StoryState
 from .llm import Tool, ToolCall
 from .protocol import GameMessage, Loading, Session, Snapshot
+from .quest_tools import _QUEST_ARG, AMEND, AMEND_TOOL, DROP, DROP_TOOL
 from .quests import SEE_CM, Lie, caught, unmask
 from .trust import WORD_BROKEN, Trust
 from .turn import ToolOutcome
@@ -62,8 +63,6 @@ ACCEPT = "accept_quest"
 CHECK = "check_claim"
 EXPOSE = "expose_lie"
 GIVE = "give_quest"
-AMEND = "amend_quest"
-DROP = "drop_quest"
 CHECK_CM = 6000  # how far an npc goes to see for itself
 LOOK_CM = 1800  # how close it comes to what it goes to see
 BACK_CM = 300  # how close it comes back to the hero to tell him
@@ -81,14 +80,6 @@ COSMETIC_CALLS = ("AI_", "PRINT", "SND_", "WLD_PLAYEFFECT", "MDL_", "B_SAY", "B_
 PARTY = ["int", 15, "AIV_PARTYMEMBER"]
 MAX_SAID = 600  # characters of the scripts' lines of a dialog shown to the npc's model
 
-_QUEST_ARG = {
-    "type": "object",
-    "properties": {
-        "quest": {"type": "string", "description": "id из обстановки, например MIS_LOBART_RUEBEN"}
-    },
-    "required": ["quest"],
-    "additionalProperties": False,
-}
 ACCEPT_TOOL = Tool(
     ACCEPT,
     "Засчитать герою дело, которого ты от него ждёшь (список — в обстановке), и выбрать плату. "
@@ -105,35 +96,6 @@ ACCEPT_TOOL = Tool(
                 "сделал не он). Опыт за решённое дело герой получит в любом случае.",
             },
         },
-    },
-)
-AMEND_TOOL = Tool(
-    AMEND,
-    "Изменить свой уговор с героем: снять пункт, который тебе больше не нужен, — пощадил того, кого "
-    "просил убить; договорились; он ушёл; хватит и того, что есть. Вызывай сразу, как решил, не жди, пока "
-    "герой придёт сдавать дело. Снимать можно только пункты, которые перечислены в обстановке. Мир от "
-    "этого не меняется: пощажённый остаётся жив.",
-    {
-        **_QUEST_ARG,
-        "properties": {
-            **_QUEST_ARG["properties"],
-            "drop": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-            "why": {"type": "string", "description": "Почему ты снимаешь эти пункты"},
-        },
-        "required": ["quest", "drop", "why"],
-    },
-)
-DROP_TOOL = Tool(
-    DROP,
-    "Отменить своё поручение, когда дело потеряло смысл: ты передумал или нужда отпала сама. Квест "
-    "закроется без награды. Не используй это, чтобы наказать героя: для этого есть твоё отношение к нему.",
-    {
-        **_QUEST_ARG,
-        "properties": {
-            **_QUEST_ARG["properties"],
-            "why": {"type": "string", "description": "Почему дело потеряло смысл"},
-        },
-        "required": ["quest", "why"],
     },
 )
 CHECK_TOOL = Tool(
@@ -655,6 +617,8 @@ class VanillaQuests:
 
             dialogue.after_speech(conv, give)
             return ToolOutcome("Принято: поручение будет у него после реплики.", "accepted")
+        if quest not in self.graph.quests:
+            return None
         offers = self.offers.get(conv.npc, {})
         offer = offers.get(quest)
         if offer is None:

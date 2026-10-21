@@ -12,6 +12,7 @@ from typing import Any
 from .. import programs, questbook, triggers
 from ..authoring import PROPOSE as PROPOSE_QUEST
 from ..authoring import Author
+from ..brain.reflex import Reflexes
 from ..cast import TEMPLATES, Cast, Person, PersonTie
 from ..casting import PROPOSE as PROPOSE_CHARACTER
 from ..casting import Casting
@@ -22,7 +23,7 @@ from ..director import PROPOSE, Director
 from ..game import GameError, GameLink
 from ..gamedata.storygraph import Expr
 from ..llm import Done, Item, LLMEvent, Message, Tool, ToolCall, ToolChoice
-from ..llm.fake import FakeBackend
+from ..llm.fake import FakeBackend, FakeStep
 from ..places import PlaceBook
 from ..protocol import (
     DialogChosen,
@@ -36,11 +37,15 @@ from ..protocol import (
 )
 from ..social import Rumors
 from ..story import StoryPatches
+from ..talk import TalkDesk
 from .common import (
     HILDA,
     LOBART,
     RUEBEN,
     RUEBEN_TO_HILDA,
+    ClaimScript,
+    FixedDecider,
+    _ByNpc,
     _logged,
     _save_or_fail,
     _until,
@@ -1056,6 +1061,20 @@ async def own_repair(
     return await book_stages(link, book, places, slot, director=director)
 
 
+async def own_amend(
+    link: GameLink,
+    book: questbook.QuestBook,
+    places: PlaceBook,
+    dialogue: DialogueManager,
+    talk: TalkDesk,
+    slot: int = 7,
+) -> dict[str, str]:
+    """Hilda waives the first destination in conversation; the three-stage quest continues and pays."""
+    if not isinstance(dialogue.llm, FakeBackend):
+        return _logged({"scripted_model": "failed (own_amend requires LLM=fake)"})
+    return await book_stages(link, book, places, slot, amend=(dialogue, talk))
+
+
 async def book_stages(
     link: GameLink,
     book: questbook.QuestBook,
@@ -1063,6 +1082,7 @@ async def book_stages(
     slot: int = 7,
     *,
     director: Director | None = None,
+    amend: tuple[DialogueManager, TalkDesk] | None = None,
 ) -> dict[str, str]:
     """Stage 3 of the director as author, layer 2 (docs/director.md): a quest as an object, of three stages.
 
@@ -1201,10 +1221,66 @@ async def book_stages(
     ok = await _until_async(lambda: vars(status, stage), lambda v: v == {status: 1, stage: 1}, 15)
     check("given", ok and book.progress(q.id).state == "given", await vars(status, stage))
 
-    await link.debug("player_goto", waypoint=to)
-    ok = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 2, 10)
-    await _until(lambda: book.progress(q.id).stage == 2, 5)
-    check("reach", ok and book.progress(q.id).stage == 2, f"{to} ({look.id}): {await vars(stage)}")
+    if amend is None:
+        await link.debug("player_goto", waypoint=to)
+        ok = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 2, 10)
+        await _until(lambda: book.progress(q.id).stage == 2, 5)
+        check("reach", ok and book.progress(q.id).stage == 2, f"{to} ({look.id}): {await vars(stage)}")
+    else:
+        dialogue, talk = amend
+        gid = questbook.goal_id(q, 1, 1)
+        facts = book.chronicle.facts
+        why = "Не нужно никуда идти: чужак уже ушёл."
+        await come_to_her()
+        distance = await link.evaluate(["call", "NPC_GETDISTTOWP", hero, ["str", to]])
+        before = await vars(status, stage, gid)
+        unvisited = before == {status: 1, stage: 1, gid: 0} and distance >= q.stages[0].goals[0].radius
+        check("unvisited", unvisited, f"{before}; {to}: {distance} cm")
+        if not unvisited:
+            return _logged(results)
+        script = ClaimScript(
+            said=[("не нужно никуда идти", FakeStep("Хорошо, туда идти не надо. Найди то, что он бросил.", [
+                ToolCall("amend_quest", {"quest": q.id, "drop": [gid], "why": why}),
+            ]))],
+            told=[],
+            default="Хм.",
+        )
+        dialogue.llm = _ByNpc({"Хильда": script}, FakeBackend("Хм.", delay=0))
+        talk.reflexes = Reflexes(FixedDecider({"posture": "listen"}))
+        nearby = await _until(lambda: HILDA in talk.people and talk.people[HILDA].distance <= 600, 20)
+        check("roster", nearby, HILDA)
+        if not nearby:
+            return _logged(results)
+        conv = dialogue.conversations.get(HILDA)
+        before_reply = conv.reply if conv else None
+        talk.hear("Хильда, не нужно никуда идти: чужак уже ушёл.", HILDA, {"via": "scenario"})
+
+        def answered() -> bool:
+            conv = dialogue.conversations.get(HILDA)
+            return bool(conv and conv.reply and conv.reply is not before_reply and conv.reply.done())
+
+        replied = await _until(answered, 60)
+        advanced = await _until_async(lambda: vars(stage), lambda v: v.get(stage) == 2, 10)
+        await _until(lambda: book.progress(q.id).stage == 2, 5)
+        terms = [f for f in facts("quest_terms") if f.get("quest") == q.id]
+        stages = [f for f in facts("story_quest_stage") if f.get("id") == q.id]
+        reached = [f for f in facts("triggered") if f.get("id") == gid]
+        situation = book.situation(HILDA) or ""
+        accepted = bool(
+            replied and advanced and book.progress(q.id).stage == 2
+            and any(f.get("drop") == [gid] and f.get("why") == why for f in terms)
+            and any(f.get("stage") == 2 for f in stages) and not reached
+            and "Снято тобой:" in situation and why in situation
+        )
+        check(
+            "amended", accepted,
+            f"terms={terms}; stages={stages}; reach={reached}; {await vars(stage, gid)}",
+        )
+        talk.end("scenario")
+        released = await _until(lambda: HILDA not in talk.attached, 20)
+        check("released", released, HILDA)
+        if not accepted or not released:
+            return _logged(results)
 
     if director is not None:
         facts = director.chronicle.facts
@@ -1272,6 +1348,15 @@ async def book_stages(
         and mine == {f"{q.id}_S1G1": 1, f"{q.id}_S1": 1, f"{q.id}_S2G1": 0, f"{q.id}_S2": 0},
         f"{await vars(status, stage)}; {mine}",
     )
+    if amend is not None:
+        terms = [f for f in book.chronicle.facts("quest_terms") if f.get("quest") == q.id]
+        situation = book.situation(HILDA) or ""
+        check(
+            "terms_after_load",
+            any(f.get("drop") == [gid] and f.get("why") == why for f in terms)
+            and "Снято тобой:" in situation and why in situation,
+            f"terms={terms}; {situation}",
+        )
     if director is not None:
         q = book.all()[q.id]
         nodes = [
@@ -1322,6 +1407,11 @@ async def book_stages(
     await _until(lambda: book.progress(q.id).state == "done", 5)
     situation = book.situation(successor) or ""
     check("knows", "ты заплатил" in situation, situation)
+    if amend is not None:
+        outcomes = [f for f in book.chronicle.facts("quest_outcome") if f.get("quest") == q.id]
+        check(
+            "outcome", any(f.get("how") == "amended" and f.get("pay") == "full" for f in outcomes), outcomes,
+        )
     if director is not None:
         left = [*left, *await link.offered_dialogs(HILDA)]
         check("once", not any(n.startswith(f"{q.id}_") for n in left), left)

@@ -2227,8 +2227,10 @@ class DialogueManager:
         of an npc's requests (and the provider's prompt cache) does not change with what is offered; only
         `offered` may be called (`allowed`)."""
         tools = [*self.tools, *(t for ext in self.extensions for t in ext.all_tools)]
-        names = {t.name for t in tools}
-        return tools + [t for t in offered if t.name not in names]
+        unique = {}
+        for tool in [*tools, *offered]:
+            unique.setdefault(tool.name, tool)
+        return list(unique.values())
 
     def _offered(self, npc: str) -> list[Tool]:
         """The tools for a turn with the hero: the npc's own and those of the extensions."""
@@ -2236,7 +2238,10 @@ class DialogueManager:
         sight = self.sight(npc, None) if self.sight is not None else None
         if sight is None or not sight.things:  # nothing lying about that it sees: nothing to pick up
             tools = [t for t in tools if t.name != npc_tools.TAKE_ITEM]
-        return tools
+        unique = {}
+        for tool in tools:
+            unique.setdefault(tool.name, tool)
+        return list(unique.values())
 
     def _recall(self, conv: Conversation, query: str) -> str:
         """Older messages than the npc has in mind (folded into the summary, or beyond what was loaded), and

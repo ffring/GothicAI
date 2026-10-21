@@ -123,6 +123,10 @@
 #       stages written in the scenario — come to a place, get a thing put at another, bring it to her; the book
 #       checks and builds it of vars, dialogs and triggers; a save and a load at stage 2 keep it. On a save:
 #       SAVE=save_slot_1.sav
+#   own_amend: Hilda's three-stage quest from `stages`; at the hero's "не нужно никуда идти", her scripted
+#       model calls amend_quest to waive stage 1's destination without a visit. Stage 2 starts, terms survive
+#       save/load, and the normal item pickup and turn-in finish with quest_outcome amended/full.
+#       LLM=fake; SAVE=save_slot_1.sav
 #   crimes: hero deeds and engine witnesses (docs/crime.md, layer 1), LLM=fake on Lobart's farm:
 #       SAVE=save_slot_1.sav; TIMEOUT=420. Theft, chest, unowned item, attack, sheep, both pocket
 #       outcomes, then save/load and a clean branch. Native script reactions remain enabled.

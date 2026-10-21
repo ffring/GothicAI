@@ -77,14 +77,15 @@ async def test_a_lie_is_paid_found_out_and_spread():
         await link_cm.__aexit__(None, None, None)
 
 
-async def test_the_truth_is_no_lie_and_quests_follow_the_save():
+@pytest.mark.parametrize("killer", ["PLAYER", "NONE_100_XARDAS"])
+async def test_the_truth_is_no_lie_and_quests_follow_the_save(killer):
     fake = FakeGame(branch="A")
     store = MemoryStore(":memory:")
     llm = FakeBackend(script=[PAY, FakeStep("Ну?")], delay=0)
     link_cm, dialogue, chronicle, board = await _setup(fake, llm, store)
     try:
         q = await board.give(XARDAS, "Ксардас", "перебей волков", "WOLF", 1, "ITPO_HEALTH_01", "Эликсир", 1)
-        await fake.send(type="npc_died", npc="WOLF", tag=q.tag, killer="PLAYER")
+        await fake.send(type="npc_died", npc="WOLF", tag=q.tag, killer=killer)
         await _until(lambda: board.done(q))
         dialogue.open(XARDAS, "Ксардас")
         await dialogue.say_as_player(XARDAS, "Волк мёртв.")

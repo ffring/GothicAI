@@ -1,4 +1,5 @@
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -7,6 +8,8 @@ from gothic_ai import questbook
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.director import Brief, Director, Ending, Offer, Pacing, Proposal
 from gothic_ai.game import GameError
+from gothic_ai.journal import Journal
+from gothic_ai.llm import ToolCall
 from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.memory import MemoryStore
 from gothic_ai.places import PlaceBook
@@ -538,7 +541,7 @@ async def test_the_book_makes_a_quest_and_follows_it(graph):  # noqa: F811
         # given, the stages through their triggers, done
         await fake.send(type="dialog_chosen", npc=HILDA, node="DIR_Q1_GIVE", made=True)
         await _until(lambda: book.progress("DIR_Q1").state == "given")
-        assert "Ты дал герою поручение «Украденное вино»: найти вора и вернуть вино." in (
+        assert "Ты дал герою поручение «Украденное вино» (id DIR_Q1): найти вора и вернуть вино." in (
             book.situation(HILDA) or ""
         )
         await fake.send(type="trigger_fired", id="DIR_Q1_S1G1", count=1, npc="PC_HERO", other="PC_HERO")
@@ -552,6 +555,10 @@ async def test_the_book_makes_a_quest_and_follows_it(graph):  # noqa: F811
         )
         facts = [f["fact"] for f in chronicle.facts() if f["fact"].startswith("story_quest")]
         assert facts == ["story_quest", "story_quest_given", "story_quest_stage", "story_quest_done"]
+        assert chronicle.facts("quest_outcome") == [{
+            "fact": "quest_outcome", "quest": q.id, "npc": HILDA, "how": "done",
+            "drop": [], "why": [], "pay": "full",
+        }]
 
         # the same title again is refused
         assert await book.make(_quest(id="DIR_Q2")) == ["поручение «Украденное вино» уже было"]
@@ -1080,6 +1087,173 @@ async def test_blame_goal_and_its_completion_follow_the_saved_branch_without_dup
         await book.settle()
         assert book.all()[q.id] == q and fake.vars["DIR_Q1_S1G1"] == 0
         assert not chronicle.facts("blamed") and not chronicle.facts("story_quest_goal")
+    finally:
+        await book.close()
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_amending_advances_the_current_stage_and_survives_the_saved_branch(graph, monkeypatch):  # noqa: F811
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, book, patches, chronicle = await _book(fake, store, graph)
+    entries = []
+    book.journal = Journal(entries.append)
+    try:
+        q = _quest(names={HILDA: "Хильда", GOODS: "Вино"})
+        assert await book.make(q) == []
+        fake.vars.update({q.id: LOG_RUNNING, "DIR_Q1_STAGE": 1, "DIR_Q1_S1G1": 0})
+        book._fact(q, "story_quest_given")
+        before = store.head("A")
+        stage = next(op for op in patches.ops() if op.get("id") == "DIR_Q1_S1")
+        assert not fake.evaluate(stage["when"], HILDA)
+        effects = book.link.story_effect
+
+        async def apply(npc, changes, **kwargs):
+            await effects(npc, changes, **kwargs)
+            fake.vars.update({e["var"]: e["value"] for e in changes if e["do"] == "set"})
+
+        monkeypatch.setattr(book.link, "story_effect", apply)
+        conv = SimpleNamespace(npc=HILDA, persona=SimpleNamespace(name="Хильда"))
+        result = await book.handle(
+            None, conv,
+            ToolCall("amend_quest", {"quest": q.id, "drop": ["dir_q1_s1g1", "DIR_Q1_S1G1"],
+                                    "why": "Не нужно никуда идти"}, "a1"), None,
+        )
+        assert result.status == "accepted"
+        assert fake.vars["DIR_Q1_S1G1"] == 1 and fake.evaluate(stage["when"], HILDA)
+        assert fake.story[-1]["effects"] == [{"do": "set", "var": "DIR_Q1_S1G1", "value": 1}]
+        assert chronicle.facts("quest_terms") == [{
+            "fact": "quest_terms", "quest": q.id, "npc": HILDA, "name": "Хильда",
+            "drop": ["DIR_Q1_S1G1"], "why": "Не нужно никуда идти",
+        }]
+        assert entries[-1]["kind"] == "quest_amended"
+        # The stage trigger advances without the hero visiting the point.
+        fake.vars["DIR_Q1_STAGE"] = 2
+        await fake.send(type="trigger_fired", id="DIR_Q1_S1", count=1, npc="PC_HERO", other="PC_HERO")
+        await _until(lambda: book.progress(q.id).stage == 2)
+        situation = book.situation(HILDA)
+        assert "Снято тобой: дойти до поля — «Не нужно никуда идти»" in situation
+        assert "Можешь снять цели (amend_quest): DIR_Q1_S2G1 — добыть Вино ×2" in situation
+        assert "DIR_Q1_S1G1 —" not in situation and "DIR_Q1_S3G1 —" not in situation
+        after = store.head("A")
+        await _until(lambda: fake.heads[-1:] == [("A", after)])
+        await fake.send(type="session", branch="B", parent="A", parent_seq=after, reason="load")
+        await _until(lambda: patches.branch == "B" and chronicle.branch == "B")
+        assert book.situation(HILDA) == situation
+        await fake.send(type="dialog_chosen", npc=HILDA, node="DIR_Q1_DONE", made=True)
+        await _until(lambda: book.progress(q.id).state == "done")
+        assert chronicle.facts("quest_outcome") == [{
+            "fact": "quest_outcome", "quest": q.id, "npc": HILDA, "how": "amended",
+            "drop": ["DIR_Q1_S1G1"], "why": ["Не нужно никуда идти"], "pay": "full",
+        }]
+        # An earlier save restores the agreement before the amendment.
+        fake.vars.update({"DIR_Q1_STAGE": 1, "DIR_Q1_S1G1": 0})
+        await fake.send(type="session", branch="C", parent="A", parent_seq=before, reason="load")
+        await _until(lambda: patches.branch == "C" and chronicle.branch == "C")
+        assert not chronicle.facts("quest_terms") and not chronicle.facts("quest_outcome")
+        assert "Снято тобой:" not in book.situation(HILDA)
+        assert "DIR_Q1_S1G1 — дойти до поля" in book.situation(HILDA)
+    finally:
+        await book.close()
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("goal, reason", [
+    ("DIR_Q1_S1G1", "этот пункт не снимается"),
+    ("DIR_Q1_S3G1", "этот пункт не снимается"),
+    ("DIR_Q1_S4G1", "такого пункта нет в уговоре"),
+])
+async def test_vanilla_turn_in_and_unknown_goals_cannot_be_removed(graph, goal, reason):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, _, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _quest()
+        q.stages[0].goals = [Goal("vanilla", quest=VANILLA_QUEST, state="running")]
+        assert await book.make(q) == []
+        book._fact(q, "story_quest_given")
+        conv = SimpleNamespace(npc=HILDA, persona=SimpleNamespace(name="Хильда"))
+        result = await book.handle(
+            None, conv, ToolCall("amend_quest", {"quest": q.id, "drop": [goal], "why": "Передумала"}, "a1"),
+            None,
+        )
+        assert result.status == "rejected" and reason in result.output
+        assert not chronicle.facts("quest_terms") and not fake.story
+    finally:
+        await book.close()
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_only_a_given_quest_and_its_current_or_future_goals_can_be_amended(graph):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, _, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    try:
+        q = _quest()
+        assert await book.make(q) == []
+        conv = SimpleNamespace(npc=HILDA, persona=SimpleNamespace(name="Хильда"))
+        call = ToolCall("amend_quest", {"quest": q.id, "drop": ["DIR_Q1_S1G1"], "why": "Передумала"}, "a1")
+        assert (await book.handle(None, conv, call, None)).status == "rejected"
+        book._fact(q, "story_quest_given")
+        book._fact(q, "story_quest_stage", stage=2)
+        assert (await book.handle(None, conv, call, None)).status == "rejected"
+        call.arguments["drop"] = ["DIR_Q1_S2G1"]
+        assert (await book.handle(None, conv, call, None)).status == "accepted"
+        assert {t.name for t in book.tools(HILDA)} == {"drop_quest"}
+        assert not chronicle.facts("quest_outcome")
+    finally:
+        await book.close()
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("npc", [HILDA, LOBART])
+async def test_the_giver_or_repair_successor_can_amend_and_drop_a_given_quest(graph, monkeypatch, npc):  # noqa: F811
+    fake = FakeGame(branch="A")
+    link_cm, book, _, chronicle = await _book(fake, MemoryStore(":memory:"), graph)
+    entries = []
+    book.journal = Journal(entries.append)
+    try:
+        q = _quest(repairs=[{"goal": "DIR_Q1_S3G1", "dead": HILDA, "npc": LOBART, "reason": "Принял"}])
+        assert await book.make(q) == []
+        fake.vars.update({q.id: LOG_RUNNING, "DIR_Q1_STAGE": 1})
+        book._fact(q, "story_quest_given")
+        assert {t.name for t in book.tools(npc)} == {"amend_quest", "drop_quest"}
+        stranger = SimpleNamespace(npc=THIEF, persona=SimpleNamespace(name="Вор"))
+        call = ToolCall("drop_quest", {"quest": q.id, "why": "Вино нашлось"}, "d1")
+        assert (await book.handle(None, stranger, call, None)).status == "rejected"
+        conv = SimpleNamespace(npc=npc, persona=SimpleNamespace(name=q.name(npc)))
+        result = await book.handle(
+            None, conv,
+            ToolCall("amend_quest", {"quest": q.id, "drop": ["DIR_Q1_S2G1"], "why": "Хватит бутылки"}, "a1"),
+            None,
+        )
+        assert result.status == "accepted"  # A later stage may be changed immediately, too.
+        pending = []
+        dialogue = SimpleNamespace(after_speech=lambda conv, job: pending.append(job))
+        result = await book.handle(dialogue, conv, call, None)
+        assert result.status == "accepted" and len(pending) == 1
+        assert not chronicle.facts("quest_outcome")
+        effects = book.link.story_effect
+
+        async def apply(npc, changes, **kwargs):
+            await effects(npc, changes, **kwargs)
+            fake.vars.update({e["var"]: e["value"] for e in changes if e["do"] == "set"})
+
+        monkeypatch.setattr(book.link, "story_effect", apply)
+        _, ok = await pending[0]()
+        assert ok and fake.vars[q.id] == LOG_OBSOLETE
+        assert fake.story[-1]["effects"] == [
+            {"do": "set", "var": q.id, "value": LOG_OBSOLETE},
+            {"do": "journal", "topic": q.title, "text": "", "status": "LOG_OBSOLETE"},
+        ]
+        assert chronicle.facts("quest_outcome") == [{
+            "fact": "quest_outcome", "quest": q.id, "npc": npc, "how": "dropped",
+            "drop": ["DIR_Q1_S2G1"], "why": ["Хватит бутылки", "Вино нашлось"], "pay": "none",
+        }]
+        assert entries[-1]["kind"] == "quest_dropped"
+        assert not chronicle.facts("story_quest_obsolete")
+        await book.settle(npc)
+        assert book.progress(q.id).state == "obsolete"
+        assert len(chronicle.facts("story_quest_obsolete")) == 1
+        assert book.tools(npc) == []
     finally:
         await book.close()
         await link_cm.__aexit__(None, None, None)
