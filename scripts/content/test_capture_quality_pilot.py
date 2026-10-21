@@ -172,6 +172,54 @@ def test_harbour_captures_require_port_materials(tmp_path):
         capture.check(*inputs, harbour_house=True)
 
 
+def hut_check_inputs(tmp_path):
+    inputs = capture_check_inputs(tmp_path, "original", capture.HARBOUR_MATERIALS, original=True)
+    inputs[1].write_text("".join(f"shot {spot}\n" for spot in capture.HUT_SPOTS))
+    (inputs[0] / "game.log").write_text("materials: 0 entries from test\n"
+        + "".join(f"[bench] shot {spot}\n" for spot in capture.HUT_SPOTS) + "[bench] done\n")
+    for spot in capture.HUT_SPOTS:
+        Image.new("RGB", (1280, 720)).save(inputs[0] / f"{spot}.png")
+    return inputs
+
+
+def test_hut_captures_validate_six_original_frames(tmp_path, capsys):
+    capture.check(*hut_check_inputs(tmp_path), harbour_hut=True)
+    assert "shots=6 materials=0 pilot_replaced=0 pilot_originals=3" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("replacement", ("", "shot side\n", "shot front\n"))
+def test_hut_captures_require_all_six_named_views(tmp_path, replacement):
+    inputs = hut_check_inputs(tmp_path)
+    inputs[1].write_text(inputs[1].read_text().replace("shot gable-close\n", replacement))
+    with pytest.raises(SystemExit, match="unexpected shot list"):
+        capture.check(*inputs, harbour_hut=True)
+
+
+def test_hut_captures_reject_wrong_frame_size(tmp_path):
+    inputs = hut_check_inputs(tmp_path)
+    Image.new("RGB", (640, 360)).save(inputs[0] / "window.png")
+    with pytest.raises(SystemExit, match="shot window: expected 1280x720"):
+        capture.check(*inputs, harbour_hut=True)
+
+
+def test_hut_captures_require_original_variant(tmp_path):
+    inputs = hut_check_inputs(tmp_path)
+    variant = inputs[0].with_name("staging")
+    inputs[0].rename(variant)
+    with pytest.raises(SystemExit, match="harbour survey requires original materials"):
+        capture.check(variant, *inputs[1:], harbour_hut=True)
+
+
+def test_hut_captures_reject_material_replacement(tmp_path):
+    inputs = hut_check_inputs(tmp_path)
+    census = inputs[0] / "census.json"
+    data = json.loads(census.read_text())
+    data["replacements"] = [{"kind": "texture", "name": "NW_CITY_HAFEN_HOLZWAND_01.TGA"}]
+    census.write_text(json.dumps(data))
+    with pytest.raises(SystemExit, match="baseline replaces pilot materials"):
+        capture.check(*inputs, harbour_hut=True)
+
+
 def test_flat_frame_has_no_detail_and_uses_linear_rec709(tmp_path):
     path = tmp_path / "green.png"
     Image.new("RGB", (1280, 720), (0, 128, 0)).save(path)
