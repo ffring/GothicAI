@@ -18,7 +18,7 @@ from ..game import GameError, GameLink
 from ..gossip import Scene
 from ..llm import Item, LLMBackend, LLMEvent, Message, Tool, ToolCall, ToolChoice, ToolResult
 from ..llm.fake import FakeBackend, FakeStep
-from ..perception import trace_name
+from ..perception import BEASTS, trace_name
 from ..protocol import ActionResult, GameMessage, NpcActResult, NpcIdle, PerceptionHeld, Saved
 from ..sightings import Sighting
 from ..talk import TalkDesk
@@ -361,6 +361,21 @@ async def _m5b_player_weapon(link: GameLink, state: Literal["none", "melee"], *,
         raise GameError(f"m5b player_weapon {state}: not ready within {timeout:g} s") from err
     finally:
         await link.body_watch([], timeout=1)
+
+
+async def _clear_beasts(link: GameLink, npc: str) -> int:
+    """Remove nearby beasts without crediting an NPC as their killer."""
+    cleared = 0
+    for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
+        if not other.dead and other.guild >= BEASTS:
+            await link.debug("kill", instance=other.id, near=npc)
+            cleared += 1
+    for view in await link.npc_view([npc]):
+        for seen in view.sees:
+            if seen.guild >= BEASTS and seen.body != "dead":
+                await link.debug("kill", instance=seen.id, near=npc)
+                cleared += 1
+    return cleared
 
 
 async def _until(check: Callable[[], object], timeout: float) -> bool:
