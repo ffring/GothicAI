@@ -203,7 +203,8 @@ async def test_new_player_text_interrupts_the_reply_in_flight():
         dialogue = DialogueManager(link, llm, PersonaProvider(None))
         dialogue.open(XARDAS, "Ксардас")
         first = dialogue.say_as_player(XARDAS, "Расскажи всё")
-        await asyncio.sleep(0.2)
+        await _until(lambda: any(m["type"] == "chat_text" for m in fake.received))
+        assert not first.done()
         second = dialogue.say_as_player(XARDAS, "Стоп")
         await second
         assert first.cancelled()
