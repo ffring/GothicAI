@@ -48,6 +48,7 @@ from .lies import rumor_spread as rumor_spread
 from .lies import vanilla_check as vanilla_check
 from .lies import vanilla_given as vanilla_given
 from .lies import vanilla_lie as vanilla_lie
+from .lies import vanilla_spare as vanilla_spare
 from .lies import witness_check as witness_check
 from .lies import xardas_wrath as xardas_wrath
 from .memprobe import memprobe_scenario as memprobe_scenario

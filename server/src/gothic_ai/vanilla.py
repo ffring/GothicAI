@@ -10,11 +10,12 @@ does not have are not, and that is a lie, written down with the truth.
 Whether the npc believes him is up to its model, in character, but on what the code shows it, so the player
 can read and play it:
 - what it sees for itself: the items he has on him (he hands them over, the rest is his word), the people
-  that must be dead — before its eyes (the engine's own sight: not behind a wall), a short walk away (60 m),
-  or too far to check;
+  that must be dead — before its eyes (the engine's own sight: not behind a wall), remembered from their
+  death or body (`seen_dead` in the save branch), a short walk away (60 m), or too far to check;
 - what it knows of his word (trust.py): lies of his it knows of, rumors, claims of his that were true.
 What it sees it does not take on his word: with someone alive before its eyes, or once he lied to it and
-it does not see the claim true, `accept_quest` is refused. It may go and see for itself (`check_claim`):
+it has not seen the claim true, `accept_quest` is refused. Its own mistaken sight is no lie of the hero's.
+It may go and see for itself (`check_claim`):
 it walks there, and what it sees decides — he lied (caught) or it pays. It may call him a liar to his face
 when it sees the claim false (`expose_lie`). A lie seen through before it pays costs him its trust and a
 rumor (quests.caught); a lie believed is found out later by a rule:
@@ -148,8 +149,12 @@ class Claim:
                 return ["int", 1]
             if e[1] == "NPC_GETDISTTOWP" and e[2] == ["inst", "SELF"]:
                 return ["int", 0]  # where the npc stands is the place of its dialog: it talks with him there
-        if e[0] == "fn" and len(e) == 2 and e[1] in self.fns:
-            return ["int", 1]
+        if e[0] == "fn" and len(e) == 2:
+            if e[1] in self.fns:
+                return ["int", 1]
+            helper = graph.functions.get(e[1])
+            if self.dead and helper and helper.get("lifted") and not helper.get("params"):
+                return self.assume(helper["body"], graph)
         if e[0] == "var" and len(e) == 2 and e[1] in self.vars:
             return ["int", self.vars[e[1]]]
         if e[0] in ("int", "str", "var", "inst", "sym", "param", "unknown"):
@@ -170,17 +175,25 @@ class Target:
     alive: bool
     distance: float | None  # cm from the npc; None: not in this world
     visible: bool | None = None  # the npc sees it now (the engine's sight); None: unknown, by distance
+    remembered: str | None = None  # how the npc saw it dead on this save branch
 
     @property
     def seen(self) -> bool:
-        if self.distance is None:
-            return False
-        return self.visible if self.visible is not None else self.distance <= SEE_CM
+        if self.visible is not None:
+            return self.visible
+        return self.distance is not None and self.distance <= SEE_CM
+
+    @property
+    def seen_dead(self) -> bool:
+        """Its remembered sight, unless it sees this person alive now."""
+        return not self.alive if self.seen else self.remembered is not None
 
     @property
     def walk(self) -> bool:
         """Not seen from here, but a short walk away."""
-        return not self.seen and self.distance is not None and self.distance <= CHECK_CM
+        return (
+            not self.seen and not self.seen_dead and self.distance is not None and self.distance <= CHECK_CM
+        )
 
 
 @dataclass
@@ -230,10 +243,10 @@ class Offer:
         return None
 
     def seen_true(self) -> bool:
-        """The npc sees for itself all the claim says: the items on him, the dead before its eyes."""
+        """The npc has seen all the claim says: the items on him, the people dead."""
         visible = bool(self.claim.items or self.claim.dead)
         return (
-            visible and not any(self.missing().values()) and all(not t.alive and t.seen for t in self.targets)
+            visible and not any(self.missing().values()) and all(t.seen_dead for t in self.targets)
         )
 
     def reachable(self) -> Target | None:
@@ -267,6 +280,14 @@ class Offer:
                 if group
             )
             parts.append(f"у тебя на глазах: {what}")
+        for t in self.targets:
+            if t.remembered and t.seen_dead and not t.seen:
+                how = {
+                    "killed": "ты убил его сам",
+                    "saw_die": "ты видел, как он умер",
+                    "saw_body": "ты видел тело",
+                }[t.remembered]
+                parts.append(f"{t.name} — мёртв: {how}")
         near = [t for t in self.targets if t.walk]
         if near:
             ds = sorted(_m(t.distance or 0) for t in near)
@@ -274,7 +295,7 @@ class Offer:
             parts.append(
                 f"{_names(near)} — в {span} м, отсюда не видно: можешь сходить и посмотреть сам ({CHECK})"
             )
-        far = [t for t in self.targets if not t.seen and not t.walk]
+        far = [t for t in self.targets if not t.seen and not t.walk and not t.seen_dead]
         if far:
             parts.append(f"{_names(far)} — далеко, проверить сам не можешь")
         return "; ".join(parts) or None
@@ -340,6 +361,7 @@ class VanillaQuests:
         self.offers: dict[str, dict[str, Offer]] = {}  # npc -> quest -> offer, as of its last turn
         self.checking: set[str] = set()  # npc's gone to see for themselves
         self.told: dict[str, Told] = {}
+        self.seen_dead: dict[tuple[str, str], str] = {}  # (giver, target) -> how it saw the target dead
         self._endings: dict[str, list[Node]] = {}  # npc -> dialogs of its that end a quest with success
         self._starts: dict[str, list[tuple[str, Node]]] = {}  # npc -> the quests its dialogs give, and those
         for q in graph.quests.values():
@@ -348,7 +370,8 @@ class VanillaQuests:
                 self._endings.setdefault(node.npc, []).append(node)
             for id in sorted(q.running):
                 node = graph.nodes[id]
-                self._starts.setdefault(node.npc, []).append((q.var, node))
+                if not _ends(node):
+                    self._starts.setdefault(node.npc, []).append((q.var, node))
         self.starts: dict[str, dict[str, Start]] = {}  # npc -> quest -> start, as of its last turn
         self._background: set[asyncio.Task[Any]] = set()
         self._reward_lock = asyncio.Lock()
@@ -420,6 +443,10 @@ class VanillaQuests:
         for o in offers:
             o.have = {i: counts.get(i, 0) for i in o.claim.items}
             o.targets = [_target(d, people.get(d) or {}) for d in o.claim.dead]
+            for target in o.targets:
+                if target.seen and not target.alive:
+                    self._remember_dead(npc, target.npc, "saw_body")
+                target.remembered = self.seen_dead.get((npc, target.npc))
             if o.targets:
                 o.needs = f"будут мертвы: {_names(o.targets)}"
 
@@ -732,10 +759,12 @@ class VanillaQuests:
         return True
 
     async def _accept(self, offer: Offer, conv: Conversation, checked: bool = False) -> tuple[str, bool]:
-        """The npc accepts: the ending plays; what the hero has of the items is taken, what he does not have
-        is not, and that is a lie."""
+        """Play the ending, keep the actual truth, and count only the hero's unsupported claims as lies."""
         try:
-            truth = (await self.link.story_eval(offer.npc, [offer.truth]))[0]
+            witnessed = Claim(dead=[t.npc for t in offer.targets if t.seen_dead])
+            truth, believed_truth = await self.link.story_eval(
+                offer.npc, [offer.truth, witnessed.assume(offer.truth, self.graph)]
+            )
             have = await self.link.story_eval(
                 offer.npc,
                 [["call", "NPC_HASITEMS", ["inst", "OTHER"], ["sym", i]] for i in offer.claim.items],
@@ -747,7 +776,7 @@ class VanillaQuests:
             log.warning("vanilla: %s not accepted: %s", offer.quest, err)
             return f"Ты не смог засчитать «{offer.title}»: {err}", False
         name = conv.persona.name
-        lie = not truth
+        lie = not believed_truth
         told = Told(
             offer.quest,
             offer.npc,
@@ -849,23 +878,65 @@ class VanillaQuests:
                 self.chronicle.record({"fact": "vanilla_reward", "quest": quest, "npc": npc})
 
     def _on_fact(self, fact: Fact) -> None:
-        if fact.get("fact") != "vanilla_quest" or fact.get("to") != "success":
+        if fact.get("fact") == "seen_dead":
+            self.seen_dead.setdefault((fact["npc"], fact["dead"]), fact["how"])
             return
-        quest = fact["quest"]
-        if quest not in QUEST_REWARDS or quest not in self.graph.quests:
+        if fact.get("fact") == "died":
+            task = asyncio.create_task(self._see_death(fact, self.chronicle.branch))
+        elif fact.get("fact") == "vanilla_quest" and fact.get("to") == "success":
+            quest = fact["quest"]
+            if quest not in QUEST_REWARDS or quest not in self.graph.quests:
+                return
+            givers = {self.graph.nodes[n].npc for n in self.graph.quests[quest].running}
+            if len(givers) != 1:
+                raise ValueError(f"extra reward of {quest} needs exactly one giver, got {givers}")
+            task = asyncio.create_task(self._pay_bonus(quest, givers.pop(), branch=self.chronicle.branch))
+        else:
             return
-        givers = {self.graph.nodes[n].npc for n in self.graph.quests[quest].running}
-        if len(givers) != 1:
-            raise ValueError(f"extra reward of {quest} needs exactly one giver, got {givers}")
-        task = asyncio.create_task(self._pay_bonus(quest, givers.pop(), branch=self.chronicle.branch))
         self._background.add(task)
 
         def finished(task: asyncio.Task[Any]) -> None:
             self._background.discard(task)
             if not task.cancelled() and (err := task.exception()) is not None:
-                log.warning("vanilla: extra reward of %s: %s", quest, err, exc_info=err)
+                log.warning("vanilla: fact %s: %s", fact, err, exc_info=err)
 
         task.add_done_callback(finished)
+
+    def _remember_dead(self, npc: str, dead: str, how: str) -> None:
+        """One observation of this pair, kept in the save branch."""
+        if (npc, dead) not in self.seen_dead:
+            self.chronicle.record({"fact": "seen_dead", "npc": npc, "dead": dead, "how": how})
+
+    async def _see_death(self, fact: Fact, branch: str | None) -> None:
+        """The giver's own kills and deaths before its eyes, even before its first conversation turn."""
+        dead = fact["npc"]
+        for npc, endings in self._endings.items():
+            if (npc, dead) in self.seen_dead:
+                continue
+            quests = {
+                quest
+                for node in endings
+                for quest in _ends(node)
+                if dead in _claim(
+                    next((e.get("when") for e in node.effects if _ends_effect(e, quest)), None),
+                    self._condition(node), self.graph, npc,
+                ).dead
+            }
+            if not quests:
+                continue
+            killed = fact.get("killer") == npc
+            try:
+                state = await self.link.story_state(
+                    vars=sorted(quests), npcs=[] if killed else [dead], near=npc,
+                )
+            except (GameError, TimeoutError):
+                continue
+            if branch is None or branch != self.chronicle.branch:
+                return
+            if not any(state.get("vars", {}).get(q, 0) not in (2, 3, 4) for q in quests):
+                continue
+            if killed or _target(dead, state.get("npcs", {}).get(dead) or {}).seen:
+                self._remember_dead(npc, dead, "killed" if killed else "saw_die")
 
     async def _check(self, offer: Offer, target: Target, conv: Conversation) -> tuple[str, bool]:
         """The npc goes to see for itself, then comes back to the hero to say what it saw: he lied to it, or
@@ -877,11 +948,11 @@ class VanillaQuests:
             if held and not walked:
                 await self._face(conv, target.npc)  # to see it, it looks that way
             try:
-                people = (await self.link.story_state(npcs=offer.claim.dead, near=offer.npc)).get("npcs", {})
+                await self._evidence(offer.npc, [offer])
             except (GameError, TimeoutError) as err:
                 return f"Ты не смог проверить: {err}", False
-            seen = [t for t in (_target(d, people.get(d) or {}) for d in offer.claim.dead) if t.seen]
-            alive = sorted((t for t in seen if t.alive), key=lambda t: t.distance or 0)
+            seen = [t for t in offer.targets if t.seen_dead]
+            alive = sorted((t for t in offer.targets if t.seen and t.alive), key=lambda t: t.distance or 0)
             if alive:
                 t = alive[0]
                 how = f"сходил проверить и увидел: {t.name} жив, в {_m(t.distance or 0)} м от тебя"
@@ -987,7 +1058,11 @@ class VanillaQuests:
         """The claims of the branch, from its facts (after a load: as they were at that save)."""
         self.told.clear()
         self.offers.clear()
+        self.seen_dead.clear()
         for f in self.chronicle.facts():
+            if f.get("fact") == "seen_dead":
+                self.seen_dead.setdefault((f["npc"], f["dead"]), f["how"])
+                continue
             quest = f.get("quest", "")
             if quest not in self.graph.quests:
                 continue
@@ -995,10 +1070,11 @@ class VanillaQuests:
                 case "claim":
                     name, reward = f.get("name", f["npc"]), f.get("reward", "")
                     self.told[quest] = Told(
-                        quest, f["npc"], name, self._title(quest), reward, lie=not f.get("truth")
+                        quest, f["npc"], name, self._title(quest), reward, lie=False
                     )
                 case "lie" if quest in self.told:
                     t = self.told[quest]
+                    t.lie = True
                     t.npc_name, t.title, t.reward = (
                         f.get("name", t.npc),
                         f.get("title", t.title),

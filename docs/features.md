@@ -72,6 +72,7 @@ PR, который добавляет фичу или выключатель, д
 |---|---|---|---|---|
 | Хроника ветки сохранения | нет | `chronicle.py` | все сценарии лжи и сюжета | [story-graph.md](story-graph.md) |
 | Ложь героя о квестах и её раскрытие | нет | `quests.py`, `trust.py` | e2e `lie` | [story-graph.md](story-graph.md) |
+| Заказчик помнит увиденные смерти целей квеста; его собственная ошибка не считается ложью героя | `--no-director` | `vanilla.py` | pytest `test_vanilla.py`; e2e `vspare`, `vgive`, `vcheck` | [story-graph.md](story-graph.md) |
 | Проверка слов через свидетеля | нет | `witnesses.py` | e2e `witness` | [npc-tools.md](npc-tools.md#сделано-свидетель) |
 | Расследование и подстава: показания о NPC, вера пострадавшего, возврат по вере и раскрытие ложного обвинения | `--no-npc-crimes` или `--no-crimes` | `blame.py`, `witnesses.py`, `npc_will.py`, `npc_far.py`, `people_knowledge.py`, `amends.py`, `crime_meet.py` | `frame` на сохранении 1, `LLM=fake`: три подряд по 43/43; pytest Ryzen 2981 passed / 14 skipped, целевые 70 passed; шесть соседей 187/187; живой ответ Лобарта — отказ верить без доказательств; Ruff чистый | [npc-wave3.md](npc-wave3.md#как-работает-сейчас) |
 | Прикрытие героя свидетелем: сделка, страх, раскрытие | `--no-cover` или `--no-crimes` | `deals.py`, `witnesses.py`, `crimes.py` | e2e `cover`; pytest `test_cover.py`, `test_deals.py` | [npc-wave3.md](npc-wave3.md#как-работает-сейчас) |
