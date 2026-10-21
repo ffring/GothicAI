@@ -441,7 +441,7 @@ class VanillaQuests:
         self.titles = topic_titles(graph)
         self._topic_uses = Counter(t for q in graph.quests.values() for t in q.topics)
         self.offers: dict[str, dict[str, Offer]] = {}  # npc -> quest -> offer, as of its last turn
-        self.checking: set[str] = set()  # npc's gone to see for themselves
+        self.checking: dict[str, Offer] = {}  # npc -> the quest it has gone to check
         self.told: dict[str, Told] = {}
         self.seen_dead: dict[tuple[str, str], str] = {}  # (giver, target) -> how it saw the target dead
         self.terms: dict[tuple[str, str], list[Fact]] = {}  # (giver, quest) -> amendments in this branch
@@ -492,6 +492,7 @@ class VanillaQuests:
                     or not (running or _reads(self._condition(node), quest))
                     or quest in offers
                     or quest in self.told
+                    or (npc in self.checking and self.checking[npc].quest == quest)
                 ):
                     continue
                 if any(o.ending == node.id for o in offers.values()):
@@ -567,6 +568,7 @@ class VanillaQuests:
         lines = []
         for o in self.offers.get(npc, {}).values():
             seen = o.evidence()
+            refusal = self._refusal(npc, o)
             lines.append(
                 (
                     f"Ты ждёшь от героя: «{o.title}» (id {o.quest}). "
@@ -594,7 +596,7 @@ class VanillaQuests:
                 )
                 + (
                     f"Засчитывая, в игре ты говоришь (скажи это по смыслу, своими словами): {o.said} "
-                    if o.said
+                    if o.said and refusal is None
                     else ""
                 )
                 + (
@@ -602,6 +604,27 @@ class VanillaQuests:
                     if seen
                     else "Сделал ли он это — своими глазами ты не видел."
                 )
+            )
+            if refusal is not None:
+                t = o.alive_in_view()
+                reason = (
+                    f"{t.name} жив — у тебя на глазах, в {_m(t.distance or 0)} м"
+                    if t is not None
+                    else "на слово ты ему не веришь, а своими глазами видел не всё"
+                )
+                hint = (
+                    f" Можешь сходить и посмотреть сам ({CHECK})."
+                    if o.reachable()
+                    else f" Можешь уличить его во лжи ({EXPOSE})." if o.seen_false() else ""
+                )
+                lines.append(
+                    f"Засчитать сейчас нельзя: {reason}. Не говори, что отдаёшь награду или "
+                    f"рассчитываешься, пока дело не засчитано.{hint}"
+                )
+        if checking := self.checking.get(npc):
+            lines.append(
+                f"Ты пошёл сам посмотреть, сделал ли герой «{checking.title}»: что увидишь, то и решит. "
+                "Пока не вернёшься, не засчитывай дело и не говори, что отдаёшь награду."
             )
         for st in self.starts.get(npc, {}).values():
             lines.append(
@@ -624,15 +647,17 @@ class VanillaQuests:
     all_tools: tuple[Tool, ...] = (ACCEPT_TOOL, CHECK_TOOL, EXPOSE_TOOL, GIVE_TOOL, AMEND_TOOL, DROP_TOOL)
 
     def tools(self, npc: str) -> list[Tool]:
-        offers = list(self.offers.get(npc.upper(), {}).values())
-        tools = [ACCEPT_TOOL] if offers else []
+        npc = npc.upper()
+        offers = list(self.offers.get(npc, {}).values())
+        tools = [ACCEPT_TOOL] if any(self._refusal(npc, o) is None for o in offers) else []
         if any(o.reachable() for o in offers):
             tools.append(CHECK_TOOL)
         if any(o.seen_false() for o in offers):
             tools.append(EXPOSE_TOOL)
-        if self.starts.get(npc.upper()):
+        if self.starts.get(npc):
             tools.append(GIVE_TOOL)
-        mutable = [o for o in offers if o.asked and o.quest not in self.plot_vars]
+        checking = [self.checking[npc]] if npc in self.checking else []
+        mutable = [o for o in [*offers, *checking] if o.asked and o.quest not in self.plot_vars]
         if any(o.claim.removable for o in mutable):
             tools.append(AMEND_TOOL)
         if mutable:
@@ -645,6 +670,11 @@ class VanillaQuests:
         if call.name not in (ACCEPT, CHECK, EXPOSE, GIVE, AMEND, DROP):
             return None
         quest = str(call.arguments.get("quest", "")).upper()
+        checking = self.checking.get(conv.npc)
+        if checking is not None and checking.quest == quest and call.name in (CHECK, ACCEPT):
+            return ToolOutcome(
+                "Отклонено: ты уже идёшь посмотреть сам; что увидишь, то и решит.", "rejected"
+            )
         if call.name == GIVE:
             start = self.starts.get(conv.npc, {}).pop(quest, None)
             if start is None:
@@ -657,6 +687,8 @@ class VanillaQuests:
             return ToolOutcome("Принято: поручение будет у него после реплики.", "accepted")
         offers = self.offers.get(conv.npc, {})
         offer = offers.get(quest)
+        if offer is None and call.name in (AMEND, DROP) and checking is not None:
+            offer = checking if checking.quest == quest else None
         if offer is None:
             return ToolOutcome("Отклонено: такого дела ты от героя не ждёшь.", "rejected")
         if call.name in (AMEND, DROP):
@@ -667,7 +699,7 @@ class VanillaQuests:
             why = str(call.arguments.get("why", ""))
             if call.name == AMEND:
                 return self._amend(offer, conv, call.arguments.get("drop", []), why)
-            offers.pop(quest)
+            offers.pop(quest, None)
 
             async def drop() -> tuple[str, bool]:
                 return await self._drop(offer, conv, why)
@@ -681,18 +713,8 @@ class VanillaQuests:
         pay = call.arguments.get("pay", "full")
         if pay not in ("full", "none"):
             return ToolOutcome("Отклонено: pay должен быть full или none.", "rejected")
-        # what it sees for itself, it does not take on his word
-        if (t := offer.alive_in_view()) is not None:
-            return ToolOutcome(
-                f"Отклонено: {t.name} жив — у тебя на глазах, в {_m(t.distance or 0)} м. Своим глазам ты "
-                "веришь больше, чем его словам.",
-                "rejected",
-            )
-        if self.trust.broken(conv.npc) and not offer.seen_true():
-            hint = f" Можешь сходить и посмотреть сам ({CHECK})." if offer.reachable() else ""
-            return ToolOutcome(
-                f"Отклонено: {self.trust.of(conv.npc).broken_reason()}. {WORD_BROKEN}{hint}", "rejected"
-            )
+        if refusal := self._refusal(conv.npc, offer):
+            return ToolOutcome(refusal, "rejected")
         offers.pop(quest)
 
         async def job() -> tuple[str, bool]:
@@ -703,6 +725,18 @@ class VanillaQuests:
         return ToolOutcome(
             f"Принято: засчитаешь после реплики, {payment}. Опыт герой получит в любом случае.", "accepted"
         )
+
+    def _refusal(self, npc: str, offer: Offer) -> str | None:
+        """What it sees for itself, it does not take on the hero's word."""
+        if (t := offer.alive_in_view()) is not None:
+            return (
+                f"Отклонено: {t.name} жив — у тебя на глазах, в {_m(t.distance or 0)} м. Своим глазам ты "
+                "веришь больше, чем его словам."
+            )
+        if self.trust.broken(npc) and not offer.seen_true():
+            hint = f" Можешь сходить и посмотреть сам ({CHECK})." if offer.reachable() else ""
+            return f"Отклонено: {self.trust.of(npc).broken_reason()}. {WORD_BROKEN}{hint}"
+        return None
 
     def _amend(self, offer: Offer, conv: Conversation, drop: Any, why: str) -> ToolOutcome:
         if not isinstance(drop, list) or not drop or not all(isinstance(d, str) for d in drop):
@@ -774,6 +808,7 @@ class VanillaQuests:
             )
             return ToolOutcome(f"Отклонено: {why}.", "rejected")
         self.offers[conv.npc].pop(offer.quest)
+        self.checking[conv.npc] = offer
 
         async def job() -> tuple[str, bool]:
             return await self._check(offer, target, conv)
@@ -1197,7 +1232,7 @@ class VanillaQuests:
     async def _check(self, offer: Offer, target: Target, conv: Conversation) -> tuple[str, bool]:
         """The npc goes to see for itself, then comes back to the hero to say what it saw: he lied to it, or
         it pays."""
-        self.checking.add(conv.npc)
+        self.checking[conv.npc] = offer
         held = await self.dialogue.borrow_body(conv, "check")
         try:
             walked = await self._go(conv, target.npc, LOOK_CM) if held else "ты был занят"
@@ -1231,12 +1266,17 @@ class VanillaQuests:
                 note = f"Ты сходил проверить: {dead}. {paid}"
                 cue = f"Ты сходил проверить слова героя о деле «{offer.title}»: {dead}, он сказал правду"
                 cue += f". {paid}"
+                if ok and offer.said:
+                    cue += (
+                        " В игре при этом ты говоришь (скажи это по смыслу, своими словами): "
+                        f"{offer.said}"
+                    )
             if held:
                 await self._go(conv, "PLAYER", BACK_CM)  # to say it to his face
         finally:
             if held:
                 self.dialogue.return_body(conv, "check")
-            self.checking.discard(conv.npc)
+            self.checking.pop(conv.npc, None)
         self._react(conv, cue)
         return note, ok
 
