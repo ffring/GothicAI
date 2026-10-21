@@ -117,7 +117,7 @@ async def greg(
         situation,
     )
     answered = await say(f"{name}, я помогу тебе попасть в город.")
-    given = any(f.get("quest") == QUEST for f in facts("quest_given"))
+    given = await _until(lambda: any(f.get("quest") == QUEST for f in facts("quest_given")), 15)
     if not check("given", answered and given and await state() == 1, facts("quest_given")[-1:]):
         return _logged(results)
 
@@ -172,6 +172,7 @@ async def greg(
     ):
         return _logged(results)
     answered = await say(f"{name}, одежду крестьянина я оставил для тебя за углом. Засчитай поручение.")
+    await _until(lambda: any(f.get("quest") == QUEST for f in facts("lie")), 15)
     claim = next((f for f in facts("claim") if f.get("quest") == QUEST), None)
     lie = next((f for f in facts("lie") if f.get("quest") == QUEST), None)
     check(
