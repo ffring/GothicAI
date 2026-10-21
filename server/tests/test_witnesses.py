@@ -447,8 +447,7 @@ async def test_gate_claim_error_keeps_far_inquiry_until_an_answer(error):
         q = Inquiry("gate-question", LOBART, "Лобарт", ANDRE, "Андре", "Андре ждёт меня", AT_8, DAY + 18 * 60)
         w.witnesses._inquire(q)
         fake.hour = 18
-        with pytest.raises(error):
-            await w.witnesses.tick()
+        await w.witnesses.tick()
         assert q.id in w.witnesses.inquiries
         assert not w.chronicle.facts("testimony")
         assert not w.chronicle.facts("inquiry_lapsed")
@@ -457,6 +456,70 @@ async def test_gate_claim_error_keeps_far_inquiry_until_an_answer(error):
         assert attempts == 2 and not w.witnesses.inquiries
         assert len(w.chronicle.facts("testimony")) == 1
         assert w.chronicle.facts("testimony")[0]["id"] == q.id
+
+
+@pytest.mark.parametrize("error", [GameError, TimeoutError])
+async def test_failed_far_inquiry_does_not_block_next_question_and_lapses_after_three_attempts(error):
+    fake = FakeGame(branch="A")
+    attempts = []
+
+    async def gate_claim(witness, asker, said):
+        attempts.append(said)
+        if said == "Андре ждёт меня":
+            raise error("Game unavailable")
+        return "Подтверждаю: у героя есть связь со мной."
+
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        w.witnesses.gate_claim = gate_claim
+        failed = Inquiry(
+            "failed-question", LOBART, "Лобарт", ANDRE, "Андре", "Андре ждёт меня", AT_8,
+            DAY + 18 * 60,
+        )
+        next_question = Inquiry(
+            "next-question", LOBART, "Лобарт", ANDRE, "Андре", "Андре меня послал", AT_8,
+            DAY + 18 * 60 + 1,
+        )
+        w.witnesses._inquire(failed)
+        w.witnesses._inquire(next_question)
+        fake.hour, fake.minute = 18, 5
+
+        await w.witnesses.tick()
+        assert failed.id in w.witnesses.inquiries
+        assert next_question.id not in w.witnesses.inquiries
+        [testimony] = w.chronicle.facts("testimony")
+        assert testimony["id"] == next_question.id
+        assert testimony["gate_claim"].startswith("Подтверждаю")
+        assert not w.chronicle.facts("inquiry_lapsed")
+
+        await w.witnesses.tick()
+        assert failed.id in w.witnesses.inquiries
+        await w.witnesses.tick()
+        assert not w.witnesses.inquiries
+        assert w.chronicle.facts("inquiry_lapsed") == [
+            {"fact": "inquiry_lapsed", "id": failed.id, "why": "error"}
+        ]
+        await w.witnesses.tick()
+        assert attempts == [failed.said, next_question.said, failed.said, failed.said]
+        assert len(w.chronicle.facts("testimony")) == 1
+
+
+async def test_far_inquiry_with_no_answer_is_removed_when_branch_does_not_change():
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        w.witnesses.npc_crimes_enabled = False
+        q = Inquiry(
+            "disabled-npc-question", LOBART, "Лобарт", ANDRE, "Андре", "Хильда взяла кошелёк", AT_8,
+            DAY + 18 * 60, about=HILDA, about_name="Хильда",
+        )
+        w.witnesses._inquire(q)
+        fake.hour = 18
+
+        await w.witnesses.tick()
+        assert not w.witnesses.inquiries
+        assert not w.chronicle.facts("testimony")
+        assert not w.chronicle.facts("inquiry_lapsed")
 
 
 @pytest.mark.parametrize("error", [GameError, TimeoutError])

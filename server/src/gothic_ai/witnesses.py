@@ -199,6 +199,7 @@ class Inquiry:
     meets: int  # their meeting, when it is asked
     about: str = HERO
     about_name: str = ""
+    attempts: int = 0
 
 
 class Witnesses:
@@ -684,7 +685,8 @@ class Witnesses:
         about: str = HERO, about_name: str = "",
     ) -> Testimony | None:
         """What the witness tells: its own evidence before the hero's words (`at`). The fact,
-        and both remember. `id`: the far question's, else a new one. None if a load came meanwhile."""
+        and both remember. `id`: the far question's, else a new one. None on load or disabled NPC testimony.
+        """
         if about != HERO and not self.npc_crimes_enabled:
             return None
         branch = self.chronicle.branch
@@ -1004,12 +1006,22 @@ class Witnesses:
             if q.npc in dead or q.witness in dead:
                 self._lapse(q, "dead")
             elif self.now >= q.meets and q.id in self.inquiries:
-                t = await self._testify(
-                    q.id, q.npc, q.name, q.witness, q.witness_name, q.said, "far", q.minute,
-                    q.about, q.about_name,
-                )
-                if t is not None and self.chronicle.branch == branch:
-                    self.inquiries.pop(q.id, None)
+                try:
+                    await self._testify(
+                        q.id, q.npc, q.name, q.witness, q.witness_name, q.said, "far", q.minute,
+                        q.about, q.about_name,
+                    )
+                except (GameError, TimeoutError) as err:
+                    if self.chronicle.branch != branch:
+                        return
+                    q.attempts += 1
+                    log.info("witnesses: inquiry %s attempt %d/3 failed: %s", q.id, q.attempts, err)
+                    if q.attempts >= 3:
+                        self._lapse(q, "error")
+                    continue
+                if self.chronicle.branch != branch:
+                    return
+                self.inquiries.pop(q.id, None)
         for npc in self._expire():
             for listener in self.on_change:
                 listener(npc)
