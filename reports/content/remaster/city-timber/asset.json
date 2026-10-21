@@ -53,6 +53,111 @@
       "utc": "2026-10-21T15:54:18Z",
       "thread": "01a15f28-cea7-7902-b1d4-9d8ba074c50e",
       "parent": null
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-4.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 4,
+      "sha256": "bd6355419057825cd23fac4a7a633505c14c8d6f71e3af22a985c615794c7559",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:04:21Z",
+      "thread": "01a15f34-ba5c-73d0-bced-24a2abf2db2d",
+      "parent": null
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-5.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 5,
+      "sha256": "11aaa86e752fb0040ab19c57cb8d9619e3f3b0456577305666e1d97c4ffd870a",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:05:36Z",
+      "thread": "01a15f34-ba5c-73d0-bced-24a2abf2db2d",
+      "parent": null
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-6.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 6,
+      "sha256": "b47616a306fa6f236a50bd0c856841aef4e701536097d6aaead1440c53895197",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:06:19Z",
+      "thread": "01a15f34-ba5c-73d0-bced-24a2abf2db2d",
+      "parent": null
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-7.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 7,
+      "sha256": "e13a4a82d55bc0e0b315b1d63ba576e3007b2727c0eac15b7f2f8c42d76dd829",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:16:22Z",
+      "thread": "01a15f34-ba5c-73d0-bced-24a2abf2db2d",
+      "parent": "city-timber-concept/concept-attempt-4.png"
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-8.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 8,
+      "sha256": "7b5f2d6bc7e46a5690eb02efbf43446d98f5cd16c497b93b9a8a4f3d732a5d8f",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:17:36Z",
+      "thread": "01a15f34-ba5c-73d0-bced-24a2abf2db2d",
+      "parent": "city-timber-concept/concept-attempt-4.png"
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-9.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 9,
+      "sha256": "f1c0def0bba5c56d3f8cf236fd439a67b76cf39b42c556be3338c170344e8170",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:22:05Z",
+      "thread": "01a15f34-ba5c-73d0-bced-24a2abf2db2d",
+      "parent": "city-timber-concept/concept-attempt-7.png"
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-10.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 10,
+      "sha256": "f724e58c3c810501fa6d67756504164573250d2745d35732601d8bd6608b1cd7",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T16:23:20Z",
+      "thread": "01a15f34-ba5c-73d0-bced-24a2abf2db2d",
+      "parent": "city-timber-concept/concept-attempt-7.png"
     }
   ],
   "selected": {},
@@ -64,6 +169,22 @@
       "verdict": "REJECT",
       "date": "2026-10-21",
       "path": "reviews/r1-concept-2/merged.json"
+    },
+    {
+      "id": "r1-concept-4",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-4/merged.json"
+    },
+    {
+      "id": "r1-concept-9",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-9/merged.json"
     }
   ],
   "gates": [
