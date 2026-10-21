@@ -2129,6 +2129,13 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario vgive: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "vspare":
+                dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
+                assert dialogue is not None and talk is not None and vanilla is not None
+                results = await scenarios.vanilla_spare(link, dialogue, talk, vanilla)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario vspare: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "greg":
                 dialogue, talk, vanilla = state.dialogue, state.talk, state.vanilla
                 assert dialogue is not None and talk is not None and vanilla is not None
@@ -2853,6 +2860,7 @@ def main() -> None:
             "character",
             "vlie",
             "vgive",
+            "vspare",
             "gate",
             "gate_vouch",
             "greg",
