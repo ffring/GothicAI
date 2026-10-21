@@ -1,4 +1,6 @@
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -30,7 +32,7 @@ def _offer(npc_gives: int, gold: int, call_id: str = "c1") -> ToolCall:
     return ToolCall("propose_deal", args, call_id)
 
 
-async def _setup(fake: FakeGame, llm: FakeBackend, store: MemoryStore):
+async def _setup(fake: FakeGame, llm: FakeBackend, store: MemoryStore, *, gates=None):
     fake.symbols = {GOLD: "item", POTION: "item"}
     fake.item_names = {GOLD: "Золото", POTION: "Эликсир лечения"}
     fake.npc_items = {XARDAS: {POTION: 3}}
@@ -38,7 +40,7 @@ async def _setup(fake: FakeGame, llm: FakeBackend, store: MemoryStore):
     link = await link_cm.__aenter__()
     dialogue = DialogueManager(link, llm, PersonaProvider(None), memory=store)
     chronicle = Chronicle(link, store)
-    deals = Deals(link, dialogue, chronicle)
+    deals = Deals(link, dialogue, chronicle, gates=gates)
     dialogue.extensions.append(deals)
     await link.snapshot(XARDAS)
     dialogue.open(XARDAS, "Ксардас")
@@ -896,5 +898,176 @@ async def test_accepting_any_deal_clears_bandit_ultimatum():
         offer = deals.open[BRAGO]
         await deals.accept(offer.id, offer.version)
         assert parley.ultimatum(BRAGO) is None and parley.truce(BRAGO) is None
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("cover", [False, True])
+@pytest.mark.parametrize("parley_enabled", [False, True])
+@pytest.mark.parametrize(
+    "enabled,npc,on_post",
+    [
+        (False, "MIL_310_STADTWACHE", True),
+        (True, "MIL_310_STADTWACHE", True),
+        (True, "MIL_310_STADTWACHE", False),
+        (True, XARDAS, False),
+    ],
+)
+async def test_gate_deal_request_schema_is_available_only_on_post(
+    enabled, npc, on_post, cover, parley_enabled
+):
+    fake = FakeGame(branch="A")
+    gates = SimpleNamespace(on_post=lambda _: on_post) if enabled else None
+    link_cm, dialogue, chronicle, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:"), gates=gates
+    )
+    deals.crimes = Crimes(dialogue.link, chronicle) if cover else None
+    deals.parley = Parley(dialogue.link, dialogue, chronicle) if parley_enabled else None
+    try:
+        [tool] = [
+            tool for tool in dialogue._request_tools(dialogue._offered(npc))
+            if tool.name == "propose_deal"
+        ]
+        assert ("let_pass" in tool.parameters["properties"]) is (enabled and on_post)
+        assert ("let_pass" in tool.parameters["required"]) is (enabled and on_post)
+        assert ("Пропуск через ворота" in tool.description) is (enabled and on_post)
+        assert ("cover" in tool.parameters["properties"]) is cover
+        assert ("truce" in tool.parameters["properties"]) is parley_enabled
+        assert ("truce" in tool.parameters["required"]) is parley_enabled
+        assert ("Только бандитам" in tool.description) is parley_enabled
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_gate_deal_is_shown_and_paid_only_with_the_passage(monkeypatch):
+    guard = "MIL_310_STADTWACHE"
+    fake = FakeGame(branch="A")
+    fake.hero_items = {GOLD: 100}
+    gates = SimpleNamespace(
+        on_post=lambda npc: npc == guard,
+        bribe_error=AsyncMock(return_value=""),
+        bribe=AsyncMock(),
+    )
+    link_cm, dialogue, chronicle, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:"), gates=gates
+    )
+    monkeypatch.setattr(dialogue, "event_turn", lambda *args, **kwargs: None)
+
+    async def transfer(npc, effects=None):
+        await dialogue.link.story_effect(npc, effects, check=True)
+
+    gates.bribe.side_effect = transfer
+    try:
+        [tool] = deals.tools(guard)
+        assert "let_pass" in tool.parameters["properties"]
+        assert "let_pass" in tool.parameters["required"]
+        [tool] = deals.tools(XARDAS)
+        assert "let_pass" not in tool.parameters["properties"] and "let_pass" not in tool.description
+        dialogue.open(guard, "Стражник")
+        result = await deals.propose(
+            guard, "Стражник", {"let_pass": True, "hero_gives": [{"item": GOLD, "count": 100}]}, None
+        )
+        assert result.status == "accepted" and "пропускаешь через ворота" in result.output
+        await _until(lambda: len(_shown(fake)) == 1)
+        shown = _shown(fake)[0]
+        assert shown["npc_gives"] == [{"item": "", "count": 0, "text": "Пропускает через ворота"}]
+        assert fake.hero_items[GOLD] == 100
+        gates.bribe.assert_not_awaited()
+        await deals.accept(shown["deal"], shown["version"])
+        effects = [{"do": "give", "item": GOLD, "count": 100, "to": "self"}]
+        gates.bribe.assert_awaited_once_with(guard, effects=effects)
+        assert gates.bribe_error.await_count == 2
+        assert fake.hero_items[GOLD] == 0 and fake.npc_items[guard][GOLD] == 100
+        assert chronicle.facts("deal")[0]["let_pass"] is True
+        assert len([m for m in fake.story if m["type"] == "story_effect"]) == 1
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    "guard,amount,reason",
+    [
+        ("MIL_310_STADTWACHE", 40, "за проход нужно не меньше 60 золотых"),
+        ("MIL_305_TORWACHE", 100, "ты не берёшь взяток"),
+        ("MIL_333_STADTWACHE", 100, "ты сейчас не на посту"),
+        ("MIL_310_STADTWACHE", 100, "у героя известная неоплаченная кража"),
+    ],
+)
+async def test_gate_deal_rejected_by_live_permission(guard, amount, reason):
+    fake = FakeGame(branch="A")
+    fake.hero_items = {GOLD: 100}
+    gates = SimpleNamespace(
+        on_post=lambda npc: True, bribe_error=AsyncMock(return_value=reason), bribe=AsyncMock()
+    )
+    link_cm, _, chronicle, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:"), gates=gates
+    )
+    try:
+        result = await deals.propose(
+            guard, "Стражник", {"let_pass": True, "hero_gives": [{"item": GOLD, "count": amount}]}, None
+        )
+        assert result.status == "rejected" and reason in result.output
+        gates.bribe_error.assert_awaited_once_with(guard, amount)
+        gates.bribe.assert_not_awaited()
+        assert _shown(fake) == [] and chronicle.facts("deal") == [] and fake.hero_items[GOLD] == 100
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("reason", ["ты уже не на посту", "у героя известная неоплаченная кража"])
+async def test_gate_deal_rechecked_on_y_without_losing_gold(monkeypatch, reason):
+    guard = "MIL_310_STADTWACHE"
+    fake = FakeGame(branch="A")
+    fake.hero_items = {GOLD: 100}
+    gates = SimpleNamespace(
+        on_post=lambda npc: True,
+        bribe_error=AsyncMock(side_effect=["", reason]),
+        bribe=AsyncMock(),
+    )
+    link_cm, dialogue, chronicle, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:"), gates=gates
+    )
+    monkeypatch.setattr(dialogue, "event_turn", lambda *args, **kwargs: None)
+    try:
+        dialogue.open(guard, "Стражник")
+        result = await deals.propose(
+            guard, "Стражник", {"let_pass": True, "hero_gives": [{"item": GOLD, "count": 100}]}, None
+        )
+        assert result.status == "accepted"
+        deal = deals.open[guard]
+        await deals.accept(deal.id, deal.version)
+        gates.bribe.assert_not_awaited()
+        assert gates.bribe_error.await_count == 2
+        assert deal.state == "withdrawn" and guard not in deals.open
+        assert fake.hero_items[GOLD] == 100 and chronicle.facts("deal") == []
+        assert not any(m["type"] == "story_effect" for m in fake.story)
+        assert any(reason in entry.content for entry in dialogue.conversations[guard].memory.entries)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    "terms",
+    [
+        {"hero_gives": [{"item": POTION, "count": 1}]},
+        {"hero_later": [{"item": GOLD, "count": 100, "days": 1}]},
+        {"hero_gives": [{"item": GOLD, "count": 100}], "npc_gives": [{"item": POTION, "count": 1}]},
+    ],
+)
+async def test_gate_deal_requires_only_gold_now(terms):
+    fake = FakeGame(branch="A")
+    gates = SimpleNamespace(
+        on_post=lambda npc: True, bribe_error=AsyncMock(return_value=""), bribe=AsyncMock()
+    )
+    link_cm, dialogue, _, deals = await _setup(
+        fake, FakeBackend("…", delay=0), MemoryStore(":memory:"), gates=gates
+    )
+    try:
+        result = await deals.propose(
+            XARDAS, "Ксардас", {"let_pass": True, **terms}, dialogue.link.snapshots[XARDAS]
+        )
+        assert result.status == "rejected" and "золот" in result.output
+        gates.bribe_error.assert_not_awaited()
+        assert _shown(fake) == []
     finally:
         await link_cm.__aexit__(None, None, None)

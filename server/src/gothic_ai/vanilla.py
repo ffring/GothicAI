@@ -1152,6 +1152,15 @@ def _bridge(e: dict[str, Any], titles: dict[str, str], graph: StoryGraph) -> dic
             e.get("of") == ["inst", "SELF"] and e.get("index") == PARTY and _int(e.get("value")) is not None
         ):
             return {"do": "party", "value": 1 if _int(e["value"]) else 0}
+        case "set_field" if (
+            e.get("field") == "AIVAR" and _int(e.get("index")) == 14
+            and _int(e.get("value")) in (0, 1)
+        ):
+            who = "SELF" if e.get("of") == ["inst", "SELF"] else _npc(e.get("of"), graph)
+            if who:
+                return {"do": "gate_pass", "npc": who, "value": _int(e["value"])}
+        case "call" if e.get("fn") == "B_CHECKLOG" and not e.get("args"):
+            return {"do": "gate_checklog"}
         case "xp" if _int(e.get("amount")) is not None:
             return {"do": "xp", "amount": _int(e["amount"])}
         case "give" if _sym(e.get("item")) and _int(e.get("amount")) is not None:
