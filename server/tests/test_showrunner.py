@@ -1,6 +1,7 @@
 """A showrunner spends the save branch's budget before asking its model or builders."""
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -695,6 +696,39 @@ async def test_brief_includes_vanilla_event_giver_known_journal_and_no_future_en
         assert "Лобарт хочет, чтобы я собрал репу." in text
         assert "Будущая тайная развязка" not in text
         assert brief.occasion["vanilla"] == event
+
+
+@pytest.mark.parametrize("has_outcome", [False, True])
+async def test_vanilla_summary_includes_latest_quest_outcome_when_present(graph, has_outcome):
+    async with world(graph) as w:
+        event = {
+            "fact": "vanilla_quest", "quest": SCRIPT_QUEST, "title": "Убрать поле репы",
+            "from": "running", "to": "success", "giver": LOBART,
+        }
+        w.chronicle.record(event)
+        expected = dict(event)
+        if has_outcome:
+            outcome = {
+                "fact": "quest_outcome", "quest": SCRIPT_QUEST, "npc": LOBART,
+                "how": "amended", "drop": [VINO, "ITPL_BEET", "DIA_LOBART_WORKNOW"],
+                "why": ["Вино я отпустил.", "Репа больше не нужна."], "pay": "none",
+            }
+            w.fake.item_names["ITPL_BEET"] = "Репа"
+            graph.nodes["DIA_LOBART_WORKNOW"].description = "Я хочу поработать."
+            w.chronicle.record({**outcome, "how": "done", "drop": [], "pay": "full"})
+            w.chronicle.record(outcome)
+            w.chronicle.record({**outcome, "quest": "MIS_OTHER", "how": "dropped"})
+            expected["outcome"] = {
+                "how": "amended", "drop": [NAMES[VINO], "Репа", "Я хочу поработать."],
+                "why": outcome["why"], "pay": "none",
+            }
+        brief = await w.showrunner.brief(occasion(kind="vanilla", vanilla=event))
+        assert brief.vanilla == [expected]
+        assert brief.occasion["vanilla"] == expected
+        summary = next(s for s in brief.text().splitlines() if s.startswith("Последние ванильные"))
+        assert json.loads(summary.split(": ", 1)[1]) == [expected]
+        assert w.chronicle.facts("vanilla_quest") == [event]
+        assert "outcome" not in event
 
 
 def test_proposal_parses_follows_and_all_three_requirements_and_keeps_old_defaults():
