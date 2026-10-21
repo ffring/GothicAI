@@ -224,9 +224,10 @@ async def gate_vouch_scenario(
             voiced.append(message)
 
     async def passage() -> list[Any]:
+        # A clock leap queues the city's rumor memories ahead of this control read.
         return await link.story_eval(GUARD, [
             ["field", ["inst", npc], "AIVAR", 14] for npc in (GUARD, PAIR)
-        ])
+        ], timeout=30)
 
     async def ready(npc: str = GUARD) -> bool:
         entry = talk.people.get(npc)
@@ -301,13 +302,16 @@ async def gate_vouch_scenario(
         situation = gates.situation(GUARD) or ""
         if not check("vouch_visible", "basis vouch" in situation and "Лотар" in situation, situation):
             return _logged(results)
+        talk.end()
+        if not check("guarantor_released", await _until(lambda: LOTHAR not in talk.attached, 20)):
+            return _logged(results)
         dialogue.llm = ClaimScript(
-            said=[("Лотар", FakeStep("Лотару я доверяю. Проходи.", [
+            said=[("поручительство", FakeStep("Лотару я доверяю. Проходи.", [
                 ToolCall("let_pass", {"basis": "vouch"}),
             ]))],
             told=[], default="Проходи.", only=guard_name,
         )
-        talk.hear("За меня поручился Лотар. Пропустишь?", GUARD)
+        talk.hear("Моё поручительство до тебя дошло. Пропустишь?", GUARD)
         if not check("vouch_passes_both", await _until_async(passage, lambda value: value == [1, 1], 20),
                      await passage()):
             return _logged(results)
@@ -363,7 +367,7 @@ async def gate_vouch_scenario(
               await passage())
         reentry = await link.story_eval(GUARD, [
             ["var", f"MIL_{number}_SCHONMALREINGELASSEN"] for number in (310, 333)
-        ])
+        ], timeout=30)
         check("native_reentry_reset", reentry == [0, 0], reentry)
         return _logged(results)
     finally:
