@@ -8,6 +8,7 @@ Torch is required by this training module only. Runtime inference lives in
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from torch import Tensor, nn
 
 
 HEAD_SIZES = {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "jump": 2, "climb": 2}
+BC3_HEAD_SIZES = {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "maneuver": 3}
 FORMAT_NAME = "gothic-nav-bc"
 FORMAT_VERSION = 1
 
@@ -29,20 +31,30 @@ class NavPolicy(nn.Module):
     shape ``(batch, time, classes)``.
     """
 
-    def __init__(self, vector_size: int, hidden_size: int = 256) -> None:
+    def __init__(self, vector_size: int, hidden_size: int = 256,
+                 format_version: int = 1, auxiliary: bool = False) -> None:
         super().__init__()
         if vector_size <= 0 or hidden_size <= 0:
             raise ValueError("vector_size and hidden_size must be positive")
         self.vector_size = int(vector_size)
         self.hidden_size = int(hidden_size)
+        if format_version not in (1, 2):
+            raise ValueError("unsupported navigation weight format")
+        self.format_version = format_version
+        self.head_sizes = HEAD_SIZES if format_version == 1 else BC3_HEAD_SIZES
+        self.auxiliary = auxiliary
         self.near_encoder = self._map_encoder()
         self.far_encoder = self._map_encoder()
         self.vector_encoder = nn.Sequential(nn.Linear(vector_size, 128), nn.ReLU())
         self.fusion = nn.Sequential(nn.Linear(256, 128), nn.ReLU())
         self.gru = nn.GRU(128, hidden_size, num_layers=1, batch_first=True)
         # "forward" itself cannot be a ModuleDict key: nn.Module owns that name.
-        for name, classes in HEAD_SIZES.items():
+        for name, classes in self.head_sizes.items():
             setattr(self, f"head_{name}", nn.Linear(hidden_size, classes))
+        if auxiliary:
+            self.aux_stuck = nn.Linear(hidden_size, 1)
+            self.aux_next_near = nn.Linear(hidden_size, 9 * 8 * 8)
+            self.aux_detour = nn.Linear(hidden_size, 4)
         if self.mac_count()["total"] > 2_000_000:
             raise ValueError("policy exceeds the 2,000,000 MAC decision budget")
 
@@ -58,7 +70,8 @@ class NavPolicy(nn.Module):
         )
 
     def forward(
-        self, near: Tensor, far: Tensor, vector: Tensor, hidden: Tensor | None = None
+        self, near: Tensor, far: Tensor, vector: Tensor, hidden: Tensor | None = None,
+        return_auxiliary: bool = False,
     ) -> tuple[dict[str, Tensor], Tensor]:
         batch, time = vector.shape[:2]
         near_features = self.near_encoder(near.reshape(batch * time, 9, 32, 32))
@@ -66,9 +79,19 @@ class NavPolicy(nn.Module):
         vector_features = self.vector_encoder(vector.reshape(batch * time, self.vector_size))
         features = self.fusion(torch.cat((near_features, far_features, vector_features), dim=-1))
         recurrent, hidden = self.gru(features.reshape(batch, time, 128), hidden)
-        return {
-            name: getattr(self, f"head_{name}")(recurrent) for name in HEAD_SIZES
-        }, hidden
+        logits = {name: getattr(self, f"head_{name}")(recurrent) for name in self.head_sizes}
+        if return_auxiliary:
+            if not self.auxiliary:
+                raise ValueError("policy has no training auxiliary heads")
+            auxiliary = {
+                "stuck": self.aux_stuck(recurrent).squeeze(-1),
+                "next_near": nn.functional.interpolate(
+                    self.aux_next_near(recurrent).reshape(batch * time, 9, 8, 8),
+                    size=(32, 32), mode="bilinear", align_corners=False).reshape(batch, time, 9, 32, 32),
+                "detour": self.aux_detour(recurrent),
+            }
+            return logits, hidden, auxiliary
+        return logits, hidden
 
     def mac_count(self) -> dict[str, Any]:
         """Matrix-product MACs per decision, including zero-padded conv taps.
@@ -85,7 +108,7 @@ class NavPolicy(nn.Module):
             "fusion_linear": 256 * 128,
             "gru_input": 3 * self.hidden_size * 128,
             "gru_hidden": 3 * self.hidden_size * self.hidden_size,
-            "heads": self.hidden_size * sum(HEAD_SIZES.values()),
+            "heads": self.hidden_size * sum(self.head_sizes.values()),
         }
         return {
             "total": sum(components.values()),
@@ -136,15 +159,17 @@ class NavPolicy(nn.Module):
                 "initial_hidden": "zeros",
             },
             "heads": {
-                name: {"classes": classes, "values": [-1, 0, 1] if classes == 3 else [0, 1]}
-                for name, classes in HEAD_SIZES.items()
+                name: {"classes": classes, "values": [0, 1, 2] if name == "maneuver" else
+                       ([-1, 0, 1] if classes == 3 else [0, 1])}
+                for name, classes in self.head_sizes.items()
             },
             "macs": self.mac_count(),
         }
 
 
 def export_weights(
-    model: NavPolicy, path: str | Path, preprocessing: dict[str, Any] | None = None
+    model: NavPolicy, path: str | Path, preprocessing: dict[str, Any] | None = None,
+    temperatures: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Write one UTF-8 JSON line followed immediately by float32 tensor data.
 
@@ -156,6 +181,8 @@ def export_weights(
     payload = []
     offset = 0
     for name, tensor in model.state_dict().items():
+        if name.startswith("aux_"):
+            continue
         array = tensor.detach().cpu().numpy().astype("<f4", copy=False)
         data = array.tobytes(order="C")
         tensors.append({"name": name, "shape": list(array.shape), "dtype": "float32", "offset": offset, "nbytes": len(data)})
@@ -163,7 +190,7 @@ def export_weights(
         offset += len(data)
     header = {
         "format": FORMAT_NAME,
-        "version": FORMAT_VERSION,
+        "version": model.format_version,
         "byte_order": "little",
         "offset_origin": "first byte after JSON header newline",
         "data_nbytes": offset,
@@ -171,6 +198,11 @@ def export_weights(
         "preprocessing": preprocessing or {},
         "tensors": tensors,
     }
+    if temperatures is not None:
+        if set(temperatures) != set(model.head_sizes) or any(
+                not math.isfinite(value) or value <= 0 for value in temperatures.values()):
+            raise ValueError("temperatures must contain one positive finite value per action head")
+        header["temperatures"] = temperatures
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as stream:

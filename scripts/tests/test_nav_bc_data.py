@@ -1,5 +1,6 @@
 """Feature privacy, pooling, pair grouping and compact-cache round trips."""
 import gzip
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -242,3 +243,145 @@ def test_saved_split_rejects_pair_leakage(tmp_path):
     ]}))
     with pytest.raises(ValueError, match="both partitions"):
         data.read_pair_split(split_path)
+
+
+def test_bc3_maneuver_labels_are_exclusive_and_keep_legacy_heads():
+    records, _ = fixture_records(3)
+    records["keys"]["jump"] = [0, 1, 0]
+    records["keys"]["climb"] = [0, 0, 1]
+    labels = data.encode_bc3_labels(records["keys"])
+    np.testing.assert_array_equal(labels[:, 4], [0, 1, 2])
+    assert labels.shape == (3, 5)
+    assert data.encode_labels(records["keys"]).shape == (3, 6)
+    records["keys"]["jump"][2] = 1
+    with pytest.raises(ValueError, match="simultaneous jump and climb"):
+        data.encode_bc3_labels(records["keys"])
+
+
+def test_bc3_global_change_weight_and_press_windows():
+    assert data.action_change_weight(100, 20) == 5
+    assert data.action_change_weight(100, 1) == 10
+    assert data.action_change_weight(100, 0) == 1
+    assert data.action_change_weight(1, 10) == 1
+    labels = np.tile([2, 1, 1, 0, 0], (7, 1))
+    labels[3:5, 4] = 1
+    np.testing.assert_array_equal(data.label_action_changes(labels), [0, 0, 0, 1, 0, 1, 0])
+    # Both window boundaries are included; held jump at t=4 s is not a new press.
+    np.testing.assert_array_equal(data.maneuver_weights(np.arange(7) * 1000, labels[:, 4]),
+                                  [1, 1, 5, 5, 5, 1, 1])
+
+
+def test_bc3_stuck_target_requires_full_horizon_and_requested_movement():
+    stamps = np.arange(6) * 1000
+    labels = np.tile([2, 1, 1, 0, 0], (6, 1))
+    position = np.zeros((6, 3), np.float32)
+    position[3:, 0] = 50
+    target, valid = data.future_stuck(stamps, position, labels)
+    np.testing.assert_array_equal(target, [1, 0, 0, 1, 0, 0])
+    np.testing.assert_array_equal(valid, [1, 1, 1, 1, 0, 0])
+    labels[0, 0] = 1
+    assert data.future_stuck(stamps, position, labels)[0][0] == 0
+    with pytest.raises(ValueError, match="increase strictly"):
+        data.future_stuck(np.zeros(6), position, labels)
+
+
+def test_bc3_detour_target_is_local_supervision_and_excludes_memory_teacher():
+    records, _ = fixture_records(2)
+    records["position_cm"] = [100, 200, 300]
+    records["teacher_hint"]["next_corner_cm"] = [200, 200, 300]
+    records["teacher_hint"]["path_cm"] = [1234, 100000]
+    records["body_yaw_deg"] = [0, 90]
+    target, valid = data.detour_targets(records, 2)
+    np.testing.assert_allclose(target, [[1.234, 0, 0, 1], [50, -1, 0, 0]], atol=1e-6)
+    np.testing.assert_array_equal(valid, [1, 1])
+    unavailable, valid = data.detour_targets(records, 3)
+    assert not unavailable.any() and not valid.any()
+
+
+def write_bc3_manifest(tmp_path, families=("point", "follow_below_gate")):
+    source, output = tmp_path / "source", tmp_path / "cache"
+    records, layout = fixture_records(4)
+    records["time_ms"] = np.arange(4) * 1000
+    records["keys"]["forward"] = [1, 1, 0, 0]
+    entries = []
+    train = {}
+    for number, family in enumerate(families):
+        identity = f"{family}-{number}"
+        success = family != "follow_below_gate"
+        write_episode(source, identity, records, layout, identity, success=success,
+                      navigation_memory_version=3, teacher_version=3)
+        directory = source / "episodes" / identity
+        with (directory / "samples.bin.gz").open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        scenario = {"id": identity, "split": "train", "region": "forest", "start": identity,
+                    "goal": "goal", "goal_kind": "follow" if family == "follow_below_gate" else family,
+                    "navigation_memory_version": 3, "teacher_version": 3, "seed": 7}
+        entries.append({"id": identity, "family": family, "split": "train", "episode": str(directory),
+                        "decisions": len(records), "training_eligible": True,
+                        "teacher_goal_success": success, "samples_sha256": digest, "scenario": scenario})
+        train[family] = [identity]
+    manifest = {"schema_version": 1, "dataset": "nav-demos-v4", "consumer": "nav-bc3", "complete": True,
+                "format": {"name": "NAVDEMO", "version": 2, "navigation_memory_version": 3,
+                           "perception_mode": "gaze", "physics": "cv"},
+                "root": str(source), "episodes": entries, "splits": {"train": train,
+                    "validation": {"point": [{"id": "heldout", "episode": None, "recorded": False}]},
+                    "test": {"point": [{"id": "final-only", "episode": None, "recorded": False}]}},
+                "totals": {"train_episodes": len(entries), "train_decisions": len(entries) * len(records)}}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    return source, output, path, manifest, records, layout
+
+
+def test_bc3_manifest_uses_exact_train_refs_including_failed_follow(tmp_path):
+    source, output, path, manifest, records, layout = write_bc3_manifest(tmp_path)
+    # Even a real extra successful recording is not admitted without a train ref.
+    write_episode(source, "not-selected", records, layout, "not-selected", navigation_memory_version=3)
+    index = data.prepare(source, output, manifest=path, chunk_records=1)
+    assert index["cache_version"] == data.BC3_CACHE_VERSION
+    assert index["heads"] == list(data.BC3_HEADS)
+    assert index["classes"] == list(data.BC3_CLASSES)
+    assert index["splits"]["train"] == {"pairs": 2, "episodes": 2, "steps": 8}
+    assert [ep["id"] for ep in index["episodes"]] == [ep["id"] for ep in manifest["episodes"]]
+    assert [ep["success"] for ep in index["episodes"]] == [True, False]
+    assert index["action_change_weight"] == 4
+    assert index["action_change"]["N"] == 8 and index["action_change"]["n_I"] == 2
+    assert index["auxiliary"]["detour"]["available_steps"] == 0
+    assert index["auxiliary"]["true_map"]["available"] is False
+    expected = data.encode_features(demos.learner_input(records), layout)
+    for entry in index["episodes"]:
+        cached = data.load_cached(output / entry["file"])
+        assert cached["labels"].shape == (4, 5)
+        np.testing.assert_array_equal(cached["action_change"], [0, 0, 1, 0])
+        np.testing.assert_array_equal(cached["maneuver_weight"], 1)
+        np.testing.assert_array_equal(cached["stuck_valid"], [1, 1, 0, 0])
+        np.testing.assert_array_equal(cached["next_near_valid"], [1, 1, 1, 0])
+        assert not cached["detour_valid"].any()
+        for name in ("near", "far", "vector"):
+            np.testing.assert_allclose(cached[name], expected[name], atol=1 / 255)
+
+
+@pytest.mark.parametrize("damage, expected", [
+    ("ineligible", "ineligible"), ("heldout", "ineligible"), ("duplicate", "duplicate training"),
+    ("totals", "totals"), ("checksum", "checksum"), ("memory", "memory-v3"),
+])
+def test_bc3_manifest_rejects_wrong_training_identity(tmp_path, damage, expected):
+    source, output, path, manifest, _, _ = write_bc3_manifest(tmp_path, ("point",))
+    entry = manifest["episodes"][0]
+    if damage == "ineligible":
+        entry["training_eligible"] = False
+    elif damage == "heldout":
+        entry["scenario"]["split"] = "validation"
+    elif damage == "duplicate":
+        manifest["splits"]["train"]["point"].append(entry["id"])
+    elif damage == "totals":
+        manifest["totals"]["train_decisions"] += 1
+    elif damage == "checksum":
+        entry["samples_sha256"] = "0" * 64
+    elif damage == "memory":
+        metadata_path = Path(entry["episode"]) / "episode.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["navigation_memory_version"] = 2
+        metadata_path.write_text(json.dumps(metadata))
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match=expected):
+        data.prepare(source, output, manifest=path)

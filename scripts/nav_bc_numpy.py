@@ -10,10 +10,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+
+HEAD_SIZES = {
+    1: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "jump": 2, "climb": 2},
+    2: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "maneuver": 3},
+}
 
 
 def _relu(value: np.ndarray) -> np.ndarray:
@@ -63,7 +70,8 @@ class NumpyPolicy:
             if not line.endswith(b"\n"):
                 raise ValueError("weight file has no bounded JSON header line")
             self.header: dict[str, Any] = json.loads(line)
-            if self.header.get("format") != "gothic-nav-bc" or self.header.get("version") != 1:
+            self.format_version = self.header.get("version")
+            if self.header.get("format") != "gothic-nav-bc" or self.format_version not in HEAD_SIZES:
                 raise ValueError("unsupported navigation weight format")
             if self.header.get("byte_order") != "little":
                 raise ValueError("unsupported weight byte order")
@@ -75,7 +83,20 @@ class NumpyPolicy:
             raise ValueError("unsupported policy architecture")
         self.vector_size = int(architecture["inputs"]["vector"][0])
         self.hidden_size = int(architecture["gru"]["hidden_size"])
-        self.head_names = tuple(architecture["heads"])
+        self.head_sizes = HEAD_SIZES[self.format_version].copy()
+        if set(architecture["heads"]) != set(self.head_sizes):
+            raise ValueError("incorrect policy heads")
+        for index, (name, classes) in enumerate(self.head_sizes.items()):
+            values = [-1, 0, 1] if index < 3 else list(range(classes))
+            if architecture["heads"][name] != {"classes": classes, "values": values}:
+                raise ValueError(f"unsupported policy head {name}")
+        self.head_names = tuple(self.head_sizes)
+        self.temperatures = self.header.get("temperatures", dict.fromkeys(self.head_names, 1.0))
+        if set(self.temperatures) != set(self.head_names) or any(
+            not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0
+            for value in self.temperatures.values()
+        ):
+            raise ValueError("policy temperatures must be finite and positive for every head")
         self.weights: dict[str, np.ndarray] = {}
         for tensor in self.header["tensors"]:
             if tensor["dtype"] != "float32":
@@ -127,6 +148,28 @@ class NumpyPolicy:
         hidden = (np.float32(1) - update) * new + update * hidden
         logits = {name: self._linear(hidden, "head_" + name) for name in self.head_names}
         return logits, hidden
+
+    def probabilities(self, logits: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Softmax distributions after the exported per-head temperatures."""
+        probabilities = {}
+        for name in self.head_names:
+            values = np.asarray(logits[name], dtype=np.float64) / self.temperatures[name]
+            if values.shape != (self.head_sizes[name],) or not np.isfinite(values).all():
+                raise ValueError(f"invalid logits for head {name}")
+            weights = np.exp(values - values.max())
+            probabilities[name] = weights / weights.sum()
+        return probabilities
+
+    def sample(self, logits: dict[str, np.ndarray], rng: np.random.Generator) -> dict[str, float | bool]:
+        """Sample the runtime keys; v2 jump and climb are mutually exclusive."""
+        actions = {name: int(rng.choice(len(values), p=values))
+                   for name, values in self.probabilities(logits).items()}
+        return {
+            "forward": float(actions["forward"] - 1), "strafe": float(actions["strafe"] - 1),
+            "turn": float(actions["turn"] - 1), "walk": actions["walk"] != 0,
+            "jump": actions["maneuver"] == 1 if self.format_version == 2 else actions["jump"] != 0,
+            "climb": actions["maneuver"] == 2 if self.format_version == 2 else actions["climb"] != 0,
+        }
 
 
 def main() -> None:

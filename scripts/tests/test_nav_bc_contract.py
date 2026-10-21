@@ -24,9 +24,10 @@ def test_synthetic_records_use_requested_road_schema(version):
 
 
 @pytest.mark.parametrize("version", [1, 2])
-def test_synthetic_weight_header_declares_input_composition(tmp_path, version):
+@pytest.mark.parametrize("weight_version", [1, 2])
+def test_synthetic_weight_header_declares_input_composition(tmp_path, version, weight_version):
     weights = tmp_path / "fixture.navbc"
-    contract.synthetic_weights(weights, version)
+    contract.synthetic_weights(weights, version, weight_version)
     with weights.open("rb") as stream:
         header = json.loads(stream.readline())
     preprocessing = header["preprocessing"]
@@ -36,10 +37,63 @@ def test_synthetic_weight_header_declares_input_composition(tmp_path, version):
     assert preprocessing["input_fields"] == ["body", "roads", "eye", "memory_near", "memory_far"]
     assert preprocessing["vector_order"] == ["eye", "roads", "body"]
     assert header["architecture"]["inputs"]["vector"] == [2166]
+    assert header["version"] == weight_version
+    assert {name: head["classes"] for name, head in header["architecture"]["heads"].items()} == contract.HEAD_SIZES[weight_version]
+    policy = contract.NumpyPolicy(weights)
+    assert policy.format_version == weight_version
+    assert policy.head_names == tuple(contract.HEAD_SIZES[weight_version])
+    assert policy.temperatures == dict.fromkeys(policy.head_names, 1.0)
     assert contract.weight_input_version(header, 2166) == version
     # Fixture generation must not alter the training metadata globally.
     assert contract.data.PREPROCESSING["navdemo_version"] == 2
     assert contract.data.PREPROCESSING["roads_schema"] == "carrot_v2"
+
+
+@pytest.mark.parametrize("weight_version", [1, 2])
+def test_numpy_softmax_uses_each_head_temperature(tmp_path, weight_version):
+    weights = tmp_path / "fixture.navbc"
+    sizes = contract.HEAD_SIZES[weight_version]
+    temperatures = {name: .5 + index for index, name in enumerate(sizes)}
+    contract.synthetic_weights(weights, format_version=weight_version, temperatures=temperatures)
+    policy = contract.NumpyPolicy(weights)
+    logits = {name: np.arange(classes, dtype=np.float32) for name, classes in sizes.items()}
+    for name, actual in policy.probabilities(logits).items():
+        expected = np.exp((logits[name].astype(np.float64) - logits[name].max()) / temperatures[name])
+        np.testing.assert_allclose(actual, expected / expected.sum(), rtol=1e-14)
+
+
+@pytest.mark.parametrize("action", [0, 1, 2])
+def test_numpy_v2_decodes_one_mutually_exclusive_maneuver(tmp_path, action):
+    weights = tmp_path / "fixture.navbc"
+    contract.synthetic_weights(weights)
+    policy = contract.NumpyPolicy(weights)
+    logits = {name: np.zeros(classes, dtype=np.float32) for name, classes in policy.head_sizes.items()}
+    logits["maneuver"][:] = -1000
+    logits["maneuver"][action] = 1000
+    keys = policy.sample(logits, np.random.default_rng(3))
+    assert keys["jump"] is (action == 1)
+    assert keys["climb"] is (action == 2)
+
+
+@pytest.mark.parametrize("bad_value", [0, -1, float("nan"), float("inf")])
+def test_numpy_rejects_invalid_exported_temperature(tmp_path, bad_value):
+    weights = tmp_path / "fixture.navbc"
+    temperatures = dict.fromkeys(contract.HEAD_SIZES[2], 1.0)
+    temperatures["maneuver"] = bad_value
+    contract.synthetic_weights(weights, temperatures=temperatures)
+    with pytest.raises(ValueError, match="temperatures"):
+        contract.NumpyPolicy(weights)
+
+
+def test_numpy_rejects_v2_legacy_head_mapping(tmp_path):
+    weights = tmp_path / "fixture.navbc"
+    contract.synthetic_weights(weights)
+    with weights.open("rb") as stream:
+        header, payload = json.loads(stream.readline()), stream.read()
+    header["architecture"]["heads"]["maneuver"]["values"] = [-1, 0, 1]
+    weights.write_bytes(json.dumps(header).encode() + b"\n" + payload)
+    with pytest.raises(ValueError, match="maneuver"):
+        contract.NumpyPolicy(weights)
 
 
 @pytest.mark.parametrize("version", [1, 2])

@@ -139,6 +139,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Навигационная GRU: `.navbc` v2 с единым манёвром и температурами softmax; чтение v1/v2 | только явный запуск стенда с весами | `common/navpolicy.*`, `navdemos.cpp`; `scripts/nav_bc_{data,model,train,numpy}.py`, `nav_rl.py drive --manifest` | целевые `test_nav_bc_*`, `test_nav_rl.py`; `gothic-navpolicy-contract`, паритет Torch/NumPy/C++ на записанных шагах | [navigation.md](navigation.md) |
 | Рэгдоллы при смерти и оглушении | `[GAME] ragdoll=0` | `common/physics/ragdoll.cpp` | бенчи `ragdoll`, `ragdoll-disabled`, `ragdoll20-*` | [physics.md](physics.md) |
 | Возврат живых NPC после падения со скалы или в воду | `[GAME] ragdoll_quest_guard=0` | `common/world/objects/npc.cpp` | бенчи `immortal-return`, `spell-quest-return` | [physics.md](physics.md) |
 | Кинематические тела живых NPC в 20 м от героя | `[GAME] living_bodies=0` | `common/world/objects/npc.cpp` | бенчи `living-bodies`, `living-radius`, `living-seat` | [physics.md](physics.md) |

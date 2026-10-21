@@ -103,7 +103,7 @@ size_t parseVectorInputSize(const Json& preprocessing, uint32_t& demoVersion) {
   return NavPolicy::legacyVectorSize;
   }
 
-void validateArchitecture(const Json& architecture, size_t& hidden, size_t vectorSize) {
+void validateArchitecture(const Json& architecture, size_t& hidden, size_t vectorSize, uint32_t version) {
   expectString(field(architecture,"name"),"map-cnn-vector-gru");
   expectInt(field(architecture,"version"),1);
   const auto& inputs = field(architecture,"inputs");
@@ -153,13 +153,15 @@ void validateArchitecture(const Json& architecture, size_t& hidden, size_t vecto
     fail("unsupported GRU hidden size");
   hidden = hiddenSize.GetUint();
   const auto& heads = field(architecture,"heads");
-  if(!heads.IsObject() || heads.MemberCount()!=NavPolicy::headCount)
+  const size_t headCount = version==2 ? NavPolicy::bc3HeadNames.size() : NavPolicy::headNames.size();
+  if(!heads.IsObject() || heads.MemberCount()!=headCount)
     fail("incorrect policy heads");
-  for(size_t i=0; i<NavPolicy::headCount; ++i) {
-    const auto& head = field(heads,NavPolicy::headNames[i]);
-    expectInt(field(head,"classes"),i<3 ? 3 : 2);
+  for(size_t i=0; i<headCount; ++i) {
+    const auto& head = field(heads,version==2 ? NavPolicy::bc3HeadNames[i] : NavPolicy::headNames[i]);
+    const size_t classes = i<3 || (version==2 && i==4) ? 3 : 2;
+    expectInt(field(head,"classes"),classes);
     const auto& values = field(head,"values");
-    if(!values.IsArray() || values.Size()!=(i<3 ? 3u : 2u))
+    if(!values.IsArray() || values.Size()!=classes)
       fail("incorrect head values");
     for(rapidjson::SizeType j=0; j<values.Size(); ++j)
       if(!values[j].IsInt() || values[j].GetInt()!=int(j)-(i<3 ? 1 : 0))
@@ -272,11 +274,25 @@ NavPolicy::NavPolicy(const std::string& path) {
   if(header.HasParseError() || !header.IsObject() || !uniqueKeys(header))
     fail("invalid or duplicate-key weight JSON header");
   expectString(field(header,"format"),"gothic-nav-bc");
-  expectInt(field(header,"version"),1);
+  const auto& version = field(header,"version");
+  if(!version.IsUint() || (version.GetUint()!=1 && version.GetUint()!=2))
+    fail("unsupported navigation weight version");
+  formatVersion = version.GetUint();
   expectString(field(header,"byte_order"),"little");
   expectString(field(header,"offset_origin"),"first byte after JSON header newline");
   const size_t vectorInputs = parseVectorInputSize(field(header,"preprocessing"),demoVersion);
-  validateArchitecture(field(header,"architecture"),hidden,vectorInputs);
+  validateArchitecture(field(header,"architecture"),hidden,vectorInputs,formatVersion);
+  if(header.HasMember("temperatures")) {
+    const auto& values = header["temperatures"];
+    if(!values.IsObject() || values.MemberCount()!=actionHeadCount())
+      fail("incorrect policy temperatures");
+    for(size_t i=0; i<actionHeadCount(); ++i) {
+      const auto& value = field(values,headName(i));
+      if(!value.IsNumber() || !std::isfinite(value.GetDouble()) || value.GetDouble()<=0)
+        fail("policy temperatures must be finite and positive");
+      temperatures[i] = value.GetDouble();
+      }
+    }
   const auto& length = field(header,"data_nbytes");
   if(!length.IsUint64() || length.GetUint64()>64*1024*1024)
     fail("invalid weight payload size");
@@ -292,7 +308,7 @@ NavPolicy::NavPolicy(const std::string& path) {
   std::unordered_map<std::string,Tensor> tensors;
   std::vector<std::pair<size_t,size_t>> ranges;
   const auto& entries = field(header,"tensors");
-  if(!entries.IsArray() || entries.Size()!=28)
+  if(!entries.IsArray() || entries.Size()!=16+2*actionHeadCount())
     fail("incorrect number of policy tensors");
   for(const auto& entry:entries.GetArray()) {
     const auto& nameValue = field(entry,"name");
@@ -376,8 +392,8 @@ NavPolicy::NavPolicy(const std::string& path) {
   gruHidden.outputs = hidden*3;
   gruHidden.weight = take("gru.weight_hh_l0",{hidden*3,hidden});
   gruHidden.bias = take("gru.bias_hh_l0",{hidden*3});
-  for(size_t i=0; i<headCount; ++i)
-    loadLinear(heads[i],std::string("head_")+headNames[i],hidden,i<3 ? 3 : 2);
+  for(size_t i=0; i<actionHeadCount(); ++i)
+    loadLinear(heads[i],std::string("head_")+headName(i),hidden,headSize(i));
   if(!tensors.empty())
     fail("unknown weight tensors");
   }
@@ -537,8 +553,8 @@ NavPolicy::Result NavPolicy::step(const Features& features, State& state) const 
     state.hidden[i] = (1.f-update)*next+update*state.hidden[i];
     }
   Result result;
-  std::array<size_t,headCount> action;
-  for(size_t i=0; i<headCount; ++i) {
+  std::array<size_t,headCount> action = {};
+  for(size_t i=0; i<actionHeadCount(); ++i) {
     result.logits[i] = linear(state.hidden.data(),heads[i]);
     action[i] = size_t(std::max_element(result.logits[i].begin(),result.logits[i].end())-result.logits[i].begin());
     }
@@ -546,8 +562,8 @@ NavPolicy::Result NavPolicy::step(const Features& features, State& state) const 
   result.keys.strafe = float(int(action[1])-1);
   result.keys.turn = float(int(action[2])-1);
   result.keys.walk = action[3]!=0;
-  result.keys.jump = action[4]!=0;
-  result.keys.climb = action[5]!=0;
+  result.keys.jump = formatVersion==2 ? action[4]==1 : action[4]!=0;
+  result.keys.climb = formatVersion==2 ? action[4]==2 : action[5]!=0;
   // Head yaw and pitch stay at the KeyState default: straight ahead.
   return result;
   }
