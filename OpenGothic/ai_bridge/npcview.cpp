@@ -390,9 +390,13 @@ bool npcSees(const Npc& self, const Npc& other) {
 NpcView::NpcView(Emit emit):emit(std::move(emit)) {
   }
 
+void NpcView::clear() {
+  next = 0;
+  }
+
 void NpcView::tick(World& world) {
   const uint64_t now = world.tickCount();
-  if(now<next)
+  if(now<next && next<=now+PushPeriodMs)
     return;
   next = now+PushPeriodMs;
   Npc* pl = world.player();

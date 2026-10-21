@@ -1,3 +1,5 @@
+import pytest
+
 from gothic_ai.dialogue import (
     MoodTag,
     MoodTags,
@@ -7,9 +9,47 @@ from gothic_ai.dialogue import (
     paragraph_end,
     strip_said,
     to_game_text,
+    tool_leak,
 )
 from gothic_ai.gamedata.ou import npc_dialog_key, npc_lines, parse_ou_bin
 from gothic_ai.persona import pick_samples, render_instructions
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "give_item",
+        "SET_INTENT(goal=follow)",
+        "protoc function give_quest?",
+        "protoc",
+        "FuNcTiOn",
+        "FUNCTIONS",
+        "functions.give_quest({...})",
+        "to=functions.unknown",
+        '"arguments": {}',
+        "call_id=abc",
+        "<tool_call>",
+        '{"name": "unknown"}',
+    ],
+)
+def test_tool_leak_recognizes_names_and_call_syntax(text):
+    assert tool_leak(text, {"give_item", "set_intent", "give_quest"})
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Дай мне функцию подумать.",
+        "Это задание как раз по тебе.",
+        "Отдам тебе булаву после боя.",
+        "Xardas знает больше.",
+        "Ладно, пошли.",
+        "give_itemized preset_intent give_quests",
+        "functional dysfunctional functions_extra",
+    ],
+)
+def test_tool_leak_leaves_ordinary_words_and_name_substrings_alone(text):
+    assert not tool_leak(text, {"give_item", "set_intent", "give_quest"})
 
 
 def test_splitter_emits_whole_sentences_as_they_complete():

@@ -89,5 +89,5 @@ class NavMemoryTeacher final {
     bool complete = false;
     bool observedGoal = false;
     Point previousGoal;
-    uint32_t movingTicks = 0;
+    uint32_t movingTicks = 0, runningTargetTicks = 0;
   };
