@@ -661,7 +661,8 @@ async def vanilla_spare(
         detail = (f"exp/gold {before} -> {after}; claim={claim}; outcome={outcome}; "
                   + " | ".join(turn_line(row) for row in rows))
         if not took and not fake:
-            return check(key, answered and no_check and not facts("lie"), f"kept: {detail}")
+            label = "amended_not_accepted" if quest_facts("quest_terms") else "kept"
+            return check(key, answered and no_check and not facts("lie"), f"{label}: {detail}")
         pay = outcome.get("pay")
         expected_gold = before[1] + (50 if pay == "full" else 0)
         alive = await bandit_state(spared)
