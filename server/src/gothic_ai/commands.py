@@ -176,8 +176,7 @@ def follow_request(text: str, is_name: Callable[[str], bool] = lambda w: False) 
     """
     rest = words(text)
     if any(mark in text for mark in ('"', "«", "»")) or any(
-        w in rest
-        for w in (
+        w in (
             "сказал",
             "сказала",
             "сказали",
@@ -185,7 +184,6 @@ def follow_request(text: str, is_name: Callable[[str], bool] = lambda w: False) 
             "говорят",
             "говорил",
             "говорила",
-            "говорю",
             "крикнул",
             "крикнула",
             "кричит",
@@ -195,6 +193,15 @@ def follow_request(text: str, is_name: Callable[[str], bool] = lambda w: False) 
             "спросила",
             "ответил",
         )
+        and not (
+            w in {"сказал", "сказала"}
+            and (
+                rest[i - 1 : i] == ["я"]
+                or rest[i - 2 : i] == ["я", "же"]
+                or rest[i + 1 : i + 2] == ["же"]
+            )
+        )
+        for i, w in enumerate(rest)
     ):
         return False
     if _follow_words(rest, is_name):
