@@ -56,7 +56,7 @@ async def bandit_hold(link: GameLink, dialogue: DialogueManager) -> dict[str, st
         await link.send(HoldVerdictCmd(
             hold=message.hold, to="scripts" if release else "parley", ms=None if release else 5000,
         ))
-        if release and not first_scripts.done():
+        if release and message.npc in GANG and message.other == "PLAYER" and not first_scripts.done():
             first_scripts.set_result(time.monotonic())
 
     def record(message: GameMessage) -> None:
@@ -70,10 +70,11 @@ async def bandit_hold(link: GameLink, dialogue: DialogueManager) -> dict[str, st
                 if row.id in GANG | {CAVALORN} and row.state == "ZS_ATTACK"
             )
         elif isinstance(message, PerceptionHeld) and (
-            message.kind == "bandit_enemy" and message.npc in GANG
+            message.kind == "bandit_enemy"
             or message.kind == "party_enemy" and message.npc == CAVALORN
         ):
-            holds.append((now, message))
+            if message.npc in GANG or message.kind == "party_enemy":
+                holds.append((now, message))
             responses.append(asyncio.create_task(answer(message, scripts)))
         elif isinstance(message, Perception) and message.perc == "ASSESSDAMAGE" and (
             message.npc in {"PLAYER", "HERO", CAVALORN} and message.other in GANG
@@ -93,7 +94,29 @@ async def bandit_hold(link: GameLink, dialogue: DialogueManager) -> dict[str, st
         await _m5b_player_weapon(link, "none")
         await link.debug("player_hp", hp=1200)
         await link.debug("skip_important", near=CAVALORN)
+        await link.debug("player_goto", waypoint=PARK)
+        party_ready, party_detail = await prepare_npc_pose(
+            link, CAVALORN, PARK, to="PC_HERO", distance=-250,
+            require_perception_ready=False,
+        )
+        party_index = int(await link.evaluate(["var", "AIV_PARTYMEMBER"]))
         await link.story_effect(CAVALORN, [{"do": "party", "value": 1}])
+        party_flag = 0
+
+        async def party_marked() -> bool:
+            nonlocal party_flag
+            [party_flag] = await link.story_eval(CAVALORN, [
+                ["field", ["inst", CAVALORN], "AIVAR", party_index],
+            ])
+            row = roster.get(CAVALORN)
+            return bool(party_flag == 1 and row is not None
+                        and row.activity == "routine" and row.state == "ZS_STAND_WP")
+
+        marked = await _until_async(party_marked, bool, 5)
+        if not check("party_prepared", party_ready and marked,
+                     f"party={party_flag}, AIVAR[{party_index}], "
+                     f"state={party_detail.get('view', {}).get('state')}, far_waypoint={PARK}"):
+            return _logged(results)
         points = {point["name"]: point for point in await link.waypoints()}
         primary = await link.snapshot(PRIMARY, fresh=True)
         approach = points[PARTY_POINT]
@@ -111,10 +134,9 @@ async def bandit_hold(link: GameLink, dialogue: DialogueManager) -> dict[str, st
         for npc in sorted(present):
             await link.debug("skip_important", near=npc)
             await link.debug("npc_goto", npc=npc, to=npc, distance=0, face="PC_HERO")
-        party_ready, party_detail = await prepare_npc_pose(
-            link, CAVALORN, PARTY_POINT, to="PC_HERO", distance=-250, face=PRIMARY,
-            require_perception_ready=False,
-        )
+        # Keep the initialized native state and verified party flag when entering the gang's sight.
+        await link.debug("npc_goto", npc=CAVALORN, to="PC_HERO", distance=-250, face=PRIMARY)
+        party_ready = await _until_async(party_marked, bool, 5)
         primary, party = await link.snapshot(PRIMARY, fresh=True), await link.snapshot(CAVALORN, fresh=True)
         hero_distance = primary.player.distance if primary.player else -1
         party_distance = party.player.distance if party.player else -1
@@ -125,7 +147,7 @@ async def bandit_hold(link: GameLink, dialogue: DialogueManager) -> dict[str, st
             ["call", "NPC_CANSEENPC", ["inst", CAVALORN], ["inst", PRIMARY]],
             ["==", ["call", "NPC_GETATTITUDE", ["inst", CAVALORN], ["inst", PRIMARY]],
              ["var", "ATT_HOSTILE"]],
-            ["field", ["inst", CAVALORN], "AIVAR", ["var", "AIV_PARTYMEMBER"]],
+            ["field", ["inst", CAVALORN], "AIVAR", party_index],
         ])
         if not check("scene", bool(
             party_ready and 1000 <= hero_distance <= 1400 and 0 <= party_distance <= 500
@@ -135,7 +157,9 @@ async def bandit_hold(link: GameLink, dialogue: DialogueManager) -> dict[str, st
             and all(roster[npc].activity == "routine" for npc in (*present, CAVALORN))
         ), f"hero={hero_distance:.0f} cm, Cavalorn={party_distance:.0f} cm, "
            f"sight={sight}/{party_sight}, hostile={hostility}/{party_hostility}, "
-           f"party={party_flag}, gang={sorted(present)}, Cavalorn_pose={party_detail}"):
+           f"party={party_flag}, gang={sorted(present)}, "
+           f"holds={dict(Counter(message.kind for _, message in holds))}, "
+           f"ZS_ATTACK={dict(Counter(npc for _, npc in native_attacks))}"):
             return _logged(results)
 
         bandit_seen = await _until(lambda: any(
@@ -168,12 +192,10 @@ async def bandit_hold(link: GameLink, dialogue: DialogueManager) -> dict[str, st
         ), f"seconds={ended - started:.2f}, HP={hero_hp}->{health[-1][0]}, "
            f"samples={len(health)}, ZS_ATTACK={attacks}, damage={hits}")
         party_holds = [message for message in during if message.kind == "party_enemy"]
-        bandit_party = [message for message in during
-                        if message.kind == "bandit_enemy" and message.other == CAVALORN]
         check("peace_party", bool(
-            party_holds and bandit_party and all(hp == party_hp for _, hp in health)
+            party_holds and all(hp == party_hp for _, hp in health)
             and not attacks and not hits
-        ), f"party_enemy={len(party_holds)}, bandit_enemy_party={len(bandit_party)}, "
+        ), f"party_enemy={len(party_holds)}, "
            f"HP={party_hp}->{health[-1][1]}, ZS_ATTACK={attacks}, damage={hits}")
         if any(not outcome.startswith("done") for outcome in results.values()):
             return _logged(results)
