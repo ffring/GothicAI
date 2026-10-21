@@ -226,6 +226,7 @@
 
 **Сценарии по областям** (модуль в `server/src/gothic_ai/scenarios/`):
 - **основа** (`basics.py`): `m0`–`m6`, `m5b`, `m5c`, `m5e`, `tts`, `websocket`;
+- **загрузка раннего сейва** (`load.py`): `load_rewind` — откат игровых часов ≥20 с, `npc_views`, `story_world` и `npc_died` возобновляются за ≤2 с;
 - **память движка на Linux и macOS** (`memprobe.py`): `memprobe` — отдельные циклы `wave`, `save`, `load`, `spawn`, `teleport`, RSS после каждого шага; в конце цикла группы `smaps` на Linux, на macOS — `phys_footprint` и категории `footprint`; [результаты исследования](../reports/engine/2026-10-19-rss-growth/README.md);
 - **спутники и бой** (`companions.py`; `neural_knockout.py` — отрезок нокаута в `neural-talk`, `neural-load` — `neural_load.py`, `neural-soak` — `neural_soak.py`, `neural_soak_capture.py` и `neural_soak_metrics.py`): `orders`, `companion`, `calm`, `wolf`, `rescue`, `rescue_self`, `neural`, `neural-companion`, `neural-group`, `neural-talk`, `neural-load`, `neural-soak`;
 - **восприятие** (`perception.py`; `broken` — `broken.py`, `places` — прямо в `cli.py`): `see`, `seen`, `hearing`, `cave`, `ground`, `places`, `knows`, `remembers`, `trace`, `broken`;

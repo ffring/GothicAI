@@ -1454,6 +1454,11 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "load_rewind":
+                results = await scenarios.load_rewind(link)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "neural-soak":
                 results = await scenarios.neural_soak_scenario(
                     link, state.dialogue, bodypilot, log_dir=Path(args.memory_db).parent
@@ -2762,6 +2767,7 @@ def main() -> None:
             "neural-load",
             "neural-soak",
             "memprobe",
+            "load_rewind",
             "m5c",
             "m5e",
             "orders",
