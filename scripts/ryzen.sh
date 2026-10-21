@@ -1024,6 +1024,9 @@ e2e_display_exclusive() {
     # With main's E2E_MAX_FPS=30 cap one more three-game round passed 3/3 at
     # 26.9-28.0 FPS, and fight_reactions_flee alone at 27.8.
     fight_reactions_bandits) return 1 ;;
+    # check_walk in shared slot 1 ran at 0.99 FPS (6.35 game seconds in 130 s);
+    # exclusive passed 3/3 checks: 67.0 s outward, 54.1 s back (21.10).
+    check_walk) return 0 ;;
     # Same fight, companion and movement timing, not measured yet: kept exclusive
     # rather than risking false failures. Move one out only after it passes
     # every round of a three-game measurement (scripts/ryzen-round.sh), as orders
