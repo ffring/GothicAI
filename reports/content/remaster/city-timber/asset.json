@@ -5,11 +5,67 @@
   "created": "2026-10-21",
   "goal": "the same Gothic, better made",
   "namespaces": [
-    "city-timber"
+    "city-timber",
+    "city-timber-concept"
   ],
-  "sources": [],
+  "sources": [
+    {
+      "file": "city-timber-concept/concept-attempt-1.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 1,
+      "sha256": "0170444c293c507cb2e2e53372e326371242b4930bd34566b10c0e3ab099b798",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T15:51:52Z",
+      "thread": "01a15f28-cea7-7902-b1d4-9d8ba074c50e",
+      "parent": null
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-2.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 2,
+      "sha256": "72a6c0acbf40bcb88ec865c5b5642cc69d550ee8e8864f0f435f6ef6657b9cca",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T15:53:32Z",
+      "thread": "01a15f28-cea7-7902-b1d4-9d8ba074c50e",
+      "parent": null
+    },
+    {
+      "file": "city-timber-concept/concept-attempt-3.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 3,
+      "sha256": "dcfc2ea8c8af4284f6da2565bc368293ce92250df38495693cb2137832828b85",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T15:54:18Z",
+      "thread": "01a15f28-cea7-7902-b1d4-9d8ba074c50e",
+      "parent": null
+    }
+  ],
   "selected": {},
-  "reviews": [],
+  "reviews": [
+    {
+      "id": "r1-concept-2",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-2/merged.json"
+    }
+  ],
   "gates": [
     {
       "gate": "preserve",

@@ -5,11 +5,67 @@
   "created": "2026-10-21",
   "goal": "the same Gothic, better made",
   "namespaces": [
-    "city-roofs"
+    "city-roofs",
+    "city-roofs-concept"
   ],
-  "sources": [],
+  "sources": [
+    {
+      "file": "city-roofs-concept/concept-attempt-1.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 1,
+      "sha256": "afa2010f90066cd48abe31b7a2265f6a4ae4817c6ef55a92d88e43b282dfdea7",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T15:51:57Z",
+      "thread": "01a15f28-b9cf-7481-a3ae-953fc121d2a3",
+      "parent": null
+    },
+    {
+      "file": "city-roofs-concept/concept-attempt-2.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 2,
+      "sha256": "823edf073cd188484d9ee07d423781042186bc2da92fae612a887f5ee58f9a8f",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T15:52:55Z",
+      "thread": "01a15f28-b9cf-7481-a3ae-953fc121d2a3",
+      "parent": null
+    },
+    {
+      "file": "city-roofs-concept/concept-attempt-3.png",
+      "role": "concept",
+      "texture": null,
+      "attempt": 3,
+      "sha256": "74b850e2dd9952a2d4a827c620456b2a3995ace780fe16f55752de755146b981",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-21T15:54:12Z",
+      "thread": "01a15f28-b9cf-7481-a3ae-953fc121d2a3",
+      "parent": null
+    }
+  ],
   "selected": {},
-  "reviews": [],
+  "reviews": [
+    {
+      "id": "r1-concept-2",
+      "stage": "concept",
+      "mode": "reference",
+      "verdict": "REJECT",
+      "date": "2026-10-21",
+      "path": "reviews/r1-concept-2/merged.json"
+    }
+  ],
   "gates": [
     {
       "gate": "preserve",
