@@ -461,8 +461,9 @@ class Conversation:
     pending: list[str] = field(default_factory=list)  # events that came while a turn was running
     calm: Intent | None = None  # the intent before an incident goal replaced it
     overlay_free_at: float = 0.0  # lines said on the move: when the last one is over
+    overlay_reset: asyncio.Event = field(default_factory=asyncio.Event)
     reply_id: str = ""  # the latest turn's reply (its subtitle entry)
-    hushed: set[str] = field(default_factory=set)  # lines cut off by the hero: never sent
+    hushed: set[str] = field(default_factory=set)  # lines cut off before they started: never sent
     cut: str | None = None  # the hero interrupted the running turn: what the npc had said of it
     trigger: Message | None = None  # what started the running turn (remembered when it ends)
     acting: bool = False  # the running turn's line is said (the quick model's): it only acts on it now
@@ -678,6 +679,7 @@ class DialogueManager:
         self._line_ids = itertools.count(1)
         self._reply_ids = itertools.count(1)
         self._lines: dict[str, tuple[str, float | None]] = {}  # line id -> (text, started at)
+        self._line_replies: dict[str, str] = {}  # line id -> the reply whose subtitle it belongs to
         self._sent: dict[str, float] = {}  # line id -> when it was sent (a line that never starts is lost)
         self._audio: dict[str, float] = {}  # line id -> how long its voice is, once it is known
         # scenes (play_scene): how long a line lasts without a voice (tests make it short), the lines
@@ -943,10 +945,12 @@ class DialogueManager:
             conv.reply.cancel()
         conv.reply = None
 
-    def _drop_unvoiced(self, conv: Conversation) -> None:
-        if conv.voice is not None:  # lines of the interrupted reply that were not voiced yet
-            while not conv.voice.empty():
-                conv.voice.get_nowait()
+    def _drop_unvoiced(self, conv: Conversation, lines: Collection[str] | None = None) -> None:
+        if conv.voice is not None:
+            for _ in range(conv.voice.qsize()):
+                item = conv.voice.get_nowait()
+                if lines is not None and item[0] not in lines:
+                    conv.voice.put_nowait(item)
                 conv.voice.task_done()
 
     def _start_reply(
@@ -1030,11 +1034,50 @@ class DialogueManager:
             conv.cut = spoken  # the turn remembers only this (see _turn)
         self._cancel(conv)
         self._drop_unvoiced(conv)
+        self._reset_overlay(conv)
         log.info("%s interrupted after %d line(s)", conv.npc, len(said))
         self._spawn(self.link.send(HushCmd(npc=conv.npc, reply=conv.reply_id or None, said=spoken or None)))
         if not running:
             self._note(conv, f"Герой перебил тебя{f'; ты успел сказать: «{spoken}»' if spoken else ''}")
         return True
+
+    def _reset_overlay(self, conv: Conversation) -> None:
+        conv.overlay_free_at = time.monotonic()
+        conv.overlay_reset.set()
+
+    async def _wait_overlay(self, conv: Conversation) -> None:
+        while (delay := conv.overlay_free_at - time.monotonic()) > 0:
+            conv.overlay_reset.clear()
+            try:
+                await asyncio.wait_for(conv.overlay_reset.wait(), delay)
+            except TimeoutError:
+                pass
+
+    async def _hush_earlier(self, conv: Conversation, reply: str | None) -> None:
+        """An overlay cuts off unheard earlier turns just before its first sound reaches the game."""
+        now = time.monotonic()
+        lines = [
+            line
+            for line in conv.earlier_lines
+            if self._line_replies.get(line) != reply and self._to_hear(conv, line, now)
+        ]
+        if not lines:
+            return
+        replies = dict.fromkeys(self._line_replies[line] for line in lines)
+        conv.hushed.update(line for line in lines if self._lines[line][1] is None)
+        self._drop_unvoiced(conv, lines)
+        conv.earlier_lines = [
+            line for line in conv.earlier_lines if self._line_replies.get(line) not in replies
+        ]
+        self._reset_overlay(conv)
+        for earlier in replies:
+            said = " ".join(
+                self._lines[line][0]
+                for line, owner in self._line_replies.items()
+                if owner == earlier and self._lines[line][1] is not None
+            )
+            await self.link.send(HushCmd(npc=conv.npc, reply=earlier, said=said or None))
+            self._note(conv, f"Ты оборвал себя на полуслове{f'; успел сказать: «{said}»' if said else ''}")
 
     def remember(self, npc: str, name: str, text: str) -> None:
         """A remark in the memory of any npc, also one nobody talks to (a rumor, something it saw)."""
@@ -1219,6 +1262,7 @@ class DialogueManager:
         line = f"AIB_{next(self._line_ids)}"
         if reply is not None:  # first words and answers to orders are not the reply's: no gesture is too late
             conv.last_lines.append(line)
+            self._line_replies[line] = reply
         self._lines[line] = (text, None)
         self._sent[line] = time.monotonic()
         if self.floor is not None:
@@ -1226,10 +1270,13 @@ class DialogueManager:
         log.info("%s: %s", conv.persona.name, text)
         if self.tts is None:
             await self._wait_floor(conv, line)
+            await self._wait_overlay(conv)
             if line in conv.hushed:
                 return  # the hero spoke while it waited to be heard
             if overlay:  # the game does not order lines said on the move
-                await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
+                await self._hush_earlier(conv, reply)
+                if line in conv.hushed:
+                    return
                 conv.overlay_free_at = time.monotonic() + line_duration(text)
             await self.link.send(
                 SayCmd(
@@ -1252,16 +1299,15 @@ class DialogueManager:
     async def _voice(self, conv: Conversation, queue: asyncio.Queue[QueuedLine]) -> None:
         """Voices the lines one by one and streams them to the game: `say` goes out with the first
         audio, chunks follow as they are generated, `say_end` gives the length. A line that gets no
-        audio still goes out, silent. Lines said on the move are not ordered by the game: the next one
-        waits until the previous has been said."""
+        audio still goes out, silent. The game does not order overlays: every line waits for the
+        preceding overlay, and an overlay cuts off unheard earlier turns before its first sound."""
         assert self.tts is not None
         while True:
             line, text, reply, overlay, mood, filler, to = await queue.get()
             started = False
             spoken_at = 0.0
             await self._wait_floor(conv, line)
-            if overlay:
-                await asyncio.sleep(max(0.0, conv.overlay_free_at - time.monotonic()))
+            await self._wait_overlay(conv)
             try:
                 if line in conv.hushed:
                     continue  # the hero interrupted the npc before this line
@@ -1281,6 +1327,10 @@ class DialogueManager:
                         nonlocal started, spoken_at
                         if line in conv.hushed:
                             return  # interrupted while its voice was being made
+                        if overlay:
+                            await self._hush_earlier(conv, reply)
+                            if line in conv.hushed:
+                                return
                         started = True
                         spoken_at = time.monotonic()
                         await self.link.send(
@@ -1318,7 +1368,8 @@ class DialogueManager:
                         await self.link.send(
                             SayEndCmd(npc=conv.npc, line=line, audio_s=round(speech.audio_s, 3))
                         )
-                        if overlay:
+                        # An interruption while TTS streamed reset the clock: do not restore it.
+                        if overlay and conv.overlay_free_at <= spoken_at:
                             conv.overlay_free_at = spoken_at + speech.audio_s + 0.25
                         log.info(
                             "%s voice %s: first audio after %.2fs, %.2fs of audio in %.2fs (%s)",
@@ -1335,6 +1386,9 @@ class DialogueManager:
                             await self.link.send(SayEndCmd(npc=conv.npc, line=line, error=str(err)))
                 if not started and line not in conv.hushed:
                     if overlay:
+                        await self._hush_earlier(conv, reply)
+                        if line in conv.hushed:
+                            continue
                         conv.overlay_free_at = time.monotonic() + line_duration(text)
                     await self.link.send(
                         SayCmd(
