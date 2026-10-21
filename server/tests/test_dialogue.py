@@ -10,7 +10,7 @@ from websockets.asyncio.server import serve
 from gothic_ai import dialogue as dialogue_module
 from gothic_ai.dialogue import QUIET_STYLE, SCENE_GAP_S, TTS_PAUSE, DialogueManager, FirstReaction
 from gothic_ai.journal import Journal
-from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, ToolCall
+from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
 from gothic_ai.scenarios import basics as scenarios
@@ -56,6 +56,119 @@ async def test_player_phrases_get_replies_line_by_line():
     }  # no body tools
 
 
+async def test_cavalorns_fragmented_tool_text_is_logged_without_being_said_or_remembered(
+    caplog, monkeypatch
+):
+    npc = "BAU_4300_ADDON_CAVALORN"
+    spoken = [
+        "Вот это разговор.",
+        "Внизу по дороге их пещера — там и вернём моё добро.",
+        "Прикроешь мне спину, только не лезь под удар.",
+    ]
+    clean = " ".join(spoken)
+    leak = "protoc function give_quest?"
+    llm = FakeBackend(clean + "\n " + leak + " \n", chunk=3, delay=0)
+    fake = FakeGame()
+    entries: list[dict] = []
+    monkeypatch.setattr(dialogue_module, "CHAT_TEXT_EVERY", 0)
+    async with scene_tts(per_char=0.0001) as (url, requests), connected(fake) as link:
+        dialogue = DialogueManager(
+            link, llm, PersonaProvider(None), tts=TtsClient(url), journal=Journal(entries.append)
+        )
+        conv = dialogue.open(npc, "Кавалорн")
+        await dialogue.say_as_player(npc, "Помочь тебе?")
+        await _until(lambda: len(fake.say_ends) == 3 and fake.statuses[-1:] == ["idle"])
+
+    assert fake.said == spoken
+    assert [r["text"] for r in requests] == spoken
+    texts = [m["text"] for m in fake.received if m["type"] == "chat_text"]
+    assert texts[-1] == clean
+    assert all(clean.startswith(text.strip()) for text in texts)  # no partial leaked prefix was shown
+    assert conv.history[-1] == Message("assistant", clean)
+    assert dialogue.memory.load("test-branch", npc).entries[-1].content == clean
+    assert [entry["text"] for entry in entries if entry["kind"] == "npc"] == [clean]
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "gothic_ai.dialogue" and r.levelname == "WARNING"
+    ]
+    assert any(leak in warning and (npc in warning or "Кавалорн" in warning) for warning in warnings)
+
+
+class HiddenQuestTool:
+    all_tools = (Tool("give_quest", "Assign a quest."),)
+
+    async def prepare(self, npc: str) -> None:
+        pass
+
+    def situation(self, npc: str) -> None:
+        return None
+
+    def tools(self, npc: str) -> list[Tool]:
+        return []
+
+
+@pytest.mark.parametrize(
+    "leak", ["give_item?", "set_intent?", "give_quest?", "turn_signal?", "functions.give_quest({...})"]
+)
+async def test_tool_names_are_filtered_from_base_extension_and_turn_tools(leak, caplog):
+    fake = FakeGame()
+    llm = FakeBackend(leak, chunk=2, delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), tools=False)
+        dialogue.extensions.append(HiddenQuestTool())
+        conv = dialogue.open(XARDAS, "Ксардас")
+        await dialogue._turn(
+            conv, Message("user", "Что скажешь?"), "player", tools=[Tool("turn_signal", "Signal.")]
+        )
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert fake.said == []
+    assert not [m for m in fake.received if m["type"] == "chat_text" and m["text"]]
+    assert conv.history == [Message("user", "Что скажешь?")]
+    assert any(leak in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("reply", "clean"),
+    [
+        (
+            "Ладно, пошли. give_item(item=ITMW_MACE)? После боя поговорим.",
+            "Ладно, пошли. После боя поговорим.",
+        ),
+        ("Жди здесь. set_intent", "Жди здесь."),
+    ],
+)
+async def test_only_the_service_sentence_is_removed_from_a_merged_line_or_tail(reply, clean):
+    fake = FakeGame()
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend(reply, chunk=2, delay=0), PersonaProvider(None))
+        conv = dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Ладно")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert " ".join(fake.said) == clean
+    assert conv.history[-1] == Message("assistant", clean)
+    assert [m["text"] for m in fake.received if m["type"] == "chat_text"][-1] == clean
+
+
+async def test_ordinary_speech_is_not_filtered(caplog):
+    reply = (
+        "Дай мне функцию подумать. Это задание как раз по тебе. Отдам тебе булаву после боя. "
+        "Xardas знает больше. Ладно, пошли."
+    )
+    fake = FakeGame()
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend(reply, chunk=3, delay=0), PersonaProvider(None))
+        conv = dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Что скажешь?")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert " ".join(fake.said) == reply
+    assert conv.history[-1] == Message("assistant", reply)
+    assert not [r for r in caplog.records if r.name == "gothic_ai.dialogue" and r.levelname == "WARNING"]
+
+
 async def test_new_player_text_interrupts_the_reply_in_flight():
     fake = FakeGame()
     llm = FakeBackend("Слишком долгий ответ, который никто не дослушает до конца. " * 5, delay=0.05)
@@ -63,7 +176,8 @@ async def test_new_player_text_interrupts_the_reply_in_flight():
         dialogue = DialogueManager(link, llm, PersonaProvider(None))
         dialogue.open(XARDAS, "Ксардас")
         first = dialogue.say_as_player(XARDAS, "Расскажи всё")
-        await asyncio.sleep(0.2)
+        await _until(lambda: bool(fake.said))
+        assert not first.done()
         second = dialogue.say_as_player(XARDAS, "Стоп")
         await second
         assert first.cancelled()
@@ -226,12 +340,13 @@ async def test_reply_text_streams_to_the_chat_before_its_lines():
 
     texts = [m for m in fake.received if m["type"] == "chat_text"]
     says = [m for m in fake.received if m["type"] == "say"]
-    assert len(texts) > 2 and texts[-1]["text"] == llm.reply and texts[-1]["final"]
+    assert len(texts) >= 2 and texts[-1]["text"] == llm.reply and texts[-1]["final"]
     assert all(len(a["text"]) <= len(b["text"]) for a, b in zip(texts, texts[1:], strict=False))
     assert {m["reply"] for m in texts} == {s["reply"] for s in says}
-    # the first words were on screen before the first line was complete
+    # the sentence is validated before any of it is shown, then reaches the chat before its line
     first_text = fake.received.index(texts[0])
-    assert first_text < fake.received.index(says[0]) and len(texts[0]["text"]) < len(says[0]["text"])
+    assert first_text < fake.received.index(says[0])
+    assert texts[0]["text"].strip() == says[0]["text"] == "Ты наконец вернулся из храма."
 
 
 async def test_mood_tags_set_the_face_of_the_lines_and_are_not_said():

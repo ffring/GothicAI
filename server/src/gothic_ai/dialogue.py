@@ -146,6 +146,19 @@ SUMMARY_INSTRUCTIONS = (
 
 _MARKDOWN = re.compile(r"[*_#`~]+")
 _SPACES = re.compile(r"\s+")
+_TOOL_SYNTAX = re.compile(
+    r"\bfunctions?\b|to\s*=\s*tools\.|[\"']arguments[\"']|\bcall_id\b|"
+    r"</?tool_call\b|\{\s*[\"']name[\"']",
+    re.IGNORECASE,
+)
+
+
+def tool_leak(text: str, names: Collection[str]) -> bool:
+    """Whether a sentence contains a tool name or a call written out as speech."""
+    known = {name.casefold() for name in names}
+    return bool(_TOOL_SYNTAX.search(text)) or any(
+        word.casefold() in known for word in re.findall(r"\w+", text)
+    )
 
 
 def to_game_text(text: str) -> str:
@@ -1925,8 +1938,8 @@ class DialogueManager:
         quick: bool = False,
         speak: bool = True,
     ) -> Done:
-        """One model call. Its text continues the turn's reply: the chat shows it as it is written, voice
-        and animation follow line by line; what is left of the last sentence is said at the end. `quick`:
+        """One model call. Checked sentences continue the turn's reply in the chat; voice and animation
+        follow line by line. What is left of the last sentence is checked and said at the end. `quick`:
         the quick model's line, without tools, up to its first blank line (after it the model may go on
         with a tool call written out, seen in the history, or loop); `speak` False: the text is not said
         (the quick model's was)."""
@@ -1971,8 +1984,8 @@ class DialogueManager:
                     first = first if first is not None else now - started
                     if state.first_delta is None:
                         state.first_delta = now - state.started
-                    pieces = self._spoken(state, state.moods.feed(text))
-                    # the chat shows the reply as it is written
+                    pieces = self._spoken(conv, state, state.moods.feed(text))
+                    # Only checked sentences reach the chat, before their subtitle lines.
                     if (
                         now - state.shown_at >= CHAT_TEXT_EVERY
                         and (shown := to_game_text(state.text)) != state.shown
@@ -1998,22 +2011,47 @@ class DialogueManager:
 
     async def _say_rest(self, conv: Conversation, state: TurnState) -> None:
         """What is left of the step's text once its stream is over: the last sentence."""
-        await self._feed_lines(conv, state, self._spoken(state, state.moods.flush()))
+        await self._feed_lines(conv, state, self._spoken(conv, state, state.moods.flush(), flush=True))
         for line in state.splitter.flush():
             await self._line(conv, state, line)
 
-    @staticmethod
-    def _spoken(state: TurnState, pieces: list[str | MoodTag]) -> list[str | MoodTag]:
-        """What the model wrote, without its tags, goes to the turn's text (what is shown and remembered)."""
+    def _spoken(
+        self,
+        conv: Conversation,
+        state: TurnState,
+        pieces: list[str | MoodTag],
+        *,
+        flush: bool = False,
+    ) -> list[str | MoodTag]:
+        """Check whole sentences before showing, remembering or splitting them into spoken lines."""
+        names = {t.name for t in self._request_tools([*npc_tools.TOOLS, *state.tools])}
         out: list[str | MoodTag] = []
+
+        def accept(text: str) -> None:
+            if tool_leak(text, names):
+                log.warning("%s: discarded tool text: %s", conv.npc, text.strip())
+                return
+            if not state.text or state.text[-1].isspace():
+                text = text.lstrip()  # no double space where a tag or tool text was taken out
+            if text:
+                state.text += text
+                out.append(text)
+
         for p in pieces:
-            if isinstance(p, str):
-                if not state.text or state.text[-1].isspace():
-                    p = p.lstrip()  # no double space where a tag was taken out
-                if not p:
-                    continue
-                state.text += p
-            out.append(p)
+            if isinstance(p, MoodTag):
+                accept(state.pending_text)
+                state.pending_text = ""
+                out.append(p)
+                continue
+            state.pending_text += p
+            start = 0
+            for end in _SENTENCE_END.finditer(state.pending_text):
+                accept(state.pending_text[start : end.end()])
+                start = end.end()
+            state.pending_text = state.pending_text[start:]
+        if flush:
+            accept(state.pending_text)
+            state.pending_text = ""
         return out
 
     async def _feed_lines(self, conv: Conversation, state: TurnState, pieces: list[str | MoodTag]) -> None:
@@ -2348,6 +2386,7 @@ class TurnState:
     moods: MoodTags = field(default_factory=MoodTags)
     mood: Mood | None = None  # of the lines being said (the model's last tag)
     text: str = ""  # everything said in the turn, all steps
+    pending_text: str = ""  # unchecked sentence, held until its end even across stream chunks
     shown: str = ""
     shown_at: float = 0.0
     first_delta: float | None = None

@@ -16,6 +16,7 @@ PR, который добавляет фичу или выключатель, д
 | Тайник пирата Грега и добавочные награды ванильных квестов один раз на ветку; награда известна до выдачи, одежда проверяется по `when` выбора | тайник — удалить запись из таблицы; ванильные поручения — `--no-director` | `contracts.py`, `vanilla.py`, `questlog.py`, `gamedata/stash.json`, `gamedata/quest_rewards.json` | `test_contracts.py`, `test_vanilla.py`; e2e `greg` | [contracts.md](contracts.md), [story-graph.md](story-graph.md) |
 | Голос героя: push-to-talk, текст на лету | `--no-voice` | `voice.py`, `asr-service/` | e2e `m3`, `m5e` | [protocol.md](protocol.md#голос-push-to-talk) |
 | Голос NPC: TTS, потоковая озвучка | `--no-tts` (остаются субтитры) | `tts.py`, `tts-service/` | e2e `tts`; бенч `tts-record` | [protocol.md](protocol.md#голоса-npc-tts) |
+| Текстовые вызовы инструментов отбрасываются из речи, журнала и памяти с записью в warning | нет | `dialogue.py` | `test_dialogue.py`, `test_dialogue_text.py` | [npc-agent.md](npc-agent.md#как-работает-сейчас) |
 | Запросы к Responses по своему WebSocket на NPC (кэш промпта на подписке) | `--no-websocket` | `llm/openai_responses.py` | — | — |
 | Память NPC по веткам сохранений | нет | `memory.py` | e2e `m3` | [protocol.md](protocol.md#сессии-и-память) |
 | Разговор без окна: адресата выбирает сервер | нет | `talk.py`, `turn.py` | e2e `m5e` | [npc-agent.md](npc-agent.md#живой-разговор-m5e) |
