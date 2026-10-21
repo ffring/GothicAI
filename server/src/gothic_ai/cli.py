@@ -1610,9 +1610,9 @@ async def serve(args: argparse.Namespace) -> int:
                 log.info("scenario check_walk: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "companion":
-                assert state.dialogue is not None and state.talk is not None
+                assert state.dialogue is not None and state.talk is not None and state.parley is not None
                 results = await scenarios.companion_scenario(
-                    link, state.dialogue, state.talk, perception=state.perception
+                    link, state.dialogue, state.talk, parley=state.parley, perception=state.perception
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario companion: %d checks, %d failed", len(results), len(bad))
@@ -1931,8 +1931,10 @@ async def serve(args: argparse.Namespace) -> int:
                 log.info("scenario remembers: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "calm":
-                assert state.dialogue is not None and state.talk is not None
-                results = await scenarios.calm_scenario(link, state.dialogue, state.talk)
+                assert state.dialogue is not None and state.talk is not None and state.parley is not None
+                results = await scenarios.calm_scenario(
+                    link, state.dialogue, state.talk, parley=state.parley
+                )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario calm: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
