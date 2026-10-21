@@ -103,7 +103,12 @@ class Trust:
                 case "broken" if f.get("npc") == npc:
                     r.broke.append(f"обещал вернуть {f.get('what', '')}, а не вернул")
                 case "gate_vouch_broken" if f.get("npc") == npc:
-                    r.crimes.append(f"ты поручился за него, а он совершил преступление: «{title}»")
+                    kind = f.get("crime_kind") or next(
+                        (deed["kind"] for deed in facts
+                         if deed.get("fact") == "crime" and deed.get("id") == f.get("crime")),
+                        "",
+                    )
+                    r.crimes.append(f"ты поручился за него, а он совершил преступление: «{kind}»")
                 case "rumor" if f.get("to") == npc and f.get("kind") == "broken":
                     about = f.get("about_name") or f.get("about", "")
                     teller = f.get("from_name") if int(f.get("hops", 1)) > 1 else None

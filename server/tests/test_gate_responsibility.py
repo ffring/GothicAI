@@ -34,7 +34,9 @@ async def test_known_city_crime_notifies_voucher_and_spreads_its_real_breach():
 
         [broken] = chronicle.facts("gate_vouch_broken")
         assert (broken["vouch"], broken["crime"], broken["npc"]) == (vouch["id"], "city-theft", LOTHAR)
-        assert Trust(chronicle).of(LOTHAR).crimes
+        assert broken["crime_kind"] == "theft"
+        [distrust] = Trust(chronicle).of(LOTHAR).crimes
+        assert "«theft»" in distrust and broken["title"] not in distrust
         memory = chronicle.memory.load(chronicle.branch, LOTHAR)
         assert any("Ты поручился за него" in entry.content for entry in memory.entries)
         [rumor] = rumors.rumors.values()

@@ -9,10 +9,12 @@ from gothic_ai.bodies import BodyOutcome
 from gothic_ai.errands import Errands, checked_items
 from gothic_ai.gates import Gates
 from gothic_ai.journal import Journal
+from gothic_ai.llm import ToolCall
 from gothic_ai.meetings import DAY
 from gothic_ai.protocol import InventoryItem, RosterEntry
 from gothic_ai.social import Rumor, Spot
 from tests.test_dialogue import _until
+from tests.test_gates import CITY, GatesFake, setup_gate
 from tests.test_guide import BOOK
 
 LOBART, ANDRE, PECK, HILDA = "BAU_950_LOBART", "MIL_311_ANDRE", "MIL_332_PECK", "BAU_951_HILDA"
@@ -303,6 +305,43 @@ async def test_delivered_vouch_does_not_hide_vouchers_other_news_to_that_guard()
 
     assert goal is not None and not why
     assert (goal.rumor, goal.title) == (rumor.key, rumor.title)
+
+
+async def test_vouch_and_plan_in_one_reply_deliver_the_vouch_before_after_speech(monkeypatch):
+    lothar = "PAL_203_LOTHAR"
+    async with setup_gate(GatesFake()) as system:
+        link, dialogue, chronicle, gates, _, _ = system
+        rumors = _Rumors()
+        rumors.social.names.update({lothar: "Лотар", CITY: "Стражник"})
+        rumors.social.guilds.update({lothar: 1, CITY: MIL})
+        rumors.social.days[CITY] = _all_day("ZS_STAND_GUARDING", "GATE_POST", BARRACKS)
+        errands = Errands(
+            link, dialogue, SimpleNamespace(people={}, partner=None), _Guide(), chronicle, _Bodies(),
+            rumors=lambda: rumors,
+        )
+        errands.gate_news, errands.gate_told = gates.news, gates.told
+        errands.now = DAY + 8 * 60
+        jobs = []
+        monkeypatch.setattr(dialogue, "after_speech", lambda conv, job: jobs.append(job))
+        conv = dialogue.open(lothar, "Лотар")
+
+        outcome = await gates.handle(
+            dialogue, conv, ToolCall("vouch_for_hero", {"note": "Я отвечаю за него."}, "vouch"), None,
+        )
+        goal, why = await errands.plan(lothar, "Лотар", {"do": "tell", "who": CITY}, None)
+
+        assert outcome is not None and outcome.status == "accepted"
+        assert goal is not None and not why
+        [vouch] = chronicle.facts("gate_vouch")
+        assert goal.rumor == f"gate:vouch:{vouch['id']}"
+        assert not jobs
+        assert not chronicle.facts("gate_vouch_heard")
+
+        await errands._near(goal, CITY)
+
+        [heard] = chronicle.facts("gate_vouch_heard")
+        assert (heard["vouch"], heard["from"], heard["to"]) == (vouch["id"], lothar, CITY)
+        assert goal.state == "done" and not rumors.told
 
 
 async def test_gate_news_near_waits_for_its_exact_addressee_instead_of_another_guard():

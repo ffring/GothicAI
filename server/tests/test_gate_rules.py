@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from typing import Any
 
@@ -219,6 +220,7 @@ async def test_next_morning_exposes_lie_revokes_pair_and_doubles_that_guards_min
     fake.day, fake.hour, fake.minute = 4, 17, 0
     _reachable(fake)
     fake.people.append({"npc": PAIR, "guild": 2, "npctype": 0, "routine": []})
+    fake.people.append({"npc": CITY, "guild": 2, "npctype": 0, "routine": []})
     async with setup_gate(fake) as system:
         chronicle, gates = system[2], system[3]
         assert (await _admit(system, basis="claim", about=HARAD)).status == "accepted"
@@ -237,6 +239,8 @@ async def test_next_morning_exposes_lie_revokes_pair_and_doubles_that_guards_min
         assert len(caught) == 1
         assert caught[0]["npc"] == CITY and caught[0]["gate_claim"] == claim["id"]
         assert Trust(chronicle).of(CITY).lied
+        assert not Trust(chronicle).of(CITY).heard
+        assert not any(f.get("to") == f.get("from") == CITY for f in chronicle.facts("rumor"))
         assert any(f.get("to") == PAIR and f.get("kind") == "caught"
                    for f in chronicle.facts("rumor"))
         assert Trust(chronicle).of(PAIR).heard
@@ -422,6 +426,95 @@ async def test_unknown_claim_admission_keeps_claim_and_can_be_exposed_next_morni
         fake.hour, fake.minute = 6, 0
         await gates.check_claims()
         assert chronicle.facts("caught")[0]["gate_claim"] == claim["id"]
+        assert not _has_pass(fake, CITY) and not _has_pass(fake, PAIR)
+
+
+@pytest.mark.parametrize("error", [gate_code.GameError, gate_code.GateResultUnknown])
+async def test_revocation_retries_remember_the_named_witness_denial_only_once(monkeypatch, error):
+    fake = GatesFake()
+    _reachable(fake)
+    async with setup_gate(fake) as system:
+        _, _, chronicle, gates, _, _ = system
+        await _admit(system, basis="claim", about=HARAD)
+        original_run = gate_code._run
+        attempts = 0
+
+        async def retry_revocation(link, npc, *args):
+            nonlocal attempts
+            if npc == "PC_HERO":
+                attempts += 1
+                if attempts <= 2:
+                    raise error("Game unavailable")
+            await original_run(link, npc, *args)
+
+        monkeypatch.setattr(gate_code, "_run", retry_revocation)
+        fake.day += 1
+        fake.hour, fake.minute = 6, 0
+        for _ in range(2):
+            with pytest.raises(error):
+                await gates.check_claims()
+        assert not chronicle.facts("gate_claim_checked")
+        assert not any("Тебе передали заявление героя" in e.content
+                       for e in chronicle.memory.load(chronicle.branch, HARAD).entries)
+        await gates.check_claims()
+        await gates.check_claims()
+        assert attempts == 3 and len(chronicle.facts("gate_claim_checked")) == 1
+        notes = [e.content for e in chronicle.memory.load(chronicle.branch, HARAD).entries
+                 if "Тебе передали заявление героя" in e.content]
+        assert len(notes) == 1 and "Отрицаю" in notes[0]
+
+
+@pytest.mark.parametrize("first", ["morning", "witness"])
+async def test_concurrent_morning_check_and_witness_keep_the_code_verdict(monkeypatch, first):
+    fake = GatesFake()
+    async with setup_gate(fake) as system:
+        world = World(system[0], fake, lobart())
+        _reachable(fake)
+        gates, chronicle = system[3], system[2]
+        world.witnesses.gate_claim = gates.claim_heard
+        # A step-one claim has no stored truth: checking it awaits the game's relationship state.
+        chronicle.record({
+            "fact": "gate_claim", "id": "concurrent-claim", "npc": CITY, "about": HARAD,
+            "claim": "Меня ждёт Гарад.", "believed": True, "day": 0, "hour": 14, "minute": 30,
+        })
+        fake.fields[(CITY, "AIVAR", 14)] = fake.fields[(PAIR, "AIVAR", 14)] = 1
+        truth_started, finish_truth, both_started = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        check = gates._check_claim
+        starts = 0
+
+        async def relationship_truth(about):
+            truth_started.set()
+            await finish_truth.wait()
+            return False
+
+        async def checking(*args):
+            nonlocal starts
+            starts += 1
+            if starts == 2:
+                both_started.set()
+            return await check(*args)
+
+        monkeypatch.setattr(gates, "claim_truth", relationship_truth)
+        monkeypatch.setattr(gates, "_check_claim", checking)
+
+        async def witness():
+            return await world.witnesses._testify(
+                "concurrent-answer", CITY, "Привратник", HARAD, "Гарад", "Меня ждёт Гарад", "far", 0,
+            )
+
+        calls = {"morning": gates.check_claims, "witness": witness}
+        early = asyncio.create_task(calls[first]())
+        await asyncio.wait_for(truth_started.wait(), 2)
+        late = asyncio.create_task(calls["witness" if first == "morning" else "morning"]())
+        await asyncio.wait_for(both_started.wait(), 2)
+        finish_truth.set()
+        await asyncio.gather(early, late)
+        [testimony] = world.chronicle.facts("testimony")
+        assert testimony["gate_claim"].startswith("Отрицаю")
+        assert len(chronicle.facts("caught")) == len(chronicle.facts("gate_claim_checked")) == 1
+        notes = [e.content for e in chronicle.memory.load(chronicle.branch, HARAD).entries
+                 if "Тебе передали заявление героя" in e.content]
+        assert len(notes) == 1
         assert not _has_pass(fake, CITY) and not _has_pass(fake, PAIR)
 
 

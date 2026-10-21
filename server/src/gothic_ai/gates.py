@@ -221,23 +221,19 @@ class Gates:
         if not 1 <= len(note) <= 200:
             return ToolOutcome("Rejected: note must contain 1 to 200 characters.", "rejected")
 
-        async def give_word() -> tuple[str, bool]:
-            session = self.link.session
-            state = await self.link.story_state()
-            if session is not self.link.session:
-                return "Passage guarantee cancelled: world reloaded.", False
-            at = game_minutes(state)
-            assert at is not None
-            self._now = at
-            self.chronicle.record({
-                "fact": "gate_vouch", "id": uuid.uuid4().hex, "npc": npc, **VOUCHERS[npc],
-                "note": note, "at": at, "expires": at + 2 * DAY_MINUTES,
-                **{k: int(state[k]) for k in ("day", "hour", "minute")},
-            })
-            return "Ты поручился за героя на двое суток; сообщи об этом привратнику.", True
-
-        self.dialogue.after_speech(conv, give_word)
-        return ToolOutcome("Принято: поручишься после реплики.", "accepted")
+        session = self.link.session
+        state = await self.link.story_state()
+        if session is not self.link.session:
+            return ToolOutcome("Rejected: world reloaded.", "rejected")
+        at = game_minutes(state)
+        assert at is not None
+        self._now = at
+        self.chronicle.record({
+            "fact": "gate_vouch", "id": uuid.uuid4().hex, "npc": npc, **VOUCHERS[npc],
+            "note": note, "at": at, "expires": at + 2 * DAY_MINUTES,
+            **{k: int(state[k]) for k in ("day", "hour", "minute")},
+        })
+        return ToolOutcome("Ты поручился за героя на двое суток; сообщи об этом привратнику.", "accepted")
 
     def _active(self, now: int) -> list[Fact]:
         return [f for f in self.chronicle.facts("gate_vouch") if f["at"] <= now < f["expires"]]
@@ -339,34 +335,35 @@ class Gates:
         return answer
 
     async def _check_claim(self, claim: Fact, witness: str, asker: str) -> str:
-        if any(f.get("claim") == _claim_id(claim) and f.get("truth") is not None
-               for f in self.chronicle.facts("gate_claim_checked")):
-            return ""
-        session = self.link.session
-        truth = claim.get("truth")
-        if truth is None:
-            truth = await self.claim_truth(witness)
-        if session is not self.link.session or claim not in self.chronicle.facts("gate_claim"):
-            return ""
-        answer = (
-            "Подтверждаю: у героя есть настоящее дело со мной."
-            if truth else "Отрицаю: у героя нет настоящего дела со мной, он солгал у ворот."
-        )
-        self.dialogue.remember(
-            witness, witness, f"Тебе передали заявление героя «{claim['claim']}». {answer}",
-        )
-        if not truth:
-            await self._expose(claim, f"проверил заявление у {witness}")
-        if session is not self.link.session:
-            return ""
-        if any(f.get("claim") == _claim_id(claim) and f.get("truth") is not None
-               for f in self.chronicle.facts("gate_claim_checked")):
-            return ""
-        self.chronicle.record({
-            "fact": "gate_claim_checked", "claim": _claim_id(claim), "npc": witness.upper(),
-            "to": asker.upper(), "truth": bool(truth),
-        })
-        return answer
+        async with self._claim_lock:
+            session = self.link.session
+            if claim not in self.chronicle.facts("gate_claim"):
+                return ""
+            checked = next((f for f in self.chronicle.facts("gate_claim_checked")
+                            if f.get("claim") == _claim_id(claim) and f.get("truth") is not None), None)
+            truth = checked["truth"] if checked is not None else claim.get("truth")
+            if truth is None:
+                truth = await self.claim_truth(witness)
+            if session is not self.link.session:
+                return ""
+            answer = (
+                "Подтверждаю: у героя есть настоящее дело со мной."
+                if truth else "Отрицаю: у героя нет настоящего дела со мной, он солгал у ворот."
+            )
+            if checked is not None:
+                return answer
+            if not truth:
+                await self._expose(claim, f"проверил заявление у {witness}")
+            if session is not self.link.session:
+                return ""
+            self.dialogue.remember(
+                witness, witness, f"Тебе передали заявление героя «{claim['claim']}». {answer}",
+            )
+            self.chronicle.record({
+                "fact": "gate_claim_checked", "claim": _claim_id(claim), "npc": witness.upper(),
+                "to": asker.upper(), "truth": bool(truth),
+            })
+            return answer
 
     def _city_person(self, person: dict[str, Any]) -> bool:
         guild, npctype = int(person.get("guild", -1)), int(person.get("npctype", 0))
@@ -375,41 +372,41 @@ class Gates:
         return guild in (1, 2, 3) and npctype not in (3, 4)
 
     async def _expose(self, claim: Fact, how: str) -> None:
-        async with self._claim_lock:
-            session = self.link.session
-            if claim not in self.chronicle.facts("gate_claim"):
-                return
-            id = _claim_id(claim)
-            if any(f.get("gate_claim") == id for f in self.chronicle.facts("caught")):
-                return
-            npc = claim["npc"]
-            guards = list(CITY_GATE_NPCS) if npc in CITY_GATE_NPCS else [npc]
-            steps = [
-                {"do": "set", "target": ["field", ["inst", guard], "AIVAR", 14], "value": ["int", 0]}
-                for guard in guards
-            ] + [
-                {"do": "set", "target": ["var", f"MIL_{guard.split('_')[1]}_SCHONMALREINGELASSEN"],
-                 "value": ["int", 0]} for guard in guards
-            ]
-            # Revocation is unconditional, including when the hero has an unpaid crime.
-            await _run(self.link, "PC_HERO", steps, ["int", 1], ["int", 1])
-            if session is not self.link.session:
-                return
-            lie = Lie(f"SAID_GATE_{id}", npc, "Привратник", claim["claim"], "проход в город", said=True)
-            await caught(self.link, self.dialogue, self.chronicle, self.dialogue.journal, lie, how,
-                         extra={"gate_claim": id})
-            people = await self.link.story_people()
-            if session is not self.link.session:
-                return
-            for guard in people:
-                if guard.get("guild") not in (1, 2) or not self._city_person(guard):
-                    continue
-                self.chronicle.record({
-                    "fact": "rumor", "kind": "caught", "quest": lie.quest, "said": True,
-                    "about": npc, "about_name": lie.giver_name, "title": lie.title,
-                    "from": npc, "from_name": lie.giver_name, "to": guard["npc"], "hops": 1,
-                    "how": "gate_check", "day": self._now // DAY_MINUTES,
-                })
+        session = self.link.session
+        if claim not in self.chronicle.facts("gate_claim"):
+            return
+        id = _claim_id(claim)
+        if any(f.get("gate_claim") == id for f in self.chronicle.facts("caught")):
+            return
+        npc = claim["npc"]
+        guards = list(CITY_GATE_NPCS) if npc in CITY_GATE_NPCS else [npc]
+        steps = [
+            {"do": "set", "target": ["field", ["inst", guard], "AIVAR", 14], "value": ["int", 0]}
+            for guard in guards
+        ] + [
+            {"do": "set", "target": ["var", f"MIL_{guard.split('_')[1]}_SCHONMALREINGELASSEN"],
+             "value": ["int", 0]} for guard in guards
+        ]
+        # Revocation is unconditional, including when the hero has an unpaid crime.
+        await _run(self.link, "PC_HERO", steps, ["int", 1], ["int", 1])
+        if session is not self.link.session:
+            return
+        lie = Lie(f"SAID_GATE_{id}", npc, "Привратник", claim["claim"], "проход в город", said=True)
+        await caught(self.link, self.dialogue, self.chronicle, self.dialogue.journal, lie, how,
+                     extra={"gate_claim": id})
+        people = await self.link.story_people()
+        if session is not self.link.session:
+            return
+        for guard in people:
+            if (guard["npc"] == npc or guard.get("guild") not in (1, 2)
+                    or not self._city_person(guard)):
+                continue
+            self.chronicle.record({
+                "fact": "rumor", "kind": "caught", "quest": lie.quest, "said": True,
+                "about": npc, "about_name": lie.giver_name, "title": lie.title,
+                "from": npc, "from_name": lie.giver_name, "to": guard["npc"], "hops": 1,
+                "how": "gate_check", "day": self._now // DAY_MINUTES,
+            })
 
     async def check_claims(self, state: dict[str, Any] | None = None) -> None:
         session = self.link.session
@@ -478,6 +475,7 @@ class Gates:
             self.chronicle.record({
                 "fact": "gate_vouch_broken", "id": uuid.uuid4().hex, "vouch": v["id"],
                 "npc": v["npc"], "name": v["name"], "crime": deed["id"], "title": title,
+                "crime_kind": deed["kind"],
                 "witnesses": observers,
                 "witness_names": {npc: VOUCHERS[npc]["name"] for npc in observers},
                 "at": at, "day": at // DAY_MINUTES,

@@ -98,11 +98,13 @@ async def test_broken_gate_vouch_breaks_only_vouchers_trust_and_keeps_crime_dist
     assert existing
     systems.chronicle.record({
         "fact": "gate_vouch_broken", "id": "V1:theft-1", "vouch": "V1", "npc": LOBART,
-        "name": "Лобарт", "crime": "theft-1", "title": "Кража хлеба",
+        "name": "Лобарт", "crime": "theft-1", "crime_kind": "theft",
+        "title": "Лобарт поручился за преступника",
     })
     record = systems.trust.of(LOBART)
     assert record.broken and len(record.crimes) == len(existing) + 1
-    assert "Кража хлеба" in record.crimes[0] and record.crimes[1:] == existing
+    assert "«theft»" in record.crimes[0] and record.crimes[1:] == existing
+    assert "Лобарт поручился за преступника" not in record.crimes[0]
     assert "ты поручился за него" in systems.trust.situation(LOBART)
     assert not systems.trust.of(VINO).broken
     systems.chronicle.record(rumor(
