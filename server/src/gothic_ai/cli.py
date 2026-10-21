@@ -877,7 +877,7 @@ async def serve(args: argparse.Namespace) -> int:
             state.interject = interject
             state.incidents.speaks_up_there = interject.covers
         state.incidents.companion = state.talk.orders.companion
-        if args.beasts or args.scenario == "wolf":
+        if args.beasts or args.scenario in {"wolf", "wolf_load"}:
             # wolves hear the tone of his words: they let him pass, run or bite (docs/beasts.md)
             state.beasts = BeastDesk(link, quick=tone_quick, journal=journal, trace=trace)
             state.talk.beasts = state.beasts
@@ -1591,6 +1591,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.wolf_scenario(link, state.talk, state.beasts)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario wolf: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "wolf_load":
+                assert state.talk is not None and state.beasts is not None
+                results = await scenarios.wolf_load_scenario(link, state.talk, state.beasts)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario wolf_load: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None
@@ -2777,6 +2783,7 @@ def main() -> None:
             "fight_reactions_flee",
             "companion",
             "wolf",
+            "wolf_load",
             "calm",
             "ground",
             "hearing",

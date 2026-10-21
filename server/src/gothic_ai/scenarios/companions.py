@@ -34,6 +34,7 @@ from ..protocol import (
     PerceptionHeld,
     RoutineEntry,
     SayCmd,
+    Session,
     ThreatControlCmd,
 )
 from ..talk import TalkDesk
@@ -43,9 +44,11 @@ from .common import (
     _logged,
     _m5b_player_weapon,
     _OnWords,
+    _save,
     _until,
     _until_async,
     attach_when_free,
+    wait_message,
 )
 
 log = logging.getLogger("gothic_ai.scenarios")
@@ -1787,6 +1790,146 @@ async def wolf_scenario(link: GameLink, talk: TalkDesk, beasts: BeastDesk) -> di
 
     beasts.rng = rng
     return results
+
+
+async def wolf_load_scenario(link: GameLink, talk: TalkDesk, beasts: BeastDesk) -> dict[str, str]:
+    """Rewind a peaceful save, then hear young wolves and each other wolf kind after loading it."""
+    await link.wait_world()
+    results: dict[str, str] = {}
+    rng, rolls = beasts.rng, _Rolls()
+    beasts.rng = rolls  # type: ignore[assignment]
+
+    def check(name: str, ok: bool, detail: str) -> bool:
+        results[name] = f"{'done' if ok else 'failed'} ({detail})"
+        log.info("%-12s %s", name, results[name])
+        return ok
+
+    def state(wolf: str | None) -> str:
+        entry = beasts.wolves.get(wolf or "")
+        return entry.state if entry is not None else "gone"
+
+    def distance(wolf: str | None) -> float:
+        entry = beasts.wolves.get(wolf or "")
+        return entry.distance / 100 if entry is not None else -1.0
+
+    async def kill(wolf: str | None) -> None:
+        if wolf in beasts.wolves:
+            await link.debug("kill", instance=wolf.split("#", 1)[0], by="PLAYER")
+            await _until(lambda: wolf not in beasts.wolves, 5)
+
+    async def ticks() -> int:
+        # A fresh snapshot carries world.tickCount() even when there are no wolves to report.
+        return (await link.snapshot("NONE_100_XARDAS", fresh=True)).t
+
+    points = {point["name"]: point for point in await link.waypoints()}
+    hero = points[WOLF_HERO]
+    ground = [point for point in points.values() if abs(point["y"] - hero["y"]) < 250 and not point["fp"]]
+    at = min(ground, key=lambda point: abs(math.hypot(point["x"] - hero["x"], point["z"] - hero["z"]) - 1000))
+
+    async def spawn(symbol: str, number: int) -> tuple[str | None, int, float]:
+        before = set(beasts.wolves)
+        started = time.monotonic()
+        count = await link.story_spawn(symbol, tag=f"beast_load_{number}", waypoint=at["name"])
+
+        def listed() -> str | None:
+            return next((wolf for wolf in beasts.wolves if wolf not in before and symbol in wolf), None)
+
+        await _until(listed, max(0, started + 8 - time.monotonic()))
+        return listed(), count, time.monotonic() - started
+
+    async def soothe(wolf: str | None, symbol: str, *, biting: bool = False) -> tuple[bool, str]:
+        ready = await _until(
+            lambda: state(wolf) == "attack" and 0 <= distance(wolf) < 3 if biting
+            else state(wolf) in ({"threaten"} if symbol == "YWOLF" else {"threaten", "attack"}),
+            20 if biting else 15,
+        )
+        before, metres = state(wolf), distance(wolf)
+        if not ready:
+            return False, f"ready=0, state={before}, distance_m={metres:.1f}, calm=0"
+        rolls.queue = [0.0]
+        beasts.verdicts = []
+        text = "Стой, стой! Песик, тихо, остановись." if biting else "Тише, тише, хороший мальчик."
+        talk.hear(text, symbol, {"via": "scenario"})
+        to = talk.last[0] if talk.last else None
+        routed = to is not None and to.why == "beast" and to.id == wolf
+        calm = await _until(lambda: state(wolf) == "calm" and bool(beasts.verdicts), 5)
+        verdict = next((item for item in beasts.verdicts if item.wolf == wolf), None)
+        outcome = verdict.outcome if verdict else "missing"
+        roll = verdict.roll if verdict else -1.0
+        tone = beasts.last_tone
+        return (
+            calm and routed and verdict is not None and roll == 0.0 and outcome == "calm",
+            f"ready={int(ready)}, state={before}, distance_m={metres:.1f}, routed={int(routed)}, "
+            f"roll={roll:.2f}, outcome={outcome}, calm={int(calm)}, tone={tone[1] if tone else 'missing'}",
+        )
+
+    try:
+        await link.debug("player_hp", hp=5000)
+        await link.debug("player_goto", waypoint=WOLF_HERO)
+        await asyncio.sleep(2)
+        killed = 0
+        for _ in range(8):
+            if not beasts.wolves:
+                break
+            await kill(min(beasts.wolves.values(), key=lambda wolf: wolf.distance).id)
+            killed += 1
+        if beasts.wolves:
+            raise GameError(f"wolf_load preparation: {len(beasts.wolves)} road wolves remain")
+
+        slot = 7
+        saved = await _save(link, slot)
+        if saved is None:
+            check("rewound", False, f"saved=0, slot={slot}, killed={killed}")
+            return results
+        saved_t = await ticks()
+        advanced = await _until_async(ticks, lambda now: now - saved_t >= 30_000, 90)
+        before_t = await ticks()
+        loading = asyncio.create_task(wait_message(
+            link, Session, lambda message: message.reason == "load", 60,
+        ))
+        await asyncio.sleep(0)
+        await link.debug("load", slot)
+        await loading
+        await link.wait_world()
+        after_t = await ticks()
+        if not check(
+            "rewound", advanced and before_t - after_t >= 20_000,
+            f"saved_t={saved_t}, before_t={before_t}, after_t={after_t}, "
+            f"elapsed_ms={before_t - saved_t}, rewind_ms={before_t - after_t}, killed={killed}",
+        ):
+            return results
+
+        wolf, count, seconds = await spawn("YWOLF", 1)
+        if not check(
+            "listed", count == 1 and wolf is not None and seconds <= 8,
+            f"spawned={count}, listed={int(wolf is not None)}, seconds={seconds:.2f}, id={wolf}",
+        ):
+            return results
+        calm, detail = await soothe(wolf, "YWOLF")
+        check("young_calm", calm, detail)
+        await kill(wolf)
+
+        await link.debug("player_goto", waypoint=WOLF_HERO)
+        wolf, count, seconds = await spawn("YWOLF", 2)
+        calm, detail = await soothe(wolf, "YWOLF", biting=True)
+        check("young_bite", count == 1 and wolf is not None and calm,
+              f"spawned={count}, listed={int(wolf is not None)}, seconds={seconds:.2f}, {detail}")
+        await kill(wolf)
+
+        kinds: list[str] = []
+        passed = 0
+        for number, symbol in enumerate(("WARG", "ICEWOLF", "BLACKWOLF"), 3):
+            await link.debug("player_goto", waypoint=WOLF_HERO)
+            wolf, count, seconds = await spawn(symbol, number)
+            calm, detail = await soothe(wolf, symbol)
+            passed += int(count == 1 and wolf is not None and calm)
+            kinds.append(f"{symbol}: spawned={count}, listed={int(wolf is not None)}, "
+                         f"seconds={seconds:.2f}, id={wolf}, {detail}")
+            await kill(wolf)
+        check("kinds", passed == 3, f"calm={passed}/3; {'; '.join(kinds)}")
+        return results
+    finally:
+        beasts.rng = rng
 
 
 async def companion_scenario(
