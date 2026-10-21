@@ -14,7 +14,7 @@ from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, To
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
 from gothic_ai.scenarios import basics as scenarios
-from gothic_ai.tts import TtsClient
+from gothic_ai.tts import Speech, TtsClient, TtsError
 from tests.fake_game import FakeGame, connected
 
 XARDAS = "NONE_100_XARDAS"
@@ -559,6 +559,280 @@ async def test_lines_without_a_tag_have_no_mood():
         await dialogue.say_as_player(XARDAS, "Привет")
         await _until(lambda: fake.statuses[-2:] == ["thinking", "idle"])
     assert all(m.get("mood") is None for m in fake.received if m["type"] == "say")
+
+
+class OneVoiceGame(FakeGame):
+    """Keeps selected ordinary lines queued in the game instead of starting them at once."""
+
+    def __init__(self, queued: tuple[str, ...] = ()) -> None:
+        super().__init__()
+        self.queued = set(queued)
+
+    async def handle(self, msg) -> None:
+        if msg["type"] == "say" and msg["text"] in self.queued:
+            self.drop_says.add(msg["npc"])
+            try:
+                await super().handle(msg)
+            finally:
+                self.drop_says.discard(msg["npc"])
+            return
+        await super().handle(msg)
+
+
+class OneVoiceTts(TtsClient):
+    """Streams a short fake voice; selected lines wait before their first sound."""
+
+    def __init__(self, audio_s: float) -> None:
+        super().__init__()
+        self.audio_s = audio_s
+        self.requested: list[str] = []
+        self.held: dict[str, asyncio.Event] = {}
+        self.finishing: dict[str, asyncio.Event] = {}
+        self.failed: set[str] = set()
+
+    async def stream(self, text, voice_id, description, on_start, on_chunk, style="") -> Speech:
+        self.requested.append(text)
+        if text in self.held:
+            await self.held[text].wait()
+        if text in self.failed:
+            raise TtsError("no voice")
+        await on_start(16000, "fake")
+        await on_chunk(b"\0\1" * 16)
+        if text in self.finishing:
+            await self.finishing[text].wait()
+        return Speech(b"", self.audio_s, "fake", 0.0)
+
+
+@asynccontextmanager
+async def one_voice_dialogue(with_tts, llm, *, queued=(), audio_s=0.1):
+    fake = OneVoiceGame(queued)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, llm, PersonaProvider(None), tts=OneVoiceTts(audio_s) if with_tts else None
+        )
+        conv = dialogue.open(XARDAS, "Ксардас")
+        try:
+            yield fake, dialogue, conv
+        finally:
+            tasks = conv.tasks()
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.parametrize("with_tts", [True, False])
+@pytest.mark.parametrize("first_started", [True, False])
+async def test_an_overlay_event_cuts_the_unheard_previous_reply(with_tts, first_started):
+    old_texts = (
+        "Я обещал ему пощаду и сдержу слово.",
+        "Не лезь в драку раньше времени.",
+        "Мы ещё поговорим об этом позже.",
+    )
+    old_reply = " ".join(
+        f"[{mood}] {text}" for mood, text in zip(("neutral", "angry", "friendly"), old_texts, strict=True)
+    )
+    urgent = "Бандиты уже напали на героя!"
+    llm = FakeBackend(script=[FakeStep(old_reply), FakeStep(urgent)], delay=0)
+    queued = old_texts[1:] if first_started else old_texts
+    async with one_voice_dialogue(with_tts, llm, queued=queued, audio_s=10.0) as (fake, dialogue, conv):
+        await dialogue.say_as_player(XARDAS, "Что ты обещал?")
+        await _until(lambda: len(fake.says) == 3 and (not with_tts or len(fake.say_ends) == 3))
+        lines, reply = conv.last_lines[:], conv.reply_id
+        if first_started:
+            await _until(lambda: dialogue.started_at(lines[0]) is not None)
+        assert all(dialogue.started_at(line) is None for line in lines[int(first_started) :])
+
+        turn = dialogue.event_turn(XARDAS, "[Событие: герой напал на бандита]", overlay=True)
+        assert turn is not None
+        await turn
+        await _until(lambda: any(m["text"] == urgent for m, _ in fake.says))
+
+        said = old_texts[0] if first_started else ""
+        expected = {"type": "hush", "npc": XARDAS, "reply": reply}
+        if said:
+            expected["said"] = said
+        assert fake.hushed == [expected]
+        overlay = next(m for m, _ in fake.says if m["text"] == urgent)
+        assert fake.received.index(expected) < fake.received.index(overlay)
+        assert set(lines[int(first_started) :]) <= conv.hushed
+        assert overlay["line"] not in conv.hushed and overlay["reply"] != reply
+        note = f"Ты оборвал себя на полуслове{f'; успел сказать: «{said}»' if said else ''}"
+        assert Message("developer", f"[{note}]") in conv.history
+
+
+@pytest.mark.parametrize("with_tts", [True, False])
+async def test_an_overlay_does_not_hush_an_already_heard_reply(with_tts):
+    llm = FakeBackend(script=[FakeStep("Я сдержу своё слово."), FakeStep("Бандиты напали!")], delay=0)
+    async with one_voice_dialogue(with_tts, llm) as (fake, dialogue, conv):
+        await dialogue.say_as_player(XARDAS, "Ты обещаешь?")
+        await _until(lambda: bool(fake.says) and (not with_tts or bool(fake.say_ends)))
+        (line,) = conv.last_lines
+        await _until(lambda: dialogue.started_at(line) is not None)
+        dialogue._lines[line] = (dialogue._lines[line][0], time.monotonic() - 30.0)
+
+        turn = dialogue.event_turn(XARDAS, "[Событие: нападение]", overlay=True)
+        assert turn is not None
+        await turn
+        await _until(lambda: len(fake.says) == 2)
+
+        assert fake.hushed == [] and conv.hushed == set()
+        assert not any("Ты оборвал себя" in m.content for m in conv.history)
+
+
+@pytest.mark.parametrize("with_tts", [True, False])
+async def test_two_overlays_of_one_turn_wait_without_hushing_each_other(with_tts, monkeypatch):
+    monkeypatch.setattr(dialogue_module, "line_duration", lambda text: 0.2)
+    llm = FakeBackend("[angry] Бандиты уже напали на героя! [friendly] Я обязательно тебя прикрою!", delay=0)
+    async with one_voice_dialogue(with_tts, llm) as (fake, dialogue, conv):
+        turn = dialogue.event_turn(XARDAS, "[Событие: нападение]", overlay=True)
+        assert turn is not None
+        await _until(lambda: len(fake.says) == 1 and (not with_tts or len(fake.say_ends) == 1))
+        first_free_at = conv.overlay_free_at
+        await turn
+        await _until(lambda: len(fake.says) == 2)
+
+        assert fake.says[1][1] >= first_free_at - 0.005
+        assert all(m["overlay"] for m, _ in fake.says)
+        assert fake.hushed == [] and conv.hushed == set()
+        assert not any("Ты оборвал себя" in m.content for m in conv.history)
+
+
+@pytest.mark.parametrize("with_tts", [True, False])
+async def test_an_ordinary_reply_waits_for_the_sounding_overlay(with_tts, monkeypatch):
+    monkeypatch.setattr(dialogue_module, "line_duration", lambda text: 0.2)
+    llm = FakeBackend(
+        script=[FakeStep("Я обязательно тебя прикрою!"), FakeStep("Теперь можно поговорить.")], delay=0
+    )
+    async with one_voice_dialogue(with_tts, llm) as (fake, dialogue, conv):
+        overlay = dialogue.event_turn(XARDAS, "[Событие: нападение]", overlay=True)
+        assert overlay is not None
+        await overlay
+        await _until(lambda: len(fake.says) == 1 and (not with_tts or len(fake.say_ends) == 1))
+        free_at = conv.overlay_free_at
+        assert time.monotonic() < free_at
+
+        ordinary = dialogue.event_turn(XARDAS, "[Событие: герой подошёл]")
+        assert ordinary is not None
+        await ordinary
+        await _until(lambda: len(fake.says) == 2)
+
+        assert fake.says[1][1] >= free_at - 0.005
+        assert "overlay" not in fake.says[1][0]
+        assert fake.hushed == []
+
+
+@pytest.mark.parametrize("with_tts", [True, False])
+async def test_interrupt_releases_the_overlay_wait_for_the_next_reply(with_tts, monkeypatch):
+    monkeypatch.setattr(dialogue_module, "line_duration", lambda text: 2.0)
+    second = "Я обязательно тебя прикрою!"
+    answer = "Теперь я тебя слушаю."
+    llm = FakeBackend(
+        script=[FakeStep(f"[angry] Бандиты уже напали на героя! [friendly] {second}"), FakeStep(answer)],
+        delay=0,
+    )
+    async with one_voice_dialogue(with_tts, llm, audio_s=2.0) as (fake, dialogue, conv):
+        overlay = dialogue.event_turn(XARDAS, "[Событие: нападение]", overlay=True)
+        assert overlay is not None
+        await _until(
+            lambda: len(conv.last_lines) == 2
+            and len(fake.says) == 1
+            and (not with_tts or (len(fake.say_ends) == 1 and conv.voice.empty()))
+        )
+        old_free_at = conv.overlay_free_at
+        assert dialogue.interrupt(XARDAS)
+        assert conv.overlay_free_at <= time.monotonic()
+        await asyncio.gather(overlay, return_exceptions=True)
+
+        reply = dialogue.event_turn(XARDAS, "[Событие: герой заговорил]")
+        assert reply is not None
+        await reply
+        await _until(lambda: any(m["text"] == answer for m, _ in fake.says), timeout=1.0)
+
+        assert next(at for m, at in fake.says if m["text"] == answer) < old_free_at
+        assert not any(m["text"] == second for m, _ in fake.says)
+
+
+async def test_an_overlay_hushes_at_first_sound_and_drops_only_old_unvoiced_lines():
+    old = "Я обещал ему пощаду и сдержу слово."
+    urgent, following = "Бандиты уже напали на героя!", "Я обязательно тебя прикрою!"
+    llm = FakeBackend(script=[FakeStep(old), FakeStep(f"[angry] {urgent} [friendly] {following}")], delay=0)
+    async with one_voice_dialogue(True, llm, audio_s=0.5) as (fake, dialogue, conv):
+        await dialogue.say_as_player(XARDAS, "Что ты обещал?")
+        await _until(lambda: bool(fake.say_ends) and dialogue.started_at(conv.last_lines[0]) is not None)
+        dialogue._audio[conv.last_lines[0]] = 10.0
+        old_reply = conv.reply_id
+        dialogue.tts.held[urgent] = asyncio.Event()
+        turn = dialogue.event_turn(XARDAS, "[Событие: нападение]", overlay=True)
+        assert turn is not None
+        await turn
+        await _until(lambda: urgent in dialogue.tts.requested)
+
+        pending = []
+        for text in ("Не лезь в драку раньше времени.", "Мы ещё поговорим об этом позже."):
+            await dialogue._say(conv, text, old_reply)
+            line = conv.last_lines.pop()
+            conv.earlier_lines.append(line)
+            pending.append((line, text))
+        assert fake.hushed == [] and not conv.hushed
+
+        dialogue.tts.held[urgent].set()
+        await asyncio.wait_for(conv.voice.join(), 2.0)
+        await _until(lambda: any(m["text"] == following for m, _ in fake.says))
+
+        assert fake.hushed == [{"type": "hush", "npc": XARDAS, "reply": old_reply, "said": old}]
+        assert {line for line, _ in pending} <= conv.hushed
+        assert all(text not in dialogue.tts.requested for _, text in pending)
+        assert all(m["text"] not in {text for _, text in pending} for m, _ in fake.says)
+        assert [m["text"] for m, _ in fake.says] == [old, urgent, following]
+
+
+async def test_a_stream_finishing_after_interrupt_does_not_restore_the_overlay_wait():
+    urgent, answer = "Я обязательно тебя прикрою!", "Теперь я тебя слушаю."
+    llm = FakeBackend(script=[FakeStep(urgent), FakeStep(answer)], delay=0)
+    async with one_voice_dialogue(True, llm, audio_s=10.0) as (fake, dialogue, conv):
+        finishing = dialogue.tts.finishing[urgent] = asyncio.Event()
+        overlay = dialogue.event_turn(XARDAS, "[Событие: нападение]", overlay=True)
+        assert overlay is not None
+        await overlay
+        await _until(lambda: bool(fake.says) and dialogue.started_at(conv.last_lines[0]) is not None)
+        assert not fake.say_ends
+        assert dialogue.interrupt(XARDAS)
+        reset_at = conv.overlay_free_at
+
+        reply = dialogue.event_turn(XARDAS, "[Событие: герой заговорил]")
+        assert reply is not None
+        await reply
+        finishing.set()
+        await _until(lambda: any(m["text"] == answer for m, _ in fake.says), timeout=1.0)
+
+        assert conv.overlay_free_at == reset_at
+
+
+async def test_tts_failure_fallback_hushes_old_speech_and_holds_the_next_reply(monkeypatch):
+    monkeypatch.setattr(dialogue_module, "line_duration", lambda text: 0.2)
+    old, urgent, answer = "Я сдержу своё слово.", "Бандиты уже напали!", "Теперь я тебя слушаю."
+    llm = FakeBackend(script=[FakeStep(old), FakeStep(urgent), FakeStep(answer)], delay=0)
+    async with one_voice_dialogue(True, llm, audio_s=10.0) as (fake, dialogue, conv):
+        await dialogue.say_as_player(XARDAS, "Ты обещаешь?")
+        await _until(lambda: bool(fake.say_ends) and dialogue.started_at(conv.last_lines[0]) is not None)
+        old_reply = conv.reply_id
+        dialogue.tts.failed.add(urgent)
+        overlay = dialogue.event_turn(XARDAS, "[Событие: нападение]", overlay=True)
+        assert overlay is not None
+        await overlay
+        await _until(lambda: len(fake.says) == 2)
+        free_at = conv.overlay_free_at
+
+        assert fake.hushed == [{"type": "hush", "npc": XARDAS, "reply": old_reply, "said": old}]
+        assert fake.received.index(fake.hushed[0]) < fake.received.index(fake.says[1][0])
+        assert "stream" not in fake.says[1][0]
+        reply = dialogue.event_turn(XARDAS, "[Событие: герой заговорил]")
+        assert reply is not None
+        await reply
+        await _until(lambda: len(fake.says) == 3)
+
+        assert fake.says[2][1] >= free_at - 0.005
+        assert dialogue.tts.requested == [old, urgent]
 
 
 async def test_a_new_mood_starts_a_new_line():

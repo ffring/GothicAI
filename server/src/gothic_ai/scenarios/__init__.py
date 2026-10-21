@@ -22,6 +22,7 @@ from .companions import neural_scenario as neural_scenario
 from .companions import neural_talk_scenario as neural_talk_scenario
 from .companions import orders_scenario as orders_scenario
 from .companions import rescue as rescue
+from .companions import wolf_load_scenario as wolf_load_scenario
 from .companions import wolf_scenario as wolf_scenario
 from .conversation import gossip_demo as gossip_demo
 from .conversation import gossip_scenario as gossip_scenario
@@ -38,6 +39,7 @@ from .deals import deal_debt as deal_debt
 from .deals import deal_demo as deal_demo
 from .deals import deal_window as deal_window
 from .deals import haggle as haggle
+from .deals import xardas_money as xardas_money
 from .frame import frame as frame
 from .gate import gate_scenario as gate_scenario
 from .gate import gate_vouch_scenario as gate_vouch_scenario
@@ -48,8 +50,10 @@ from .lies import rumor_spread as rumor_spread
 from .lies import vanilla_check as vanilla_check
 from .lies import vanilla_given as vanilla_given
 from .lies import vanilla_lie as vanilla_lie
+from .lies import vanilla_spare as vanilla_spare
 from .lies import witness_check as witness_check
 from .lies import xardas_wrath as xardas_wrath
+from .load import load_rewind as load_rewind
 from .memprobe import memprobe_scenario as memprobe_scenario
 from .neural_load import neural_load_scenario as neural_load_scenario
 from .neural_soak import neural_soak_scenario as neural_soak_scenario

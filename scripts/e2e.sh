@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
+#   load_rewind: load a save at least 20 game seconds earlier; npc_views, story_world and npc_died
+#       must resume within 2 s. New game, no SAVE, LLM=fake.
 #   memprobe: engine RSS after each step (Linux /proc status, macOS RSS and phys_footprint), and after
 #       each cycle Linux smaps groups or macOS `footprint` categories;
 #       MEMPROBE_PHASES=wave,save,load,spawn,teleport, MEMPROBE_CYCLES=8; LLM=fake, no body URL
@@ -20,7 +22,7 @@
 #       WebSocket reuse, tool continuation, HTTP fallback and --no-websocket; SAVE=save_slot_1.sav; LLM=fake
 #   m2: npc actions (give_item, follow/stop, gestures)
 #   m3: memory survives save/load and follows the save; push-to-talk from a wav file (streamed at
-#       speaking pace) through the ASR service (ASR=fake|voxtral|chatgpt)
+#       speaking pace) through the ASR service (ASR=fake|inworld|voxtral|chatgpt)
 #   m4: what the npc planner needs from the bridge: npc roster, soft actions (npc_act) and their end
 #       (npc_idle); with DECIDER_URL the planner runs against that decision service too
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
@@ -55,6 +57,8 @@
 #       for his words while he holds the talk key, is soothed, sits, lets him pass and be; hostility, «Стой!»,
 #       walking right up to a calm one, a threat, a failed roll, and one talked down mid-bite (the tone is the
 #       quick model's with QUICK_URL, the rules' else; the dice are the scenario's)
+#   wolf_load: rewind a save by 30 game seconds, then young wolves (growling and biting), wargs,
+#       ice wolves and black wolves hear the hero and calm down; tone as in wolf, fixed scenario dice
 #   orders: immediate companion orders, then Cavalorn hears «Бей волка!» with no focus: he fights the
 #       visible wolf before it attacks the hero; the wolf never hears the phrase or asks its tone model.
 #       Scripted with LLM=fake; TIMEOUT=360
@@ -228,6 +232,9 @@
 #   vgive: a quest of the scripts given and ended in a conversation (Cavalorn's bandits; model scripted with
 #       LLM=fake): he gives it as his dialog HELFEN does, the bandits die, the hero says so and the scripts'
 #       ending plays (the letter to Vatras, +100 exp); a new game (protocol v31: story_effect knows)
+#   vspare: Cavalorn remembers his kills and a witnessed death after leaving all three bodies; broken
+#       trust still allows accept_quest without check_claim; the ending's letter quest is no separate
+#       give_quest offer (new game, LLM=fake)
 #   vlie: a lie about a quest of the scripts: the hero tells Lobart the turnips are in the barn, Lobart's
 #       model (scripted with LLM=fake) believes him and his own ending plays; the next morning he misses the
 #       turnips, turns against the hero, and the people around hear it (story graph, stage 5)
@@ -287,6 +294,9 @@
 #       LLM=fake): Y waits without the gold; the hero declines (N), Lobart offers it for 40, then 30 after
 #       haggling: the deal window shows the new version, Y waits right after the change, then the deal is
 #       done and Lobart answers (docs/npc-tools.md, wave 1)
+#   xardas_money: new game, no SAVE; LLM=fake: Xardas gives 30 gold, lends 150 for three days, refuses
+#       another gift of 100; LLM=chatgpt: no gold offer for 20 s unasked, then the hero asks for 200 and
+#       accepts Xardas's chosen terms; the result includes his words and the deal's terms
 #   graph: the story graph decides which dialogs an npc offers (docs/story-graph.md, stage 3): switching a
 #       dialog off, adding a condition and a dialog of the director's own, keeping that across save/load;
 #       the game checks every script condition against its lifted form ("[story] check" in game.log)

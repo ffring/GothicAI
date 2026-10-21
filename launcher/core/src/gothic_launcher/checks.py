@@ -165,6 +165,8 @@ async def _llm(config: Config, http: httpx.AsyncClient) -> Check:
 async def _asr(name: str, config: Config, http: httpx.AsyncClient) -> Check:
     provider = name.partition(":")[0]
     match provider:
+        case "inworld":
+            return await _inworld(config.secrets.inworld_api_key, http)
         case "voxtral":
             url = (config.settings.voice.voxtral_url or DEFAULT_VOXTRAL_URL).rstrip("/")
             return await _http("voxtral", "Voxtral на своём сервере", f"{url}/health", http)
@@ -181,10 +183,7 @@ async def _tts(name: str, config: Config, http: httpx.AsyncClient) -> Check:
     provider = name.partition(":")[0]
     match provider:
         case "inworld":
-            key = config.secrets.inworld_api_key
-            if not key:
-                return Check("inworld", False, "Inworld", "Ключ не задан")
-            return await _inworld(key, http)
+            return await _inworld(config.secrets.inworld_api_key, http)
         case "voxcpm":
             url = config.settings.tts.voxcpm_url or DEFAULT_VOXCPM_URL
             return await _tcp("voxcpm", "VoxCPM2 на своём сервере", url)
@@ -195,9 +194,11 @@ async def _tts(name: str, config: Config, http: httpx.AsyncClient) -> Check:
             return Check(provider, True, name, "Не проверяется")
 
 
-async def _inworld(key: str, http: httpx.AsyncClient) -> Check:
+async def _inworld(key: str | None, http: httpx.AsyncClient) -> Check:
     """The key and the credits, at no cost. The free voice list is no such check: an account without
     credits still gets it, while every line is refused with 402."""
+    if not key:
+        return Check("inworld", False, "Inworld", "Ключ не задан")
     auth = {"Authorization": f"Basic {key}"}
     try:
         resp = await http.post(INWORLD_STREAM, json=INWORLD_CHECK, headers=auth)

@@ -8,6 +8,7 @@ import pytest
 
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.dialogue import DialogueManager
+from gothic_ai.game import GameError
 from gothic_ai.gamedata.storygraph import StoryGraph, load
 from gothic_ai.knowledge import Partial, StoryState
 from gothic_ai.llm import ToolCall, ToolResult
@@ -16,6 +17,7 @@ from gothic_ai.memory import MemoryStore
 from gothic_ai.persona import PersonaProvider
 from gothic_ai.questlog import QuestLog
 from gothic_ai.story import freed
+from gothic_ai.trust import WORD_BROKEN, Record
 from gothic_ai.vanilla import VanillaQuests, _bridge, _claim, _takes
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
@@ -207,6 +209,7 @@ async def test_a_lie_about_a_killing_is_found_out_when_the_victim_turns_up(graph
         await _until(lambda: any(m["type"] == "story_tag" for m in fake.story))
         tag = next(m for m in fake.story if m["type"] == "story_tag")
         assert (tag["tag"], tag["npcs"]) == (f"{KILL}_ALIVE", [BANDIT])
+        await _until(lambda: any(m["type"] == "story_watch" for m in fake.story))  # sent after the tag's answer
         watch = [m for m in fake.story if m["type"] == "story_watch"][-1]
         assert (watch["npcs"], watch["owner"]) == ([LOBART], "vanilla")
 
@@ -431,8 +434,260 @@ async def test_once_lied_to_it_takes_his_word_no_more(graph):
         await link_cm.__aexit__(None, None, None)
 
 
+async def test_a_giver_remembers_its_own_kill_before_its_first_turn(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, _, chronicle, vanilla = await _setup(fake, FakeBackend(delay=0), graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 5000, "seen": False}
+    try:
+        assert vanilla.offers == {}
+        died = {"fact": "died", "npc": BANDIT, "killer": LOBART}
+        chronicle.record(died)
+        chronicle.record(died)
+        await _until(lambda: not vanilla._background)
+        assert chronicle.facts("seen_dead") == [
+            {"fact": "seen_dead", "npc": LOBART, "dead": BANDIT, "how": "killed"}
+        ]
+        await vanilla.prepare(LOBART)
+        offer = vanilla.offers[LOBART][KILL]
+        assert offer.seen_true() and offer.reachable() is None
+        assert "Бандит — мёртв: ты убил его сам" in offer.evidence()
+        assert "check_claim" not in [t.name for t in vanilla.tools(LOBART)]
+        assert len(chronicle.facts("seen_dead")) == 1
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("distance", "seen", "witnessed"),
+    [(9000, True, True), (500, False, False), (1000, None, True), (3000, None, False)],
+)
+async def test_a_death_is_remembered_only_when_the_giver_sees_it(graph, distance, seen, witnessed):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, _, chronicle, vanilla = await _setup(fake, FakeBackend(delay=0), graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": distance}
+    if seen is not None:
+        fake.npc_states[BANDIT]["seen"] = seen
+    try:
+        chronicle.record({"fact": "died", "npc": BANDIT, "killer": "PLAYER"})
+        await _until(lambda: not vanilla._background)
+        assert chronicle.facts("seen_dead") == (
+            [{"fact": "seen_dead", "npc": LOBART, "dead": BANDIT, "how": "saw_die"}]
+            if witnessed
+            else []
+        )
+        sight = [
+            m for m in fake.received if m["type"] == "story_state" and m.get("near") == LOBART
+        ]
+        assert len(sight) == 1 and sight[0]["npcs"] == [BANDIT]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("error", [GameError("no game"), TimeoutError("no answer")])
+async def test_a_failed_death_observation_is_not_remembered(graph, monkeypatch, error):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, _, chronicle, vanilla = await _setup(fake, FakeBackend(delay=0), graph, store)
+    fake.vars[KILL] = 1
+    original = vanilla.link.story_state
+
+    async def unavailable(**kwargs):
+        if kwargs.get("near") == LOBART:
+            raise error
+        return await original(**kwargs)
+
+    monkeypatch.setattr(vanilla.link, "story_state", unavailable)
+    try:
+        chronicle.record({"fact": "died", "npc": BANDIT, "killer": "PLAYER"})
+        await _until(lambda: not vanilla._background)
+        assert chronicle.facts("seen_dead") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("status", [2, 3, 4])
+async def test_a_closed_quest_does_not_remember_a_new_death(graph, status):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, _, chronicle, vanilla = await _setup(fake, FakeBackend(delay=0), graph, store)
+    fake.vars[KILL] = status
+    fake.npc_states[BANDIT] = {"state": "dead", "distance": 1000, "seen": True}
+    try:
+        chronicle.record({"fact": "died", "npc": BANDIT, "killer": LOBART})
+        await _until(lambda: not vanilla._background)
+        assert chronicle.facts("seen_dead") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_seen_body_is_remembered_once_and_follows_the_save_branch(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    link_cm, _, chronicle, vanilla = await _setup(fake, FakeBackend(delay=0), graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 1000, "seen": True}
+    try:
+        before = store.head("A")
+        await vanilla.prepare(LOBART)
+        await vanilla.prepare(LOBART)
+        assert chronicle.facts("seen_dead") == [
+            {"fact": "seen_dead", "npc": LOBART, "dead": BANDIT, "how": "saw_body"}
+        ]
+        after = store.head("A")
+        fake.npc_states[BANDIT].update(distance=5000, seen=False)
+
+        async def load_branch(branch, head):
+            await fake.send(type="loading")
+            await fake.send(type="session", branch=branch, parent="A", parent_seq=head, reason="load")
+            await vanilla.link.evaluate(["int", 1])
+            await _until(lambda: chronicle.branch == branch)
+            await vanilla.prepare(LOBART)
+
+        await load_branch("after-body", after)
+        offer = vanilla.offers[LOBART][KILL]
+        assert offer.seen_true() and offer.reachable() is None
+        assert "Бандит — мёртв: ты видел тело" in offer.evidence()
+        assert len(chronicle.facts("seen_dead")) == 1
+        await load_branch("before-body", before)
+        offer = vanilla.offers[LOBART][KILL]
+        assert not offer.seen_true() and offer.reachable().npc == BANDIT
+        assert chronicle.facts("seen_dead") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.fixture
+def two_bandits(graph):
+    graph.instances["SECOND_BANDIT"] = "BDT_2_BANDIT"
+    ending = graph.nodes["DIA_LOBART_BANDITDEAD"]
+    for effect in ending.effects:
+        effect["when"] = [
+            "&&", effect["when"], ["call", "NPC_ISDEAD", ["inst", "SECOND_BANDIT"]]
+        ]
+    return graph
+
+
+async def test_even_a_distrustful_giver_accepts_deaths_it_witnessed_earlier(two_bandits):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    accept = FakeStep("С ними покончено.", [ToolCall("accept_quest", {"quest": KILL}, "a1")])
+    llm = FakeBackend(script=[accept, FakeStep("Держи плату.")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, two_bandits, store)
+    fake.instances["SECOND_BANDIT"] = "BDT_2_BANDIT"
+    fake.vars.update({QUEST: 2, KILL: 1})
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 5000, "seen": False}
+    fake.npc_states["BDT_2_BANDIT"] = {
+        "state": "dead", "name": "Второй бандит", "distance": 1000, "seen": True
+    }
+    try:
+        chronicle.record({"fact": "caught", "npc": LOBART, "quest": KILL, "how": "видел сам"})
+        chronicle.record({"fact": "died", "npc": BANDIT, "killer": LOBART})
+        chronicle.record({"fact": "died", "npc": "BDT_2_BANDIT", "killer": "PLAYER"})
+        await _until(lambda: not vanilla._background)
+        fake.npc_states["BDT_2_BANDIT"].update(distance=5000, seen=False)
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        offer = vanilla.offers[LOBART][KILL]
+        assert offer.seen_true() and offer.reachable() is None
+        assert "ты убил его сам" in offer.evidence() and "ты видел, как он умер" in offer.evidence()
+        assert [t.name for t in vanilla.tools(LOBART)] == ["accept_quest"]
+        await dialogue.say_as_player(LOBART, "С ними покончено.")
+        await _until(lambda: chronicle.facts("claim") != [])
+        assert chronicle.facts("claim")[0]["truth"] is True and chronicle.facts("lie") == []
+        assert not any(m["type"] == "action" and m["action"] == "go_to_npc" for m in fake.received)
+        assert all("check_claim" not in [t.name for t in call[2]] for call in llm.calls)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_checking_another_body_keeps_the_death_already_witnessed(two_bandits):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    check = FakeStep("Проверю второго.", [ToolCall("check_claim", {"quest": KILL}, "c1")])
+    llm = FakeBackend(script=[check, FakeStep("Оба мертвы. Держи плату.")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, two_bandits, store)
+    fake.instances["SECOND_BANDIT"] = "BDT_2_BANDIT"
+    fake.vars.update({QUEST: 2, KILL: 1})
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 9000, "seen": False}
+    fake.npc_states["BDT_2_BANDIT"] = {
+        "state": "dead", "name": "Второй бандит", "distance": 4000, "seen": False
+    }
+    try:
+        chronicle.record({"fact": "died", "npc": BANDIT, "killer": LOBART})
+        await _until(lambda: not vanilla._background)
+        await vanilla.link.attach(LOBART)
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert vanilla.offers[LOBART][KILL].reachable().npc == "BDT_2_BANDIT"
+        await dialogue.say_as_player(LOBART, "Оба бандита мертвы.")
+        await _until(lambda: chronicle.facts("claim") != [])
+        await _until(lambda: LOBART not in vanilla.checking)
+        assert chronicle.facts("claim")[0]["checked"] is True
+        assert chronicle.facts("lie") == []
+        assert {(f["dead"], f["how"]) for f in chronicle.facts("seen_dead")} == {
+            (BANDIT, "killed"), ("BDT_2_BANDIT", "saw_body")
+        }
+        go = [
+            m["args"]["npc"]
+            for m in fake.received
+            if m["type"] == "action" and m["action"] == "go_to_npc"
+        ]
+        assert go == ["BDT_2_BANDIT", "PLAYER"]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+def test_broken_trust_reason_lists_every_cause_in_order():
+    record = Record(lied=["lie"], broke=["debt"], crimes=["theft", "attack"])
+    assert record.broken_reason() == (
+        "он уже лгал тебе; он не сдержал слово; "
+        "его дела подорвали твоё доверие (theft; attack)"
+    )
+    assert Record().broken_reason() == ""
+
+
+@pytest.mark.parametrize("lied", [False, True])
+async def test_accept_quest_names_the_actual_trust_reason(graph, lied):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    llm = FakeBackend(delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "alive", "name": "Бандит", "distance": 4000}
+    try:
+        chronicle.record({"fact": "gate_vouch_broken", "npc": LOBART, "crime_kind": "theft"})
+        if lied:
+            chronicle.record({"fact": "caught", "npc": LOBART, "quest": QUEST})
+        record = vanilla.trust.of(LOBART)
+        assert record.crimes and not record.broke
+        assert bool(record.lied) is lied
+        conv = dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        result = await vanilla.handle(dialogue, conv, ToolCall("accept_quest", {"quest": KILL}, "c1"), None)
+        assert result is not None and result.status == "rejected"
+        reason = (
+            "его дела подорвали твоё доверие "
+            "(ты поручился за него, а он совершил преступление: «theft»)"
+        )
+        if lied:
+            reason = f"он уже лгал тебе; {reason}"
+        else:
+            assert "лгал" not in result.output
+        assert result.output == (
+            f"Отклонено: {reason}. {WORD_BROKEN} Можешь сходить и посмотреть сам (check_claim)."
+        )
+        assert chronicle.facts("claim") == []
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 CAVALORN, BRAGO = "BAU_4300_ADDON_CAVALORN", "BDT_1013_BANDIT_L"
 KILLBRAGO = "MIS_ADDON_CAVALORN_KILLBRAGO"
+LETTER = "MIS_ADDON_CAVALORN_LETTER2VATRAS"
 BANDITEN, HELFEN, KILLED = (
     "DIA_ADDON_CAVALORN_BANDITEN",
     "DIA_ADDON_CAVALORN_HELFEN",
@@ -486,6 +741,7 @@ def cavalorn(tmp_path: Path) -> StoryGraph:
                 _line("С бандитами покончено.", "OTHER"),
                 _line(VATRAS),
                 {"do": "set", "var": KILLBRAGO, "value": ["int", 2, "LOG_SUCCESS"]},
+                {"do": "set", "var": LETTER, "value": ["int", 1, "LOG_RUNNING"]},
                 {"do": "xp", "amount": ["int", 100, "XP_ADDON_CAVALORN_KILLBRAGO"]},
                 {**PARTY, "value": ["int", 0, "FALSE"]},
             ],
@@ -510,13 +766,24 @@ def cavalorn(tmp_path: Path) -> StoryGraph:
             "other": [],
         }
     )
+    g["quests"].append(
+        {
+            "var": LETTER,
+            "topics": [{"topic": "TOPIC_LETTER", "title": "Письмо Ватрасу"}],
+            "running": [KILLED],
+            "success": [],
+            "failed": [],
+            "obsolete": [],
+            "other": [],
+        }
+    )
     path = tmp_path / "story.json"
     path.write_text(json.dumps(g, ensure_ascii=False), encoding="utf-8")
     return load(path)
 
 
 async def _cavalorn(fake: FakeGame, llm: FakeBackend, graph: StoryGraph):
-    fake.vars = {KILLBRAGO: 0, "KAPITEL": 1}
+    fake.vars = {KILLBRAGO: 0, LETTER: 0, "KAPITEL": 1}
     fake.npc_states = {
         CAVALORN: {"state": "alive", "name": "Кавалорн"},
         BRAGO: {"state": "alive", "name": "Браго"},
@@ -530,6 +797,102 @@ async def _cavalorn(fake: FakeGame, llm: FakeBackend, graph: StoryGraph):
     vanilla = VanillaQuests(link, dialogue, chronicle, graph, hero_distance=lambda npc: 300.0)
     await _until(lambda: chronicle.branch is not None)
     return link_cm, dialogue, chronicle, vanilla
+
+
+@pytest.mark.parametrize("reload", [False, True])
+async def test_the_givers_mistaken_death_observation_is_not_the_heros_lie(cavalorn, reload):
+    fake = FakeGame(branch="A")
+    accept = FakeStep("Я сам видел его мёртвым.", [ToolCall("accept_quest", {"quest": KILLBRAGO}, "a1")])
+    llm = FakeBackend(script=[accept, FakeStep("Держи плату.")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _cavalorn(fake, llm, cavalorn)
+    fake.npc_states[BRAGO].update(state="dead", distance=1000, seen=True)
+    try:
+        await vanilla.prepare(CAVALORN)
+        assert chronicle.facts("seen_dead")[0]["how"] == "saw_body"
+        fake.npc_states[BRAGO].update(state="alive", distance=5000, seen=False)
+        fake.fns["C_BRAGOBANDITSDEAD"] = 0
+        chronicle.record({"fact": "caught", "npc": CAVALORN, "quest": KILLBRAGO, "how": "видел сам"})
+        if reload:
+            vanilla._load()
+        dialogue.open(CAVALORN, "Кавалорн")
+        await vanilla.prepare(CAVALORN)
+        assert vanilla.offers[CAVALORN][KILLBRAGO].seen_true()
+        await dialogue.say_as_player(CAVALORN, "С бандитами покончено.")
+        await _until(lambda: chronicle.facts("claim") != [])
+        assert chronicle.facts("claim")[0]["truth"] is False
+        assert chronicle.facts("lie") == [] and vanilla.told[KILLBRAGO].lie is False
+        vanilla._load()
+        assert vanilla.told[KILLBRAGO].lie is False
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_seen_death_does_not_make_an_unseen_target_in_a_helper_true(cavalorn):
+    cavalorn.instances["SECOND_BANDIT"] = "BDT_2_BANDIT"
+    helper = cavalorn.functions["C_BRAGOBANDITSDEAD"]
+    helper["body"] = [
+        "&&", helper["body"], ["call", "NPC_ISDEAD", ["inst", "SECOND_BANDIT"]]
+    ]
+    fake = FakeGame(branch="A")
+    accept = FakeStep("Верю тебе.", [ToolCall("accept_quest", {"quest": KILLBRAGO}, "a1")])
+    llm = FakeBackend(script=[accept, FakeStep("Держи плату.")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _cavalorn(fake, llm, cavalorn)
+    fake.instances["SECOND_BANDIT"] = "BDT_2_BANDIT"
+    fake.npc_states[BRAGO].update(state="dead", distance=1000, seen=True)
+    fake.npc_states["BDT_2_BANDIT"] = {
+        "state": "alive", "name": "Второй бандит", "distance": 9000, "seen": False
+    }
+    fake.fns["C_BRAGOBANDITSDEAD"] = 0
+    try:
+        dialogue.open(CAVALORN, "Кавалорн")
+        await dialogue.say_as_player(CAVALORN, "Все бандиты мертвы.")
+        await _until(lambda: chronicle.facts("lie") != [])
+        assert chronicle.facts("claim")[0]["truth"] is False
+        assert len(chronicle.facts("lie")) == 1 and vanilla.told[KILLBRAGO].lie is True
+        assert [f["dead"] for f in chronicle.facts("seen_dead")] == [BRAGO]
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_a_target_reviving_before_the_givers_eyes_overrides_its_memory(graph):
+    fake = FakeGame(branch="A")
+    store = MemoryStore(":memory:")
+    accept = FakeStep("Ты говоришь, он мёртв?", [ToolCall("accept_quest", {"quest": KILL}, "a1")])
+    llm = FakeBackend(script=[accept, FakeStep("Но он же жив!")], delay=0)
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, graph, store)
+    fake.vars.update({QUEST: 2, KILL: 1})
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 1000, "seen": True}
+    try:
+        await vanilla.prepare(LOBART)
+        assert vanilla.offers[LOBART][KILL].seen_true()
+        fake.npc_states[BANDIT]["state"] = "alive"
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        offer = vanilla.offers[LOBART][KILL]
+        assert not offer.seen_true() and offer.reachable() is None
+        assert "Бандит жив — у тебя на глазах" in offer.seen_false()
+        assert "мёртв: ты видел тело" not in offer.evidence()
+        await dialogue.say_as_player(LOBART, "Бандит мёртв.")
+        await _until(lambda: "Отклонено:" in _outputs(llm))
+        assert chronicle.facts("claim") == []
+        assert len(chronicle.facts("seen_dead")) == 1
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+async def test_another_quests_ending_is_not_offered_as_a_letter_assignment(cavalorn):
+    fake = FakeGame(branch="A")
+    link_cm, _, _, vanilla = await _cavalorn(fake, FakeBackend(delay=0), cavalorn)
+    fake.npc_states[BRAGO].update(state="dead", distance=1000, seen=True)
+    fake.fns["C_BRAGOBANDITSDEAD"] = 1
+    try:
+        await vanilla.prepare(CAVALORN)
+        assert KILLBRAGO in vanilla.offers[CAVALORN]
+        assert LETTER not in vanilla.starts[CAVALORN]
+        assert not any(start.dialog == KILLED for start in vanilla.starts[CAVALORN].values())
+        assert "поручение «Письмо Ватрасу»" not in vanilla.situation(CAVALORN)
+    finally:
+        await link_cm.__aexit__(None, None, None)
 
 
 async def test_a_quest_of_the_scripts_given_in_a_conversation(cavalorn):
