@@ -95,3 +95,33 @@ def test_scale_relief_flattens_and_keeps_unit_vectors():
     assert abs(half[0, 0, 0]) < abs(tilt[0])
     with pytest.raises(ValueError):
         building_set.scale_relief(encoded, 1.5)
+
+
+def staged(root, name, entries):
+    folder = root / 'content-staging' / name / 'materials'
+    folder.mkdir(parents=True)
+    index = {}
+    for texture, stem in entries.items():
+        (folder / stem).mkdir()
+        for channel in ('albedo', 'normal', 'orm'):
+            (folder / stem / f'{channel}.dds').write_bytes(f'{name}/{stem}/{channel}'.encode())
+        index[texture] = {k: f'{stem}/{k}.dds' for k in ('albedo', 'normal', 'orm')} | {'scale': 1., 'antitile': 'off'}
+    (folder / 'materials.json').write_text(json.dumps(index))
+
+
+def test_compose_joins_parts_and_rejects_shared_texture(tmp_path, monkeypatch):
+    monkeypatch.setenv('GOTHIC_AI_DATA', str(tmp_path))
+    staged(tmp_path, 'roofs-1', {'ROOF_01.TGA': 'roofs-1-roof-01'})
+    staged(tmp_path, 'hut-4', {'WAND_01.TGA': 'hut-4-wand-01', 'WAND_02.TGA': 'hut-4-wand-02'})
+    result = building_set.compose('hut-4-review', ['roofs-1', 'hut-4'])
+    assert result == {'set': 'hut-4-review', 'entries': 3, 'parts': {'roofs-1': 1, 'hut-4': 2}}
+    out = tmp_path / 'content-staging/hut-4-review'
+    index = json.loads((out / 'materials/materials.json').read_text())
+    assert sorted(index) == ['ROOF_01.TGA', 'WAND_01.TGA', 'WAND_02.TGA']
+    assert (out / 'materials/hut-4-wand-02/orm.dds').read_bytes() == b'hut-4/hut-4-wand-02/orm'
+    assert json.loads((out / 'composition.json').read_text())['parts']['roofs-1'] == ['ROOF_01.TGA']
+    staged(tmp_path, 'house-3', {'ROOF_01.TGA': 'house-3-roof-01'})
+    with pytest.raises(ValueError, match='in both roofs-1 and house-3'):
+        building_set.compose('mixed', ['roofs-1', 'house-3'])
+    with pytest.raises(ValueError, match='staging set exists'):
+        building_set.compose('hut-4-review', ['roofs-1', 'hut-4'])

@@ -16,7 +16,11 @@ normalises fine detail to full contrast, which turns wood grain into bark.
 
 Numbers are guard rails: luminance outside the ratio range or clipped pixels are recorded,
 never "fixed" here. No detail fit, Marigold or highlight shoulder. Maps come from the
-existing CPU filter, the set is the base staging set with only these entries replaced.
+existing CPU filter. With `"base": "original"` the set holds only this asset's entries;
+with a staging set as base, it is that set with only these entries replaced.
+
+`compose SET PART...` joins the sets of several assets into one staging set for the game:
+each texture belongs to exactly one part, so a shared texture lives in its own asset.
 """
 from __future__ import annotations
 
@@ -221,20 +225,31 @@ def scale_relief(normal_map: np.ndarray, relief: float) -> np.ndarray:
     return (vector * .5 + .5).astype(normal_map.dtype)
 
 
-def pack(records: list[dict], spec: dict, derived_root: Path) -> dict:
-    base = remaster.data_root() / 'content-staging' / spec['base']
-    output = pack_materials.staging_output(base.parent / spec['set'])
+def new_staging(name: str) -> Path:
+    output = pack_materials.staging_output(remaster.data_root() / 'content-staging' / name)
     if output.exists():
         raise ValueError(f'{output}: staging set exists; choose a new set name')
-    shutil.copytree(base, output, symlinks=False)
+    return output
+
+
+def pack(records: list[dict], spec: dict, derived_root: Path) -> dict:
+    output = new_staging(spec['set'])
+    if spec['base'] == 'original':
+        base = output
+        (output / 'materials').mkdir(parents=True)
+        (output / 'materials/materials.json').write_text('{}\n')
+    else:
+        base = remaster.data_root() / 'content-staging' / spec['base']
+        shutil.copytree(base, output, symlinks=False)
     index_path = output / 'materials/materials.json'
     before = json.loads(index_path.read_text())
     index = deepcopy(before)
     write_dds = pack_materials.load_compressor()
     names = {r['replaces'][0] for r in records}
     missing = names - before.keys()
-    if missing:
+    if missing and spec['base'] != 'original':
         raise ValueError(f'{spec["base"]} has no entries for {sorted(missing)}')
+    entry = dict(albedo=None, normal=None, orm=None, scale=1., antitile='off', antitile_cell=1.)
     for record in records:
         maps = pack_materials.read_maps(record, derived_root)
         directory = output / 'materials' / record['id']
@@ -243,7 +258,7 @@ def pack(records: list[dict], spec: dict, derived_root: Path) -> dict:
         write_dds(directory / 'normal.dds', maps['normal'], normal=True)
         write_dds(directory / 'orm.dds', np.stack([maps[k] for k in ('ao', 'roughness', 'metallic')], axis=2))
         name = record['replaces'][0]
-        index[name] = dict(before[name], **{k: f'{record["id"]}/{k}.dds' for k in ('albedo', 'normal', 'orm')},
+        index[name] = dict(before.get(name, entry), **{k: f'{record["id"]}/{k}.dds' for k in ('albedo', 'normal', 'orm')},
                            scale=1., antitile='off')
     for name in before.keys() - names:
         for channel in ('albedo', 'normal', 'orm'):
@@ -252,6 +267,42 @@ def pack(records: list[dict], spec: dict, derived_root: Path) -> dict:
                 raise ValueError(f'{name}: unrelated DDS changed')
     index_path.write_text(json.dumps(index, indent=2) + '\n')
     return dict(entries=len(index), replaced=sorted(names), unchanged_entries=len(index) - len(names))
+
+
+def compose(name: str, parts: list[str]) -> dict:
+    """Join the staging sets `parts` into a new set; a texture may come from one part only."""
+    if len(parts) < 2 or len(set(parts)) != len(parts):
+        raise ValueError('compose needs two or more distinct parts')
+    staging = remaster.data_root() / 'content-staging'
+    indexes, owner = {}, {}
+    for part in parts:
+        indexes[part] = json.loads((staging / part / 'materials/materials.json').read_text())
+        for texture in indexes[part]:
+            if texture in owner:
+                raise ValueError(f'{texture}: in both {owner[texture]} and {part}')
+            owner[texture] = part
+    output = new_staging(name)
+    (output / 'materials').mkdir(parents=True)
+    index, digests = {}, {}
+    for part, part_index in indexes.items():
+        for texture, entry in part_index.items():
+            for channel in ('albedo', 'normal', 'orm'):
+                relative = Path(entry[channel])
+                source, target = staging / part / 'materials' / relative, output / 'materials' / relative
+                if target.exists():
+                    raise ValueError(f'{relative}: path used by two parts')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+                digests[str(relative)] = pilot.file_digest(target)
+                if digests[str(relative)] != pilot.file_digest(source):
+                    raise ValueError(f'{relative}: copy differs from {part}')
+            index[texture] = entry
+    (output / 'materials/materials.json').write_text(json.dumps(index, indent=2) + '\n')
+    composition = dict(set=name, date=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+                       parts={part: sorted(part_index) for part, part_index in indexes.items()},
+                       dds_sha256=digests)
+    (output / 'composition.json').write_text(json.dumps(composition, indent=2) + '\n')
+    return dict(set=name, entries=len(index), parts={part: len(i) for part, i in indexes.items()})
 
 
 def contact_sheet(records: list[dict], derived_root: Path, target: Path) -> None:
@@ -310,10 +361,14 @@ def build(asset: str, spec: dict, records: list[dict]) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('prepare', 'build'))
-    parser.add_argument('asset')
+    parser.add_argument('command', choices=('prepare', 'build', 'compose'))
+    parser.add_argument('asset', help='asset, or the new set name for compose')
+    parser.add_argument('parts', nargs='*', help='compose: staging sets to join')
     args = parser.parse_args(argv)
     try:
+        if args.command == 'compose':
+            print(json.dumps(compose(args.asset, args.parts), sort_keys=True), flush=True)
+            return 0
         spec = load_spec(args.asset)
         records, report = prepare(args.asset, spec)
         for name, row in report.items():

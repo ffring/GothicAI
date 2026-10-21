@@ -29,6 +29,7 @@ description: Remaster pipeline for Gothic content — rebuild a building, a set 
    - найди модели рядом по переписи мешей (`reports/content/2026-10-world-meshes/`).
 
    Что на кадре нарисовано в текстуре, а что стоит отдельной моделью — по кадру не угадывай. Большое окно хижины порта оказалось моделью `NW_CITY_WINDOW_WOOD_OUT_01`, а текстура несла маленький тёмный проём.
+5. Проверь, чьи это текстуры, по [очереди переделки](../../../docs/remaster-pipeline.md#очередь-переделки). Текстура принадлежит одному ассету. Общий материал (кровля, балка) — свой ассет: его лист замысла перечисляет все места, где он стоит (перепись блоков `reports/content/2026-10-harbour-house/census.csv`), и снимает хотя бы по одному месту каждого вида построек.
 
 ## 1. Лист замысла (`intent.md`)
 
@@ -77,7 +78,7 @@ description: Remaster pipeline for Gothic content — rebuild a building, a set 
 `build.json` в папке ассета:
 
 ```json
-{"set": "hut-1", "base": "house-2", "registry": "data/content/remaster/<ассет>.jsonl",
+{"set": "hut-4", "base": "original", "registry": "data/content/remaster/<ассет>.jsonl",
  "textures": {"NW_….TGA": {"axes": "uv", "colour": {"mode": "target"}},
               "NW_….TGA": {"axes": "u", "colour": {"mode": "match", "to": "NW_….TGA", "exclude_uv": [u0, v0, u1, v1]}}},
  "guard": {"luminance_ratio": [0.75, 1.25], "clipped_max": 0.01}}
@@ -90,9 +91,11 @@ description: Remaster pipeline for Gothic content — rebuild a building, a set 
 
 Выход за ограничитель записывай в отчёт и не подгоняй. Если число требует одного, а вид другого, вынеси это пользователю фразой «число требует X, вид требует Y».
 
+База — `original`: в наборе ассета только его текстуры. Для съёмки соедини его с наборами общих материалов, которые стоят на постройке: `B compose <набор> <часть>…`, например `B compose hut-4-city roofs-1 timber-1 hut-4`.
+
 ## 6. В игре
 
-1. Сними `original` и набор одним сценарием через `gq`.
+1. Сними `original` и набор одним сценарием через `gq`: `QUALITY_PILOT_TASK=gothic-ai/remaster-<ассет> scripts/content/capture-quality-pilot.sh --capture original|<набор> <каталог>`, сценарий — `scripts/content/<ассет>.bench`.
 2. На каждый ракурс — `R pair <ассет> --id r3-<ракурс> --stage ingame --mode blind --a <оригинал> --b <наш> --subject "…"`.
 3. Рецензент на `order-1` и `order-2` по отдельности, затем `R merge`.
 4. `DISPUTED` и `REJECT` разбери сам. Повторно пускай рецензента только с новым пакетом, не спорь с ним.
