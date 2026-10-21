@@ -176,8 +176,7 @@ async def test_new_player_text_interrupts_the_reply_in_flight():
         dialogue = DialogueManager(link, llm, PersonaProvider(None))
         dialogue.open(XARDAS, "Ксардас")
         first = dialogue.say_as_player(XARDAS, "Расскажи всё")
-        await _until(lambda: bool(fake.said))
-        assert not first.done()
+        await asyncio.sleep(0.2)
         second = dialogue.say_as_player(XARDAS, "Стоп")
         await second
         assert first.cancelled()
@@ -340,13 +339,122 @@ async def test_reply_text_streams_to_the_chat_before_its_lines():
 
     texts = [m for m in fake.received if m["type"] == "chat_text"]
     says = [m for m in fake.received if m["type"] == "say"]
-    assert len(texts) >= 2 and texts[-1]["text"] == llm.reply and texts[-1]["final"]
+    assert len(texts) > 2 and texts[-1]["text"] == llm.reply and texts[-1]["final"]
     assert all(len(a["text"]) <= len(b["text"]) for a, b in zip(texts, texts[1:], strict=False))
     assert {m["reply"] for m in texts} == {s["reply"] for s in says}
-    # the sentence is validated before any of it is shown, then reaches the chat before its line
+    # the first words were on screen before the first line was complete
     first_text = fake.received.index(texts[0])
-    assert first_text < fake.received.index(says[0])
-    assert texts[0]["text"].strip() == says[0]["text"] == "Ты наконец вернулся из храма."
+    assert first_text < fake.received.index(says[0]) and len(texts[0]["text"]) < len(says[0]["text"])
+
+
+class CountedBackend(FakeBackend):
+    """Counts model chunks before dialogue consumes them, independently of its line buffering."""
+
+    chunks = 0
+
+    async def stream(self, **kwargs) -> AsyncIterator[LLMEvent]:
+        async for event in super().stream(**kwargs):
+            if isinstance(event, TextDelta):
+                self.chunks += 1
+            yield event
+
+
+@pytest.mark.parametrize(
+    ("reply", "expected", "sentence_end_chunk"),
+    [
+        (
+            "Ты вернулся из храма, и это хорошо. Теперь слушай меня внимательно.",
+            [
+                ("Ты вернулся из храма,", 8),
+                ("и это хорошо. Теперь слушай меня внимательно.", 23),
+            ],
+            12,
+        ),
+        (
+            "Когда ты пойдёшь в город через северные ворота мимо стражи найди там Лестера.",
+            [
+                ("Когда ты пойдёшь в город через северные ворота мимо стражи", 20),
+                ("найди там Лестера.", 26),
+            ],
+            26,
+        ),
+    ],
+    ids=["first-comma", "first-words-max"],
+)
+async def test_ordinary_speech_reaches_say_on_the_same_chunks_as_main(
+    reply, expected, sentence_end_chunk, monkeypatch
+):
+    # Constants were measured through origin/main's DialogueManager with the same three-character chunks.
+    fake = FakeGame()
+    llm = CountedBackend(reply, chunk=3, delay=0)
+    said: list[tuple[str, int]] = []
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), tts=TtsClient("ws://unused"))
+
+        async def record_say(conv, text, *args, **kwargs):
+            said.append((text, llm.chunks))
+
+        monkeypatch.setattr(dialogue, "_say", record_say)
+        conv = dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Что скажешь?")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert said == expected
+    assert said[0][1] < sentence_end_chunk
+    assert conv.history[-1] == Message("assistant", reply)
+
+
+async def test_a_fragmented_tool_call_drops_its_arguments_after_a_short_sentence(caplog, monkeypatch):
+    clean = "Держи."
+    leak = 'functions.give_item({"item": "ITMI_GOLD", "count": 50})'
+    fake = FakeGame()
+    entries: list[dict] = []
+    monkeypatch.setattr(dialogue_module, "CHAT_TEXT_EVERY", 0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link,
+            FakeBackend(clean + " " + leak, chunk=3, delay=0),
+            PersonaProvider(None),
+            journal=Journal(entries.append),
+        )
+        conv = dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дашь золота?")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert fake.said == [clean]
+    texts = [m["text"] for m in fake.received if m["type"] == "chat_text"]
+    assert texts[-1] == clean
+    assert all(clean.startswith(text.strip()) for text in texts)
+    assert conv.history[-1] == Message("assistant", clean)
+    assert dialogue.memory.load("test-branch", XARDAS).entries[-1].content == clean
+    assert [entry["text"] for entry in entries if entry["kind"] == "npc"] == [clean]
+    assert any(
+        leak in r.getMessage() and XARDAS in r.getMessage() and r.levelname == "WARNING"
+        for r in caplog.records
+    )
+
+
+async def test_a_late_tool_marker_keeps_the_spoken_clause_and_removes_the_pending_sentence(caplog):
+    prefix = "Ты вернулся из храма,"
+    leak = "пока ждал тебя function give_item(item=ITMI_GOLD)?"
+    clean = prefix + " После боя поговорим."
+    fake = FakeGame()
+    async with scene_tts(per_char=0.0001) as (url, requests), connected(fake) as link:
+        dialogue = DialogueManager(
+            link,
+            FakeBackend(prefix + " " + leak + " После боя поговорим.", chunk=3, delay=0),
+            PersonaProvider(None),
+            tts=TtsClient(url),
+        )
+        conv = dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Что скажешь?")
+        await _until(lambda: len(fake.say_ends) == 2 and fake.statuses[-1:] == ["idle"])
+
+    assert fake.said == [prefix, "После боя поговорим."]
+    assert [r["text"] for r in requests] == fake.said
+    assert conv.history[-1] == Message("assistant", clean)
+    assert [m["text"] for m in fake.received if m["type"] == "chat_text"][-1] == clean
+    assert any(leak in r.getMessage() and r.levelname == "WARNING" for r in caplog.records)
 
 
 async def test_mood_tags_set_the_face_of_the_lines_and_are_not_said():

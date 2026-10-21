@@ -147,14 +147,14 @@ SUMMARY_INSTRUCTIONS = (
 _MARKDOWN = re.compile(r"[*_#`~]+")
 _SPACES = re.compile(r"\s+")
 _TOOL_SYNTAX = re.compile(
-    r"\bfunctions?\b|to\s*=\s*tools\.|[\"']arguments[\"']|\bcall_id\b|"
+    r"\b(?:functions?|protoc)\b|to\s*=\s*tools\.|[\"']arguments[\"']|\bcall_id\b|"
     r"</?tool_call\b|\{\s*[\"']name[\"']",
     re.IGNORECASE,
 )
 
 
 def tool_leak(text: str, names: Collection[str]) -> bool:
-    """Whether a sentence contains a tool name or a call written out as speech."""
+    """Whether text contains a tool name or a call written out as speech."""
     known = {name.casefold() for name in names}
     return bool(_TOOL_SYNTAX.search(text)) or any(
         word.casefold() in known for word in re.findall(r"\w+", text)
@@ -1938,8 +1938,8 @@ class DialogueManager:
         quick: bool = False,
         speak: bool = True,
     ) -> Done:
-        """One model call. Checked sentences continue the turn's reply in the chat; voice and animation
-        follow line by line. What is left of the last sentence is checked and said at the end. `quick`:
+        """One model call. Its text continues the turn's reply in the chat as words complete; voice and
+        animation follow line by line. What is left of the last sentence is said at the end. `quick`:
         the quick model's line, without tools, up to its first blank line (after it the model may go on
         with a tool call written out, seen in the history, or loop); `speak` False: the text is not said
         (the quick model's was)."""
@@ -1985,7 +1985,7 @@ class DialogueManager:
                     if state.first_delta is None:
                         state.first_delta = now - state.started
                     pieces = self._spoken(conv, state, state.moods.feed(text))
-                    # Only checked sentences reach the chat, before their subtitle lines.
+                    # The chat shows checked words as they arrive, before their subtitle lines.
                     if (
                         now - state.shown_at >= CHAT_TEXT_EVERY
                         and (shown := to_game_text(state.text)) != state.shown
@@ -2023,36 +2023,69 @@ class DialogueManager:
         *,
         flush: bool = False,
     ) -> list[str | MoodTag]:
-        """Check whole sentences before showing, remembering or splitting them into spoken lines."""
+        """Hold only unfinished words; a tool marker discards the unsaid rest of its sentence."""
         names = {t.name for t in self._request_tools([*npc_tools.TOOLS, *state.tools])}
         out: list[str | MoodTag] = []
 
-        def accept(text: str) -> None:
-            if tool_leak(text, names):
-                log.warning("%s: discarded tool text: %s", conv.npc, text.strip())
-                return
-            if not state.text or state.text[-1].isspace():
-                text = text.lstrip()  # no double space where a tag or tool text was taken out
-            if text:
-                state.text += text
-                out.append(text)
+        def accept(word: str) -> None:
+            if not state.discarded_text:
+                # Include this chunk's words, which have not reached the splitter yet.
+                pending = state.splitter._buf + "".join(p for p in out if isinstance(p, str))
+                start = 0
+                for end in _SENTENCE_END.finditer(pending):
+                    start = end.end()
+                prefix = pending[start:]
+                if tool_leak(prefix + word, names):
+                    # Keep completed sentences waiting in the splitter, and any clause already said.
+                    remove = len(prefix)
+                    if remove:
+                        state.text = state.text[:-remove]
+                    for i in range(len(out) - 1, -1, -1):
+                        if isinstance(p := out[i], str):
+                            cut = min(remove, len(p))
+                            out[i] = p[: len(p) - cut]
+                            remove -= cut
+                    if remove:
+                        state.splitter._buf = state.splitter._buf[:-remove]
+                    state.discarded_text = prefix + word
+                else:
+                    if not state.text or state.text[-1].isspace():
+                        word = word.lstrip()  # no double space after a tag or discarded text
+                    if word:
+                        state.text += word
+                        if out and isinstance(out[-1], str):
+                            out[-1] += word
+                        else:
+                            out.append(word)
+                    return
+            else:
+                state.discarded_text += word
+            if _SENTENCE_END.search(state.discarded_text):
+                log.warning("%s: discarded tool text: %s", conv.npc, state.discarded_text.strip())
+                state.discarded_text = ""
+
+        def finish_word() -> None:
+            if state.pending_text:
+                accept(state.pending_text)
+                state.pending_text = ""
 
         for p in pieces:
             if isinstance(p, MoodTag):
-                accept(state.pending_text)
-                state.pending_text = ""
+                finish_word()
                 out.append(p)
                 continue
             state.pending_text += p
-            start = 0
-            for end in _SENTENCE_END.finditer(state.pending_text):
-                accept(state.pending_text[start : end.end()])
-                start = end.end()
-            state.pending_text = state.pending_text[start:]
+            end = 0
+            for word in re.finditer(r"\S*\s+", state.pending_text):
+                accept(word.group())
+                end = word.end()
+            state.pending_text = state.pending_text[end:]
         if flush:
-            accept(state.pending_text)
-            state.pending_text = ""
-        return out
+            finish_word()
+            if state.discarded_text:
+                log.warning("%s: discarded tool text: %s", conv.npc, state.discarded_text.strip())
+                state.discarded_text = ""
+        return [p for p in out if p != ""]
 
     async def _feed_lines(self, conv: Conversation, state: TurnState, pieces: list[str | MoodTag]) -> None:
         """Lines as they complete. A new mood starts a new line: what was said before the tag goes out
@@ -2386,7 +2419,8 @@ class TurnState:
     moods: MoodTags = field(default_factory=MoodTags)
     mood: Mood | None = None  # of the lines being said (the model's last tag)
     text: str = ""  # everything said in the turn, all steps
-    pending_text: str = ""  # unchecked sentence, held until its end even across stream chunks
+    pending_text: str = ""  # only the last unfinished word, held across stream chunks
+    discarded_text: str = ""  # a tool leak, skipped through its sentence's end or the end of the step
     shown: str = ""
     shown_at: float = 0.0
     first_delta: float | None = None

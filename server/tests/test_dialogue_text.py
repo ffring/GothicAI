@@ -21,6 +21,7 @@ from gothic_ai.persona import pick_samples, render_instructions
         "give_item",
         "SET_INTENT(goal=follow)",
         "protoc function give_quest?",
+        "protoc",
         "FuNcTiOn",
         "FUNCTIONS",
         "functions.give_quest({...})",
