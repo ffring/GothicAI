@@ -240,6 +240,10 @@ _FOLLOW_ACCEPTED = re.compile(
 _FOLLOW_SHORT = re.compile(
     r"^(?:(?:да|ладно|хорошо|ну|ага|угу)\b[\s,.!—–-]*)*(?:я\s+)?(?:иду|пойду)\s*(?:$|[,!.…])"
 )
+_FOLLOW_LEAD = re.compile(
+    r"(?:(?:да|ладно|хорошо|ну|ага|угу|тогда|давай)\b[\s,]*)*"
+    r"(?:веди|ведите)(?:\s+(?:уж|же))?\s*[.!…]*"
+)
 
 
 def follow_agreement(heard: str, reply: str, name: str = "") -> bool:
@@ -267,7 +271,11 @@ def follow_agreement(heard: str, reply: str, name: str = "") -> bool:
         return False
     sentences = re.split(r"(?<=[.!?…])\s+", answer)
     return any(
-        bool(_FOLLOW_ACCEPTED.search(line) or _FOLLOW_SHORT.match(line))
+        bool(
+            _FOLLOW_ACCEPTED.search(line)
+            or _FOLLOW_SHORT.match(line)
+            or _FOLLOW_LEAD.fullmatch(line)
+        )
         for line in sentences
         if not line.endswith("?")
     )
