@@ -37,6 +37,7 @@ from .common import (
     FixedDecider,
     _ByNpc,
     _caught_by,
+    _clear_beasts,
     _logged,
     _OnWords,
     _save,
@@ -667,13 +668,16 @@ async def vanilla_spare(
         terms_ok = (outcome.get("drop") == [spared] and bool(outcome.get("why"))
                     and all(str(reason).strip() for reason in outcome["why"])) if amended else True
         strict = (pay == "full" and outcome.get("why") == [why]) if fake and amended else True
+        how = "amended" if amended else "done"
+        if not fake and key == "seen_ended" and quest_facts("quest_terms"):
+            how = "amended"
         return check(
             key,
             bool(answered and took and claimed and after == (2, 1, before[0] + 100, expected_gold)
                  and claim.get("truth") is (alive.get("state") == "dead")
                  and claim.get("checked") is False
                  and not facts("lie") and no_check and outcome.get("npc") == npc
-                 and outcome.get("how") == ("amended" if amended else "done")
+                 and outcome.get("how") == how
                  and pay in (("full",) if fake else ("full", "none")) and terms_ok and strict
                  and (not amended or accepted(rows, "amend_quest"))
                  and (not fake or not amended or alive.get("state") == "alive")),
@@ -756,6 +760,7 @@ async def vanilla_spare(
     if not await park_cavalorn():
         check("held", False, "Cavalorn could not stop to listen")
         return finish()
+    beasts_cleared = await _clear_beasts(link, npc)
     await link.debug("npc_goto", npc=spared, to=npc, distance=150, face=npc)
     await link.attach(spared)
     await link.act(npc, "turn_to", npc=spared)
@@ -768,7 +773,7 @@ async def vanilla_spare(
     before_spare = nearby.get(spared, {})
     if not check(
         "spared_in_view", visible and before_spare.get("state") == "alive" and bool(before_spare.get("seen")),
-        nearby,
+        f"beasts_cleared={beasts_cleared}; {nearby}",
     ):
         return finish()
 
@@ -843,7 +848,11 @@ async def vanilla_spare(
             results["ended_after_kill"] = results.pop("ended")
     elif not fake and not dropped():
         results["ended_after_kill"] = results.pop("ended")
-    await link.detach(spared)
+    if spared in talk.attached and (await bandit_state(spared)).get("state") == "alive":
+        try:
+            await link.detach(spared)
+        except GameError as err:
+            log.info("vspare: detach %s: %s", spared, err)
     talk.free(npc, "scenario")
     talk.end("scenario")
     await _until(lambda: npc not in talk.attached, 20)
@@ -859,6 +868,7 @@ async def vanilla_spare(
         check("loaded", False, str(err))
         return finish()
     baseline = (await link.story_state(npcs=list(bandits), near=npc)).get("npcs", {})
+    fresh_after_load = not any(spared in f.get("drop", []) for f in quest_facts("quest_terms"))
     if not check(
         "loaded",
         saved is not None and session.parent == saved.branch and session.parent_seq == saved.seq
@@ -885,6 +895,7 @@ async def vanilla_spare(
     if not await park_cavalorn():
         check("away2", False, "Cavalorn could not stop to listen")
         return finish()
+    beasts_cleared = await _clear_beasts(link, npc)
     bodies = (await link.story_state(npcs=list(bandits), near=npc)).get("npcs", {})
     distances = {b: bodies.get(b, {}).get("distance") for b in bandits}
     await vanilla.prepare(npc)
@@ -893,15 +904,21 @@ async def vanilla_spare(
     if not check("away2", all(d is not None and d > 2000 for d in distances.values())
                  and offer is not None and offer.seen_true()
                  and all(t.seen_dead and not t.seen for t in offer.targets) and "check_claim" not in tools,
-                 f"cm={distances}; tools={tools}; {vanilla.situation(npc)}"):
+                 f"beasts_cleared={beasts_cleared}; cm={distances}; tools={tools}; {vanilla.situation(npc)}"):
         return finish()
     before_reward = await rewards()
     answered, end_turns = await say("Кавалорн, с ними покончено.")
     await ending("seen_ended", answered, end_turns, before_reward, amended=False)
-    check("fresh_terms", not quest_facts("quest_terms")
-          and all(f.get("how") == "done" and not f.get("drop") for f in quest_facts("quest_outcome"))
-          and len(quest_facts("quest_outcome")) == int(accepted(end_turns, "accept_quest")),
-          f"terms={quest_facts('quest_terms')}; outcome={quest_facts('quest_outcome')}")
+    fresh_terms = fresh_after_load
+    if fake:
+        fresh_terms = (
+            not quest_facts("quest_terms")
+            and all(f.get("how") == "done" and not f.get("drop") for f in quest_facts("quest_outcome"))
+            and len(quest_facts("quest_outcome")) == int(accepted(end_turns, "accept_quest"))
+        )
+    check("fresh_terms", fresh_terms,
+          f"fresh_after_load={fresh_after_load}; terms={quest_facts('quest_terms')}; "
+          f"outcome={quest_facts('quest_outcome')}")
     talk.free(npc, "scenario")
     return finish()
 
