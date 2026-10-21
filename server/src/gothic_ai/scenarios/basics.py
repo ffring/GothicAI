@@ -1119,18 +1119,24 @@ async def m5e_talk(
         f"{notes(npc)[-1:]})"
     )
 
-    # 7. a walking npc answers on the move, without stopping
+    # 7. a walking npc answers on the move, without stopping. The hero comes back in front of it first:
+    # where step 6 left him a wall or a floor of the tower is between them (15 m straight, 67 m round by
+    # voice), and a name called out to one who does not hear it goes to nobody (v30)
     stand_in.choices["posture"] = "keep_working"
+    await link.debug("teleport", near=npc, distance=800)
+    back = await _until(lambda: npc in talk.people and talk.people[npc].earshot <= 1000, 5)
     await link.npc_act(npc, "go_to_npc")  # walks to the hero
     moving = await _until(lambda: npc in talk.people and talk.people[npc].moving, 10)
+    e = talk.people.get(npc)
+    ear = f"heard {e.earshot / 100:.0f} m, {e.distance / 100:.0f} m straight" if e else "not around"
     dialogue.llm = FakeBackend("Иду я, иду.", delay=0)
     t0 = time.monotonic()
     await link.debug("type", text="Ксардас, ты куда?")
     ok = await _until(lambda: bool(lines_of(npc, t0)), 20)
     still = npc in talk.people and talk.people[npc].moving
     results["answer_on_the_move"] = (
-        f"{'done' if moving and ok and still and npc not in talk.held else 'failed'} "
-        f"(walking {moving}, still walking at its line {still}, body: "
+        f"{'done' if back and moving and ok and still and npc not in talk.held else 'failed'} "
+        f"({heard()}; {ear}; walking {moving}, still walking at its line {still}, body: "
         f"{talk.partner.posture if talk.partner else '-'})"
     )
 
