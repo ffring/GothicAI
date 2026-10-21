@@ -1613,10 +1613,11 @@ async def test_greg_knows_the_whole_reward_before_giving_the_quest(greg):
 
 
 @pytest.mark.parametrize("armor", ["ITAR_BAU_L", "ITAR_BAU_M"])
-async def test_gregs_parent_choice_requires_and_takes_the_clothing_the_hero_has(greg, armor):
+@pytest.mark.parametrize("pay_args", [{}, {"pay": None}], ids=["omitted", "null"])
+async def test_gregs_parent_choice_requires_and_takes_the_clothing_the_hero_has(greg, armor, pay_args):
     fake = FakeGame(branch="A")
     fake.hero_items = {armor: 1}
-    accept = FakeStep("Держи плату.", [ToolCall("accept_quest", {"quest": GREG_QUEST}, "a1")])
+    accept = FakeStep("Держи плату.", [ToolCall("accept_quest", {"quest": GREG_QUEST, **pay_args}, "a1")])
     llm = FakeBackend(script=[accept, FakeStep("Прощай.")], delay=0)
     link_cm, dialogue, chronicle, vanilla = await _greg(fake, llm, greg, running=1)
     try:
@@ -1642,6 +1643,7 @@ async def test_gregs_parent_choice_requires_and_takes_the_clothing_the_hero_has(
         assert {"do": "set", "var": GREG_QUEST, "value": 2} in effects
         assert {i: fake.hero_items[i] for i in GREG_BONUS} == GREG_BONUS
         assert chronicle.facts("vanilla_reward")[0]["quest"] == GREG_QUEST
+        assert chronicle.facts("quest_outcome")[0]["pay"] == "full"
 
         # QuestLog can observe this same success after accept_quest already paid it.
         chronicle.record({"fact": "vanilla_quest", "quest": GREG_QUEST, "to": "success", "giver": GREG})
