@@ -360,6 +360,47 @@ def test_bc3_manifest_uses_exact_train_refs_including_failed_follow(tmp_path):
             np.testing.assert_allclose(cached[name], expected[name], atol=1 / 255)
 
 
+@pytest.mark.parametrize("raw_annotations", [False, True])
+def test_bc3_manifest_admits_early_episode_without_collector_annotations(tmp_path, raw_annotations):
+    source, output, path, manifest, _, _ = write_bc3_manifest(tmp_path, ("point",))
+    entry = manifest["episodes"][0]
+    scenario = entry["scenario"]
+    for name in ("id", "split", "region"):
+        scenario.pop(name)
+    scenario["seed"] = 0
+    physical_scenario = scenario.copy()
+    metadata_path = Path(entry["episode"]) / "episode.json"
+    metadata = json.loads(metadata_path.read_text())
+    for name in ("id", "split", "region", "success", "training_eligible"):
+        metadata.pop(name, None)
+    if raw_annotations:
+        metadata.update(success=False, training_eligible=False)
+    metadata_path.write_text(json.dumps(metadata))
+
+    summary_path = source / "recordings" / "collection-metrics.json"
+    summary_path.parent.mkdir()
+    summary_path.write_text(json.dumps({"episodes": [{
+        "id": entry["id"], "family": "point", "split": "train", "region": "forest",
+        "training_eligible": True, "start": "summary-start", "goal": "summary-goal", "seed": 99,
+    }]}))
+    manifest["sources"] = {"recordings/collection-metrics.json": {
+        "path": str(summary_path), "sha256": hashlib.sha256(summary_path.read_bytes()).hexdigest(),
+    }}
+    path.write_text(json.dumps(manifest))
+    original_files = {file: file.read_bytes() for file in source.rglob("*") if file.is_file()}
+
+    _, selected = data.load_training_manifest(path, source)
+    assert selected[0]["scenario"] == {**physical_scenario, "region": "forest"}
+    index = data.prepare(source, output, manifest=path, chunk_records=1)
+    assert index["splits"]["train"] == {"pairs": 1, "episodes": 1, "steps": 4}
+    cached_entry = index["episodes"][0]
+    assert cached_entry["id"] == entry["id"]
+    assert cached_entry["pair"] == [physical_scenario["start"], physical_scenario["goal"]]
+    assert cached_entry["region"] == "forest" and cached_entry["success"] is True
+    assert data.load_cached(output / cached_entry["file"])["labels"].shape == (4, 5)
+    assert {file: file.read_bytes() for file in original_files} == original_files
+
+
 @pytest.mark.parametrize("damage, expected", [
     ("ineligible", "ineligible"), ("heldout", "ineligible"), ("duplicate", "duplicate training"),
     ("totals", "totals"), ("checksum", "checksum"), ("memory", "memory-v3"),

@@ -346,6 +346,7 @@ def load_training_manifest(path: Path, source: Path) -> tuple[dict[str, Any], li
             raise ValueError(f"duplicate episode ID in manifest: {entry['id']}")
         by_id[entry["id"]] = entry
     selected, seen = [], set()
+    annotations = None
     for family, identities in manifest["splits"]["train"].items():
         if not isinstance(identities, list):
             raise ValueError(f"training split must list episode IDs: {family}")
@@ -358,13 +359,22 @@ def load_training_manifest(path: Path, source: Path) -> tuple[dict[str, Any], li
             entry = by_id[identity]
             scenario = entry["scenario"]
             if (entry.get("split") != "train" or entry.get("family") != family
-                    or entry.get("training_eligible") is not True or scenario.get("split") != "train"
+                    or entry.get("training_eligible") is not True or scenario.get("split", entry["split"]) != "train"
                     or scenario.get("navigation_memory_version") != 3):
                 raise ValueError(f"ineligible BC3 training episode: {identity}")
             directory = Path(entry["episode"])
             if not directory.is_absolute() or not directory.resolve().is_relative_to(source.resolve()):
                 raise ValueError(f"training episode is outside the corpus: {identity}")
-            selected.append({**entry, "directory": directory})
+            if "region" not in scenario:
+                # Early raw episodes lack collector annotations. Eligibility and
+                # split belong to the manifest; only the missing region comes
+                # from the finalized summary, never physical scenario values.
+                if annotations is None:
+                    summary = Path(manifest["sources"]["recordings/collection-metrics.json"]["path"])
+                    annotations = {value["id"]: value for value in
+                                   json.loads(summary.read_text(encoding="utf-8"))["episodes"]}
+                scenario = {**scenario, "region": annotations[identity]["region"]}
+            selected.append({**entry, "scenario": scenario, "directory": directory})
     if not selected:
         raise ValueError("manifest has no BC3 training episodes")
     totals = manifest["totals"]
