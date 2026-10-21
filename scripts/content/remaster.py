@@ -394,9 +394,11 @@ def merge_verdicts(verdicts: dict[str, dict], key: dict) -> dict:
     for name, verdict in verdicts.items():
         ours = key['orders'][name]['ours']
         criteria = {}
-        for criterion, value in verdict.get('criteria', {}).items():
-            if key['mode'] == 'blind' and ours is not None and str(value) in ('1', '2'):
-                criteria[criterion] = 'better' if str(value) == str(ours) else 'worse'
+        for criterion, raw in verdict.get('criteria', {}).items():
+            # Reviewers sometimes append a reason ("1 — boards are straighter on 2"); the token decides.
+            value = re.split(r'[\s—–-]', str(raw).strip(), maxsplit=1)[0]
+            if key['mode'] == 'blind' and ours is not None and value in ('1', '2'):
+                criteria[criterion] = 'better' if value == str(ours) else 'worse'
             else:
                 criteria[criterion] = value
         findings = [dict(f, image=_relabel(f.get('image'), ours)) for f in verdict.get('findings', [])]
