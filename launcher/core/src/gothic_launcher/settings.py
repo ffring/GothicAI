@@ -85,13 +85,18 @@ class LlmSettings(_Section):
     body_url: str | None = Field(
         None,
         title="Адрес сети боя",
-        description="Сеть тела P30 (tcp://…:47835) ведёт бой NPC с одноручным мечом против героя. Пусто: бой ведут скрипты",
+        description=(
+            "Сеть тела P30 (tcp://…:47835) ведёт бой NPC с одноручным мечом против героя. "
+            "Пусто: бой ведут скрипты"
+        ),
     )
 
 
 class VoiceSettings(_Section):
     enabled: bool = Field(True, title="Голосовой ввод", description="Удерживайте T, чтобы сказать реплику")
-    provider: str = Field("voxtral", title="Распознавание", description="voxtral, chatgpt или openai:…")
+    provider: str = Field(
+        "inworld", title="Распознавание", description="inworld, voxtral, chatgpt или openai:…"
+    )
     fallback: str = Field("chatgpt", title="Запасное распознавание", description="none: без запасного")
     voxtral_url: str | None = Field(None, title="Адрес Voxtral")
     mic_device: str | None = Field(None, title="Микрофон", description="Имя или номер; пусто: системный")

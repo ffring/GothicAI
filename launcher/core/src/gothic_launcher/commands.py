@@ -225,6 +225,8 @@ def services(config: Config, layout: Layout, ports: Ports, cwd: Path) -> list[Pr
         env = dict(openai_key)
         if s.voice.voxtral_url:
             env["GOTHIC_VOXTRAL_URL"] = s.voice.voxtral_url
+        if keys.inworld_api_key:
+            env["INWORLD_API_KEY"] = keys.inworld_api_key
         argv = ["--port", str(ports.asr), "--provider", s.voice.provider, "--fallback", s.voice.fallback]
         procs.append(_service(layout, "asr", "asr-service", "gothic-asr", argv, env, ports.asr, cwd))
         server_args += ["--asr-url", f"ws://127.0.0.1:{ports.asr}"] + _opt("--mic-device", s.voice.mic_device)
