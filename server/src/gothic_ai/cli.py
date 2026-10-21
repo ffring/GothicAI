@@ -28,6 +28,7 @@ from .beasts import TONE_MAX_TOKENS, BeastDesk
 from .blame import Blame
 from .bodies import Bodies
 from .bodypilot import BodyPilot
+from .bounty import Bounty
 from .brain import DeciderClient, GameApplier, NpcPlanner, PlannerConfig
 from .brain.reflex import Reflexes
 from .brain.situation import SituationBuilder
@@ -258,6 +259,7 @@ class ServerState:
         self.knowledge: Knowledge | None = None
         self.deals: Deals | None = None
         self.parley: Parley | None = None
+        self.bounty: Bounty | None = None
         self.chests: ChestDesk | None = None
         self.interject: Interjections | None = None
         self.bodies: Bodies | None = None
@@ -991,6 +993,9 @@ async def serve(args: argparse.Namespace) -> int:
                 perception=perception, companion=orders.companion, places=place_book, lead=state.talk.lead,
             )
             state.dialogue.extensions.append(state.parley)
+        if not args.no_bounty:
+            state.bounty = Bounty(link, state.dialogue, state.chronicle, perception=perception)
+            state.dialogue.extensions.append(state.bounty)
         # deals the npc's offer the hero in conversation: a window, the player accepts (docs/npc-tools.md)
         if graph is not None and not args.no_gates:
             state.gates = Gates(link, state.dialogue, state.chronicle, graph)
@@ -1009,6 +1014,7 @@ async def serve(args: argparse.Namespace) -> int:
         )
         state.deals.roster = lambda: talk.people
         state.deals.parley = state.parley
+        state.deals.bounty = state.bounty
         state.deals.contracts.roster = lambda: talk.people
         state.dialogue.extensions.append(state.deals)
         # its tasks and their rewards, and what npc's keep in their stash (docs/contracts.md)
@@ -1454,6 +1460,15 @@ async def serve(args: argparse.Namespace) -> int:
                 assert state.parley is not None and state.deals is not None and state.talk is not None
                 results = await scenarios.bandit_parley(
                     link, state.dialogue, state.talk, state.deals, state.parley
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "bandit_bounty":
+                assert state.bounty is not None and state.deals is not None and state.talk is not None
+                assert state.guide is not None
+                results = await scenarios.bandit_bounty(
+                    link, state.dialogue, state.talk, state.deals, state.bounty, state.guide
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -2724,6 +2739,7 @@ def main() -> None:
             "neural-group",
             "neural-talk",
             "bandit_parley",
+            "bandit_bounty",
             "neural-load",
             "neural-soak",
             "memprobe",
@@ -2875,6 +2891,7 @@ def main() -> None:
     p.add_argument("--no-gates", action="store_true", help="disable conversational gate admission")
     p.add_argument("--no-questlog", action="store_true", help="do not track the scripts' quest states")
     p.add_argument("--no-parley", action="store_true", help="bandits may attack the hero without a cause")
+    p.add_argument("--no-bounty", action="store_true", help="disable bandit bounty secrets")
     p.add_argument(
         "--no-crimes", action="store_true", help="disable crimes and law patches; scripts own law entirely"
     )

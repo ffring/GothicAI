@@ -50,6 +50,14 @@ class Source:
 
 
 SOURCES = {
+    "bounty_betrayal": Source(
+        kind="bounty_betrayal", subject="npc", observer="witnesses", key="id", context="",
+        subject_name="name", observer_name="witness_names",
+        text="{subject_name} сдал Декстера герою",
+        warning_direct="{subject_name} при тебе сдал Декстера герою",
+        warning_heard="ты слышал, что {subject_name} сдал Декстера герою; со слов: {source_name}",
+        about="BDT_1060_DEXTER", about_name="Декстер", direct_context="ты слышал это сам",
+    ),
     "blamed": Source(
         kind="blamed", subject="culprit", observer="npc", key="id", context="",
         subject_name="culprit_name", observer_name="name",
