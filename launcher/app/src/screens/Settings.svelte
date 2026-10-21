@@ -21,10 +21,6 @@
   ] as const;
   let tab = $state<(typeof TABS)[number]["id"]>("game");
   const s = $derived(launcher.state!.settings);
-  const inworldSelected = $derived(
-    (tab === "voice" && s.voice.enabled && [s.voice.provider, s.voice.fallback].includes("inworld")) ||
-      (tab === "speech" && s.tts.enabled && [s.tts.provider, s.tts.fallback].includes("inworld")),
-  );
 </script>
 
 <div class="screen">
@@ -59,6 +55,9 @@
         <Setting key="voice.enabled" kind="toggle" />
         {#if s.voice.enabled}
           <Setting key="voice.provider" kind="choice" options={ASR} />
+          {#if s.voice.provider === "inworld" || s.voice.fallback === "inworld"}
+            <Setting key="secrets.inworld_api_key" kind="secret" />
+          {/if}
           <Setting key="voice.fallback" kind="choice" options={ASR_FALLBACK} />
           {#if s.voice.provider === "voxtral" || s.voice.fallback === "voxtral"}
             <Setting key="voice.voxtral_url" placeholder="http://127.0.0.1:47830" mono />
@@ -70,6 +69,9 @@
         <Setting key="tts.enabled" kind="toggle" />
         {#if s.tts.enabled}
           <Setting key="tts.provider" kind="choice" options={TTS} />
+          {#if s.tts.provider === "inworld" || s.tts.fallback === "inworld"}
+            <Setting key="secrets.inworld_api_key" kind="secret" />
+          {/if}
           <Setting key="tts.fallback" kind="choice" options={TTS_FALLBACK} />
           <Setting key="tts.voxcpm_url" placeholder="ws://127.0.0.1:47831" mono />
           <Setting key="tts.loudness" placeholder="как озвучка игры" />
@@ -86,9 +88,6 @@
           <span>Настройки: <span class="mono selectable">{launcher.state!.paths.config.replace(/^\/Users\/[^/]+/, "~")}</span>, ключи в secrets.toml</span>
           <button class="link" onclick={() => openFolder(launcher.state!.paths.config)}>Открыть папку настроек</button>
         </div>
-      {/if}
-      {#if inworldSelected}
-        <Setting key="secrets.inworld_api_key" kind="secret" />
       {/if}
     </main>
   </div>
