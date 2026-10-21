@@ -283,3 +283,19 @@ def test_criteria_token_survives_appended_reasons():
     one = {'preserve': [], 'criteria': {'material': '1 — на 2 нижняя полоса стены шумит'}, 'verdict': 'PASS'}
     two = {'preserve': [], 'criteria': {'material': '2'}, 'verdict': 'PASS'}
     assert remaster.merge_verdicts({'order-1': one, 'order-2': two}, key)['criteria']['material'] == 'worse'
+
+
+def test_bench_lines_put_eye_and_target_back():
+    import math
+    eye, target = [1354., 822., 2414.], [1366., 351., 1706.]
+    lines = remaster.bench_lines('city-roofs', [{'name': 'roof-01-close', 'eye': eye, 'target': target}])
+    look = float(next(l for l in lines if l.startswith('cam look')).split()[2])
+    hero = [float(v) for v in next(l for l in lines if l.startswith('goto pos')).split()[2:]]
+    distance, height, yaw = (float(v) for v in next(l for l in lines if l.startswith('cam world')).split()[2:])
+    rebuilt = [hero[0] + distance * math.cos(math.radians(yaw)), hero[1] + height,
+               hero[2] + distance * math.sin(math.radians(yaw))]
+    assert rebuilt == pytest.approx(eye, abs=1e-3)
+    assert [hero[0], hero[1] + look, hero[2]] == pytest.approx(target, abs=1e-3)
+    assert hero[1] > max(eye[1], target[1]) and 'shot roof-01-close' in lines
+    with pytest.raises(ValueError, match='unique'):
+        remaster.bench_lines('a', [{'name': 'x', 'eye': eye, 'target': target}] * 2)

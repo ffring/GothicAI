@@ -1,0 +1,16 @@
+{
+  "asset": "city-timber",
+  "title": "Дерево города: балки и доски",
+  "kind": "material",
+  "created": "2026-10-21",
+  "goal": "the same Gothic, better made",
+  "namespaces": [
+    "city-timber"
+  ],
+  "sources": [],
+  "selected": {},
+  "reviews": [],
+  "gates": [],
+  "build": null,
+  "backup": null
+}

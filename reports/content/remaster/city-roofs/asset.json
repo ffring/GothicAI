@@ -1,0 +1,16 @@
+{
+  "asset": "city-roofs",
+  "title": "Кровли города",
+  "kind": "material",
+  "created": "2026-10-21",
+  "goal": "the same Gothic, better made",
+  "namespaces": [
+    "city-roofs"
+  ],
+  "sources": [],
+  "selected": {},
+  "reviews": [],
+  "gates": [],
+  "build": null,
+  "backup": null
+}
