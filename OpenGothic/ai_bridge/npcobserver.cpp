@@ -275,7 +275,7 @@ void NpcObserver::tick(World& world) {
     releaseHeld(world,held[i]);  // no verdict in time: the scripts react as they would have
     held.erase(held.begin()+ptrdiff_t(i));
     }
-  if(now<nextRoster)
+  if(now<nextRoster && nextRoster<=now+RosterPeriodMs)
     return;
   nextRoster = now+RosterPeriodMs;
   // Deed keys are unique for every action, unlike the bounded actor-pair cache.
@@ -1111,7 +1111,7 @@ bool NpcObserver::throttled(std::string_view npc, std::string_view kind, uint64_
   key += '/';
   key += kind;
   auto it = lastEvent.find(key);
-  if(it!=lastEvent.end() && now<it->second+periodMs)
+  if(it!=lastEvent.end() && it->second<=now && now<it->second+periodMs)
     return true;
   lastEvent[key] = now;
   return false;
