@@ -2614,6 +2614,7 @@ async def replay_first_words(args: argparse.Namespace) -> int:
         if args.hint_file else REACT_HINT
     )
     previous: dict[str, list[str]] = {}
+    branch: str | None = None
     llm = make_quick(quick_at)
     try:
         with (
@@ -2621,6 +2622,9 @@ async def replay_first_words(args: argparse.Namespace) -> int:
             if args.out else nullcontext()
         ) as output:
             for turn in turns:
+                if turn.get("branch") != branch:
+                    previous.clear()
+                    branch = turn.get("branch")
                 last = previous.setdefault(turn["npc"], [""] * args.runs)
                 result = await replay_first_words_turn(
                     llm,

@@ -203,6 +203,38 @@ def test_cli_filters_turns_runs_independently_and_prints_and_writes_results(
     assert [r["outcome"] for r in results[2]["runs"]] == ["same", "said"]
 
 
+def test_cli_resets_every_npcs_repetitions_when_the_save_branch_changes(monkeypatch, tmp_path, capsys):
+    trace = tmp_path / "traces.jsonl"
+    out = tmp_path / "results.jsonl"
+    other = "NONE_100_XARDAS"
+    turns = [
+        {**_turn(npc=npc), "branch": branch}
+        for branch, npc in [
+            ("first", other), ("first", NPC), ("first", other),
+            ("second", NPC), ("second", other), ("first", other),
+        ]
+    ]
+    rows = [{"type": "instructions", "hash": "persona", "text": "Recorded persona."}, *turns]
+    trace.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
+    quick = FakeBackend("Ты серьёзно?", delay=0)
+    monkeypatch.setattr(cli, "make_quick", lambda url: quick)
+    monkeypatch.setattr("sys.argv", [
+        "gothic-ai", "replay-first-words", str(trace), "--quick-url", "http://quick:9000/v1",
+        "--runs", "2", "--out", str(out),
+    ])
+
+    with pytest.raises(SystemExit) as exit:
+        cli.main()
+
+    assert exit.value.code == 0
+    results = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert [[run["outcome"] for run in result["runs"]] for result in results] == [
+        ["said", "said"], ["said", "said"], ["same", "same"],
+        ["said", "said"], ["said", "said"], ["said", "said"],
+    ]
+    assert len(capsys.readouterr().out.splitlines()) == 6
+
+
 @pytest.mark.parametrize(
     ("setting", "expected_url"),
     [
