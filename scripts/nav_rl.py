@@ -678,6 +678,10 @@ def drive_validation(args):
                                 temporary = Path(stream.name)
                             temporary.replace(rejection)
                             print(json.dumps(dict(setup_rejected=True, **rejected)), flush=True)
+                            # A rejected advance remains pending in the native
+                            # protocol. Recreate this worker before another reset.
+                            runner.close()
+                            runner = new_runner(worker, "validation")
                             continue
                         episode = read_json(directory / "episode.json")
                     if (episode.get("demo_version") != 2 or episode.get("navigation_memory_version") != 3
@@ -978,6 +982,56 @@ def validation_summary(episodes):
             falls="physical unsupported descent >60cm; harmful falls reported separately by original safety assessor"), episodes=episodes)
 
 
+def object_detour_summary(episodes, probes_path):
+    """Stratify objects with frozen Detour labels, independent of policy outcomes."""
+    objects = defaultdict(list)
+    for episode in episodes:
+        if episode["family"] == "object":
+            objects[episode["id"]].append(episode)
+    probes = {}
+    for probe in rows(probes_path):
+        identifier = probe.get("label")
+        if identifier in objects:
+            if identifier in probes:
+                raise ValueError(f"Duplicate object Detour probe: {identifier}")
+            probes[identifier] = probe
+    scenarios, ratios = [], {}
+    for identifier, samples in sorted(objects.items()):
+        probe = probes.get(identifier)
+        if probe is None:
+            raise ValueError(f"Missing object Detour probe: {identifier}")
+        direct, detour = float(probe["direct_cm"]), float(probe["detour_length_cm"])
+        if (probe.get("detour_complete") is not True or not math.isfinite(direct)
+                or not math.isfinite(detour) or min(direct, detour) <= 0
+                or any((sample["start"], sample["goal"]) != (probe["start"], probe["goal"])
+                       for sample in samples)):
+            raise ValueError(f"Invalid object Detour probe: {identifier}")
+        ratio = detour / direct
+        ratios[identifier] = ratio
+        bucket = "<1.2" if ratio < 1.2 else "1.2-1.5" if ratio <= 1.5 else ">1.5"
+        successes = sum(bool(sample["success"]) for sample in samples)
+        scenarios.append(dict(id=identifier, start=probe["start"], goal=probe["goal"],
+            detour_length_cm=detour, direct_cm=direct, detour_ratio=ratio, bucket=bucket,
+            episodes=len(samples), successes=successes, success_fraction=successes / len(samples),
+            by_seed={str(sample["action_seed"]): bool(sample["success"]) for sample in samples}))
+
+    def aggregate(selected):
+        values = [episode for identifier in selected for episode in objects[identifier]]
+        successes = sum(bool(episode["success"]) for episode in values)
+        by_seed = {}
+        for seed in sorted({episode["action_seed"] for episode in values}):
+            repeated = [episode for episode in values if episode["action_seed"] == seed]
+            wins = sum(bool(episode["success"]) for episode in repeated)
+            by_seed[str(seed)] = dict(episodes=len(repeated), successes=wins, success_fraction=wins / len(repeated))
+        return dict(scenarios=len(selected), episodes=len(values), successes=successes,
+                    success_fraction=successes / len(values) if values else None, by_seed=by_seed)
+
+    return {"source": str(probes_path), "scenarios": scenarios,
+        "by_bucket": {bucket: aggregate([value["id"] for value in scenarios if value["bucket"] == bucket])
+                      for bucket in ("<1.2", "1.2-1.5", ">1.5")},
+        "detours_over_1.2": aggregate([identifier for identifier, ratio in ratios.items() if ratio > 1.2])}
+
+
 def object_failure_summaries(episodes, count=10):
     failures = [ep for ep in episodes if ep["family"] == "object" and not ep["success"]]
     selected, seen = [], set()
@@ -1007,6 +1061,8 @@ def summarize(args):
         episodes = [episode for episode in episodes if episode["id"] not in excluded]
         result = validation_summary(episodes)
         result["setup_rejections"] = rejections
+        if getattr(args, "object_probes", None) is not None:
+            result["object_detour"] = object_detour_summary(episodes, args.object_probes)
         result["object_failures_last_10s"] = object_failure_summaries(episodes)
         write_json(args.output / "metrics.json", result)
         print(json.dumps({key: value for key, value in result.items()
@@ -1344,6 +1400,7 @@ def main():
     parser.add_argument("--pairs", type=Path)
     parser.add_argument("--manifest", type=Path, help="Frozen v4 corpus manifest; drive reads splits.validation only")
     parser.add_argument("--families", help="Comma-separated validation families; default all five")
+    parser.add_argument("--object-probes", type=Path, help="Frozen object Detour probes for validation summary")
     parser.add_argument("--action-seeds", help="Fixed sampling seeds; default 18102027,18102028,18102029")
     parser.add_argument("--jump-links", type=Path, help="Frozen jump links, used only for the jump family")
     parser.add_argument("--safety-fixtures", type=Path, help="Existing physically qualified nav-perception-safety fixtures")

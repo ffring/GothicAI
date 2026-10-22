@@ -145,7 +145,7 @@
 
 ## Движок: наши подсистемы
 
-Навигационное BC v4 → bc3: `scripts/nav_bc_data.py prepare --manifest` читает только train; `nav_bc_train.py train --init` переносит совместимый PPO it35. Формат `.navbc` v2 хранит единый манёвр и температуры softmax; вспомогательные цели остаются в обучении. `nav_rl.py drive --manifest` исполняет только validation с тремя seed. [Решения, ограничения и журнал](navigation.md).
+Навигационное BC v4 → bc3: `scripts/nav_bc_data.py prepare --manifest` читает только train; `nav_bc_train.py train --init` переносит совместимый PPO it35. Формат `.navbc` v2 хранит единый манёвр и температуры softmax; вспомогательные цели остаются в обучении. `nav_rl.py drive --manifest` исполняет только validation с тремя seed. `nav_rl.py summarize --object-probes` группирует доходимость объектов по отношению Detour к прямой, с отдельной корзиной обходов >1,2. [Решения, ограничения и журнал](navigation.md).
 
 `OpenGothic/` — форк Try/OpenGothic. Сторонние библиотеки лежат в `lib/` обычными файлами ([`VENDORED.md`](../OpenGothic/lib/VENDORED.md)); `lib/cgltf/` содержит заголовок и MIT-лицензию парсера glTF 2.0. Целиком наше: `ai_bridge/`, `game/bodyrunner.cpp`, `tests/*_contract.cpp`. В `common/` наши `physics/`, `gltfmesh.*`, части `game/` и `graphics/mesh/`, `testbench.*`, `nav*`; остальное — апстрим с точечными правками. Эмуляция Ikarus/LeGo апстрима (`common/game/compatibility/`, кроме `phoenix.*`) удалена; при слиянии апстрима конфликт `modify/delete` в этой папке решается сохранением удаления.
 

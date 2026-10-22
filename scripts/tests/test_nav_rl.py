@@ -870,26 +870,56 @@ def test_validation_setup_refusal_continues_and_is_shared_between_policies(tmp_p
     groups["approach"].append(healthy)
     rl.write_json(manifest, dict(schema_version=1, splits=dict(validation=groups)))
     stub_validation_runner(monkeypatch)
-    calls = []
+    calls, runners, healthy_runners = [], [], []
     reason = "Runner rejected advance: navdemos moving route needs distinct connected points"
 
+    class FakeRunner:
+        pending = False
+        closes = 0
+
+        def close(self):
+            self.closes += 1
+
+    def new_runner(*args):
+        runner = FakeRunner()
+        runners.append(runner)
+        return runner
+
+    monkeypatch.setattr(rl, "new_runner", new_runner)
     def scenario(args, runner, name, commands, directory):
+        if runner.pending:
+            raise RuntimeError("Runner rejected reset: advance is pending")
         scenario_id = directory.parent.name
         seed = int(directory.name.removeprefix("seed-"))
         calls.append((args.weights.stem, scenario_id, seed))
         if scenario_id == rejected["id"]:
+            runner.pending = True
             directory.mkdir(parents=True, exist_ok=True)
             (directory / "runner.log").write_text(reason)
             raise RuntimeError(reason)
+        healthy_runners.append(runner)
         rl.write_json(directory / "episode.json", validation_runner_metadata(healthy, seed))
 
     monkeypatch.setattr(rl, "scenario", scenario)
     monkeypatch.setattr(rl, "validation_episode_metrics", lambda path: dict(success=False))
     for policy in ("bc3", "it35"):
-        rl.drive_validation(validation_drive_args(tmp_path, manifest, policy))
+        args = validation_drive_args(tmp_path, manifest, policy, resume=True)
+        seed = rl.ACTION_SEEDS[0]
+        ready = args.output / "validation/approach" / healthy["id"] / f"seed-{seed}"
+        metadata = dict(validation_runner_metadata(healthy, seed), validation_scenario=healthy,
+                        action_seed=seed, weights=str(args.weights))
+        rl.write_json(ready / "episode.json", metadata)
+        rl.write_json(ready / "drive-metrics.json", dict(success=False))
+        (ready / "samples.bin.gz").write_bytes(b"ready original samples")
+        rl.drive_validation(args)
+        assert rl.read_json(ready / "episode.json") == metadata
+        assert (ready / "samples.bin.gz").read_bytes() == b"ready original samples"
 
     assert calls == [("bc3", rejected["id"], rl.ACTION_SEEDS[0])] + [
-        (policy, healthy["id"], seed) for policy in ("bc3", "it35") for seed in rl.ACTION_SEEDS]
+        (policy, healthy["id"], seed) for policy in ("bc3", "it35") for seed in rl.ACTION_SEEDS[1:]]
+    assert [runner.closes for runner in runners] == [1, 1, 1]
+    assert runners[0].pending
+    assert healthy_runners == [runners[1], runners[1], runners[2], runners[2]]
     saved = rl.read_json(tmp_path / "validation/setup-rejections" / f"{rejected['id']}.json")
     assert saved["id"] == rejected["id"]
     assert saved["family"] == "approach"
@@ -897,6 +927,34 @@ def test_validation_setup_refusal_continues_and_is_shared_between_policies(tmp_p
     assert saved["reason"] == reason
     for policy in ("bc3", "it35"):
         assert len(list((tmp_path / "validation" / policy).rglob("episode.json"))) == 3
+
+
+@pytest.mark.parametrize("failure_stage", ["close", "restart"])
+def test_validation_setup_refusal_keeps_runner_replacement_failures_fatal(tmp_path, monkeypatch, failure_stage):
+    manifest, _ = validation_manifest(tmp_path)
+    stub_validation_runner(monkeypatch)
+    started, calls = [], []
+
+    def close():
+        if failure_stage == "close":
+            raise RuntimeError("Runner close failed")
+
+    def new_runner(*args):
+        started.append(True)
+        if len(started) > 1:
+            raise RuntimeError("Runner restart failed")
+        return SimpleNamespace(close=close)
+
+    def scenario(*args):
+        calls.append(True)
+        raise RuntimeError("Runner rejected advance: navdemos moving route needs distinct connected points")
+
+    monkeypatch.setattr(rl, "new_runner", new_runner)
+    monkeypatch.setattr(rl, "scenario", scenario)
+    with pytest.raises(RuntimeError, match=f"Runner {failure_stage} failed"):
+        rl.drive_validation(validation_drive_args(tmp_path, manifest))
+    assert calls == [True]
+    assert len(started) == (1 if failure_stage == "close" else 2)
 
 
 @pytest.mark.parametrize("family,failure", [("approach", RuntimeError("Runner exited with code 1")),
@@ -992,3 +1050,61 @@ def test_validation_resume_recreates_only_incomplete_episode(tmp_path, monkeypat
     rl.drive_validation(args)
     assert calls == [directory]
     assert rl.read_json(neighbour) == dict(sentinel="other episode")
+
+
+def test_object_detour_summary_counts_scenarios_and_keeps_exact_ratio_boundaries(tmp_path):
+    probes, episodes = [], []
+    cases = [("short", 110, [True, False, False]), ("lower-boundary", 120, [False, True, True]),
+             ("upper-boundary", 150, [True, True, True]), ("long", 200, [False, False, False])]
+    for identifier, length, wins in cases:
+        probes.append(dict(label=identifier, start=f"{identifier}-A", goal=f"{identifier}-B",
+                           detour_complete=True, detour_length_cm=length, direct_cm=100))
+        episodes.extend(dict(id=identifier, family="object", start=f"{identifier}-A", goal=f"{identifier}-B",
+                             action_seed=seed, success=success) for seed, success in zip(rl.ACTION_SEEDS, wins))
+    episodes.append(dict(family="point", success=True))
+    path = tmp_path / "object-probes.jsonl"
+    path.write_text("".join(json.dumps(probe) + "\n" for probe in probes))
+
+    result = rl.object_detour_summary(episodes, path)
+
+    assert result["source"] == str(path)
+    scenarios = {value["id"]: value for value in result["scenarios"]}
+    assert set(scenarios) == {identifier for identifier, _, _ in cases}
+    for identifier, length, wins in cases:
+        value = scenarios[identifier]
+        assert value["start"] == f"{identifier}-A"
+        assert value["goal"] == f"{identifier}-B"
+        assert value["detour_length_cm"] == length
+        assert value["direct_cm"] == 100
+        assert value["detour_ratio"] == pytest.approx(length / 100)
+        assert value["episodes"] == 3
+        assert value["successes"] == sum(wins)
+        assert value["success_fraction"] == pytest.approx(sum(wins) / 3)
+    assert {identifier: value["bucket"] for identifier, value in scenarios.items()} == {
+        "short": "<1.2", "lower-boundary": "1.2-1.5", "upper-boundary": "1.2-1.5", "long": ">1.5"}
+    for bucket, scenario_count, successes, count in (("<1.2", 1, 1, 3), ("1.2-1.5", 2, 5, 6), (">1.5", 1, 0, 3)):
+        value = result["by_bucket"][bucket]
+        assert (value["scenarios"], value["episodes"], value["successes"]) == (scenario_count, count, successes)
+        assert value["success_fraction"] == pytest.approx(successes / count)
+    middle = result["by_bucket"]["1.2-1.5"]["by_seed"]
+    for seed, successes in zip(rl.ACTION_SEEDS, (1, 2, 2)):
+        assert middle[str(seed)] == dict(episodes=2, successes=successes, success_fraction=successes / 2)
+    detours = result["detours_over_1.2"]
+    assert (detours["scenarios"], detours["episodes"], detours["successes"]) == (2, 6, 3)
+    assert detours["success_fraction"] == .5
+    assert detours["by_seed"] == {str(seed): dict(episodes=2, successes=1, success_fraction=.5)
+                                  for seed in rl.ACTION_SEEDS}
+
+
+@pytest.mark.parametrize("corruption", [None, dict(detour_complete=False), dict(detour_length_cm=float("nan")),
+    dict(direct_cm=float("inf")), dict(direct_cm=0), dict(start="WRONG-A"), dict(goal="WRONG-B")])
+def test_object_detour_summary_rejects_missing_or_invalid_selected_probe(tmp_path, corruption):
+    identifier = "object-case"
+    probe = dict(label=identifier, start="A", goal="B", detour_complete=True, detour_length_cm=150, direct_cm=100)
+    if corruption is not None:
+        probe.update(corruption)
+    path = tmp_path / "object-probes.jsonl"
+    path.write_text("" if corruption is None else json.dumps(probe) + "\n")
+    episode = dict(id=identifier, family="object", start="A", goal="B", action_seed=7, success=False)
+    with pytest.raises(ValueError, match=identifier):
+        rl.object_detour_summary([episode], path)
