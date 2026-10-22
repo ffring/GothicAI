@@ -11,6 +11,7 @@ from gothic_launcher.commands import (
     Layout,
     Ports,
     child_env,
+    content_env,
     default_game_bin,
     default_hd_textures,
     default_log_root,
@@ -155,6 +156,35 @@ def test_the_game_preserves_an_explicit_fracture_override(config, tmp_path, monk
     assert game(config, layout, PORTS).env["OPENGOTHIC_FRACTURE"] == override
 
 
+@pytest.mark.parametrize("override", ["/another/content", ""])
+def test_content_preserves_an_explicit_override(config, tmp_path, monkeypatch, override):
+    (tmp_path / "materials").mkdir()
+    (tmp_path / "materials" / "materials.json").write_text("{}")
+    layout = replace(LAYOUT, play_content=tmp_path)
+    monkeypatch.setenv("OPENGOTHIC_CONTENT", override)
+    assert content_env(layout) == {"OPENGOTHIC_CONTENT": override}
+    assert game(config, layout, PORTS).env["OPENGOTHIC_CONTENT"] == override
+
+
+def test_the_game_gets_the_personal_content_when_enabled(config, tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENGOTHIC_CONTENT", raising=False)
+    (tmp_path / "materials").mkdir()
+    (tmp_path / "materials" / "materials.json").write_text("{}")
+    layout = replace(LAYOUT, play_content=tmp_path)
+    assert content_env(layout) == {"OPENGOTHIC_CONTENT": str(tmp_path)}
+    assert game(config, layout, PORTS).env["OPENGOTHIC_CONTENT"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_content_without_materials_is_not_enabled(tmp_path, monkeypatch, exists):
+    monkeypatch.delenv("OPENGOTHIC_CONTENT", raising=False)
+    content = tmp_path / "play-content"
+    if exists:
+        content.mkdir()
+    assert content_env(replace(LAYOUT, play_content=content)) == {}
+    assert content_env(LAYOUT) == {}
+
+
 def test_latest_save(tmp_path):
     assert latest_save(tmp_path) is None
     for i, slot in enumerate(["1", "0", "12"]):
@@ -193,14 +223,23 @@ def test_find_layout_lists_everything_missing(config, tmp_path, monkeypatch):
     binary.write_text("#!/bin/sh\n")
     binary.chmod(0o755)
     config.set("game.dir", str(game_dir))
+    content = tmp_path / "play-content"
+    (content / "materials").mkdir(parents=True)
+    (content / "materials" / "materials.json").write_text("{}")
+    monkeypatch.setattr(commands, "PLAY_CONTENT", content)
+    monkeypatch.setattr(commands.sys, "platform", "linux")
+    monkeypatch.delenv("OPENGOTHIC_CONTENT", raising=False)
     layout = find_layout(config)
     assert layout.game_bin == binary and layout.game_dir == game_dir and layout.uv == Path("/bin/sh")
+    assert layout.play_content == content
 
     bundled = binary.parent / "OpenGothic Dev.app" / "Contents" / "MacOS" / "Gothic2Notr"
     bundled.parent.mkdir(parents=True)
     bundled.symlink_to("../../../Gothic2Notr")  # as scripts/make-dev-app.sh makes it
     monkeypatch.setattr(commands.sys, "platform", "darwin")
-    assert find_layout(config).game_bin == bundled  # the game gets its own name and icon in the Dock
+    layout = find_layout(config)
+    assert layout.game_bin == bundled  # the game gets its own name and icon in the Dock
+    assert layout.play_content is None and content_env(layout) == {}
     monkeypatch.setattr(commands.sys, "platform", "linux")
     assert default_game_bin(repo) == binary  # Linux never chooses a stray macOS bundle
 

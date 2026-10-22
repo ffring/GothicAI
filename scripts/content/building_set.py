@@ -28,7 +28,11 @@ existing CPU filter unless the texture takes them from its model bake (below). W
 with a staging set as base, it is that set with only these entries replaced.
 
 `compose SET PART...` joins the sets of several assets into one staging set for the game:
-each texture belongs to exactly one part, so a shared texture lives in its own asset.
+each texture belongs to exactly one part, so a shared texture lives in its own asset. Meshes of a
+part (a prop's GLB) come along.
+
+`enable SET` copies a staging set into the working content `~/.local/share/gothic-ai/content`, which
+the game reads by default; only on the user's word (gate `enable`).
 """
 from __future__ import annotations
 
@@ -330,39 +334,92 @@ def pack(records: list[dict], spec: dict, derived_root: Path) -> dict:
 
 
 def compose(name: str, parts: list[str]) -> dict:
-    """Join the staging sets `parts` into a new set; a texture may come from one part only."""
+    """Join the staging sets `parts` into a new set; a texture or a visual may come from one part only.
+
+    A part's meshes (`meshes/meshes.json` and its GLB files, a prop like the barrel) come along with its
+    materials. Entries of one part may share files: the barrel's wood and iron use one atlas."""
     if len(parts) < 2 or len(set(parts)) != len(parts):
         raise ValueError('compose needs two or more distinct parts')
     staging = remaster.data_root() / 'content-staging'
-    indexes, owner = {}, {}
+    indexes, meshes, owner = {}, {}, {}
     for part in parts:
         indexes[part] = json.loads((staging / part / 'materials/materials.json').read_text())
-        for texture in indexes[part]:
-            if texture in owner:
-                raise ValueError(f'{texture}: in both {owner[texture]} and {part}')
-            owner[texture] = part
+        mesh_index = staging / part / 'meshes/meshes.json'
+        meshes[part] = json.loads(mesh_index.read_text()) if mesh_index.is_file() else {}
+        # the engine finds a visual by name without case
+        for key in [*indexes[part], *(f'visual {visual.upper()}' for visual in meshes[part])]:
+            if key in owner:
+                raise ValueError(f'{key}: in both {owner[key]} and {part}')
+            owner[key] = part
     output = new_staging(name)
     (output / 'materials').mkdir(parents=True)
-    index, digests = {}, {}
+    copied, digests = {}, {'materials': {}, 'meshes': {}}
+
+    def take(part: str, kind: str, relative: Path) -> None:
+        key = f'{kind}/{relative}'
+        if key in copied:
+            if copied[key] != part:
+                raise ValueError(f'{relative}: path used by two parts')
+            return
+        source, target = staging / part / kind / relative, output / kind / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        digests[kind][str(relative)] = pilot.file_digest(target)
+        if digests[kind][str(relative)] != pilot.file_digest(source):
+            raise ValueError(f'{relative}: copy differs from {part}')
+        copied[key] = part
+
+    index, mesh_index = {}, {}
     for part, part_index in indexes.items():
         for texture, entry in part_index.items():
             for channel in ('albedo', 'normal', 'orm'):
-                relative = Path(entry[channel])
-                source, target = staging / part / 'materials' / relative, output / 'materials' / relative
-                if target.exists():
-                    raise ValueError(f'{relative}: path used by two parts')
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, target)
-                digests[str(relative)] = pilot.file_digest(target)
-                if digests[str(relative)] != pilot.file_digest(source):
-                    raise ValueError(f'{relative}: copy differs from {part}')
+                take(part, 'materials', Path(entry[channel]))
             index[texture] = entry
+        for visual, entry in meshes[part].items():
+            take(part, 'meshes', Path(entry['glb']))
+            mesh_index[visual] = entry
     (output / 'materials/materials.json').write_text(json.dumps(index, indent=2) + '\n')
+    if mesh_index:
+        (output / 'meshes/meshes.json').write_text(json.dumps(mesh_index, indent=2) + '\n')
     composition = dict(set=name, date=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
-                       parts={part: sorted(part_index) for part, part_index in indexes.items()},
-                       dds_sha256=digests)
+                       parts={part: sorted(part_index) + sorted(meshes[part]) for part, part_index in indexes.items()},
+                       dds_sha256=digests['materials'])
+    if mesh_index:
+        composition['glb_sha256'] = digests['meshes']
     (output / 'composition.json').write_text(json.dumps(composition, indent=2) + '\n')
-    return dict(set=name, entries=len(index), parts={part: len(i) for part, i in indexes.items()})
+    return dict(set=name, entries=len(index), meshes=len(mesh_index),
+                parts={part: len(i) + len(meshes[part]) for part, i in indexes.items()})
+
+
+def enable(name: str) -> dict:
+    """Make the staging set `name` the game's working content: `<data>/content`, which the engine reads
+    when OPENGOTHIC_CONTENT is unset. Only its `materials/` and `meshes/` are replaced, other folders
+    there stay; `enabled.json` records the set. Enabling is the user's decision (gate `enable`)."""
+    staging = remaster.data_root() / 'content-staging' / name
+    if not (staging / 'materials/materials.json').is_file():
+        raise ValueError(f'{staging}: no materials/materials.json')
+    live = remaster.data_root() / 'content'
+    incoming = live / '.enable'
+    shutil.rmtree(incoming, ignore_errors=True)
+    incoming.mkdir(parents=True)
+    kinds = [kind for kind in ('materials', 'meshes') if (staging / kind).is_dir()]
+    for kind in kinds:
+        shutil.copytree(staging / kind, incoming / kind)
+        for source in (staging / kind).rglob('*'):
+            if source.is_file() and pilot.file_digest(source) != pilot.file_digest(incoming / kind / source.relative_to(staging / kind)):
+                raise ValueError(f'{source}: copy differs')
+    for kind in ('materials', 'meshes'):
+        shutil.rmtree(live / kind, ignore_errors=True)
+        if kind in kinds:
+            (incoming / kind).rename(live / kind)
+    incoming.rmdir()
+    composition = staging / 'composition.json'
+    record = dict(set=name, date=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+                  materials=len(json.loads((live / 'materials/materials.json').read_text())),
+                  meshes=len(json.loads((live / 'meshes/meshes.json').read_text())) if 'meshes' in kinds else 0,
+                  parts=json.loads(composition.read_text())['parts'] if composition.is_file() else None)
+    (live / 'enabled.json').write_text(json.dumps(record, indent=2, ensure_ascii=False) + '\n')
+    return record
 
 
 def contact_sheet(records: list[dict], derived_root: Path, target: Path) -> None:
@@ -427,13 +484,16 @@ def build(asset: str, spec: dict, records: list[dict]) -> dict:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('prepare', 'build', 'compose'))
-    parser.add_argument('asset', help='asset, or the new set name for compose')
+    parser.add_argument('command', choices=('prepare', 'build', 'compose', 'enable'))
+    parser.add_argument('asset', help='asset, the new set name for compose, or the set to enable')
     parser.add_argument('parts', nargs='*', help='compose: staging sets to join')
     args = parser.parse_args(argv)
     try:
         if args.command == 'compose':
             print(json.dumps(compose(args.asset, args.parts), sort_keys=True), flush=True)
+            return 0
+        if args.command == 'enable':
+            print(json.dumps(enable(args.asset), sort_keys=True, ensure_ascii=False), flush=True)
             return 0
         spec = load_spec(args.asset)
         records, report = prepare(args.asset, spec)

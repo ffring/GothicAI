@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -77,6 +78,17 @@ def build_command(source):
     return [str(Path.home() / "gothic-ai/bin/gq"), "run", "--class", "quick",
             "--threads", "12", "--mem", "12G", "--max", "30m",
             "--name", "Gothic AI install/update", "--", sys.executable, "-c", source, "__prepare"]
+
+
+def sync_content():
+    content = Path.home() / ".local/share/gothic-ai/content"
+    with tempfile.TemporaryDirectory(prefix="gothic-play-content-") as empty:
+        source = content if content.is_dir() else Path(empty)
+        run(["rsync", "-a", "--delete", "--checksum", "--delete-excluded",
+             "--include=/materials/***", "--include=/meshes/***", "--include=/enabled.json", "--exclude=*",
+             "-e", "ssh -o BatchMode=yes -o ConnectTimeout=10",
+             "--rsync-path=mkdir -p ~/.local/share/gothic-ai/play-content.incoming && rsync",
+             f"{source}/", "ryzen:.local/share/gothic-ai/play-content.incoming/"])
 
 
 def prepare():
@@ -161,6 +173,16 @@ def remote_install(action, payload, source):
         result = owned_process(build_command(source))
         if result not in (0, 3):
             return result
+        content = home / ".local/share/gothic-ai/play-content"
+        incoming = content.with_name("play-content.incoming")
+        old = content.with_name("play-content.old")
+        if old.exists():
+            shutil.rmtree(old)
+        if content.exists():
+            content.rename(old)
+        incoming.rename(content)
+        if old.exists():
+            shutil.rmtree(old)
         create_settings(home / ".config/gothic-ai/settings.toml", payload["settings"], repo, home)
         applications = home / ".local/share/applications"
         applications.mkdir(parents=True, exist_ok=True)
@@ -187,6 +209,7 @@ def main(argv=None):
         source = Path(__file__).read_text()
         payload = {"origin": origin, "settings": {key: settings.get(key, {}) for key in ("game", "llm", "voice", "tts")},
                    "installer": source}
+        sync_content()
         command = shlex.join(["python3", "-c", source, "__remote", args.action])
         return owned_process(["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                               "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",

@@ -126,6 +126,9 @@ async def test_a_lie_to_lobart_is_paid_and_found_out_the_next_morning(graph):
         assert "Ты ждёшь от героя: «Убрать поле репы» (id MIS_LOBART_RUEBEN)" in situation
         assert "герой принесёт тебе Репа ×20" in situation and "5 золотых, опыт +50" in situation
         assert "у героя с собой Репа ×0 из 20" in situation  # what Lobart sees for himself
+        assert (
+            "Можешь снять пункты (amend_quest): ITPL_BEET — Репа (у героя с собой ×0 из 20)."
+        ) in situation
         # he sees the hero has none on him: he may call it a lie to his face; nothing to go and check
         assert {t.name for t in vanilla.tools(LOBART)} == {
             "accept_quest", "expose_lie", "amend_quest", "drop_quest"
@@ -850,6 +853,57 @@ def two_bandits(graph):
             "&&", effect["when"], ["call", "NPC_ISDEAD", ["inst", "SECOND_BANDIT"]]
         ]
     return graph
+
+
+async def test_amendment_list_distinguishes_same_named_targets(two_bandits):
+    fake = FakeGame(branch="A")
+    link_cm, dialogue, chronicle, vanilla = await _setup(
+        fake, FakeBackend(delay=0), two_bandits, MemoryStore(":memory:")
+    )
+    fake.instances["SECOND_BANDIT"] = "BDT_2_BANDIT"
+    fake.vars.update({QUEST: 2, KILL: 1})
+    fake.npc_states.update({
+        BANDIT: {"state": "alive", "name": "Бандит", "distance": 500, "seen": True},
+        "BDT_2_BANDIT": {"state": "dead", "name": "Бандит", "distance": 9000, "seen": False},
+    })
+    try:
+        chronicle.record({"fact": "seen_dead", "npc": LOBART, "dead": "BDT_2_BANDIT", "how": "saw_die"})
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert (
+            f"Можешь снять пункты (amend_quest): {BANDIT} — Бандит (жив, у тебя на глазах); "
+            "BDT_2_BANDIT — Бандит (мёртв: ты видел, как он умер)."
+        ) in vanilla.situation(LOBART)
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("unseen", [False, True])
+async def test_completion_reminder_requires_every_target_witnessed(two_bandits, unseen):
+    fake = FakeGame(branch="A")
+    link_cm, dialogue, chronicle, vanilla = await _setup(
+        fake, FakeBackend(delay=0), two_bandits, MemoryStore(":memory:")
+    )
+    fake.instances["SECOND_BANDIT"] = "BDT_2_BANDIT"
+    fake.vars.update({QUEST: 2, KILL: 1})
+    fake.npc_states.update({
+        BANDIT: {"state": "dead", "name": "Бандит", "distance": 500, "seen": True},
+        "BDT_2_BANDIT": {"state": "dead", "name": "Второй бандит", "distance": 9000, "seen": False},
+    })
+    try:
+        chronicle.record({"fact": "caught", "npc": LOBART, "quest": QUEST})
+        if not unseen:
+            chronicle.record({"fact": "seen_dead", "npc": LOBART, "dead": "BDT_2_BANDIT", "how": "saw_die"})
+        dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        assert vanilla.trust.broken(LOBART)
+        assert vanilla.offers[LOBART][KILL].seen_true() is not unseen
+        reminder = (
+            "Засчитать можно сейчас: отдаёшь награду — вызови accept_quest, без него она не перейдёт."
+        )
+        assert (reminder in vanilla.situation(LOBART)) is not unseen
+    finally:
+        await link_cm.__aexit__(None, None, None)
 
 
 async def test_even_a_distrustful_giver_accepts_deaths_it_witnessed_earlier(two_bandits):
