@@ -1969,14 +1969,17 @@ async def companion_scenario(
     def check(name: str, ok: bool, detail: object = "") -> None:
         results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
 
-    calls: list[tuple[float, str, str, dict[str, Any]]] = []  # (sent, action, status, args)
+    sent: list[tuple[float, str]] = []
+    calls: list[tuple[float, str, str, dict[str, Any], float]] = []  # (sent, action, status, args, completed)
     act = link.act
 
     async def recorded(who: str, action: Any, /, **kw: Any) -> Any:
         t = time.monotonic()
+        if who.upper() == npc:
+            sent.append((t, action))
         res = await act(who, action, **kw)
         if who.upper() == npc:
-            calls.append((t, action, res.status, kw))
+            calls.append((t, action, res.status, kw, time.monotonic()))
         return res
 
     link.act = recorded  # type: ignore[method-assign]
@@ -2020,7 +2023,7 @@ async def companion_scenario(
     def dist(who: str = npc) -> float:
         return talk.people[who].distance / 100 if who in talk.people else -1.0
 
-    def since(t0: float, action: str) -> list[tuple[float, str, str, dict[str, Any]]]:
+    def since(t0: float, action: str) -> list[tuple[float, str, str, dict[str, Any], float]]:
         return [c for c in calls if c[0] >= t0 and c[1] == action]
 
     try:
@@ -2063,15 +2066,19 @@ async def companion_scenario(
     await _until(lambda: 0 <= dist() <= 6, 30)  # it has caught up from its fire: it hears its name
     t0 = time.monotonic()
     talk.hear("Кавалорн, иди в пещеру первым.", None, {"via": "scenario"})
-    walked = await _until(lambda: since(t0, "go_to_waypoint"), 20)
+    walked = await _until(lambda: any(t >= t0 and action == "go_to_waypoint" for t, action in sent), 20)
     arrived = await _until(lambda: any(c[2] == "done" for c in since(t0, "go_to_waypoint")), 100)
     walk = since(t0, "go_to_waypoint")
+    first_done = next((c for c in walk if c[2] == "done"), None)
+    done_detail = f"first done after {first_done[4] - t0:.1f} s" if first_done else "no done"
     snap = await link.snapshot(npc, fresh=True)
     standing = talk.orders.standing.get(npc) if talk.orders else None
     check(
         "go_to",
         walked and arrived and standing is not None and standing.kind == "go",
-        f"{walk[-1][2] if walk else 'not sent'}, at {snap.npc.waypoint or snap.npc.nearest_waypoint}",
+        f"{walk[-1][2] if walk else 'not sent'}, {done_detail}, "
+        f"standing {standing.kind if standing is not None else 'none'}, "
+        f"at {snap.npc.waypoint or snap.npc.nearest_waypoint}",
     )
     # it looks around in there before it says what it found
     told = await _until(
