@@ -678,22 +678,25 @@
       "id": "r3-m4-basement-window",
       "stage": "ingame",
       "mode": "blind",
-      "verdict": "pending",
-      "date": "2026-10-22"
+      "verdict": "DISPUTED",
+      "date": "2026-10-22",
+      "path": "reviews/r3-m4-basement-window/merged.json"
     },
     {
       "id": "r3-m4-basement-chain",
       "stage": "ingame",
       "mode": "blind",
-      "verdict": "pending",
-      "date": "2026-10-22"
+      "verdict": "DISPUTED",
+      "date": "2026-10-22",
+      "path": "reviews/r3-m4-basement-chain/merged.json"
     },
     {
       "id": "r3-m4-front",
       "stage": "ingame",
       "mode": "blind",
-      "verdict": "pending",
-      "date": "2026-10-22"
+      "verdict": "DISPUTED",
+      "date": "2026-10-22",
+      "path": "reviews/r3-m4-front/merged.json"
     }
   ],
   "gates": [
