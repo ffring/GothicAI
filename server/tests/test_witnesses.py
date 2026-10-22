@@ -371,7 +371,15 @@ async def test_a_witness_that_did_not_see_him_can_not_catch_him():
     reaction = next(c for c in llm.calls if "Ответ:" in str(c[1][-1].content))
     assert "героя не видели за сутки до того" in str(reaction[1][-1].content)
     # it saw nothing: nothing to catch him with, the lie stands
-    assert any(o == "Отклонено: со слов: Хильда — героя не видели, уличить нечем." for o in llm.outputs)
+    assert any(
+        o.startswith("Отклонено: со слов: Хильда — героя не видели, уличить нечем.")
+        and (
+            " Ты уже сказал вслух: «Так ты врёшь!». "
+            "Если отказ этого не меняет — ничего не говори. "
+            "Если меняет — поправься одной короткой фразой, не повторяя сказанного."
+        ) in o
+        for o in llm.outputs
+    )
     assert w.chronicle.facts("caught") == []
 
 
