@@ -20,8 +20,10 @@ import math
 import os
 from pathlib import Path
 import random
+import shutil
 import statistics
 import sys
+import tempfile
 import threading
 import time
 
@@ -614,6 +616,7 @@ def drive_validation(args):
     values += safety_scenarios(args)
     seeds = action_seeds(getattr(args, "action_seeds", None))
     jobs = [(index, value, seed) for index, value in enumerate(values) for seed in seeds]
+    rejections = args.output.parent / "setup-rejections"
     if any(value["family"] == "jump" for value in values) and getattr(args, "jump_links", None) is None:
         raise ValueError("Jump validation requires --jump-links from the frozen corpus inputs")
     workers = min(args.parallel, len(jobs))
@@ -633,31 +636,66 @@ def drive_validation(args):
             try:
                 for index, value, seed in group:
                     directory = args.output / "validation" / value["family"] / value["id"] / f"seed-{seed}"
-                    if (directory / "drive-metrics.json").is_file():
-                        existing = read_json(directory / "episode.json")
-                        if (not args.resume or existing.get("validation_scenario") != value
-                                or existing.get("action_seed") != seed or existing.get("weights") != str(args.weights)):
-                            raise ValueError(f"Existing or different validation episode: {directory}")
-                        module("nav_ppo_final").retain_tail(directory)
+                    rejection = rejections / f"{value['id']}.json"
+                    if rejection.is_file():
+                        if read_json(rejection)["validation_scenario"] != value:
+                            raise ValueError(f"Different rejected validation scenario: {rejection}")
                         continue
-                    if directory.exists() and any(directory.iterdir()):
-                        raise ValueError(f"Incomplete validation episode; refusing to overwrite: {directory}")
-                    worker.seed = value["seed"]
-                    started = time.monotonic()
-                    scenario(worker, runner, f"validation-{value['id']}-{seed}",
-                             validation_commands(worker, value, seed), directory)
-                    episode = read_json(directory / "episode.json")
+                    if (directory / "episode.json").is_file():
+                        existing = read_json(directory / "episode.json")
+                        if (not args.resume or existing.get("validation_scenario", value) != value
+                                or existing.get("action_seed", seed) != seed
+                                or existing.get("weights", str(args.weights)) != str(args.weights)):
+                            raise ValueError(f"Existing or different validation episode: {directory}")
+                        episode = existing
+                        started = None
+                    else:
+                        if directory.exists() and any(directory.iterdir()):
+                            if not args.resume:
+                                raise ValueError(f"Incomplete validation episode; use --resume: {directory}")
+                            shutil.rmtree(directory)
+                        worker.seed = value["seed"]
+                        started = time.monotonic()
+                        try:
+                            scenario(worker, runner, f"validation-{value['id']}-{seed}",
+                                     validation_commands(worker, value, seed), directory)
+                        except RuntimeError as error:
+                            reason = str(error)
+                            if (value["goal_kind"] not in ("approach", "follow") or reason !=
+                                    "Runner rejected advance: navdemos moving route needs distinct connected points"):
+                                raise
+                            process = getattr(runner, "process", None)
+                            if process is not None and process.poll() is not None:
+                                raise RuntimeError(f"Runner exited during setup refusal: {process.returncode}") from error
+                            if any(path.name in ("episode.json", "actions.txt", "trajectory.txt", "target-trajectory.txt")
+                                   or path.name.startswith("samples.bin") for path in directory.rglob("*")):
+                                raise
+                            rejected = dict(id=value["id"], family=value["family"],
+                                            validation_scenario=value, reason=reason)
+                            rejections.mkdir(parents=True, exist_ok=True)
+                            with tempfile.NamedTemporaryFile(mode="w", dir=rejections, delete=False) as stream:
+                                json.dump(rejected, stream, ensure_ascii=False, indent=2)
+                                temporary = Path(stream.name)
+                            temporary.replace(rejection)
+                            print(json.dumps(dict(setup_rejected=True, **rejected)), flush=True)
+                            continue
+                        episode = read_json(directory / "episode.json")
                     if (episode.get("demo_version") != 2 or episode.get("navigation_memory_version") != 3
                             or episode.get("physics_mode") != args.physics or episode.get("oracle") is not False
                             or episode.get("action_mode") != "sample" or episode.get("teacher_beta") != 0
                             or episode.get("mixing_seed") != seed or episode.get("drive") is not True
                             or episode.get("observation_source") != "learner_memory"):
                         raise ValueError(f"Runner validation identity differs: {directory}")
+                    if (directory / "drive-metrics.json").is_file():
+                        module("nav_ppo_final").retain_tail(directory)
+                        continue
                     for key in ("id", "family", "split", "region", "place_id"):
                         if key in value:
                             episode[key] = value[key]
                     episode.update(index=index, validation_scenario=value, scenario_seed=value["seed"], action_seed=seed,
-                                   weights=str(args.weights), collector_wall_s=time.monotonic() - started)
+                                   weights=str(args.weights))
+                    if started is not None:
+                        episode["collector_wall_s"] = time.monotonic() - started
                     write_json(directory / "episode.json", episode)
                     measured = validation_episode_metrics(directory)
                     write_json(directory / "drive-metrics.json", measured)
@@ -964,7 +1002,11 @@ def summarize(args):
         episodes = [read_json(path) for path in cached]
         if any(ep.get("split") != "validation" for ep in episodes):
             raise ValueError("Manifest summary requires validation-only episodes")
+        rejections = [read_json(path) for path in sorted((args.source.parent / "setup-rejections").glob("*.json"))]
+        excluded = {value["id"] for value in rejections}
+        episodes = [episode for episode in episodes if episode["id"] not in excluded]
         result = validation_summary(episodes)
+        result["setup_rejections"] = rejections
         result["object_failures_last_10s"] = object_failure_summaries(episodes)
         write_json(args.output / "metrics.json", result)
         print(json.dumps({key: value for key, value in result.items()

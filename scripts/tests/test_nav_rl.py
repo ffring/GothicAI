@@ -842,3 +842,153 @@ def test_manifest_drive_repeats_scenario_seed_for_three_policy_seeds(tmp_path, m
     assert [(world, seed) for world, seed, _ in calls] == [(19, seed) for seed in rl.ACTION_SEEDS]
     assert len(closed) == 1
     assert len(tails) == 3
+
+
+def validation_drive_args(tmp_path, manifest, policy="bc3", family="approach", resume=False):
+    return SimpleNamespace(manifest=manifest, families=family, action_mode="sample", action_seeds=None,
+        indices=None, parallel=1, output=tmp_path / "validation" / policy, cache=tmp_path / "cache", seed=7,
+        resume=resume, npc="NPC", roads=Path("/roads"), weights=Path(f"/{policy}.navbc"),
+        limit_ms=240000, physics="cv")
+
+
+def validation_runner_metadata(value, seed):
+    return dict(demo_version=2, navigation_memory_version=3, physics_mode="cv", oracle=False,
+        action_mode="sample", teacher_beta=0, mixing_seed=seed, drive=True,
+        observation_source="learner_memory", goal_kind=value["goal_kind"], elapsed_ms=100, success=False)
+
+
+def stub_validation_runner(monkeypatch):
+    monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(rl, "module", lambda name: SimpleNamespace(retain_tail=lambda path: None))
+
+
+def test_validation_setup_refusal_continues_and_is_shared_between_policies(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    rejected = groups["approach"][0]
+    healthy = dict(rejected, id="approach-connected", route=["B", "C"])
+    groups["approach"].append(healthy)
+    rl.write_json(manifest, dict(schema_version=1, splits=dict(validation=groups)))
+    stub_validation_runner(monkeypatch)
+    calls = []
+    reason = "Runner rejected advance: navdemos moving route needs distinct connected points"
+
+    def scenario(args, runner, name, commands, directory):
+        scenario_id = directory.parent.name
+        seed = int(directory.name.removeprefix("seed-"))
+        calls.append((args.weights.stem, scenario_id, seed))
+        if scenario_id == rejected["id"]:
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "runner.log").write_text(reason)
+            raise RuntimeError(reason)
+        rl.write_json(directory / "episode.json", validation_runner_metadata(healthy, seed))
+
+    monkeypatch.setattr(rl, "scenario", scenario)
+    monkeypatch.setattr(rl, "validation_episode_metrics", lambda path: dict(success=False))
+    for policy in ("bc3", "it35"):
+        rl.drive_validation(validation_drive_args(tmp_path, manifest, policy))
+
+    assert calls == [("bc3", rejected["id"], rl.ACTION_SEEDS[0])] + [
+        (policy, healthy["id"], seed) for policy in ("bc3", "it35") for seed in rl.ACTION_SEEDS]
+    saved = rl.read_json(tmp_path / "validation/setup-rejections" / f"{rejected['id']}.json")
+    assert saved["id"] == rejected["id"]
+    assert saved["family"] == "approach"
+    assert saved["validation_scenario"] == rejected
+    assert saved["reason"] == reason
+    for policy in ("bc3", "it35"):
+        assert len(list((tmp_path / "validation" / policy).rglob("episode.json"))) == 3
+
+
+@pytest.mark.parametrize("family,failure", [("approach", RuntimeError("Runner exited with code 1")),
+    ("approach", ValueError("NAVDEMO record is corrupt")), ("approach", OSError("No space left on device")),
+    ("point", RuntimeError("Runner rejected advance: navdemos moving route needs distinct connected points"))])
+def test_validation_keeps_runner_record_and_disk_failures_fatal(tmp_path, monkeypatch, family, failure):
+    manifest, _ = validation_manifest(tmp_path)
+    stub_validation_runner(monkeypatch)
+    calls = []
+
+    def scenario(*args):
+        calls.append(True)
+        raise failure
+
+    monkeypatch.setattr(rl, "scenario", scenario)
+    with pytest.raises(type(failure), match=str(failure)):
+        rl.drive_validation(validation_drive_args(tmp_path, manifest, family=family))
+    assert calls == [True]
+    assert not list((tmp_path / "validation/setup-rejections").glob("*.json"))
+
+
+def test_validation_summary_removes_shared_setup_refusals_from_both_policies(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    rejected = groups["approach"][0]
+    reason = "Runner rejected advance: navdemos moving route needs distinct connected points"
+    rl.write_json(tmp_path / "validation/setup-rejections" / f"{rejected['id']}.json",
+        dict(id=rejected["id"], family="approach", validation_scenario=rejected, reason=reason))
+    captured = []
+    monkeypatch.setattr(rl, "validation_summary", lambda episodes: captured.append(episodes) or dict(episodes=episodes))
+    monkeypatch.setattr(rl, "object_failure_summaries", lambda episodes: [])
+    for policy in ("bc3", "it35"):
+        output = validation_drive_args(tmp_path, manifest, policy).output
+        for identifier in (rejected["id"], "approach-connected"):
+            rl.write_json(output / "validation/approach" / identifier / "seed-7/drive-metrics.json",
+                dict(id=identifier, family="approach", split="validation", success=False, action_seed=7))
+        rl.summarize(SimpleNamespace(source=output, output=output))
+        summary = rl.read_json(output / "metrics.json")
+        assert [episode["id"] for episode in summary["episodes"]] == ["approach-connected"]
+        assert summary["setup_rejections"][0]["id"] == rejected["id"]
+        assert summary["setup_rejections"][0]["reason"] == reason
+    assert [[episode["id"] for episode in episodes] for episodes in captured] == [
+        ["approach-connected"], ["approach-connected"]]
+
+
+def test_validation_resume_recovers_completed_episode_without_collector_metadata(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    args = validation_drive_args(tmp_path, manifest, family="point", resume=True)
+    args.action_seeds = "7"
+    value = groups["point"][0]
+    directory = args.output / "validation/point" / value["id"] / "seed-7"
+    rl.write_json(directory / "episode.json", validation_runner_metadata(value, 7))
+    (directory / "samples.bin.gz").write_bytes(b"completed original samples")
+    stub_validation_runner(monkeypatch)
+    monkeypatch.setattr(rl, "scenario", lambda *args: pytest.fail("Completed episode was rerun"))
+    measured = []
+
+    def metrics(path):
+        measured.append(path)
+        metadata = rl.read_json(path / "episode.json")
+        assert metadata["validation_scenario"] == value
+        assert metadata["action_seed"] == 7
+        assert metadata["weights"] == str(args.weights)
+        return dict(success=False)
+
+    monkeypatch.setattr(rl, "validation_episode_metrics", metrics)
+    rl.drive_validation(args)
+    assert measured == [directory]
+    assert (directory / "samples.bin.gz").read_bytes() == b"completed original samples"
+    assert rl.read_json(directory / "drive-metrics.json") == dict(success=False)
+
+
+def test_validation_resume_recreates_only_incomplete_episode(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    args = validation_drive_args(tmp_path, manifest, family="point", resume=True)
+    args.action_seeds = "7"
+    value = groups["point"][0]
+    directory = args.output / "validation/point" / value["id"] / "seed-7"
+    directory.mkdir(parents=True)
+    (directory / "partial-samples.bin.gz").write_bytes(b"incomplete")
+    neighbour = directory.parent / "seed-19" / "episode.json"
+    rl.write_json(neighbour, dict(sentinel="other episode"))
+    stub_validation_runner(monkeypatch)
+    calls = []
+
+    def scenario(args, runner, name, commands, output):
+        assert output == directory
+        assert not (output / "partial-samples.bin.gz").exists()
+        calls.append(output)
+        rl.write_json(output / "episode.json", validation_runner_metadata(value, 7))
+
+    monkeypatch.setattr(rl, "scenario", scenario)
+    monkeypatch.setattr(rl, "validation_episode_metrics", lambda path: dict(success=False))
+    rl.drive_validation(args)
+    assert calls == [directory]
+    assert rl.read_json(neighbour) == dict(sentinel="other episode")
