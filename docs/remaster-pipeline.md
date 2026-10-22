@@ -137,20 +137,22 @@
 
 Все 78 текстур из [таблицы города](../data/content/city-materials.csv) разложены по ассетам. Совместное использование взято из [переписи блоков](../reports/content/2026-10-harbour-house/census.csv).
 
-| # | Ассет | Вид | Текстуры | Где стоят | Что было |
-|---|---|---|---|---|---|
-| 1 | `city-roofs` | общий материал | `ROOF_01`, `ROOF_04`, `ROOF_INSIDE_01` | `ROOF_01` — хижины и дома порта, дома у рынка, маяк; `ROOF_04` — верхний квартал, таверна, ратуша, навесы лавок | `city-3` |
-| 2 | `city-timber` | общий материал | `WOODBEAM_02`, `WOODBEAM_03`, `WOOD_01`, `WOOD_ORNAMENT_01`, `WOOD_ORNAMENT_02` | балки и стойки по всему городу, палубы, навесы лавок и рыбаков | `WOODBEAM_02` — `house-2`, прочие — `city-3` |
-| 3 | `harbour-hut` | постройка | `HAFEN_HOLZWAND_01`, `HAFEN_HOLZWAND_02`, `HAFEN_GIEBEL_01`, `WOODBEAM_01` | хижины бедного квартала, маяк | `hut-1`…`hut-3`, ассет конвейера |
-| 4 | `market-house` | постройка | `FACHWERKBASEMENT_CHAIN_01`, `_EMPTY_01`, `_WINDOW_01`, `WALL_03`, `WALL_04`, `WALL_05`, `WINDOW_03` | фахверк нижнего города и края порта | `house-2` (`WALL_04`, `WALL_05` — `city-3`) |
-| 5 | `harbour-quay` | квартал | `HAFENKAI_MAUER_01`, `HAFENKAI_BODEN_01`, `HAFENKAI_BODEN_TRANS_01`, `HAFENRANDSTEIN_01`, `HARBOUR_STAIRS_01`, `HARBOUR_STAIRS_03`, `HARBOUR_WOOD_IRON_01` | набережная, подпорная стена, лестницы, причалы | `city-3` |
-| 6 | `city-wall` | постройка | `MISC_STRONG_STONEWALL_01`, `_SIDE_01`, `_ENTRANCE_01`, `_BLOCKBORDER_01`, `_ROUNDBORDER_01`, `BROKENSTONE_01`, `STONEWALL_02` | городская стена, ворота верхнего квартала, цоколи | `city-3` |
-| 7 | `streets` | квартал | `PFLASTERSTEIN_01`, `PFLASTERSTEIN_BORDER_01`, `MISC_OLDSTONEPATH_01`, `MISC_OLDSTONEPATH_WAY_01`, `DIRTYGROUND_02`, `DIRTYGROUND_WEG_02`, `_WEG_03`, `_WEG_END_01`, `_WEG_TRANS_02` | улицы, рыночная площадь, дворы | `city-3` |
-| 8 | `upper-house` | постройка | `RICH_WALL_01`, `RICH_WALL_HALF_01`, `RICH_WINDOW_01`, `RICH_BLACKWOOD_01` | дома верхнего квартала, ратуша | `city-3` |
-| 9 | `interiors` | общий материал | `BODENDIELEN_01`, `_02`, `_DRECK_01`, `INSIDEFLOOR_11`, `INSIDEWALL_11`, `_12`, `_13`, `DUNGEONFLOOR_02`, `_03`, `DUNGEONWALL_05`, `SHRINEFLOOR_01` | полы и стены внутри домов, подвалы, каналы | `city-3` |
-| 10 | `harbour-rigging` | набор | `ROPE_01`, `HARBOUR_ROPEWALL_01`, `_02`, `HARBOUR_CANON_01`, `HARBOUR_CANONHOLE`, `HARBOUR_WOODCRATE_01`, `_02` | снасти, пушки, ящики порта | `city-3` |
-| 11 | `greenery` | общий материал | `IVY_BORDER_01`, `IVY_FULL_01`, `FLAG_01` | плющ на стенах, флаги | `city-3` |
-| 12 | предметы рынка | наборы моделей | 21 визуал рынка, ящики, бочка, сундук, стол, лавка | рынок, порт, дома | модели Blender |
+| # | Ассет | Вид | Текстуры | Где стоят | Что было | Статус |
+|---|---|---|---|---|---|---|
+| 1 | `city-roofs` | общий материал | `ROOF_01`, `ROOF_04`, `ROOF_INSIDE_01` | `ROOF_01` — хижины и дома порта, дома у рынка, маяк; `ROOF_04` — верхний квартал, таверна, ратуша, навесы лавок | `city-3` | включён, набор roofs-8 |
+| 2 | `city-timber` | общий материал | `WOODBEAM_02`, `WOODBEAM_03`, `WOOD_01`, `WOOD_ORNAMENT_01`, `WOOD_ORNAMENT_02` | балки и стойки по всему городу, палубы, навесы лавок и рыбаков | `WOODBEAM_02` — `house-2`, прочие — `city-3` | включён, набор timber-7 |
+| 3 | `harbour-hut` | постройка | `HAFEN_HOLZWAND_01`, `HAFEN_HOLZWAND_02`, `HAFEN_GIEBEL_01`, `WOODBEAM_01` | хижины бедного квартала, маяк | `hut-1`…`hut-3`, ассет конвейера | концепт принят; текстуры — правки |
+| 4 | `market-house` | постройка | `FACHWERKBASEMENT_CHAIN_01`, `_EMPTY_01`, `_WINDOW_01`, `WALL_03`, `WALL_04`, `WALL_05`, `WINDOW_03` | фахверк нижнего города и края порта | `house-2` (`WALL_04`, `WALL_05` — `city-3`) | концепт принят; игра — правки |
+| 5 | `harbour-quay` | квартал | `HAFENKAI_MAUER_01`, `HAFENKAI_BODEN_01`, `HAFENKAI_BODEN_TRANS_01`, `HAFENRANDSTEIN_01`, `HARBOUR_STAIRS_01`, `HARBOUR_STAIRS_03`, `HARBOUR_WOOD_IRON_01` | набережная, подпорная стена, лестницы, причалы | `city-3` | не начат |
+| 6 | `city-wall` | постройка | `MISC_STRONG_STONEWALL_01`, `_SIDE_01`, `_ENTRANCE_01`, `_BLOCKBORDER_01`, `_ROUNDBORDER_01`, `BROKENSTONE_01`, `STONEWALL_02` | городская стена, ворота верхнего квартала, цоколи | `city-3` | не начат |
+| 7 | `streets` | квартал | `PFLASTERSTEIN_01`, `PFLASTERSTEIN_BORDER_01`, `MISC_OLDSTONEPATH_01`, `MISC_OLDSTONEPATH_WAY_01`, `DIRTYGROUND_02`, `DIRTYGROUND_WEG_02`, `_WEG_03`, `_WEG_END_01`, `_WEG_TRANS_02` | улицы, рыночная площадь, дворы | `city-3` | не начат |
+| 8 | `upper-house` | постройка | `RICH_WALL_01`, `RICH_WALL_HALF_01`, `RICH_WINDOW_01`, `RICH_BLACKWOOD_01` | дома верхнего квартала, ратуша | `city-3` | не начат |
+| 9 | `interiors` | общий материал | `BODENDIELEN_01`, `_02`, `_DRECK_01`, `INSIDEFLOOR_11`, `INSIDEWALL_11`, `_12`, `_13`, `DUNGEONFLOOR_02`, `_03`, `DUNGEONWALL_05`, `SHRINEFLOOR_01` | полы и стены внутри домов, подвалы, каналы | `city-3` | не начат |
+| 10 | `harbour-rigging` | набор | `ROPE_01`, `HARBOUR_ROPEWALL_01`, `_02`, `HARBOUR_CANON_01`, `HARBOUR_CANONHOLE`, `HARBOUR_WOODCRATE_01`, `_02` | снасти, пушки, ящики порта | `city-3` | не начат |
+| 11 | `greenery` | общий материал | `IVY_BORDER_01`, `IVY_FULL_01`, `FLAG_01` | плющ на стенах, флаги | `city-3` | не начат |
+| 12 | предметы рынка | наборы моделей | 21 визуал рынка, ящики, бочка, сундук, стол, лавка | рынок, порт, дома | модели Blender | модели построены до конвейера; бочка включена, набор barrel-wear-metal0 |
+
+«Статус» — ворота пользователя по ассету одной фразой: последние принятые ворота, затем ворота, отправленные на правки. Его считает `remaster.py queue` из `asset.json`; `remaster.py decide` печатает новую фразу, и её вписывают в той же правке. Тест `test_queue_table_matches_the_gates` сверяет таблицу с воротами, а строка без папки ассета должна говорить «не начат». Чего не хватает до следующего этапа, включая рецензентов, показывает `remaster.py check <ассет> --stage <этап>`.
 
 Одиннадцать текстур (`BARREL_01`, три `DOOR`, `GITTERZAUN_01`, `TEMPLESTARROOF_01`, `HARBOUR_BLACKIRON_01`, три `FISHINGNET`, `HARBOUR_WOODENGATE_01`) — части предметов. Они уходят в модели этапа 2, а не в текстурные ассеты.
 
@@ -160,6 +162,8 @@
 3. **`market-house`** — прежний концепт и текстуры проходят Р1 и Р2. Что не прошло, переделывается. Затем сборка на базе оригинала, Р3, В3.
 4. **Кварталы и постройки по площади:** `harbour-quay` (≈25 000 м²), `city-wall` (≈16 000 м²), `streets`, `upper-house`, `interiors`, `harbour-rigging`, `greenery`. Правила кварталов для них берутся из [библии города](khorinis-art-bible.md#правила-кварталов).
 5. **Предметы рынка.** Конвейер расширяется на модели: этап текстур заменяется моделью в Blender и запеканием атласа.
+
+**2026-10-22 — статус в очереди.** Решение пользователя: в очереди должно быть видно, что сделано, чтобы идти по ней итеративно. В таблицу добавлен столбец «Статус»; `remaster.py queue` считает его по воротам из `asset.json`, `decide` печатает новую фразу, тест сверяет таблицу. Следующий по очереди — `harbour-hut`.
 
 **2026-10-21 — конвейер принят.** Причины: два промаха концепта хижины порта (окно меньше и проще оригинала, хижина ровнее) и обработка, которую раньше вёл Codex. Сделаны:
 - этот документ, список отклонённых дефолтов, скилл `remaster`;
