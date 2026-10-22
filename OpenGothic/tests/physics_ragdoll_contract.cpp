@@ -829,6 +829,73 @@ void testDropSleepWake() {
   require(world.bodyCount()==emptyCount,"destroying the owner must remove all ragdoll parts and joints");
   }
 
+zenkit::ModelHierarchy insectHierarchy() {
+  // A Bloodfly-like insect: its root is the thorax itself and carries six
+  // legs, two wing pairs, pincers and a tail directly, with no pelvis bone.
+  zenkit::ModelHierarchy source;
+  auto add=[&](const char* name, int16_t parent, Tempest::Vec3 offset) {
+    zenkit::ModelHierarchyNode node;
+    node.name=name;
+    node.parent_index=parent;
+    const auto transform=at(offset.x,offset.y,offset.z);
+    std::memcpy(&node.transform,&transform,sizeof(transform));
+    source.nodes.push_back(node);
+    return int16_t(source.nodes.size()-1);
+    };
+  add("BIP01 CENTER",-1,{0,0,0});
+  for(const char* side:{"L","R"}) {
+    const float x=side[0]=='L' ? 1.f : -1.f;
+    const std::pair<const char*,float> legs[]={{"FRONT",8.f},{"MIDDLE",0.f},{"BACK",-8.f}};
+    for(auto [leg,z]:legs) {
+      const std::string base=std::string("BIP01 ")+side+"-LEG "+leg;
+      auto parent=add((base+"01").c_str(),0,{5*x,-3,z});
+      parent=add((base+"02").c_str(),parent,{10*x,-2,0});
+      parent=add((base+"03").c_str(),parent,{12*x,-8,0});
+      parent=add((base+"04").c_str(),parent,{4*x,-24,0});
+      add((base+"05").c_str(),parent,{0,0,0});
+      }
+    add((std::string("BIP01 ")+side+"-WING01").c_str(),0,{6*x,6,2});
+    add((std::string("BIP01 ")+side+"-WING02").c_str(),0,{6*x,6,-4});
+    add((std::string("BIP01 ")+side+"-PINCER").c_str(),0,{3*x,-2,12});
+    }
+  int16_t tail=0;
+  for(const char* name:{"BIP01 TAIL01","BIP01 TAIL02","BIP01 TAIL03","BIP01 TAIL04"})
+    tail=add(name,tail,{0,-4,tail==0 ? -15.f : -20.f});
+  add("BIP01 HOLD STING",tail,{0,0,-10});
+  source.bbox.min={-40,-40,-90}; source.bbox.max={40,10,20};
+  source.collision_bbox=source.bbox;
+  return source;
+  }
+
+void testInsectRootBody() {
+  // Without a thorax part, every limb hung off the first leg segment and the
+  // corpse exploded into screen-sized triangles once it landed.
+  Skeleton skeleton{insectHierarchy(),nullptr,"Bloodfly.mds"};
+  HitZones zones;
+  zones.setSkeleton(&skeleton);
+  require(zones.isValid(),"insect fixture must have hit capsules");
+  CollisionWorld world;
+  auto ground=floor(world);
+  std::vector<Tempest::Matrix4x4> pose;
+  const auto object=at(0,150,0);
+  for(const auto& matrix:skeleton.tr) pose.push_back(object*matrix);
+  auto body=world.createRagdoll(skeleton,zones,pose.data(),pose.size(),object,{});
+  require(body!=nullptr && body->valid(),"insect skeleton must create a ragdoll");
+  require(!body->boneIndices().empty() && body->boneIndices().front()==0,
+          "an insect's root thorax must be the ragdoll's root part");
+  std::vector<Tempest::Matrix4x4> bones;
+  float worst=0;
+  for(int i=0;i<1800 && !(i>120 && body->isSleeping());++i) {
+    world.tick(17);
+    finite(body->state());
+    require(body->getPose(bones),"insect pose must stay exportable");
+    const auto center=position(bones[0]);
+    for(size_t bone:body->boneIndices()) worst=std::max(worst,(position(bones[bone])-center).length());
+    }
+  require(worst<110.f,"insect limbs must stay attached to the thorax after landing");
+  require(body->isSleeping(),"an insect corpse must settle and sleep within thirty seconds");
+  }
+
 zenkit::ModelHierarchy wolfHierarchy() {
   auto source=hierarchy();
   // A quadruped's bind pose is not a human silhouette with a different mass.
@@ -2699,6 +2766,7 @@ int main(int argc, const char** argv) {
     testFiniteRecoveryHierarchy();
     testBenchmarkSleepPolicy();
     testDropSleepWake();
+    testInsectRootBody();
     testRagdollWaterWolfHockTargetIndependentOfMass();
     testRagdollWaterFloatSleepRestoreAndToggle();
     testRagdollWaterDenseAndShallow();
