@@ -169,14 +169,12 @@ async def test_the_models_repeated_companion_intent_resumes_following(goal, body
         assert result.output == "Намерение не изменилось."
 
 
-@pytest.mark.parametrize("model_sets_intent", [False, True])
+@pytest.mark.parametrize("model_calls", [0, 1, 2])
 @pytest.mark.parametrize("goal", ["follow_hero", "guard_hero"])
-async def test_a_follow_agreement_recalls_a_companion_whose_body_is_walking(model_sets_intent, goal):
+async def test_a_follow_agreement_recalls_a_companion_whose_body_is_walking(model_calls, goal):
     fake = FakeGame()
-    calls = [ToolCall("set_intent", {"goal": goal, "target": "PLAYER"})]
-    llm = FakeBackend(
-        "Иду, прикроешь мне спину.", delay=0, tool_calls=calls if model_sets_intent else []
-    )
+    calls = [ToolCall("set_intent", {"goal": goal, "target": "PLAYER"}) for _ in range(model_calls)]
+    llm = FakeBackend("Иду, прикроешь мне спину.", delay=0, tool_calls=calls)
     async with connected(fake) as link:
         dialogue = DialogueManager(link, llm, PersonaProvider(None))
         await link.attach(CAVALORN)
@@ -194,7 +192,7 @@ async def test_a_follow_agreement_recalls_a_companion_whose_body_is_walking(mode
 
     assert len([m for m in fake.received if m.get("action") == "follow"]) == 1
     notes = [m for m in conv.history if "Ты согласился и идёшь за героем" in m.content]
-    assert len(notes) == (0 if model_sets_intent else 1)
+    assert len(notes) == (0 if model_calls else 1)
 
 
 async def test_an_event_turn_cannot_make_a_follow_agreement():

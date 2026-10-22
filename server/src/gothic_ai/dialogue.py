@@ -2200,7 +2200,7 @@ class DialogueManager:
                 state.end_requested = True
                 return ToolOutcome("Разговор закончится, когда ты договоришь.", "accepted")
             case npc_tools.SET_INTENT:
-                outcome = self._set_intent(conv, call, snap)
+                outcome = self._set_intent(conv, call, snap, state=state)
                 if outcome.status == "accepted" and conv.intent.goal in executor.COMPANION_GOALS:
                     state.follow_set = True
                 return outcome
@@ -2326,7 +2326,9 @@ class DialogueManager:
         if self.free_body is not None:
             self.free_body(conv.npc, why)
 
-    def _set_intent(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
+    def _set_intent(
+        self, conv: Conversation, call: ToolCall, snap: Snapshot | None, *, state: TurnState | None = None
+    ) -> ToolOutcome:
         sight = self.sight(conv.npc, snap) if self.sight is not None else None
         seen = sight.targets if sight is not None else None  # whom it perceives, not all within 15 m
         intent, reason = executor.check_intent(
@@ -2341,6 +2343,7 @@ class DialogueManager:
                 or snap is None
                 or snap.npc.following
                 or self.fighting(conv.npc)
+                or (state is not None and state.follow_set)
             ):
                 return ToolOutcome("Намерение не изменилось.", "accepted")
 
