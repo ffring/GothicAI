@@ -25,7 +25,7 @@ description: Remaster pipeline for Gothic content — rebuild a building, a set 
    - кадры — камеры в `cameras.json` ассета (глаз и цель в см мира), `R bench <ассет>` пишет `scripts/content/<ассет>.bench`. Снимает `capture-quality-pilot.sh` на Ryzen с `QUALITY_PILOT_TASK=gothic-ai/remaster-<ассет>`: `--prepare` один раз на сборку движка, `--scenario` после правки камер, `--capture original <каталог>`. Полдень, обычный FOV, NPC скрыты, издалека и вблизи главной детали.
 3. Сам смотри кадры оригинала. Пиксели оригинала никогда не идут в `image_gen`.
 4. Разведи текстуру и модели:
-   - открой превью оригинальных текстур постройки — `~/.local/share/gothic-ai/city-materials-review/2026-10-19/thumbs/<TEXTURE>.TGA.png`, только для себя;
+   - открой оригинальные текстуры постройки в родном размере и вид ×4 — `uv run --no-project --with pillow python scripts/content/original_view.py <TEXTURE>… --out <scratch> --upscale`, только для себя. Превью в `city-materials-review/…/thumbs/` урезаны до 256 px по длинной стороне: резная доска 128 × 512 там вдвое мельче, и её восьмёрки прочитались двумя кольцами ([дефолт 5c](../../../docs/remaster-defaults.md)). Форму читай по виду ×4, цвет и контраст меряй по родному: апскейлер дорисовывает дерево вокруг линий;
    - найди модели рядом по переписи мешей (`reports/content/2026-10-world-meshes/`).
 
    Что на кадре нарисовано в текстуре, а что стоит отдельной моделью — по кадру не угадывай. Большое окно хижины порта оказалось моделью `NW_CITY_WINDOW_WOOD_OUT_01`, а текстура несла маленький тёмный проём.
