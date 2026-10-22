@@ -2,12 +2,17 @@
 # Submit bounded teacher-v3b phases and return queue IDs without waiting.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-teacher-v3b-remote.sh build|measure}"
-[[ ( "$stage" == build || "$stage" == measure ) && $# == 1 ]] || { echo "Expected build or measure" >&2; exit 2; }
+stage="${1:?Usage: nav-teacher-v3b-remote.sh build|measure|retry}"
+[[ ( "$stage" == build || "$stage" == measure || "$stage" == retry ) && $# == 1 ]] || { echo "Expected build, measure or retry" >&2; exit 2; }
 export GQ_OWNER=nav-teacher-v3b
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-teacher-v3b" "$HOME"')"
 results=/mnt/shared/gothic-ai/nav-teacher-v3b
-ssh ryzen "TASK='$task' RESULTS='$results' bash -s" <<'PREPARE'
+input_source="$(dirname "$task")/nav-memory-v4"
+if [[ "$stage" == retry ]]; then
+  input_source="$results"
+  results="$results/variant2"
+fi
+ssh ryzen "TASK='$task' RESULTS='$results' INPUT_SOURCE='$input_source' bash -s" <<'PREPARE'
 set -euo pipefail
 df -h "$HOME" /mnt/shared
 python3 -c 'import pathlib,shutil; assert shutil.disk_usage(pathlib.Path.home()).free >= 20*1024**3, "Less than 20 GiB free"'
@@ -16,7 +21,7 @@ rm -f "$RESULTS/build-passed"
 # Existing experiment inputs are read-only; freeze ordinary copies on storage.
 for name in expanded-scenarios.jsonl detour-val.jsonl fixtures.json save.sav accepted-links.txt places.json familiar.bin; do
   if [[ ! -f "$RESULTS/input/$name" ]]; then
-    cp "$HOME/gothic-ai/nav-memory-v4/input/$name" "$RESULTS/input/$name"
+    cp "$INPUT_SOURCE/input/$name" "$RESULTS/input/$name"
   fi
 done
 if [[ ! -f "$RESULTS/input/detour-test.jsonl" && -f "$HOME/gothic-ai/nav-dagger3/detours/detour-test.jsonl" ]]; then
@@ -39,21 +44,23 @@ for name in ("detour-val.jsonl", "detour-test.jsonl"):
     print(f"Frozen {name}: {len(rows)} cases")
 PY
 PREPARE
-if [[ "$stage" == measure ]]; then
-  ssh ryzen "RESULTS='$results' bash -s" <<'INPUT'
+if [[ "$stage" == measure || "$stage" == retry ]]; then
+  ssh ryzen "RESULTS='$results' INPUT_SOURCE='$input_source' STAGE='$stage' bash -s" <<'INPUT'
 set -euo pipefail
 # Keep existing discovery and physics caches identical, in ordinary owned copies.
 for name in cache discovery bake-npcs; do
   mkdir -p "$RESULTS/$name"
-  rsync -rlt --ignore-existing "$HOME/gothic-ai/nav-memory-v4/$name/" "$RESULTS/$name/"
+  rsync -rlt --ignore-existing "$INPUT_SOURCE/$name/" "$RESULTS/$name/"
 done
 # Preserve the pre-change water evidence for the final before/after analysis.
-mkdir -p "$RESULTS/before-water"
-rsync -rlt --ignore-existing --include='*/' --include='episode.json' \
-  --include='actions.txt' --include='teacher-paths.jsonl' \
-  --include='perception-safety-frames.jsonl' --include='perception-water-observations.jsonl' \
-  --include='body-control-events.jsonl' --exclude='*' \
-  "$HOME/gothic-ai/nav-memory-v4/safety/" "$RESULTS/before-water/"
+if [[ "$STAGE" == measure ]]; then
+  mkdir -p "$RESULTS/before-water"
+  rsync -rlt --ignore-existing --include='*/' --include='episode.json' \
+    --include='actions.txt' --include='teacher-paths.jsonl' \
+    --include='perception-safety-frames.jsonl' --include='perception-water-observations.jsonl' \
+    --include='body-control-events.jsonl' --exclude='*' \
+    "$HOME/gothic-ai/nav-memory-v4/safety/" "$RESULTS/before-water/"
+fi
 INPUT
 fi
 rsync -a --exclude=build --exclude='build-*' --exclude=__pycache__ \
@@ -68,7 +75,8 @@ ssh ryzen "cat > '$task/phase.sh'" <<'PHASE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
-results=/mnt/shared/gothic-ai/nav-teacher-v3b
+results="${1:?result storage}"
+shift
 phase="${1:?phase}"
 shift
 exec > >(tee "$results/$phase-${1:-prepare}-$(date -u +%Y%m%dT%H%M%SZ).log") 2>&1
@@ -98,6 +106,13 @@ if [[ "$phase" == cost ]]; then
     --task "$results" --runtime "$task" --assets "$HOME/gothic-ai/game"
   exit 0
 fi
+if [[ "$phase" == retry-build ]]; then
+  # Only the familiar hazard price changed. Journey and memory/cache checks
+  # already passed; retain their first-round measurements as controls.
+  cmake --build "$task/build" --target gothic-body-runner check-navmemoryteacher --parallel 3
+  touch "$results/build-passed"
+  exit 0
+fi
 [[ "$phase" == build ]] || { echo "Unknown phase: $phase" >&2; exit 2; }
 if [[ ! -x "$task/.venv/bin/python" ]]; then uv venv "$task/.venv"; fi
 uv pip install --python "$task/.venv/bin/python" numpy pytest
@@ -119,18 +134,24 @@ c++ -I"$task/pre-cache" "${cxx_args[@]}" OpenGothic/tests/navmemory_cost.cpp \
   --basetemp="$results/pytest-tmp" scripts/tests/test_nav_teacher_v3b.py
 touch "$results/build-passed"
 PHASE
+build_phase=build
+[[ "$stage" != retry ]] || build_phase=retry-build
 identifier=$("$ROOT/scripts/gq" submit --class batch --threads 16 --mem 8G --max 2h --cpu-quota 1200% \
-  --name "nav teacher v3b build" -- bash "$task/phase.sh" build)
+  --name "nav teacher v3b $build_phase" -- bash "$task/phase.sh" "$results" "$build_phase")
 printf 'build %s\n' "$identifier"
-if [[ "$stage" == measure ]]; then
+if [[ "$stage" == measure || "$stage" == retry ]]; then
   # Sixteen declared threads serialize these phases on the 28-thread host. Each
   # mode includes both route cohorts and the nine frozen physical safety cases.
-  for mode in journey journey-stranger familiar-local familiar-stranger; do
+  modes=(journey journey-stranger familiar-local familiar-stranger)
+  [[ "$stage" != retry ]] || modes=(familiar-local familiar-stranger)
+  for mode in "${modes[@]}"; do
     identifier=$("$ROOT/scripts/gq" submit --class batch --threads 16 --mem 8G --max 2h --cpu-quota 1200% \
-      --name "nav teacher v3b $mode" -- bash "$task/phase.sh" mode "$mode")
+      --name "nav teacher v3b $stage $mode" -- bash "$task/phase.sh" "$results" mode "$mode")
     printf '%s %s\n' "$mode" "$identifier"
   done
+fi
+if [[ "$stage" == measure ]]; then
   identifier=$("$ROOT/scripts/gq" submit --class batch --threads 28 --mem 8G --max 2h --cpu-quota 1200% \
-    --name "nav teacher v3b paired cost" -- bash "$task/phase.sh" cost)
+    --name "nav teacher v3b paired cost" -- bash "$task/phase.sh" "$results" cost)
   printf 'paired-cost %s\n' "$identifier"
 fi

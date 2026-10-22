@@ -41,9 +41,10 @@ bool knownFree(const Cell& c) {
 float cost(const Cell& c,float unknownCost) {
   // Two-metre familiar tiles mix walls and passages. Their existing familiar
   // channel selects a soft prior; fresh live observations have already won in
-  // memory. Initial measured candidate: familiar free 2, unknown 4, danger 6.
+  // memory. Second/final candidate: familiar free 2, unknown 4, danger 4.25;
+  // the weaker hazard premium avoids overpricing mixed passage tiles.
   if(c.familiar!=0) {
-    if(familiarDanger(c)) return unknownCost*1.5f;
+    if(familiarDanger(c)) return unknownCost*1.0625f;
     if(c.channels[1]!=0) return std::max(1.f,unknownCost*.5f);
     return unknownCost;
     }
