@@ -553,6 +553,29 @@
           "sha256": "c0ebdd500d537c30b87b38efc79bdb80abda308b800a90806ea0d5f13a21240b"
         }
       }
+    },
+    {
+      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-3.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOOD_ORNAMENT_01.TGA",
+      "attempt": 3,
+      "sha256": "60ed1c54543fdcead12956d2cf19427d91ca241a31cb13bd05569c40c95ee5f3",
+      "c2pa": null,
+      "model": "derived: scripts/content/timber_bake.py",
+      "utc": "2026-10-22T08:06:39Z",
+      "thread": "blender",
+      "parent": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-2.png",
+      "tool": "scripts/content/timber_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-3.normal.png",
+          "sha256": "aef3a55d8f4a9723ed8475591e1240b0a1ce8853d8d0dd1763dd8df172e6e77f"
+        },
+        "roughness": {
+          "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-3.roughness.png",
+          "sha256": "d1e45dcdb25466fa8a0c5fb6ab56fb163848b19a0ec04d4dcfd7dbf0fee1fde6"
+        }
+      }
     }
   ],
   "selected": {
@@ -597,8 +620,8 @@
       "date": "2026-10-22"
     },
     "NW_CITY_WOOD_ORNAMENT_01.TGA": {
-      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-2.png",
-      "reason": "model-built on timber_bake.py; tone and spread measured against the original's preview",
+      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-3.png",
+      "reason": "model-built carved board with the original's figure-eights: one band crossing itself at the waist, crescent chips, the square in a frame, lilies of a lens, a bud and two leaves",
       "date": "2026-10-22"
     },
     "NW_CITY_WOOD_01.TGA": {
@@ -692,14 +715,14 @@
     }
   ],
   "build": {
-    "set": "timber-6",
+    "set": "timber-7",
     "base": "original",
     "date": "2026-10-22",
     "albedo_sha256": {
       "NW_CITY_WOODBEAM_02.TGA": "99f08690d1d04d3d69f7edfdc00c6bded705373fbc62c7380fa2f113d844acb7",
       "NW_CITY_WOODBEAM_03.TGA": "b020ef0232b65287e43b67d97db51b2439bfd8f193d862bc93bd4873bd37ab11",
       "NW_CITY_WOOD_ORNAMENT_02.TGA": "a60ce99745ec81c74aa28f98226856f5b8c4dce3c6a59c14c4180261b8a0aea4",
-      "NW_CITY_WOOD_ORNAMENT_01.TGA": "ba4bb46bb6732c83d41e5efcf81ecdaa768c4f7683a5b6dc4a82b603b33885d4",
+      "NW_CITY_WOOD_ORNAMENT_01.TGA": "b6fe5a9e2a875d15919a96de37f9659cd3556f5e5634a3c943b8cfbf05020afc",
       "NW_CITY_WOOD_01.TGA": "a7d672d2e04be0d72b162a90b402545d66ad31cf212aa72bb19544478ff61e1b"
     },
     "entries": 5,

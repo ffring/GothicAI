@@ -88,15 +88,82 @@ def test_every_wood_builds_and_wraps(woods):
                 assert np.allclose(grid[:, 0], grid[:, -1])           # boards close along x
 
 
+def carving_at(points):
+    """Depth, standing band and dark chips of the carved board at (u, v) points of the texture."""
+    cfg = tb.WOODS['carved']
+    px, py = cfg['period']
+    uv = np.array(points, float)
+    depth, standing, dark = tb._carving(uv[:, :1] * px, (1 - uv[:, 1:]) * py, (px, py), cfg['carving'])
+    return depth[:, 0], standing[:, 0], dark[:, 0]
+
+
+DEEP = tb.WOODS['carved']['carving']['depth']
+
+
 def test_carving_at_the_measured_places(woods):
     spec, _, grids = woods['carved']
     cfg = tb.WOODS['carved']
-    face, step, carving = grids[0], cfg['step'], cfg['carving']
-    for v in carving['rings']:
-        assert at(face, step, carving['u'], v, cfg['period']) < -.8 * carving['depth']    # the cut-away disc
-    assert at(face, step, carving['u'], carving['square'][0], cfg['period']) < -.8 * carving['depth']
-    for v in (.35, .55):                                     # the bands between are left standing
-        assert at(face, step, .9, v, cfg['period']) > -.006
+    # cut away where the original is dark: the four loops, the square, the two lenses and the two buds
+    sunk = [(.40, .29), (.40, .395), (.40, .60), (.41, .70), (.415, .50), (.435, .23), (.435, .77), (.45, .13),
+            (.45, .8625)]
+    for u, v in sunk:
+        assert at(grids[0], cfg['step'], u, v, cfg['period']) < -.8 * DEEP
+    depth, standing, _ = carving_at(sunk)
+    assert np.all(depth >= .95 * DEEP) and np.all(standing == 0)
+    depth, standing, _ = carving_at([(.9, .35), (.9, .55), (.06, .5), (.45, .02)])    # the board around is whole
+    assert np.all(depth == 0) and np.all(standing == 0)
+    # the necks between the lenses and the buds stand; the right leaf reaches further out than the left
+    assert np.all(carving_at([(.4425, .185), (.4425, .811)])[1] > .9)
+    for rows in (np.linspace(.08, .17, 40), np.linspace(.83, .92, 40)):
+        u = np.linspace(0, 1, 200)
+        _, standing, _ = carving_at([(x, v) for v in rows for x in u])
+        reach = u[(standing.reshape(len(rows), -1) > .5).any(axis=0)]
+        assert reach.max() - .45 > .45 - reach.min() > .15
+
+
+def test_figure_eight_is_one_band_crossing_at_the_waist():
+    cfg = tb.WOODS['carved']
+    px, py = cfg['period']
+    geometry = tb._ornament(cfg['carving'], (px, py))
+    for band, crossing in zip(geometry['bands'], geometry['crossings']):
+        line, waist = band['line'], crossing['at']
+        depth, standing, _ = carving_at(np.stack([line[:, 0] / px, 1 - line[:, 1] / py], axis=1))
+        far = np.linalg.norm(line - waist, axis=1) > tb.CROSSING + .005
+        assert np.all(depth[far] == 0) and np.all(standing[far] > .9)          # whole all the way round
+        # the strands cross: the band runs out of the waist four ways about 30° to the horizontal,
+        # the loops are sunk above and below it, the board is whole left and right of it
+        def around(directions, reach):
+            return carving_at([((waist[0] + reach * dx) / px, 1 - (waist[1] + reach * dy) / py) for dx, dy in directions])
+        assert np.all(around([(.87, .5), (-.87, .5), (.87, -.5), (-.87, -.5)], .025)[1] > .9)
+        assert np.all(around([(0, 1), (0, -1)], .025)[0] >= .95 * DEEP)
+        depth, standing, _ = around([(1, 0), (-1, 0)], .045)
+        assert np.all(standing == 0) and np.all(depth <= tb.GROOVE * DEEP + 1e-9)
+
+
+def test_chips_where_the_original_has_its_dark_crescents():
+    cfg = tb.WOODS['carved']
+    for u0, v in ((.415, .293), (.415, .398), (.415, .600), (.415, .705)):        # each loop across its middle
+        for direction in (1, -1):
+            u = u0 + direction * np.linspace(0, .3, 300)
+            depth, standing, dark = carving_at(np.stack([u, np.full_like(u, v)], axis=1))
+            band = np.flatnonzero(standing > .9)
+            inside, outside = slice(0, band[0]), slice(band[-1] + 1, band[-1] + 1 + 30)     # 30 steps ≈ 1.2 cm
+            if direction > 0:       # right: a black chip outside the band, none inside
+                assert depth[outside].max() > 1.5 * DEEP and dark[outside].max() == 1
+                assert depth[inside].max() < 1.05 * DEEP
+            else:                   # left: a dark crescent inside the band, only a groove outside
+                assert depth[inside].max() > 1.4 * DEEP and dark[inside].max() == 1
+                assert depth[outside].max() <= tb.GROOVE * DEEP + 1e-9
+
+
+def test_square_sunk_in_a_frame_with_a_slit_on_the_right():
+    square = tb.WOODS['carved']['carving']['square']
+    u, v = square['u'], square['v']
+    depth, standing, _ = carving_at([(u + du, v + dv) for du in (-.07, .07) for dv in (-.03, .03)])
+    assert np.all(depth >= .95 * DEEP)                                       # 6.6 × 11.8 cm sunk
+    assert np.all(carving_at([(u - .117, v), (u + .117, v)])[1] > .9)       # the frame stands
+    depth, _, dark = carving_at([(.570, v), (u - (.570 - u), v)])
+    assert depth[0] > 1.2 * DEEP and dark[0] == 1 and depth[1] <= tb.GROOVE * DEEP + 1e-9
 
 
 def test_three_boards_with_gaps_at_the_original_joints(woods):
