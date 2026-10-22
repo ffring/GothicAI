@@ -49,13 +49,13 @@ BEAM = (.032, .105)          # the sill beam
 RUBBLE = (.105, .849)        # the rubble
 BLOCK_ROWS = (.849, .903, .962, 1.)   # the dressed blocks: two courses and the top of a third
 
-COURSE = (.045, .095)        # rubble course heights, metres
+COURSE = (.035, .12)         # rubble course heights, metres
 STONE = (.26, .45, (.13, .50))        # rubble stone lengths: median, log spread, limits
 JOINT = (.012, .005)         # joint width between stones: mean, spread
-COURSE_WAVE = (.010, (1.5, .5))       # the courses wander: amplitude, wavelengths
+COURSE_WAVE = (.014, (1.2, .5))       # the courses wander and break: amplitude, wavelengths
 BLOCK = (.30, .08, (.22, .40))        # block lengths: mean, spread, limits
-BLOCK_JOINT = .018
-MORTAR = (-.016, .004)       # the joints' bottom: depth behind the stone faces, roughness
+BLOCK_JOINT = .024
+MORTAR = (-.022, .004)       # the joints' bottom: depth behind the stone faces, roughness
 BEAM_PROUD = .035            # the beam stands out of the rubble face
 
 # the window of _WINDOW_01: a dressed frame (u0, u1, v0, v1) round the opening; the frame's stones
@@ -70,11 +70,12 @@ SLIT = dict(frame=(.300, .390, .260, .480), opening=(.322, .365, .292, .452),
                     (.300, .322, .292, .372), (.300, .322, .372, .452),
                     (.365, .390, .292, .372), (.365, .390, .372, .452),
                     (.300, .390, .452, .480)])
-BEAM_RING = (.670, .055, .040)       # u, v, outer radius in metres
+BEAM_RING = (.670, .055, .060)       # u, v, outer radius in metres
 CHAINS = [(.660, .378, .700), (.850, .372, .800)]   # u, v of the wall ring, v where the chain ends
-CHAIN = dict(ring=(.050, .010), link=(.030, .020, .007), proud=.012)  # ring radius and wire; link half
+CHAIN = dict(ring=(.090, .011), link=(.030, .020, .007), proud=.012)  # ring radius and wire; link half
                                                                     # length, half width, wire radius
 OPENING_Z = -.10             # the opening's inside, dark
+SOCKET = (.040, .115, .105, .142)    # a joist socket under the beam (u0, u1, v0, v1)
 FRAME_PROUD = .022
 
 SURFACES = [dict(name='stone', colour=[.30, .28, .22], metres=.6, bump=.0008),
@@ -138,10 +139,10 @@ def _stone(rng, gx, gy, x0, x1, ybot, ytop, joint, kind):
         b, corner = full / 2, rng.uniform(.006, .015)
         dome, proud, rim = rng.uniform(.002, .004), rng.uniform(.004, .012), rng.uniform(.008, .014)
     else:
-        b = full / 2 * rng.uniform(.72, 1.)              # thinner than its course: chinks above it
-        corner = np.minimum(a, b) * rng.uniform(.55, 1.)
-        dome, proud, rim = rng.uniform(.004, .012), rng.uniform(-.004, .014), rng.uniform(.010, .022)
-    cx, cy = (x0 + x1) / 2 + rng.normal(0, .004), ybot + joint / 2 + b
+        b = full / 2 * rng.uniform(.8, 1.)              # thinner than its course: chinks above it
+        corner = np.minimum(a, b) * rng.uniform(.2, .6)  # split, not water-worn: sharp-ish ends
+        dome, proud, rim = rng.uniform(.002, .006), rng.uniform(-.006, .016), rng.uniform(.006, .014)
+    cx, cy = (x0 + x1) / 2 + rng.normal(0, .004), ybot + joint / 2 + b + (rng.normal(0, .008) if kind != 'block' else 0)
     dx, dy = np.abs(gx - cx), np.abs(gy - cy)
     qx, qy = dx - (a - corner), dy - (b - corner)
     sdf = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - corner
@@ -151,9 +152,21 @@ def _stone(rng, gx, gy, x0, x1, ybot, ytop, joint, kind):
         t = rng.uniform(0, math.pi)
         sdf += amount * share * rng.uniform(.6, 1) * np.sin(2 * math.pi * (math.cos(t) * gx + math.sin(t) * gy) / length
                                                    + rng.uniform(0, 6.3))
+    if kind != 'block':                                   # knocked off corners: straight cuts
+        for _ in range(rng.integers(0, 3)):
+            sx, sy = rng.choice([-1, 1]), rng.choice([-1, 1])
+            t = rng.uniform(.2, 1.3)
+            nx, ny = sx * math.cos(t), sy * math.sin(t)
+            reach = rng.uniform(.78, .95) * (abs(nx) * a + abs(ny) * np.mean(b))
+            sdf = np.maximum(sdf, nx * (gx - cx) + ny * (gy - cy) - reach)
     inside = sdf < 0
     depth = np.clip(-sdf, 0, None)                         # metres in from the rim
     face = proud + dome * (1 - np.exp(-depth / rim))
+    if kind != 'block':                                   # a cleft face: two or three flat facets
+        planes = [rng.normal(0, .10, 2) for _ in range(rng.integers(2, 4))]
+        offs = [rng.uniform(0, .004) for _ in planes]
+        facets = np.min([o + px_ * (gx - cx) + py_ * (gy - cy) for (px_, py_), o in zip(planes, offs)], axis=0)
+        face += np.clip(facets - np.median(facets[inside]) if inside.any() else facets, -.006, .006)
     face += rng.normal(0, .012) * (gx - cx) + rng.normal(0, .03) * (gy - cy)
     for k in range(3):                                    # an uneven face: a few broad bumps
         fx, fy = rng.uniform(2, 6) / max(a, .05), rng.uniform(2, 5) / max(float(np.mean(b)), .02)
@@ -201,7 +214,7 @@ def _lay(rng, gx, gy, height, labels, kinds, kind, lines, size, joint_spread=Tru
             ybot = np.interp(sx % px, xs, lines[k]) + rng.normal(0, .004)
             ytop = np.interp(sx % px, xs, lines[k + 1]) + rng.normal(0, .004)
             # a third of the rubble cells hold two thin slabs one on the other
-            split = kind == 'rubble' and rng.uniform() < .3 and (ytop - ybot).min() > .06
+            split = kind == 'rubble' and rng.uniform() < .4 and (ytop - ybot).min() > .06
             beds = [(ybot, ybot + (ytop - ybot) * (f := rng.uniform(.4, .6))), (ybot + (ytop - ybot) * f, ytop)] if split \
                 else [(ybot, ytop)]
             for bot, top in beds:
@@ -315,6 +328,11 @@ def basement(seed: int, variant: str):
     height[r0:r1 + 1] = BEAM_PROUD + face + .004 * np.sin(2 * math.pi * bx / px + rng.uniform(0, 6.3))
     labels[r0:r1 + 1] = len(kinds)
     kinds.append('beam')
+    # the socket of a joist under the beam, as in all three originals: a dark hole cut by the beam
+    hole = _rect(gx, gy, SOCKET)
+    height[hole] = OPENING_Z
+    labels[hole] = len(kinds)
+    kinds.append('opening')
     if variant == 'window':
         _frame(rng, gx, gy, height, labels, kinds, WINDOW)
     if variant == 'chain':
@@ -388,7 +406,7 @@ PART_COLOUR = dict(top=(115, 98, 79), beam=(46, 40, 42), block=(78, 70, 47))
 RUBBLE_COLOUR = [(.105, (134, 130, 120)), (.215, (128, 118, 101)), (.40, (121, 111, 90)), (.59, (112, 104, 78)),
                  (.765, (93, 86, 61)), (.849, (93, 86, 61))]
 FRAME_COLOUR = dict(window=(159, 148, 117), chain=(143, 131, 106))
-OPENING_COLOUR = dict(window=(24, 21, 16), chain=(15, 12, 11))
+OPENING_COLOUR = dict(window=(24, 21, 16), chain=(15, 12, 11), empty=(18, 16, 13))
 IRON = (35, 31, 23)
 STONE_TINTS = [((1., .92, .78), .62), ((1., .86, .76), .12), ((1., .93, .70), .14), ((.97, .95, .82), .12)]
                                        # olive-grey, pinkish, ochre, grey: linear ratios to R, and their share
@@ -461,10 +479,12 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
             out[mask] = (lum[mask] / np.median(lum[mask]))[:, None]
     idx = np.maximum(stone, 0)
     blocks = np.array(spec['stones']) == 'block'          # the blocks keep their red-brown, some redder
-    tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .5, np.array([1., .80, .70]), 1.)[blocks]
+    tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .6, np.array([1., .76, .64]), np.array([1., .9, .8]))[blocks]
     out[rock] *= (tone[idx[rock]][:, None] * tint[idx[rock]])
     out[frame] *= np.exp(.08 * rng.normal(0, 1, count))[idx[frame]][:, None] * np.array([1., .93, .74])
     out[mortar] *= np.array([1., .97, .86])
+    # the blocks' joints are pointed with light lime, the rubble's lie deep
+    out[mortar & (v > RUBBLE[1])] *= 2.2
     out[beam] *= np.array([1., .87, .88])
     out[iron] *= np.array([1., .88, .62])
     out *= np.exp(.10 * (pb.noise_metres(rng, (rows, cols), period, .25) + .5 * pb.noise_metres(rng, (rows, cols), period, .06)))[..., None]
@@ -492,8 +512,8 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     out *= occlusion[..., None]
     # the sky from above is cut off under every stone's lower edge: a dark line under each, as on the
     # original
-    shade = pb.overhang_shade(passes['height'], py / rows, (25., 35., 50.), .04, softness=.004)
-    out *= (1 - .35 * shade * (rock | mortar))[..., None]
+    shade = pb.overhang_shade(passes['height'], py / rows, (25., 35., 50.), .05, softness=.004)
+    out *= (1 - .5 * shade * (rock | mortar))[..., None]
 
     # the original's colour part by part, the joints and their shadow included; the rubble darkens and
     # greens towards the foot. Frames, openings and iron keep their own colour.
