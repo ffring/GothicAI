@@ -278,6 +278,282 @@
       "utc": "2026-10-21T11:49:15Z",
       "thread": "01a15d50-51ed-7270-beab-ca7655b0a6ce",
       "parent": "harbour-hut-concept/harbour-hut-elevations-attempt-2.png"
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-4.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_HOLZWAND_01.TGA",
+      "attempt": 4,
+      "sha256": "d38ffd49e8e6878e297b26fe8a8672c830fa071d4380fc227d3d09e9ce794f37",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:01:08Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-4.normal.png",
+          "sha256": "6140720e8485aa66b007403097f98bab0cc13ba30edbd846efbdc07dab0462fa"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-4.roughness.png",
+          "sha256": "9dea0e2ccaf528baee9ee1b427323ec55ef0e26a5b50342a1f697bf65c4f8290"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-8.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_HOLZWAND_02.TGA",
+      "attempt": 8,
+      "sha256": "2eda7d1edd4d77f3c12d49bcb1a078194d03a5d0798b9e5d5527a4cbd0e67628",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:01:08Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-8.normal.png",
+          "sha256": "0515afe372d360b642701af3bc74147ced8d5c6d776fc3a49a773f1d57f9617a"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-8.roughness.png",
+          "sha256": "034b98ba849b77246de9463e4ebcd9c6080c30e6b7c4dd6cb94cea231c52fd4a"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-5.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_GIEBEL_01.TGA",
+      "attempt": 5,
+      "sha256": "6dceaf54e108ac86fca53fb41873d047c48a98f37a11dd53ac1e40a3ad87ed6b",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:01:08Z",
+      "thread": "blender",
+      "parent": "city-timber-oak/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-5.normal.png",
+          "sha256": "66c6a1ee7d046fcf9a5d46b8a4a26489862dee5fbc9519a834ef313884847287"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-5.roughness.png",
+          "sha256": "21272eb1de1a2fad0e0c4ff801a7aa6c04ef3b5d31ffa09d9561507c2f47b80a"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_WOODBEAM_01-attempt-3.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOODBEAM_01.TGA",
+      "attempt": 3,
+      "sha256": "27191cd77e4ac02165dc406ee86ed87670b7a3abd16345e63031bd8591bc6f7e",
+      "c2pa": null,
+      "model": "derived: scripts/content/timber_bake.py",
+      "utc": "2026-10-22T12:01:08Z",
+      "thread": "blender",
+      "parent": "city-timber-oak/reference-attempt-1.png",
+      "tool": "scripts/content/timber_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_WOODBEAM_01-attempt-3.normal.png",
+          "sha256": "07e6745449c6782711e9f37139ed294ad0c8a4de6ba064e2f121d1c3b58c69cf"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_WOODBEAM_01-attempt-3.roughness.png",
+          "sha256": "1b0987b9c80b5768e262bec69b72e6745edb25a71775faeea95987f46499c44a"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-6.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_GIEBEL_01.TGA",
+      "attempt": 6,
+      "sha256": "a34381e17791bad6994467d3da6171999d4a433681214e68a191f09eb919bf6b",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:05:36Z",
+      "thread": "blender",
+      "parent": "city-timber-oak/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-6.normal.png",
+          "sha256": "89ac2bb88527a602048a540885213ec999a1770246834304b42097b0dac08ccc"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-6.roughness.png",
+          "sha256": "e1d7188e6a3f81e6b571df9a824646a830bc6fa893075d76591489e04af2dc6e"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-5.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_HOLZWAND_01.TGA",
+      "attempt": 5,
+      "sha256": "30db9371216f1c71cc6ac5e5c6a022b5531300429939be067aa2c58daf9bb11c",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:08:36Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-5.normal.png",
+          "sha256": "6140720e8485aa66b007403097f98bab0cc13ba30edbd846efbdc07dab0462fa"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-5.roughness.png",
+          "sha256": "41629fd6c69f2b9b04a399d19028c5d5ffc7634da73073b1ecb170cbdf485c13"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-9.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_HOLZWAND_02.TGA",
+      "attempt": 9,
+      "sha256": "2908dfa8f7118e23372ec060596279ed8fcb90ddc0cad6f8031adf7e7611a859",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:08:36Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-9.normal.png",
+          "sha256": "0515afe372d360b642701af3bc74147ced8d5c6d776fc3a49a773f1d57f9617a"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-9.roughness.png",
+          "sha256": "6e2b0bb0c2e3d326d56542fde2e99837238f723a0408a146884c0c75bada30f0"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-7.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_GIEBEL_01.TGA",
+      "attempt": 7,
+      "sha256": "b88f543b30c652428ce5da6999869df390435ebbb0ac8a02c3e86ab2b393feed",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:08:36Z",
+      "thread": "blender",
+      "parent": "city-timber-oak/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-7.normal.png",
+          "sha256": "89ac2bb88527a602048a540885213ec999a1770246834304b42097b0dac08ccc"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-7.roughness.png",
+          "sha256": "33d4ab6f958c5eae45448f4164dd220ac256a8559dc787ebed88d16dd7484719"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-10.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_HOLZWAND_02.TGA",
+      "attempt": 10,
+      "sha256": "755d298ef3f94d1cb51a89d761b9e18f9fa49a581755e9c437f6166b6c20bccb",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:09:16Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-10.normal.png",
+          "sha256": "0515afe372d360b642701af3bc74147ced8d5c6d776fc3a49a773f1d57f9617a"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-10.roughness.png",
+          "sha256": "6e2b0bb0c2e3d326d56542fde2e99837238f723a0408a146884c0c75bada30f0"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-6.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_HOLZWAND_01.TGA",
+      "attempt": 6,
+      "sha256": "0e5174b74bb548eabbc0c7185e46bef017d4770ac9fa6be74daeb0d6d3ca0b77",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:22:24Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-6.normal.png",
+          "sha256": "b9b7dc16a99bb5f1a01a91d2fff672b7d7ecedf516ecc105a1c03344c6e4667d"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-6.roughness.png",
+          "sha256": "71b007ebd0306577310d34e9a8df5ffef6cffba025092a55bc938081ca69af1f"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-11.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_HOLZWAND_02.TGA",
+      "attempt": 11,
+      "sha256": "be3c226a70c8cf78afdb95ebfe6dcbc6c80f626700fe6512127c4871026c627e",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:22:24Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-11.normal.png",
+          "sha256": "83b15da1c55aa697481044dfc6c490508ff4620b6491fea5d5c2fe53c25fcff8"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-11.roughness.png",
+          "sha256": "c6b3c3918bbdc1dd422cc5db5df59d59ee7b7fa11cc94ed0580f95e1f4c9906f"
+        }
+      }
+    },
+    {
+      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-8.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFEN_GIEBEL_01.TGA",
+      "attempt": 8,
+      "sha256": "5e6baa17e95349b99a2cacab3cf8d2ed874a488b9490b9339b9ca658f3378fe4",
+      "c2pa": null,
+      "model": "derived: scripts/content/hut_bake.py",
+      "utc": "2026-10-22T12:22:24Z",
+      "thread": "blender",
+      "parent": "city-timber-oak/reference-attempt-1.png",
+      "tool": "scripts/content/hut_bake.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-8.normal.png",
+          "sha256": "1b2de6b792f25c8310606f33fbb36aa9356fbf8386d83dd97f3a55dacbf3b4e2"
+        },
+        "roughness": {
+          "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-8.roughness.png",
+          "sha256": "617f948ae796b8d3a8dace4bf22fa08fe8744a183f06fbf7d77abe3d4ebb89e7"
+        }
+      }
     }
   ],
   "selected": {
@@ -287,24 +563,24 @@
       "date": "2026-10-21"
     },
     "NW_CITY_HAFEN_HOLZWAND_01.TGA": {
-      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-3.png",
-      "reason": "a3: no saturated orange boards, moss over the full height",
-      "date": "2026-10-21"
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_01-attempt-6.png",
+      "reason": "hut-8: moss and soil at the foot",
+      "date": "2026-10-22"
     },
     "NW_CITY_HAFEN_HOLZWAND_02.TGA": {
-      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-7.png",
-      "reason": "a7: the original texture's small dark window (frame U 0.35–0.68, V 0.27–0.60), same boards as HOLZWAND_01 a3; the large leaded window is the model NW_CITY_WINDOW_WOOD_OUT_01",
-      "date": "2026-10-21"
+      "file": "harbour-hut/NW_CITY_HAFEN_HOLZWAND_02-attempt-11.png",
+      "reason": "hut-8: moss and soil at the foot, a readable frame",
+      "date": "2026-10-22"
     },
     "NW_CITY_HAFEN_GIEBEL_01.TGA": {
-      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-4.png",
-      "reason": "a4: eight courses of smooth weathered boards with wavy edges, as the original; no bark strips or crumpled noise",
-      "date": "2026-10-21"
+      "file": "harbour-hut/NW_CITY_HAFEN_GIEBEL_01-attempt-8.png",
+      "reason": "hut-8: edges break at the joints",
+      "date": "2026-10-22"
     },
     "NW_CITY_WOODBEAM_01.TGA": {
-      "file": "harbour-hut/NW_CITY_WOODBEAM_01-attempt-2.png",
-      "reason": "a2: thinner strap",
-      "date": "2026-10-21"
+      "file": "harbour-hut/NW_CITY_WOODBEAM_01-attempt-3.png",
+      "reason": "hut-4: model-built truss beam",
+      "date": "2026-10-22"
     }
   },
   "reviews": [
@@ -363,6 +639,54 @@
       "verdict": "REJECT",
       "date": "2026-10-21",
       "path": "reviews/r3-hut2-planks/merged.json"
+    },
+    {
+      "id": "r3-h7-front",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "DISPUTED",
+      "date": "2026-10-22",
+      "path": "reviews/r3-h7-front/merged.json"
+    },
+    {
+      "id": "r3-h7-gable-close",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "DISPUTED",
+      "date": "2026-10-22",
+      "path": "reviews/r3-h7-gable-close/merged.json"
+    },
+    {
+      "id": "r3-h7-planks",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "DISPUTED",
+      "date": "2026-10-22",
+      "path": "reviews/r3-h7-planks/merged.json"
+    },
+    {
+      "id": "r3-h8-front",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "PASS",
+      "date": "2026-10-22",
+      "path": "reviews/r3-h8-front/merged.json"
+    },
+    {
+      "id": "r3-h8-gable-close",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "DISPUTED",
+      "date": "2026-10-22",
+      "path": "reviews/r3-h8-gable-close/merged.json"
+    },
+    {
+      "id": "r3-h8-planks",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "DISPUTED",
+      "date": "2026-10-22",
+      "path": "reviews/r3-h8-planks/merged.json"
     }
   ],
   "gates": [
@@ -400,23 +724,28 @@
     }
   ],
   "build": {
-    "set": "hut-3",
-    "base": "house-2",
-    "date": "2026-10-21",
+    "set": "hut-8",
+    "base": "original",
+    "date": "2026-10-22",
     "albedo_sha256": {
-      "NW_CITY_HAFEN_HOLZWAND_01.TGA": "796b774c2b1e4110e4dfdb1e64474544aa2d05ec7a97b75ba3a22015601bc92d",
-      "NW_CITY_HAFEN_HOLZWAND_02.TGA": "ded7441767f352fd6e8bc160d8a9d862e2717f189ff958c0bd661d2b35bf2701",
-      "NW_CITY_HAFEN_GIEBEL_01.TGA": "5f7072b03ea85ed15ecbdd268926f9c5693423e8967462a2a17355ca41c4e9cb",
-      "NW_CITY_WOODBEAM_01.TGA": "ed351087ac3df49b38bdcbd803e04a6cfbe6ec3572cf74637617bd1f011e5dc2"
+      "NW_CITY_HAFEN_HOLZWAND_01.TGA": "e6fd4d3a1730462418acd721a83c1d1db3e7ab0a9772d3fc0787e78f62b2dd84",
+      "NW_CITY_HAFEN_HOLZWAND_02.TGA": "423cccd10d3fbde690818c6d568ee8534004b26cdf17fe80bb277f8363523c57",
+      "NW_CITY_HAFEN_GIEBEL_01.TGA": "61d69623df151896a3bacc1a6e4d0da142a43bad3b9516e77b119d7fd97aabee",
+      "NW_CITY_WOODBEAM_01.TGA": "0a5085ee0bdeed11496710e16ecae14aa510b4bb68209eb1add414bc4a984b98"
     },
-    "entries": 58,
+    "entries": 4,
     "replaced": [
       "NW_CITY_HAFEN_GIEBEL_01.TGA",
       "NW_CITY_HAFEN_HOLZWAND_01.TGA",
       "NW_CITY_HAFEN_HOLZWAND_02.TGA",
       "NW_CITY_WOODBEAM_01.TGA"
     ],
-    "unchanged_entries": 54
+    "unchanged_entries": 0
   },
-  "backup": null
+  "backup": {
+    "date": "2026-10-22",
+    "host": "dev-ubuntu",
+    "matched": 72,
+    "mismatched": []
+  }
 }

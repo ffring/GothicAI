@@ -340,6 +340,20 @@ WOODS = {
                            dict(path=[(.52, .70), (.57, .71), (.63, .69)], width=.004, depth=.010),
                            dict(path=[(.05, .18), (.12, .19)], width=.004, depth=.010)],
                    strap=(.72, .76, .005), nails=((.31, .66), .0065, .0035), out=(1024, 2048)),
+    # the truss timber of the harbour huts (asset harbour-hut): rough, dark grey-brown, checked all over
+    # with short splits along the grain; the same strap and nails as beam02, measured on its own original
+    'beam01': dict(texture='NW_CITY_WOODBEAM_01.TGA', period=(.5, 1.), step=(.001, .001), stretch=3.4,
+                   adze=((.06, .05), ((.03, .05), (.03, .06)), (.0015, .0045)), cup=0., grain=(.0009, (.003, .008)),
+                   pits=((.006, .05), .004, .10, .10), arris=(.02, .010),
+                   cracks=[dict(path=[(.05, .62), (.12, .63), (.19, .61)], width=.005, depth=.014),
+                           dict(path=[(.30, .25), (.40, .26), (.52, .24)], width=.006, depth=.016),
+                           dict(path=[(.34, .78), (.45, .80), (.55, .79)], width=.005, depth=.014),
+                           dict(path=[(.58, .45), (.68, .46), (.80, .44)], width=.006, depth=.016),
+                           dict(path=[(.70, .15), (.78, .16), (.86, .15)], width=.004, depth=.012),
+                           dict(path=[(.82, .70), (.90, .71), (.97, .70)], width=.005, depth=.014),
+                           dict(path=[(.42, .55), (.47, .56)], width=.003, depth=.008),
+                           dict(path=[(.88, .35), (.94, .36)], width=.003, depth=.008)],
+                   strap=(.219, .266, .006), nails=((.16, .81), .0075, .004), out=(1024, 2048)),
     # the plain board of light buildings: sawn spruce, one dark line along its whole length, a knot low left
     'plain': dict(texture='NW_CITY_WOOD_ORNAMENT_02.TGA', period=(.45, 1.8), step=(.001, .0015), stretch=2.06,
                   adze=None, cup=.002, grain=(.0008, (.003, .008)), pits=((.006, .05), .0025, .06, .12),
@@ -694,6 +708,10 @@ LOOKS = {
     'beam03': dict(ratio=(1., .64, .45), desaturate=.45, grain=.6, light=(.45, (1., .76, .56)),
                    mottle=((.10, .04), .07, (1.3, .7), (1., .74, .54)), damp=((.14, .05), .22),
                    smudge=((.06, .30), .35), strap=((1., .43, .28), .85), contrast=1.0),
+    # dark grey-brown, hardly olive (sRGB 59/53/49), blotchy and rough (pixel spread 20.4); a rusty strap
+    'beam01': dict(ratio=(1., .79, .68), desaturate=.6, grain=1.0, light=(.4, (1., .85, .76)),
+                   mottle=((.08, .03), .10, (1.4, .6), (1., .85, .76)), damp=((.12, .05), .35),
+                   strap=((1., .62, .45), .7), contrast=1.3),
     # grey-brown sawn spruce, a bleached pale streak down the left (sRGB 76/68/58 against 63/54/43)
     'plain': dict(ratio=(1., .75, .48), desaturate=.6, grain=.75, light=(.5, (1., .82, .62)),
                   mottle=((.08, .03), .08, (1.3, .65), (1., .82, .62)), damp=((.12, .05), .28),
