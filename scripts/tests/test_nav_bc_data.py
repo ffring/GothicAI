@@ -360,6 +360,33 @@ def test_bc3_manifest_uses_exact_train_refs_including_failed_follow(tmp_path):
             np.testing.assert_allclose(cached[name], expected[name], atol=1 / 255)
 
 
+@pytest.mark.parametrize("input_variant", ["compact", "hd"])
+def test_packed_cache_slices_match_expanded_episode(tmp_path, input_variant):
+    records, layout = fixture_records(4)
+    features = data.encode_features(demos.learner_input(records), layout, input_variant,
+                                    records["position_cm"][:, 1] if input_variant == "hd" else None)
+    if input_variant == "hd":
+        features["aux_near"] = data.encode_features(demos.learner_input(records), layout)["near"]
+    packed = data._pack(features)
+    packed.update(labels=data.encode_bc3_labels(records["keys"]),
+                  baseline=np.zeros((4, 5), np.uint8), situations=np.zeros((4, 3), np.uint8),
+                  action_change=np.array([0, 1, 0, 1], np.uint8),
+                  next_near_valid=np.array([1, 1, 1, 0], np.uint8))
+    path = tmp_path / "episode.npz"
+    np.savez_compressed(path, **packed)
+    expanded = data.load_cached(path)
+    loaded = data.load_cached(path, packed=True)
+    assert "near" not in loaded and "far" not in loaded
+    assert loaded["near_channels"].dtype == np.uint8
+    assert loaded["near_height"].dtype == np.float16
+    assert loaded["vector"].dtype == np.float16
+    for start, stop in ((0, 3), (2, 4), (4, 7)):
+        segment = data.unpack_cached(loaded, start, stop)
+        assert segment.keys() == expanded.keys()
+        for name in expanded:
+            np.testing.assert_array_equal(segment[name], expanded[name][start:stop])
+
+
 @pytest.mark.parametrize("raw_annotations", [False, True])
 def test_bc3_manifest_admits_early_episode_without_collector_annotations(tmp_path, raw_annotations):
     source, output, path, manifest, _, _ = write_bc3_manifest(tmp_path, ("point",))

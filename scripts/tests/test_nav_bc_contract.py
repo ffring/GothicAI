@@ -148,3 +148,70 @@ def test_recorded_fixture_filters_navdemo_version(tmp_path):
     assert all(sample.dtype == contract.demos.RECORD_V2_DTYPE for sample in samples)
     with pytest.raises(ValueError, match="NAVDEMO v2"):
         contract.recorded_steps(tmp_path / "1", 2, 2)
+
+
+def test_hd_synthetic_weight_header_declares_full_resolution_maps(tmp_path):
+    weights = tmp_path / "fixture.navbc"
+    contract.synthetic_weights(weights, format_version=3)
+    policy = contract.NumpyPolicy(weights)
+    header = policy.header
+    assert header["version"] == 3
+    assert header["architecture"]["inputs"]["near"] == [10, 64, 64]
+    assert header["architecture"]["inputs"]["far"] == [10, 50, 100]
+    assert header["architecture"]["map_encoders"]["layers"][0]["in_channels"] == 10
+    assert header["preprocessing"] == contract.data.HD_PREPROCESSING
+    assert contract.weight_input_version(header, 2166) == 2
+    assert contract.weight_input_variant(header) == "hd"
+    assert policy.head_names == tuple(contract.HEAD_SIZES[2])
+    first_conv = policy.weights["near_encoder.0.weight"]
+    assert first_conv.shape == (8, 10, 3, 3)
+    with pytest.raises(ValueError, match="requires NAVDEMO v2"):
+        contract.synthetic_weights(tmp_path / "invalid.navbc", navdemo_version=1, format_version=3)
+
+
+def test_weight_input_variant_preserves_old_headers_and_requires_declared_hd():
+    assert contract.weight_input_variant({"version": 1}) == "compact"
+    assert contract.weight_input_variant({"version": 2}) == "compact"
+    assert contract.weight_input_variant({"version": 3, "preprocessing": {"input_variant": "hd"}}) == "hd"
+    with pytest.raises(ValueError, match="requires hd input_variant"):
+        contract.weight_input_variant({"version": 3})
+    with pytest.raises(ValueError, match="requires compact input_variant"):
+        contract.weight_input_variant({"version": 2, "preprocessing": {"input_variant": "hd"}})
+
+
+def test_hd_fixture_uses_physical_feet_and_preserves_full_raw_record():
+    layout, samples = contract.synthetic_records(1)
+    record = next(samples)
+    record["position_cm"] = [3100, 700, -4900]
+    for name in ("memory_near", "memory_far"):
+        record[name]["height_valid"] = 0
+        record[name]["ground_height_cm"] = 0
+    near = record["memory_near"]
+    near["height_valid"][0, 2, 3] = 1
+    near["ground_height_cm"][0, 2, 3] = 940
+    far = record["memory_far"]
+    far["height_valid"][0, 49, 25] = 1
+    far["ground_height_cm"][0, 49, 25] = 2000
+    far["height_valid"][0, 50, 25] = 1
+    far["ground_height_cm"][0, 50, 25] = 600
+    far["height_valid"][0, 99, 99] = 1
+    far["ground_height_cm"][0, 99, 99] = 900
+    original = record.copy()
+    features = contract.fixture_features(record, layout, 2, "hd")
+    assert features["near"].shape == (1, 10, 64, 64)
+    assert features["far"].shape == (1, 10, 50, 100)
+    np.testing.assert_allclose(features["near"][0, 7:10, 2, 3], [1.2, 1.2, 1])
+    np.testing.assert_array_equal(features["far"][0, 7:10, 0, 25], [-.5, -.5, 1])
+    np.testing.assert_array_equal(features["far"][0, 7:10, 49, 99], [1, 1, 1])
+    np.testing.assert_array_equal(record, original)
+
+    translated = record.copy()
+    translated["position_cm"] += [12345, 300, -23456]
+    translated["body_yaw_deg"] = -170
+    translated["teacher_hint"]["path_cm"] = 88888
+    for name in ("memory_near", "memory_far"):
+        memory = translated[name]
+        memory["ground_height_cm"][memory["height_valid"] != 0] += 300
+    moved = contract.fixture_features(translated, layout, 2, "hd")
+    for name in features:
+        np.testing.assert_array_equal(features[name], moved[name])

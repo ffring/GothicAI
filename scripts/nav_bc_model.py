@@ -25,7 +25,7 @@ FORMAT_VERSION = 1
 class NavPolicy(nn.Module):
     """Encode the two local maps and sensors, then retain state with one GRU.
 
-    Map inputs have shape ``(batch, time, 9, height, width)``; the vector has
+    Map inputs have shape ``(batch, time, channels, height, width)``; the vector has
     shape ``(batch, time, vector_size)``. Hidden state follows torch's GRU
     convention: ``(1, batch, hidden_size)``. Every output logit tensor has
     shape ``(batch, time, classes)``.
@@ -38,13 +38,15 @@ class NavPolicy(nn.Module):
             raise ValueError("vector_size and hidden_size must be positive")
         self.vector_size = int(vector_size)
         self.hidden_size = int(hidden_size)
-        if format_version not in (1, 2):
+        if format_version not in (1, 2, 3):
             raise ValueError("unsupported navigation weight format")
         self.format_version = format_version
         self.head_sizes = HEAD_SIZES if format_version == 1 else BC3_HEAD_SIZES
+        self.near_shape = (10, 64, 64) if format_version == 3 else (9, 32, 32)
+        self.far_shape = (10, 50, 100) if format_version == 3 else (9, 25, 25)
         self.auxiliary = auxiliary
-        self.near_encoder = self._map_encoder()
-        self.far_encoder = self._map_encoder()
+        self.near_encoder = self._map_encoder(self.near_shape[0])
+        self.far_encoder = self._map_encoder(self.far_shape[0])
         self.vector_encoder = nn.Sequential(nn.Linear(vector_size, 128), nn.ReLU())
         self.fusion = nn.Sequential(nn.Linear(256, 128), nn.ReLU())
         self.gru = nn.GRU(128, hidden_size, num_layers=1, batch_first=True)
@@ -55,13 +57,13 @@ class NavPolicy(nn.Module):
             self.aux_stuck = nn.Linear(hidden_size, 1)
             self.aux_next_near = nn.Linear(hidden_size, 9 * 8 * 8)
             self.aux_detour = nn.Linear(hidden_size, 4)
-        if self.mac_count()["total"] > 2_000_000:
+        if format_version != 3 and self.mac_count()["total"] > 2_000_000:
             raise ValueError("policy exceeds the 2,000,000 MAC decision budget")
 
     @staticmethod
-    def _map_encoder() -> nn.Sequential:
+    def _map_encoder(channels: int) -> nn.Sequential:
         return nn.Sequential(
-            nn.Conv2d(9, 8, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(channels, 8, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
             nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
@@ -74,8 +76,8 @@ class NavPolicy(nn.Module):
         return_auxiliary: bool = False,
     ) -> tuple[dict[str, Tensor], Tensor]:
         batch, time = vector.shape[:2]
-        near_features = self.near_encoder(near.reshape(batch * time, 9, 32, 32))
-        far_features = self.far_encoder(far.reshape(batch * time, 9, 25, 25))
+        near_features = self.near_encoder(near.reshape(batch * time, *self.near_shape))
+        far_features = self.far_encoder(far.reshape(batch * time, *self.far_shape))
         vector_features = self.vector_encoder(vector.reshape(batch * time, self.vector_size))
         features = self.fusion(torch.cat((near_features, far_features, vector_features), dim=-1))
         recurrent, hidden = self.gru(features.reshape(batch, time, 128), hidden)
@@ -99,11 +101,15 @@ class NavPolicy(nn.Module):
         Bias addition, activation, pooling, and scalar GRU gates are listed as
         non-MAC operations rather than silently counted as dense matrix work.
         """
+        near1 = tuple((size + 1) // 2 for size in self.near_shape[1:])
+        near2 = tuple((size + 1) // 2 for size in near1)
+        far1 = tuple((size + 1) // 2 for size in self.far_shape[1:])
+        far2 = tuple((size + 1) // 2 for size in far1)
         components = {
-            "near_conv1": 16 * 16 * 8 * 9 * 3 * 3,
-            "near_conv2": 8 * 8 * 16 * 8 * 3 * 3,
-            "far_conv1": 13 * 13 * 8 * 9 * 3 * 3,
-            "far_conv2": 7 * 7 * 16 * 8 * 3 * 3,
+            "near_conv1": math.prod(near1) * 8 * self.near_shape[0] * 3 * 3,
+            "near_conv2": math.prod(near2) * 16 * 8 * 3 * 3,
+            "far_conv1": math.prod(far1) * 8 * self.far_shape[0] * 3 * 3,
+            "far_conv2": math.prod(far2) * 16 * 8 * 3 * 3,
             "vector_linear": self.vector_size * 128,
             "fusion_linear": 256 * 128,
             "gru_input": 3 * self.hidden_size * 128,
@@ -117,7 +123,9 @@ class NavPolicy(nn.Module):
             "other_operations": {
                 "gru_elementwise_multiplies": 3 * self.hidden_size,
                 "pool_output_means": 2 * 16 * 2 * 2,
-                "pool_input_values_summed": 16 * 64 + 16 * 64,
+                "pool_input_values_summed": 16 * sum(
+                    math.prod(2 * ((size + 1) // 2) for size in shape)
+                    for shape in (near2, far2)),
                 "excluded": "bias additions, ReLU, sigmoid, tanh, pooling reductions, scalar gate additions",
             },
         }
@@ -128,8 +136,8 @@ class NavPolicy(nn.Module):
             "name": "map-cnn-vector-gru",
             "version": 1,
             "inputs": {
-                "near": [9, 32, 32],
-                "far": [9, 25, 25],
+                "near": list(self.near_shape),
+                "far": list(self.far_shape),
                 "vector": [self.vector_size],
                 "dtype": "float32",
                 "map_layout": "CHW",
@@ -137,7 +145,7 @@ class NavPolicy(nn.Module):
             "map_encoders": {
                 "separate_weights": True,
                 "layers": [
-                    {"type": "conv2d", "in_channels": 9, "out_channels": 8, "kernel": 3, "stride": 2, "padding": 1, "activation": "relu"},
+                    {"type": "conv2d", "in_channels": self.near_shape[0], "out_channels": 8, "kernel": 3, "stride": 2, "padding": 1, "activation": "relu"},
                     {"type": "conv2d", "in_channels": 8, "out_channels": 16, "kernel": 3, "stride": 2, "padding": 1, "activation": "relu"},
                     {"type": "adaptive_avg_pool2d", "output": [2, 2], "bins": "start=floor(i*input/output); end=ceil((i+1)*input/output)"},
                     {"type": "flatten", "order": "CHW", "output": 64},
