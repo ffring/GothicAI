@@ -141,7 +141,7 @@
 |---|---|---|---|---|---|---|
 | 1 | `city-roofs` | общий материал | `ROOF_01`, `ROOF_04`, `ROOF_INSIDE_01` | `ROOF_01` — хижины и дома порта, дома у рынка, маяк; `ROOF_04` — верхний квартал, таверна, ратуша, навесы лавок | `city-3` | включён, набор roofs-8 |
 | 2 | `city-timber` | общий материал | `WOODBEAM_02`, `WOODBEAM_03`, `WOOD_01`, `WOOD_ORNAMENT_01`, `WOOD_ORNAMENT_02` | балки и стойки по всему городу, палубы, навесы лавок и рыбаков | `WOODBEAM_02` — `house-2`, прочие — `city-3` | включён, набор timber-7 |
-| 3 | `harbour-hut` | постройка | `HAFEN_HOLZWAND_01`, `HAFEN_HOLZWAND_02`, `HAFEN_GIEBEL_01`, `WOODBEAM_01` | хижины бедного квартала, маяк | `hut-1`…`hut-3`, ассет конвейера | включён, набор hut-8 |
+| 3 | `harbour-hut` | постройка | `HAFEN_HOLZWAND_01`, `HAFEN_HOLZWAND_02`, `HAFEN_GIEBEL_01`, `WOODBEAM_01` | хижины бедного квартала, маяк | `hut-1`…`hut-3`, ассет конвейера | включён, набор hut-10 |
 | 4 | `market-house` | постройка | `FACHWERKBASEMENT_CHAIN_01`, `_EMPTY_01`, `_WINDOW_01`, `WALL_03`, `WALL_04`, `WALL_05`, `WINDOW_03` | фахверк нижнего города и края порта | `house-2` (`WALL_04`, `WALL_05` — `city-3`) | концепт принят; игра — правки |
 | 5 | `harbour-quay` | квартал | `HAFENKAI_MAUER_01`, `HAFENKAI_BODEN_01`, `HAFENKAI_BODEN_TRANS_01`, `HAFENRANDSTEIN_01`, `HARBOUR_STAIRS_01`, `HARBOUR_STAIRS_03`, `HARBOUR_WOOD_IRON_01` | набережная, подпорная стена, лестницы, причалы | `city-3` | не начат |
 | 6 | `city-wall` | постройка | `MISC_STRONG_STONEWALL_01`, `_SIDE_01`, `_ENTRANCE_01`, `_BLOCKBORDER_01`, `_ROUNDBORDER_01`, `BROKENSTONE_01`, `STONEWALL_02` | городская стена, ворота верхнего квартала, цоколи | `city-3` | не начат |
