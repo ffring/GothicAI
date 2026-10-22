@@ -876,6 +876,23 @@
       "quote": "Да все понравилось, все хорошо, классно получилось.",
       "note": "Ответ на «Если нравится — включу хижину вместе с кровлями и деревом». working-3 = roofs-8 + timber-7 + barrel-wear-metal0 + hut-8.",
       "set": "hut-8"
+    },
+    {
+      "gate": "ingame",
+      "verdict": "approved",
+      "by": "user",
+      "date": "2026-10-22",
+      "quote": "да, давай",
+      "note": "Набор hut-10: рельеф досок в модели, ровные ряды фронтона, оливковые тени. Ответ на «Если hut-10 нравится, заменю им hut-8 в рабочем контенте»."
+    },
+    {
+      "gate": "enable",
+      "verdict": "approved",
+      "by": "user",
+      "date": "2026-10-22",
+      "quote": "да, давай",
+      "note": "working-4 = roofs-8 + timber-7 + barrel-wear-metal0 + hut-10.",
+      "set": "hut-10"
     }
   ],
   "build": {
@@ -900,7 +917,7 @@
   "backup": {
     "date": "2026-10-22",
     "host": "dev-ubuntu",
-    "matched": 84,
+    "matched": 108,
     "mismatched": []
   }
 }
