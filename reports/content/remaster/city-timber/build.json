@@ -1,9 +1,41 @@
 {
- "set": "timber-4",
+ "set": "timber-6",
  "base": "original",
  "registry": "data/content/remaster/city-timber.jsonl",
  "textures": {
   "NW_CITY_WOODBEAM_02.TGA": {
+   "axes": "",
+   "colour": {
+    "mode": "target"
+   },
+   "maps": "source",
+   "size": 1024
+  },
+  "NW_CITY_WOODBEAM_03.TGA": {
+   "axes": "",
+   "colour": {
+    "mode": "target"
+   },
+   "maps": "source",
+   "size": 1024
+  },
+  "NW_CITY_WOOD_ORNAMENT_02.TGA": {
+   "axes": "",
+   "colour": {
+    "mode": "target"
+   },
+   "maps": "source",
+   "size": 1024
+  },
+  "NW_CITY_WOOD_ORNAMENT_01.TGA": {
+   "axes": "",
+   "colour": {
+    "mode": "target"
+   },
+   "maps": "source",
+   "size": 1024
+  },
+  "NW_CITY_WOOD_01.TGA": {
    "axes": "",
    "colour": {
     "mode": "target"

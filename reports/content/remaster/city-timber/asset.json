@@ -438,6 +438,121 @@
           "sha256": "41a60a9861772a0a6fe352486cd9ecf7653d6f9ca00872faee47433e2d618c97"
         }
       }
+    },
+    {
+      "file": "city-timber/NW_CITY_WOODBEAM_03-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOODBEAM_03.TGA",
+      "attempt": 1,
+      "sha256": "aab5b8bc9726a80f043c462aec6d2a495d54c8f53df4e73a822e7b508da09f5d",
+      "c2pa": null,
+      "model": "derived: scripts/content/timber_bake.py",
+      "utc": "2026-10-22T05:53:36Z",
+      "thread": "blender",
+      "parent": "city-timber-oak/reference-attempt-2.png",
+      "tool": "scripts/content/timber_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-timber/NW_CITY_WOODBEAM_03-attempt-1.normal.png",
+          "sha256": "049073d2b6e483c92a3736342dce31206ffc46420f41505c4287e8c385e16d7d"
+        },
+        "roughness": {
+          "file": "city-timber/NW_CITY_WOODBEAM_03-attempt-1.roughness.png",
+          "sha256": "89fd4498d8512ca3fea7090c04067f9d9c758550d1e738f501edb32e28d2106c"
+        }
+      }
+    },
+    {
+      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_02-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOOD_ORNAMENT_02.TGA",
+      "attempt": 1,
+      "sha256": "414b912bd084a7ad5c524c20275ceaa9d5cf88813771f8e521de998d198ef9bc",
+      "c2pa": null,
+      "model": "derived: scripts/content/timber_bake.py",
+      "utc": "2026-10-22T05:53:38Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/timber_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-timber/NW_CITY_WOOD_ORNAMENT_02-attempt-1.normal.png",
+          "sha256": "b889ea203c8ba48323a50808daca44f99a9136fcaa3fa76d2d7742c463f48d9e"
+        },
+        "roughness": {
+          "file": "city-timber/NW_CITY_WOOD_ORNAMENT_02-attempt-1.roughness.png",
+          "sha256": "0edb72f79320910f286bccd805d0c2337c7a9297605838d173a46123619d4379"
+        }
+      }
+    },
+    {
+      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-2.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOOD_ORNAMENT_01.TGA",
+      "attempt": 2,
+      "sha256": "c18d90a6f562479a6aa5b14a609bad188413e2165cbc0e88deb7a42b82f6abe4",
+      "c2pa": null,
+      "model": "derived: scripts/content/timber_bake.py",
+      "utc": "2026-10-22T05:52:19Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-1.png",
+      "tool": "scripts/content/timber_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-2.normal.png",
+          "sha256": "0614c8adea27aee0fb477a5eb65a4e85805f1538ac658cc44fbc692f7de0816f"
+        },
+        "roughness": {
+          "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-2.roughness.png",
+          "sha256": "1dfe77fb5a26e3596b717b3287a6146081c228156be2fce92630840a22aae206"
+        }
+      }
+    },
+    {
+      "file": "city-timber/NW_CITY_WOOD_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOOD_01.TGA",
+      "attempt": 1,
+      "sha256": "7805b7c7c484a29e675eb1f10307ea906146b4f43ad19353856fd8ce0831b62c",
+      "c2pa": null,
+      "model": "derived: scripts/content/timber_bake.py",
+      "utc": "2026-10-22T05:53:33Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-2.png",
+      "tool": "scripts/content/timber_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-timber/NW_CITY_WOOD_01-attempt-1.normal.png",
+          "sha256": "d39a83cf3a596751919426be2c40caf41558b0eabb612637d17cbe32870fd507"
+        },
+        "roughness": {
+          "file": "city-timber/NW_CITY_WOOD_01-attempt-1.roughness.png",
+          "sha256": "ba98cffd20746c1ca38c287801cb75632648a38127f863d80fedf20ac4f8189c"
+        }
+      }
+    },
+    {
+      "file": "city-timber/NW_CITY_WOOD_01-attempt-2.png",
+      "role": "texture",
+      "texture": "NW_CITY_WOOD_01.TGA",
+      "attempt": 2,
+      "sha256": "f849532f08f0c7ecfbd4f677e7cb26d86ae56dc643f1dac3310823fdd9f31184",
+      "c2pa": null,
+      "model": "derived: scripts/content/timber_bake.py",
+      "utc": "2026-10-22T05:56:40Z",
+      "thread": "blender",
+      "parent": "city-roofs-shingle/reference-attempt-2.png",
+      "tool": "scripts/content/timber_bake.py",
+      "maps": {
+        "normal": {
+          "file": "city-timber/NW_CITY_WOOD_01-attempt-2.normal.png",
+          "sha256": "d39a83cf3a596751919426be2c40caf41558b0eabb612637d17cbe32870fd507"
+        },
+        "roughness": {
+          "file": "city-timber/NW_CITY_WOOD_01-attempt-2.roughness.png",
+          "sha256": "c0ebdd500d537c30b87b38efc79bdb80abda308b800a90806ea0d5f13a21240b"
+        }
+      }
     }
   ],
   "selected": {
@@ -472,24 +587,24 @@
       "date": "2026-10-22"
     },
     "NW_CITY_WOODBEAM_03.TGA": {
-      "file": "city-timber-concept/concept-NW_CITY_WOODBEAM_03-attempt-1.png",
-      "reason": "accepted concept used as the texture",
-      "date": "2026-10-21"
+      "file": "city-timber/NW_CITY_WOODBEAM_03-attempt-1.png",
+      "reason": "model-built on timber_bake.py; tone and spread measured against the original's preview",
+      "date": "2026-10-22"
     },
     "NW_CITY_WOOD_ORNAMENT_02.TGA": {
-      "file": "city-timber-concept/concept-NW_CITY_WOOD_ORNAMENT_02-attempt-1.png",
-      "reason": "accepted concept used as the texture",
-      "date": "2026-10-21"
+      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_02-attempt-1.png",
+      "reason": "model-built on timber_bake.py; tone and spread measured against the original's preview",
+      "date": "2026-10-22"
     },
     "NW_CITY_WOOD_ORNAMENT_01.TGA": {
-      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-1.png",
-      "reason": "texture edit: hand-cut rings",
-      "date": "2026-10-21"
+      "file": "city-timber/NW_CITY_WOOD_ORNAMENT_01-attempt-2.png",
+      "reason": "model-built on timber_bake.py; tone and spread measured against the original's preview",
+      "date": "2026-10-22"
     },
     "NW_CITY_WOOD_01.TGA": {
-      "file": "city-timber-concept/concept-NW_CITY_WOOD_01-attempt-2.png",
-      "reason": "accepted concept used as the texture",
-      "date": "2026-10-21"
+      "file": "city-timber/NW_CITY_WOOD_01-attempt-2.png",
+      "reason": "model-built boards, moss share as the original",
+      "date": "2026-10-22"
     }
   },
   "reviews": [
@@ -569,15 +684,23 @@
     }
   ],
   "build": {
-    "set": "timber-4",
+    "set": "timber-6",
     "base": "original",
     "date": "2026-10-22",
     "albedo_sha256": {
-      "NW_CITY_WOODBEAM_02.TGA": "99f08690d1d04d3d69f7edfdc00c6bded705373fbc62c7380fa2f113d844acb7"
+      "NW_CITY_WOODBEAM_02.TGA": "99f08690d1d04d3d69f7edfdc00c6bded705373fbc62c7380fa2f113d844acb7",
+      "NW_CITY_WOODBEAM_03.TGA": "b020ef0232b65287e43b67d97db51b2439bfd8f193d862bc93bd4873bd37ab11",
+      "NW_CITY_WOOD_ORNAMENT_02.TGA": "a60ce99745ec81c74aa28f98226856f5b8c4dce3c6a59c14c4180261b8a0aea4",
+      "NW_CITY_WOOD_ORNAMENT_01.TGA": "ba4bb46bb6732c83d41e5efcf81ecdaa768c4f7683a5b6dc4a82b603b33885d4",
+      "NW_CITY_WOOD_01.TGA": "a7d672d2e04be0d72b162a90b402545d66ad31cf212aa72bb19544478ff61e1b"
     },
-    "entries": 1,
+    "entries": 5,
     "replaced": [
-      "NW_CITY_WOODBEAM_02.TGA"
+      "NW_CITY_WOODBEAM_02.TGA",
+      "NW_CITY_WOODBEAM_03.TGA",
+      "NW_CITY_WOOD_01.TGA",
+      "NW_CITY_WOOD_ORNAMENT_01.TGA",
+      "NW_CITY_WOOD_ORNAMENT_02.TGA"
     ],
     "unchanged_entries": 0
   },

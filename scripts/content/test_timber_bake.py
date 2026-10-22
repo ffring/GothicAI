@@ -70,3 +70,46 @@ def test_compose_blackens_cracks_and_keeps_the_strap_iron():
     assert lum[crack].mean() < .1 * lum[face & ~crack].mean()
     assert result['roughness'][piece == 1].max() == pytest.approx(tb.ROUGH[2])
     assert result['roughness'][face & ~crack].min() >= tb.ROUGH[1] - 1e-9
+
+
+@pytest.fixture(scope='module')
+def woods():
+    return {name: tb.wood(name, seed=0) for name in tb.WOODS}
+
+
+def test_every_wood_builds_and_wraps(woods):
+    for name, (spec, _, grids) in woods.items():
+        assert spec['texture'] == tb.WOODS[name]['texture']
+        for piece in spec['pieces']:
+            grid = grids.get(piece['id'])
+            if piece['kind'] == 'face':
+                assert np.allclose(grid[0], grid[-1])                 # closes along the length
+            elif piece['kind'] == 'board':
+                assert np.allclose(grid[:, 0], grid[:, -1])           # boards close along x
+
+
+def test_carving_at_the_measured_places(woods):
+    spec, _, grids = woods['carved']
+    cfg = tb.WOODS['carved']
+    face, step, carving = grids[0], cfg['step'], cfg['carving']
+    for v in carving['rings']:
+        assert at(face, step, carving['u'], v, cfg['period']) < -.8 * carving['depth']    # the cut-away disc
+    assert at(face, step, carving['u'], carving['square'][0], cfg['period']) < -.8 * carving['depth']
+    for v in (.35, .55):                                     # the bands between are left standing
+        assert at(face, step, .9, v, cfg['period']) > -.006
+
+
+def test_three_boards_with_gaps_at_the_original_joints(woods):
+    spec, _, grids = woods['floor']
+    boards = [p for p in spec['pieces'] if p['kind'] == 'board']
+    assert len(boards) == 3 and spec['void']['z'] < -.01
+    py = tb.WOODS['floor']['period'][1]
+    spans = sorted((p['grid'][1], p['grid'][1] + p['grid'][3] * (grids[p['id']].shape[0] - 1)) for p in boards)
+    for (_, top), (bottom, _), joint in zip(spans, spans[1:], (.67, .32)):
+        assert top < (1 - joint) * py < bottom                     # the gap sits on the joint
+
+
+def test_ship_beam_strap_low_and_no_long_cracks(woods):
+    spec, _, _ = woods['beam03']
+    assert spec['strap']['v'] == [.72, .76] and len([p for p in spec['pieces'] if p['kind'] == 'nail']) == 2
+    assert all(abs(c['path'][-1][0] - c['path'][0][0]) < .2 for c in spec['cracks'])
