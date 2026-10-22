@@ -65,7 +65,7 @@
 6. Инструменты модели — `npc_tools.TOOLS`. Их проверяет `executor.py`, а намерение превращается в действия для игры.
 7. Текст режется на предложения с тегами настроения и озвучивается через `tts-service` (Inworld TTS-2, запасной — VoxCPM2). В игру уходят `say`, `say_audio`, `say_end`.
 8. Движок двигает губы, лицо и руки по голосу (`common/graphics/mesh/lipsync.*`, `talkgestures.*`).
-9. Ход пишется в трейс (`trace.py`, `~/.local/share/gothic-ai/traces/`). `replay.py` повторяет записанный ход на другой модели или с другим промптом без игры.
+9. Ход пишется в трейс (`trace.py`, `~/.local/share/gothic-ai/traces/`). `replay.py` повторяет записанный ход на другой модели или с другим промптом без игры. Стенд `gothic-ai replay-first-words <traces.jsonl> [--hint-file F] [--runs N] [--temperature T] [--quick-url URL] [--npc ID] [--out FILE.jsonl]` отдельно повторяет первые слова Gemma на фразы героя; [состав запроса и результаты](npc-agent.md#лицо).
 
 ## Два контура NPC
 

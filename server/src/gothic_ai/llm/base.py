@@ -142,9 +142,11 @@ class LLMBackend(Protocol):
         tool_choice: ToolChoice | None = None,
         allowed: Collection[str] | None = None,
         cache_key: str | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[LLMEvent]:
         """Yield `TextDelta`s and `ToolCall`s as they arrive, then exactly one `Done` with the full text.
         `tool_choice="none"` keeps the tools in the request (and the prompt cache) but forbids calls;
         `allowed` likewise lets only the named ones be called (None: all of them). `cache_key`: requests
-        that share their start (an npc's) and the provider's prompt cache with it."""
+        that share their start (an npc's) and the provider's prompt cache with it.
+        `temperature`: override the quick model's sampling temperature; None keeps its default."""
         ...

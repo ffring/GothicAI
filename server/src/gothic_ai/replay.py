@@ -7,16 +7,98 @@ same call (name and arguments) is given back; a call the original turn did not m
 
 from __future__ import annotations
 
+import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from contextlib import aclosing
 from typing import Any
 
 from . import npc_tools
-from .llm import Done, Item, LLMBackend, TextDelta, ToolCall, ToolResult
+from .dialogue import (
+    _FIRST_SENTENCE,
+    QUICK_HINT,
+    REACT_HINT,
+    REACTION_S,
+    SOUND_SAID,
+    first_words,
+    first_words_outcome,
+    is_pure_sound,
+    paragraph_end,
+)
+from .llm import Done, Item, LLMBackend, LLMError, Message, TextDelta, ToolCall, ToolResult
 from .trace import CallTrace, item_from_json
 from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice
 
 Resolver = Callable[[ToolCall, dict[str, Any]], ToolOutcome | None]
+
+
+async def replay_first_words(
+    llm: LLMBackend,
+    record: dict[str, Any],
+    instructions: str,
+    *,
+    hint: str = REACT_HINT,
+    runs: int = 1,
+    temperature: float = 0.6,
+    previous: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Replay only the quick first reaction, with independent repetition history for each run."""
+    added = record["steps"][0]["added"]
+    situation_at = next(i for i in range(len(added) - 1, -1, -1) if added[i].get("role") == "developer")
+    situation = next(
+        (e["situation"] for e in record.get("events", []) if e["kind"] == "first_words" and "situation" in e),
+        None,
+    )
+    if situation is None:
+        situation = added[situation_at]["content"].split(SOUND_SAID.split("{}", 1)[0], 1)[0]
+        situation = situation.removesuffix("\n" + QUICK_HINT).rstrip()
+    history = [item for data in added[:situation_at] if (item := item_from_json(data)) is not None]
+    phrase = record["trigger"]["text"]
+    request = [*history, Message("developer", situation + "\n" + hint), Message("user", phrase)]
+    results = []
+    for run in range(runs):
+        started = time.monotonic()
+        text = ""
+        outcome = "said"
+        error = ""
+        try:
+            async with (
+                asyncio.timeout(REACTION_S),
+                aclosing(
+                    llm.stream(instructions=instructions, messages=request, tools=[], temperature=temperature)
+                ) as events,
+            ):
+                async for event in events:
+                    if isinstance(event, TextDelta):
+                        text += event.text
+                        if _FIRST_SENTENCE.search(text) or paragraph_end(text) is not None:
+                            break
+        except TimeoutError:
+            outcome = "late"
+        except LLMError as err:
+            outcome, error = "error", str(err)
+        words, _ = first_words(text)
+        if outcome == "said":
+            outcome = first_words_outcome(words, previous[run] if run < len(previous) else "")
+        result = {
+            "text": text,
+            "words": words,
+            "outcome": outcome,
+            "pure_sound": is_pure_sound(words),
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+        }
+        if error:
+            result["error"] = error
+        results.append(result)
+    return {
+        "turn": record.get("id"),
+        "npc": record["npc"],
+        "phrase": phrase,
+        "situation": situation,
+        "hint": hint,
+        "temperature": temperature,
+        "runs": results,
+    }
 
 
 async def replay(

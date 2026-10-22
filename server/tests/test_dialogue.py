@@ -1254,6 +1254,7 @@ async def test_a_line_in_a_fight_is_the_quick_models_and_the_turns_model_only_ac
         await _until(lambda: any(m.get("type") == "story_effect" for m in fake.story))
 
     assert " ".join(fake.said) == "Это он! Держи его!"
+    assert quick.temperatures == [None]
     (_, quick_messages, quick_tools), (_, messages, tools) = quick.calls[0], llm.calls[0]
     assert quick_tools == [] and "set_intent" in {t.name for t in tools}
     brief, full = _situation_of(quick_messages), _situation_of(messages)
@@ -1293,6 +1294,7 @@ async def test_out_of_a_fight_the_quick_model_only_says_the_first_words():
         await _until(lambda: fake.said == ["Тьфу!", "Не спеши.", "Не спеши."])
 
     assert len(quick.calls) == 1  # the phrase's first words; the event: no
+    assert quick.temperatures == [0.6]
     _, words_request, words_tools = quick.calls[0]
     assert words_tools == [] and dialogue_module.REACT_HINT in _situation_of(words_request)
     said = [m for m, _ in fake.says if m["text"] == "Тьфу!"]
@@ -1427,6 +1429,123 @@ async def test_a_companion_answers_an_order_through_the_quick_model():
     assert messages[-1].role == "developer" and dialogue_module.ACK_HINT in messages[-1].content
     (said,) = [m for m, _ in fake.says if m["text"] == "Стою."]
     assert said["overlay"] is True and not said.get("filler")  # on the move: the order is carried out
+    assert quick.temperatures == [None]
+
+
+async def test_first_words_accept_eight_words_but_not_nine_and_trace_rejections(tmp_path):
+    from gothic_ai.trace import TraceWriter, read
+
+    eight = "Твоё невежество явно граничит с самым настоящим безумием."
+    nine = "Твоё невежество явно граничит с самым настоящим полным безумием."
+    replies = [eight, nine, eight, "[neutral] —"]
+    quick = FakeBackend(script=[FakeStep(text) for text in replies], delay=0)
+    writer = TraceWriter(tmp_path)
+    fake = FakeGame()
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, FakeBackend("Слушаю.", delay=0), PersonaProvider(None), quick=quick, trace=writer
+        )
+        dialogue.open(XARDAS, "Ксардас")
+        for phrase in ("Невежда!", "Сам такой!", "Да ты сам!", "До встречи."):
+            await dialogue.say_as_player(XARDAS, phrase)
+        await _until(lambda: fake.said.count("Слушаю.") == 4)
+
+    assert [m["text"] for m, _ in fake.says if m.get("filler")] == [eight]
+    turns = [r for r in read(writer.path()) if r["type"] == "turn"]
+    events = [e for t in turns for e in t["events"] if e["kind"] == "first_words"]
+    assert [e["outcome"] for e in events] == ["said", "too_long", "same", "nothing"]
+    assert [e["text"] for e in events] == replies
+    for event, (_, messages, _) in zip(events, quick.calls, strict=True):
+        assert event["hint"] == dialogue_module.REACT_HINT
+        assert event["situation"] + "\n" + event["hint"] == _situation_of(messages)
+        assert 0 <= event["elapsed_ms"] < dialogue_module.REACTION_S * 1000
+
+
+async def test_a_pure_sound_waits_four_player_turns_but_words_with_a_sound_do_not(tmp_path):
+    from gothic_ai.trace import TraceWriter, read
+
+    replies = ["Хммм...", "Ого!", "Хм, двести золотых?", "—", "Ааа!", "Гм!"]
+    quick = FakeBackend(script=[FakeStep(text) for text in replies], delay=0)
+    fake = FakeGame()
+    writer = TraceWriter(tmp_path)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, FakeBackend("Слушаю.", delay=0), PersonaProvider(None), quick=quick, trace=writer
+        )
+        dialogue.open(XARDAS, "Ксардас")
+        for _ in replies:
+            await dialogue.say_as_player(XARDAS, "Сколько стоит свиток?")
+        await _until(lambda: fake.said.count("Слушаю.") == len(replies))
+        quick.script = [FakeStep("Ого!")]
+        dialogue.open(LOBART, "Лобарт")
+        await dialogue.say_as_player(LOBART, "Двести золотых!")
+        await _until(lambda: fake.said.count("Слушаю.") == len(replies) + 1)
+
+    assert [m["text"] for m, _ in fake.says if m.get("filler")] == [
+        "Хммм...", "Хм, двести золотых?", "Гм!", "Ого!"
+    ]
+    turns = [r for r in read(writer.path()) if r["type"] == "turn"]
+    assert [e["outcome"] for t in turns for e in t["events"] if e["kind"] == "first_words"] == [
+        "said", "sound", "said", "nothing", "sound", "said", "said"
+    ]
+
+
+@pytest.mark.parametrize("failure", ["late", "error"])
+async def test_failed_first_words_attempts_are_traced(tmp_path, monkeypatch, failure):
+    from gothic_ai.trace import TraceWriter, find_turn
+
+    monkeypatch.setattr(dialogue_module, "REACTION_S", 0.02)
+    quick = FakeBackend("Хм...", first=1) if failure == "late" else FailingBackend()
+    fake = FakeGame()
+    writer = TraceWriter(tmp_path)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, FakeBackend("Слушаю.", delay=0), PersonaProvider(None), quick=quick, trace=writer
+        )
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Как мне быть?")
+        await _until(lambda: fake.said == ["Слушаю."])
+    turn, _ = find_turn(writer.path(), None)
+    (event,) = [e for e in turn["events"] if e["kind"] == "first_words"]
+    assert event["outcome"] == failure and event["text"] == ""
+    assert event["elapsed_ms"] >= 0 and event["hint"] == dialogue_module.REACT_HINT
+    assert fake.said == ["Слушаю."]
+
+
+@pytest.mark.parametrize("waiting_for_delivery", [False, True])
+async def test_interrupted_first_words_are_traced_as_late_until_sent(
+    tmp_path, monkeypatch, waiting_for_delivery
+):
+    from gothic_ai.trace import TraceWriter, find_turn
+
+    fake = FakeGame()
+    quick = FakeBackend("Ого!", delay=0, first=0 if waiting_for_delivery else 1)
+    writer = TraceWriter(tmp_path)
+    waiting = asyncio.Event()
+
+    async def wait_to_say(*args, **kwargs):
+        waiting.set()
+        await asyncio.Event().wait()
+
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), quick=quick, trace=writer)
+        if waiting_for_delivery:
+            monkeypatch.setattr(dialogue, "_say", wait_to_say)
+        dialogue.open(XARDAS, "Ксардас")
+        task = dialogue.say_as_player(XARDAS, "Я убью дракона!")
+        if waiting_for_delivery:
+            await asyncio.wait_for(waiting.wait(), 1)
+        else:
+            await _until(lambda: bool(quick.calls))
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    turn, _ = find_turn(writer.path(), None)
+    (event,) = [e for e in turn["events"] if e["kind"] == "first_words"]
+    assert event["outcome"] == "late"
+    assert event["text"] == ("Ого!" if waiting_for_delivery else "")
+    assert fake.said == []
 
 
 async def test_first_words_are_short_and_not_the_same_twice_in_a_row():

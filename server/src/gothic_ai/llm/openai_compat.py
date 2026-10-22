@@ -67,6 +67,7 @@ class OpenAICompatBackend:
         tool_choice: ToolChoice | None = None,
         allowed: Collection[str] | None = None,
         cache_key: str | None = None,  # unused: llama.cpp reuses the prompts of its slots by itself
+        temperature: float | None = None,
     ) -> AsyncIterator[LLMEvent]:
         chat = [{"role": "system", "content": instructions}, *chat_messages(messages)]
         kwargs: dict[str, Any] = {}
@@ -84,6 +85,8 @@ class OpenAICompatBackend:
                 kwargs["tool_choice"] = tool_choice
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         text = ""
         calls: dict[int, dict[str, str]] = {}
         try:

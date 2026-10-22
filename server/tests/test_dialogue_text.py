@@ -1,10 +1,12 @@
 import pytest
 
 from gothic_ai.dialogue import (
+    REACT_HINT,
     MoodTag,
     MoodTags,
     SentenceSplitter,
     first_words,
+    is_pure_sound,
     mood_of,
     paragraph_end,
     strip_said,
@@ -13,6 +15,29 @@ from gothic_ai.dialogue import (
 )
 from gothic_ai.gamedata.ou import npc_dialog_key, npc_lines, parse_ou_bin
 from gothic_ai.persona import pick_samples, render_instructions
+
+
+def test_first_words_hint_has_no_examples_and_asks_for_a_reaction_to_the_point():
+    assert REACT_HINT == (
+        "Герой только что это сказал. Отреагируй вслух сразу, одной короткой фразой до восьми слов, "
+        "как вырвалось бы само. Зацепись за главное в его словах: переспроси это, оцени или покажи, "
+        "как ты к этому относишься. Ответ по существу скажешь следом: не начинай его и ничего не обещай. "
+        "На приветствие и прощание, или если сразу сказать нечего, напиши только «—»."
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [*"хм гм ха ой ли ого ага угу эх ох ах ух тьфу фу ишь ну э м о а что чего".split(),
+     "Хммм...", "Ааа!", "Ну, что?!", "Ууугу!", "Ой ли?"],
+)
+def test_pure_sounds_include_stretched_interjections(text):
+    assert is_pure_sound(text)
+
+
+@pytest.mark.parametrize("text", ["Хм, двести золотых?", "Ишь ты!", "", "—", "Твоё невежество!"])
+def test_meaningful_first_words_are_not_pure_sounds(text):
+    assert not is_pure_sound(text)
 
 
 @pytest.mark.parametrize(
