@@ -29,6 +29,8 @@ ssh ryzen 'test -x ~/gothic-ai/play/launcher/app/src-tauri/target/release/gothic
 
 Общая очередь устанавливается отдельно явной командой `scripts/gq install ryzen` с Mac. Личный установщик не меняет `~/gothic-ai/bin/gq` и `gq.profile`: перед изменением клона он проверяет поддержку `--interactive` и при её отсутствии печатает эту команду.
 
+Рабочий контент личной установки — `~/.local/share/gothic-ai/play-content`: `install/update` переносит с Mac из `~/.local/share/gothic-ai/content` только `materials/`, `meshes/` и `enabled.json` через `rsync --delete --checksum` в `play-content.incoming`, затем под `play.install.lock` заменяет папку переименованием и удаляет прежнюю `play-content.old`. Без исходного контента папка становится пустой. Linux-лаунчер передаёт её игре через `OPENGOTHIC_CONTENT`, только если есть `materials/materials.json`; явное значение переменной имеет приоритет, `OPENGOTHIC_CONTENT=` выключает контент. Каталог по умолчанию на Ryzen установщик не меняет; на Mac выбор контента остаётся прежним.
+
 `install` повторяемый. В `~/gothic-ai/play/` создаётся git-клон `main` с тем же GitHub `origin`, что у репозитория на Mac; оба действия обновляют его через `git pull --ff-only`. Локальные изменения в клоне останавливают обновление с объяснением. Исходники игры берутся из этого клона. Сборка `RelWithDebInfo` в `OpenGothic/build` использует Vulkan SDK `~/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0`; Ninja пересобирает изменившиеся файлы. Также собирается существующая утилита `OpenGothic/ai_bridge/storygraph/build/storygraph`: без неё на свежей машине сервер отключает знания NPC и режиссёра. Обе сборки, release-сборка окна Tauri и `uv sync --locked` для `server`, `asr-service`, `tts-service`, `launcher/core` идут одной заявкой `gq quick`: 12 потоков, 12 ГБ RAM, до 30 минут, без окна. Системные пакеты установщик не ставит.
 
 Если на Ryzen ещё нет `~/.config/gothic-ai/settings.toml`, установщик переносит из одноимённого файла Mac настройки провайдеров, `reasoning_effort` и адреса сервисов, включая `decider_url`, `body_url`, `voxtral_url`, `voxcpm_url`. Пути заменяются на `~/gothic-ai/game`, `~/gothic-ai/play` и `~/.local/bin/uv`; `voice.mic_device` не переносится, используется системный микрофон Ryzen. Существующий файл настроек сохраняется. `secrets.toml` и `chatgpt.json` не читаются и не копируются.
@@ -169,6 +171,8 @@ Gothic AI.app / Gothic AI Linux (Tauri, launcher/app)
 **Оформление.** Тёмный камень и пергамент. Шрифт с кириллицей и лицензией OFL (Cormorant, Old Standard TT) лежит в приложении. Фон можно брать из своей копии игры: текстуры меню из `Textures.vdf`.
 
 ## План и журнал
+
+**2026-10-22 — рабочий контент личной установки Ryzen.** `install/update` синхронизирует включённый набор Mac в отдельную папку через incoming и замену под замком; Linux-ядро передаёт путь игре. Покрытие — тесты `content_env`, rsync и замены папки при свободном и занятом замке; живую установку проверяет пользователь.
 
 21 октября 2026: Inworld добавлен в распознавание речи и выбран по умолчанию для голоса игрока с запасным ChatGPT. ASR получает общий с озвучкой ключ Inworld и ту же проверку ключа и кредитов; явные настройки Voxtral сохраняются. Мастер, настройки и моки обновлены, адрес Voxtral показывается только при его выборе основным или запасным провайдером.
 
