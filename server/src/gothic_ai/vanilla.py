@@ -60,6 +60,9 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 ACCEPT = "accept_quest"
+ACCEPT_NOW = (
+    f"Засчитать можно сейчас: отдаёшь награду — вызови {ACCEPT}, без него она не перейдёт."
+)
 CHECK = "check_claim"
 EXPOSE = "expose_lie"
 GIVE = "give_quest"
@@ -222,6 +225,21 @@ class Target:
             not self.seen and not self.seen_dead and self.distance is not None and self.distance <= CHECK_CM
         )
 
+    @property
+    def state(self) -> str:
+        if self.seen:
+            return f"{'жив' if self.alive else 'мёртв'}, у тебя на глазах"
+        if self.remembered:
+            how = {
+                "killed": "ты убил его сам",
+                "saw_die": "ты видел, как он умер",
+                "saw_body": "ты видел тело",
+            }[self.remembered]
+            return f"мёртв: {how}"
+        if self.walk:
+            return f"в {_m(self.distance or 0)} м, отсюда не видно"
+        return "ты его не видел"
+
 
 @dataclass
 class Offer:
@@ -327,12 +345,7 @@ class Offer:
             parts.append(f"у тебя на глазах: {what}")
         for t in self.targets:
             if t.remembered and t.seen_dead and not t.seen:
-                how = {
-                    "killed": "ты убил его сам",
-                    "saw_die": "ты видел, как он умер",
-                    "saw_body": "ты видел тело",
-                }[t.remembered]
-                parts.append(f"{t.name} — мёртв: {how}")
+                parts.append(f"{t.name} — {t.state}")
         near = [t for t in self.targets if t.walk]
         if near:
             ds = sorted(_m(t.distance or 0) for t in near)
@@ -535,6 +548,15 @@ class VanillaQuests:
             if seen and npc in self.checking:
                 seen = seen.replace(f": можешь сходить и посмотреть сам ({CHECK})", "")
             refusal = self._refusal(npc, o)
+            targets = {t.npc: t for t in o.targets}
+            terms = []
+            for i in o.claim.removable:
+                term = f"{i} — {o.term_names.get(i, i)}"
+                if i in targets:
+                    term += f" ({targets[i].state})"
+                elif i in o.claim.items:
+                    term += f" (у героя с собой ×{o.have.get(i, 0)} из {o.claim.items[i]})"
+                terms.append(term)
             lines.append(
                 (
                     f"Ты ждёшь от героя: «{o.title}» (id {o.quest}). "
@@ -555,7 +577,7 @@ class VanillaQuests:
                 )
                 + (
                     f"Можешь снять пункты ({AMEND}): "
-                    + "; ".join(f"{i} — {o.term_names.get(i, i)}" for i in o.claim.removable)
+                    + "; ".join(terms)
                     + ". "
                     if o.asked and o.quest not in self.plot_vars and o.claim.removable
                     else ""
@@ -587,6 +609,8 @@ class VanillaQuests:
                     f"Засчитать сейчас нельзя: {reason}. Не говори, что отдаёшь награду или "
                     f"рассчитываешься, пока дело не засчитано.{hint}"
                 )
+            elif o.seen_true():
+                lines.append(ACCEPT_NOW)
         if checking := self.checking.get(npc):
             lines.append(
                 f"Ты пошёл сам посмотреть, сделал ли герой «{checking.title}»: что увидишь, то и решит. "
