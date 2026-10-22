@@ -455,7 +455,7 @@ def qualify(args):
 
 
 def drive(args):
-    if getattr(args, "manifest", None) is not None:
+    if getattr(args, "manifest", None) is not None or getattr(args, "detour_scenarios", None) is not None:
         return drive_validation(args)
     pairs = load_pairs(args.pairs)
     if not all(pair.get("final_test") and pair.get("teacher_success") and pair.get("teacher_version") == 2 for pair in pairs):
@@ -528,6 +528,46 @@ def validation_scenarios(manifest, families=None):
     return result
 
 
+def detour_scenarios(path):
+    """Read a frozen geometry-only validation cohort without inspecting test."""
+    result, seen = [], set()
+    for original in rows(path):
+        if (not isinstance(original, dict) or original.get("split") != "validation"
+                or original.get("family") != "detour" or original.get("goal_kind") not in ("point", "object")):
+            raise ValueError("Detour drive requires validation point/object scenarios")
+        for key in ("id", "region", "start", "goal"):
+            token = original.get(key)
+            if not isinstance(token, str) or not token or any(c.isspace() for c in token):
+                raise ValueError(f"Invalid detour scenario token: {key}")
+        identifier = original["id"]
+        if Path(identifier).name != identifier or identifier in (".", "..") or identifier in seen:
+            raise ValueError(f"Unsafe or duplicate detour scenario ID: {identifier}")
+        if type(original.get("seed")) is not int or not 0 <= original["seed"] <= 0xffffffff:
+            raise ValueError(f"Invalid detour scenario seed: {identifier}")
+        geometry = original.get("geometry")
+        if not isinstance(geometry, dict) or any(geometry.get(key) != original[key] for key in ("start", "goal")):
+            raise ValueError(f"Detour geometry identity differs: {identifier}")
+        if geometry.get("label") != identifier:
+            raise ValueError(f"Detour geometry label differs: {identifier}")
+        points = [geometry.get(key) for key in ("start_cm", "goal_cm")]
+        length = geometry.get("length_cm")
+        if (any(not isinstance(point, list) or len(point) != 3
+                or any(type(value) not in (int, float) or not math.isfinite(value) for value in point) for point in points)
+                or type(length) not in (int, float) or not math.isfinite(length)):
+            raise ValueError(f"Invalid detour geometry lengths: {identifier}")
+        direct = math.dist(*points)
+        if (geometry.get("complete") is not True or geometry.get("straight_walkable") is not False
+                or direct <= 0 or length < 1.3 * direct):
+            raise ValueError(f"Unqualified detour geometry: {identifier}")
+        if original["goal_kind"] == "object" and original.get("visibility") is not True:
+            raise ValueError(f"Detour object was not prequalified as visible: {identifier}")
+        seen.add(identifier)
+        result.append(dict(original))
+    if not result:
+        raise ValueError("No frozen detour validation scenarios")
+    return result
+
+
 def action_seeds(value):
     try:
         seeds = list(ACTION_SEEDS) if value is None else [int(item) for item in value.split(",")]
@@ -547,7 +587,8 @@ def validation_commands(args, value, action_seed):
     if type(limit) is not int or limit <= 0:
         raise ValueError("Validation scenario limit must be positive")
     suffix = f"{limit} {args.weights} 0 {action_seed} sample"
-    commands = [f"roads load {args.roads}", f"roads on {npc}", "navdemos record on",
+    record = "off" if value.get("family") == "detour" else "on"
+    commands = [f"roads load {args.roads}", f"roads on {npc}", f"navdemos record {record}",
                 "navdemos perception-mode gaze", "navdemos oracle off"]
     if value.get("family") == "safety":
         commands.append("navdemos perception-monitor on")
@@ -607,7 +648,14 @@ def drive_validation(args):
     if args.action_mode != "sample":
         raise ValueError("Frozen manifest validation requires softmax sampling")
     checked_paths(args, policy=True)
-    values = validation_scenarios(args.manifest, getattr(args, "families", None))
+    detours = getattr(args, "detour_scenarios", None)
+    if detours is not None:
+        if (getattr(args, "families", None) is not None or getattr(args, "safety_fixtures", None) is not None
+                or getattr(args, "fence_control", False)):
+            raise ValueError("--detour-scenarios measures only its frozen validation cohort")
+        values = detour_scenarios(detours)
+    else:
+        values = validation_scenarios(args.manifest, getattr(args, "families", None))
     if args.indices is not None:
         selected = [int(value) for value in args.indices.split(",")]
         if not selected or len(set(selected)) != len(selected) or any(not 0 <= index < len(values) for index in selected):
@@ -690,8 +738,14 @@ def drive_validation(args):
                             or episode.get("mixing_seed") != seed or episode.get("drive") is not True
                             or episode.get("observation_source") != "learner_memory"):
                         raise ValueError(f"Runner validation identity differs: {directory}")
+                    if value["family"] == "detour":
+                        if (any(episode.get(key) != value[key] for key in ("start", "goal", "goal_kind"))
+                                or episode.get("record") is not False or episode.get("teacher_control_decisions") != 0
+                                or (directory / "samples.bin.gz").exists()):
+                            raise ValueError(f"Runner detour identity/recording/control differs: {directory}")
                     if (directory / "drive-metrics.json").is_file():
-                        module("nav_ppo_final").retain_tail(directory)
+                        if value["family"] != "detour":
+                            module("nav_ppo_final").retain_tail(directory)
                         continue
                     for key in ("id", "family", "split", "region", "place_id"):
                         if key in value:
@@ -701,9 +755,14 @@ def drive_validation(args):
                     if started is not None:
                         episode["collector_wall_s"] = time.monotonic() - started
                     write_json(directory / "episode.json", episode)
-                    measured = validation_episode_metrics(directory)
+                    measured = (detour_episode_metrics(directory) if value["family"] == "detour"
+                                else validation_episode_metrics(directory))
                     write_json(directory / "drive-metrics.json", measured)
-                    module("nav_ppo_final").retain_tail(directory)
+                    if value["family"] == "detour":
+                        for name in ("known-paths.jsonl", "teacher-paths.jsonl", "transition-frames.jsonl"):
+                            (directory / name).unlink(missing_ok=True)
+                    else:
+                        module("nav_ppo_final").retain_tail(directory)
                     print(json.dumps(dict(id=value["id"], family=value["family"], action_seed=seed,
                                           success=measured["success"], elapsed_ms=episode["elapsed_ms"])), flush=True)
             finally:
@@ -895,6 +954,70 @@ def applied_transition_trace(route, actions, frames):
     return trace
 
 
+def detour_episode_metrics(directory):
+    """Physical outcomes and applied actions only; no NAVDEMO/teacher labels."""
+    import numpy as np
+    directory = Path(directory)
+    episode = read_json(directory / "episode.json")
+    actions = np.loadtxt(directory / "actions.txt", ndmin=2)
+    trajectory = np.loadtxt(directory / "trajectory.txt", ndmin=2)
+    steps, elapsed = episode["decisions"], episode["elapsed_ms"]
+    if (type(steps) is not int or steps <= 0 or actions.shape != (steps + 1, 9)
+            or not np.isfinite(actions).all() or actions[0, 0] != 0 or actions[-1, 0] != elapsed
+            or (np.diff(actions[:, 0]) <= 0).any()):
+        raise ValueError(f"Invalid detour applied-action rows: {directory}")
+    if (trajectory.shape[1] != 5 or not np.isfinite(trajectory).all() or trajectory[0, 0] != 0
+            or trajectory[-1, 0] != elapsed or (np.diff(trajectory[:, 0]) < 0).any()):
+        raise ValueError(f"Invalid detour trajectory rows: {directory}")
+    applied = actions[:-1, 1:7]
+    if (not np.isin(applied[:, :3], (-1, 0, 1)).all() or not np.isin(applied[:, 3:], (0, 1)).all()
+            or (actions[-1, [1, 2, 3, 5, 6]] != 0).any()):
+        raise ValueError(f"Invalid detour applied-action keys: {directory}")
+    masks = {head: applied[:, index] != 0 for index, head in enumerate(HEADS)}
+    masks.update(turn_only=(applied[:, :2] == 0).all(axis=1) & (applied[:, 2] != 0),
+                 idle=~applied[:, [0, 1, 2, 4, 5]].any(axis=1))
+    counts = {key: int(mask.sum()) for key, mask in masks.items()}
+    presses = {}
+    for column, name in ((4, "jump"), (5, "climb")):
+        pressed = applied[:, column] != 0
+        count = int(np.count_nonzero(pressed & ~np.r_[False, pressed[:-1]]))
+        presses[name] = dict(presses=count, per_1000_decisions=1000 * count / steps)
+    result = {key: episode[key] for key in ("id", "family", "goal_kind", "split", "region", "start", "goal",
+        "action_seed", "scenario_seed", "success", "elapsed_ms", "decisions", "blocked_spans", "blocked_ms",
+        "max_blocked_ms", "teacher_beta", "teacher_control_decisions", "failure", "distance_cm")}
+    result.update(episode=str(directory), elapsed_s=elapsed / 1000, action_counts=counts,
+        action_fraction={key: count / steps for key, count in counts.items()}, action_presses=presses,
+        travelled_xz_cm=float(np.linalg.norm(np.diff(trajectory[:, [1, 3]], axis=0), axis=1).sum()),
+        detour_geometry=episode["validation_scenario"]["geometry"], recording="text_only")
+    return result
+
+
+def detour_summary(episodes):
+    """Pool lean detour outcomes without inventing unavailable teacher agreement."""
+    def aggregate(values):
+        decisions = sum(value["decisions"] for value in values)
+        counts = {key: sum(value["action_counts"][key] for value in values) for key in values[0]["action_counts"]}
+        return dict(n=len(values), arrived=sum(bool(value["success"]) for value in values),
+            arrival_fraction=sum(bool(value["success"]) for value in values) / len(values), decisions=decisions,
+            median_elapsed_s=statistics.median(value["elapsed_s"] for value in values),
+            blocked_spans=sum(value["blocked_spans"] for value in values),
+            blocked_ms=sum(value["blocked_ms"] for value in values), max_blocked_ms=max(value["max_blocked_ms"] for value in values),
+            teacher_control_decisions=sum(value["teacher_control_decisions"] for value in values),
+            action_counts=counts, action_fraction={key: count / decisions for key, count in counts.items()},
+            turn_in_place_fraction=counts["turn_only"] / decisions, idle_fraction=counts["idle"] / decisions,
+            action_presses={name: dict(presses=sum(value["action_presses"][name]["presses"] for value in values),
+                per_1000_decisions=1000 * sum(value["action_presses"][name]["presses"] for value in values) / decisions)
+                for name in ("jump", "climb")})
+    return dict(all=aggregate(episodes),
+        by_seed={str(seed): aggregate([ep for ep in episodes if ep["action_seed"] == seed])
+                 for seed in sorted({ep["action_seed"] for ep in episodes})},
+        by_goal_kind={kind: aggregate([ep for ep in episodes if ep["goal_kind"] == kind])
+                      for kind in sorted({ep["goal_kind"] for ep in episodes})},
+        metric_definitions=dict(action_presses="applied rising edges per type per 1000 decisions; no teacher labels recorded",
+            turn_in_place="nonzero turn, zero forward/strafe; fraction of decisions", recording="text_only; no NAVDEMO"),
+        episodes=episodes)
+
+
 def validation_episode_metrics(directory):
     import numpy as np
     directory = Path(directory)
@@ -1059,11 +1182,12 @@ def summarize(args):
         rejections = [read_json(path) for path in sorted((args.source.parent / "setup-rejections").glob("*.json"))]
         excluded = {value["id"] for value in rejections}
         episodes = [episode for episode in episodes if episode["id"] not in excluded]
-        result = validation_summary(episodes)
+        detours = bool(episodes) and all(ep.get("family") == "detour" for ep in episodes)
+        result = detour_summary(episodes) if detours else validation_summary(episodes)
         result["setup_rejections"] = rejections
         if getattr(args, "object_probes", None) is not None:
             result["object_detour"] = object_detour_summary(episodes, args.object_probes)
-        result["object_failures_last_10s"] = object_failure_summaries(episodes)
+        result["object_failures_last_10s"] = [] if detours else object_failure_summaries(episodes)
         write_json(args.output / "metrics.json", result)
         print(json.dumps({key: value for key, value in result.items()
                           if key not in ("episodes", "object_failures_last_10s")}, ensure_ascii=False))
@@ -1399,6 +1523,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--pairs", type=Path)
     parser.add_argument("--manifest", type=Path, help="Frozen v4 corpus manifest; drive reads splits.validation only")
+    parser.add_argument("--detour-scenarios", type=Path, help="Frozen detour-val JSONL; drive only, text recording without NAVDEMO")
     parser.add_argument("--families", help="Comma-separated validation families; default all five")
     parser.add_argument("--object-probes", type=Path, help="Frozen object Detour probes for validation summary")
     parser.add_argument("--action-seeds", help="Fixed sampling seeds; default 18102027,18102028,18102029")
@@ -1447,7 +1572,10 @@ def main():
         parser.error("seed must be uint32; per-region, population, episodes and limit-ms must be positive")
     if args.manifest is not None and (args.command != "drive" or args.pairs is not None):
         parser.error("--manifest is exclusive with --pairs and only supports validation drive")
-    if args.command in ("qualify", "drive", "population", "equivalence", "death-smoke") and args.pairs is None and args.manifest is None:
+    if args.detour_scenarios is not None and (args.command != "drive" or args.pairs is not None or args.manifest is not None):
+        parser.error("--detour-scenarios is exclusive with --pairs/--manifest and only supports validation drive")
+    if (args.command in ("qualify", "drive", "population", "equivalence", "death-smoke")
+            and args.pairs is None and args.manifest is None and args.detour_scenarios is None):
         parser.error("--pairs is required")
     if args.command in ("check", "summarize", "compare") and args.source is None:
         parser.error("--source is required")

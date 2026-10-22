@@ -821,6 +821,124 @@ def test_manifest_drive_cli_does_not_require_pairs_and_forbids_argmax(tmp_path, 
         rl.drive_validation(SimpleNamespace(action_mode="argmax"))
 
 
+def frozen_detour(tmp_path, **changes):
+    value = dict(id="detour-A", family="detour", goal_kind="point", split="validation", region="harbour",
+        start="A", goal="B", seed=19, geometry=dict(label="detour-A", start="A", goal="B",
+        start_cm=[0, 0, 0], goal_cm=[1000, 0, 0], length_cm=1300, complete=True, straight_walkable=False))
+    value.update(changes)
+    path = tmp_path / "detour-val.jsonl"
+    rl.write_pairs(path, [value])
+    return path, value
+
+
+@pytest.mark.parametrize("change", [dict(split="test"), dict(family="object"), dict(goal_kind="follow"),
+    dict(visibility=False, goal_kind="object"), dict(start="changed"), dict(id="../unsafe")])
+def test_detour_reader_rejects_other_splits_invalid_identity_and_invisible_objects(tmp_path, change):
+    path, _ = frozen_detour(tmp_path, **change)
+    with pytest.raises(ValueError):
+        rl.detour_scenarios(path)
+
+
+@pytest.mark.parametrize("change", [dict(complete=False), dict(straight_walkable=True), dict(length_cm=1299),
+    dict(label="changed"), dict(start_cm=[float("nan"), 0, 0])])
+def test_detour_reader_requires_complete_blocked_geometric_route(tmp_path, change):
+    path, value = frozen_detour(tmp_path)
+    value["geometry"].update(change)
+    path.unlink()
+    rl.write_pairs(path, [value])
+    with pytest.raises(ValueError):
+        rl.detour_scenarios(path)
+
+
+def test_detour_reader_preserves_frozen_geometry_and_rejects_duplicate_ids(tmp_path):
+    path, value = frozen_detour(tmp_path, obstacle="rock", source_id="original-v4-point")
+    assert rl.detour_scenarios(path) == [value]
+    with path.open("a") as stream:
+        stream.write(json.dumps(value) + "\n")
+    with pytest.raises(ValueError, match="duplicate"):
+        rl.detour_scenarios(path)
+
+
+def test_detour_drive_cli_requires_no_pairs_and_rejects_other_commands(tmp_path, monkeypatch):
+    captured = []
+    monkeypatch.setattr(rl.sys, "argv", ["nav_rl.py", "drive", "--output", str(tmp_path),
+        "--detour-scenarios", "/detour-val.jsonl"])
+    monkeypatch.setattr(rl, "drive", lambda args: captured.append(args))
+    rl.main()
+    assert captured[0].manifest is None
+    assert captured[0].pairs is None
+    assert captured[0].action_mode == "sample"
+    monkeypatch.setattr(rl.sys, "argv", ["nav_rl.py", "population", "--output", str(tmp_path),
+        "--detour-scenarios", "/detour-val.jsonl"])
+    with pytest.raises(SystemExit):
+        rl.main()
+
+
+def test_detour_drive_is_sampled_record_off_and_keeps_policy_outputs_separate(tmp_path, monkeypatch):
+    path, value = frozen_detour(tmp_path)
+    calls = []
+    monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(rl, "module", lambda name: pytest.fail("Detour evaluation must not read NAVDEMO or retain a tail"))
+    def scenario(args, runner, name, commands, directory):
+        assert "navdemos record off" in commands
+        seed = int(directory.name.removeprefix("seed-"))
+        calls.append((args.weights.stem, args.seed, seed))
+        metadata = validation_runner_metadata(value, seed)
+        metadata.update(start=value["start"], goal=value["goal"], record=False, teacher_control_decisions=0)
+        rl.write_json(directory / "episode.json", metadata)
+        (directory / "teacher-paths.jsonl").write_text("unused diagnostic")
+    monkeypatch.setattr(rl, "scenario", scenario)
+    monkeypatch.setattr(rl, "detour_episode_metrics", lambda directory: dict(success=False, split="validation"))
+    for policy in ("bc3", "it35"):
+        args = validation_drive_args(tmp_path, None, policy, family=None)
+        args.detour_scenarios = path
+        rl.drive(args)
+        episodes = list(args.output.rglob("episode.json"))
+        assert len(episodes) == 3
+        assert not list(args.output.rglob("teacher-paths.jsonl"))
+        for episode in episodes:
+            saved = rl.read_json(episode)
+            assert saved["validation_scenario"] == value
+            assert saved["weights"] == f"/{policy}.navbc"
+    assert calls == [(policy, 19, seed) for policy in ("bc3", "it35") for seed in rl.ACTION_SEEDS]
+
+
+def test_detour_text_metrics_count_executed_rising_edges_without_teacher_labels(tmp_path):
+    _, value = frozen_detour(tmp_path)
+    directory = tmp_path / "episode"
+    metadata = validation_runner_metadata(value, 7)
+    metadata.update(id=value["id"], family="detour", split="validation", region=value["region"],
+        scenario_seed=value["seed"], action_seed=7, start="A", goal="B", decisions=4, elapsed_ms=400,
+        success=True, blocked_spans=1, blocked_ms=200, max_blocked_ms=200, teacher_control_decisions=0,
+        failure="", distance_cm=0, validation_scenario=value)
+    rl.write_json(directory / "episode.json", metadata)
+    actions = np.zeros((5, 9))
+    actions[:, 0] = np.arange(5) * 100
+    actions[:, 4] = 1
+    actions[:2, 5] = 1
+    actions[3, 5] = 1
+    actions[2, 6] = 1
+    actions[1, 3] = 1
+    np.savetxt(directory / "actions.txt", actions)
+    np.savetxt(directory / "trajectory.txt", [[0, 0, 0, 0, 0], [400, 100, 0, 0, 0]])
+    measured = rl.detour_episode_metrics(directory)
+    assert measured["action_presses"] == dict(jump=dict(presses=2, per_1000_decisions=500),
+        climb=dict(presses=1, per_1000_decisions=250))
+    assert measured["action_fraction"]["turn_only"] == .25
+    assert measured["travelled_xz_cm"] == 100
+    assert "disagreement_counts" not in measured
+    summary = rl.detour_summary([measured])
+    assert summary["all"]["arrived"] == 1
+    assert summary["all"]["blocked_ms"] == 200
+    assert summary["all"]["teacher_control_decisions"] == 0
+    assert summary["by_seed"]["7"]["action_presses"]["jump"]["presses"] == 2
+    actions[-1, 5] = 1
+    np.savetxt(directory / "actions.txt", actions)
+    with pytest.raises(ValueError, match="keys"):
+        rl.detour_episode_metrics(directory)
+
+
 def test_manifest_drive_repeats_scenario_seed_for_three_policy_seeds(tmp_path, monkeypatch):
     manifest, groups = validation_manifest(tmp_path)
     calls, closed, tails = [], [], []

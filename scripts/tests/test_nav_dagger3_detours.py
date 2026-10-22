@@ -206,3 +206,34 @@ def test_profiles_preserve_scenario_mapping_and_sample_floor_every_50_cm():
                for a, b in zip(floor, floor[1:]))
     assert [sample for case, sample, _ in queries if case == "second" and sample.startswith("floor")] == [
         "floor-0-of-1", "floor-1-of-1"]
+
+
+def floor_ray(x, y, normal_y=1., hit=True):
+    return dict(point=[x, y, 0], normal=[0, normal_y, 0], hit=hit, sector="")
+
+
+def test_obstacle_classification_requires_positive_material_or_floor_witness():
+    samples = [("horizontal-100", dict(floor_ray(0, 0), material=2)),
+               ("floor-0-of-1", floor_ray(0, 0)), ("floor-1-of-1", floor_ray(50, -100))]
+    assert detours.obstacle_type(samples)[0] == "unknown"  # STONE and a 1-m step are insufficient.
+    samples[-1] = ("floor-1-of-1", floor_ray(50, -101))
+    assert detours.obstacle_type(samples)[0] == "cliff_or_ledge"
+    samples[0] = ("horizontal-100", dict(floor_ray(0, 0), sector="S:HAFEN_HOLZWAND_01"))
+    assert detours.obstacle_type(samples)[0] == "wall_or_fence"
+
+
+@pytest.mark.parametrize("bad_floor", [floor_ray(50, -150, normal_y=.6), floor_ray(50, -150, hit=False),
+                                      floor_ray(51, -150)])
+def test_missing_steep_or_distant_floor_samples_do_not_establish_a_ledge(bad_floor):
+    assert detours.obstacle_type([("floor-0-of-1", floor_ray(0, 0)),
+                                 ("floor-1-of-1", bad_floor)])[0] == "unknown"
+
+
+def test_validation_site_count_merges_neighbourhoods_and_existing_object_sites():
+    def site(region):
+        return detours.site_id(dict(goal_kind="point", split="validation", region=region))
+    assert site("harbour") == site("port_streets")
+    assert site("onar") == "BIGFARM_HOUSE"
+    assert site("upper_streets") == "CITY_UPTOWN_HUT#2"
+    assert len({site(region) for region in ("harbour", "market", "lobart")}) == 3
+    assert detours.site_id(dict(goal_kind="point", split="test", region="market")) is None

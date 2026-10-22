@@ -175,6 +175,82 @@ def profile_queries(values):
                                                            point[0], point[1] - 1000, point[2], 0]
 
 
+def obstacle_type(samples):
+    """Use positive physical witnesses; an unnamed STONE hit is ambiguous."""
+    walls = sorted({ray["sector"] for sample, ray in samples if sample.startswith("horizontal-")
+                    and ray["hit"] and any(name in ray.get("sector", "").upper()
+                                           for name in ("HOLZWAND", "INSIDEWALL", "RICH_WALL"))})
+    if walls:
+        return "wall_or_fence", dict(wall_material_names=walls)
+    floor = sorted((int(sample.split("-")[1]), ray) for sample, ray in samples if sample.startswith("floor-"))
+    steps = []
+    for (ia, a), (ib, b) in zip(floor, floor[1:]):
+        if (ib == ia + 1 and a["hit"] and b["hit"] and min(a["normal"][1], b["normal"][1]) >= math.sqrt(.5)
+                and math.hypot(a["point"][0] - b["point"][0], a["point"][2] - b["point"][2]) <= 50.01):
+            steps.append(abs(a["point"][1] - b["point"][1]))
+    if steps and max(steps) > 100:
+        return "cliff_or_ledge", dict(supported_floor_step_cm=max(steps))
+    return "unknown", dict(reason="No unambiguous obstacle-type witness; geometry still qualifies")
+
+
+def site_id(value):
+    if value["goal_kind"] == "object":
+        return value["place_id"]
+    if value["split"] == "test":
+        # Eleven object places already meet the site requirement. Do not add
+        # potentially overlapping point sites merely to increase that count.
+        return None
+    # These are the original validation road pairs. Merge whole neighbourhoods
+    # and all Onar/uptown pairs into existing object sites, conservatively.
+    return {"harbour": "point-harbour", "port_streets": "point-harbour", "market": "point-market",
+            "lobart": "point-lobart-forest", "onar": "BIGFARM_HOUSE",
+            "upper_streets": "CITY_UPTOWN_HUT#2"}[value["region"]]
+
+
+def freeze(task, corpus):
+    output = task / "detours"
+    values = rows(output / "qualified.jsonl")
+    probes = {value["label"]: value for value in rows(output / "probes/object-candidates.jsonl")}
+    mesh = json.loads((output / "runner-work/prepare/navmesh-stats.json").read_text(encoding="utf-8"))
+    samples = {value["id"]: [] for value in values}
+    for directory in sorted((output / "profiles").iterdir()):
+        queries = rows(directory / "queries.jsonl")
+        rays = {ray["id"]: ray for ray in rows(directory / "native/physics-results.jsonl") if ray["kind"] == "ray"}
+        if set(rays) != {query["id"] for query in queries}:
+            raise ValueError("Physical profile query IDs differ")
+        for query in queries:
+            samples[query["scenario"]].append((query["sample"], rays[query["id"]]))
+    # Revalidate membership against the original corpus, without adding or
+    # changing any route after looking at a student's outcome.
+    manifest = json.loads((corpus / "manifest.json").read_text(encoding="utf-8"))
+    frozen_points = {split: {(p["start"], p["goal"]) for p in manifest["splits"][split]["point"]} for split in SPLITS}
+    selected = {split: [] for split in SPLITS}
+    for value in values:
+        split = value["split"]
+        if not qualified(value, probes[value["id"]], value["geometry"], mesh):
+            raise ValueError(f"Previously qualified detour no longer qualifies: {value['id']}")
+        if value["goal_kind"] == "point":
+            if (value["start"], value["goal"]) not in frozen_points[split]:
+                raise ValueError("Point detour left its original split")
+        elif value["place_id"] not in manifest["split_policy"]["object"]["groups"][split]:
+            raise ValueError("Object detour left its original place split")
+        if len([sample for sample, _ in samples[value["id"]] if sample.startswith("horizontal-")]) != 3:
+            raise ValueError(f"Missing physical obstacle profiles: {value['id']}")
+        kind, evidence = obstacle_type(samples[value["id"]])
+        selected[split].append(dict(value, family="detour", source_family=value["goal_kind"], site_id=site_id(value),
+                                    obstacle_type=kind, obstacle_evidence=evidence))
+    for split, name in (("validation", "detour-val"), ("test", "detour-test")):
+        if len(selected[split]) < 60:
+            raise ValueError(f"Only {len(selected[split])} strict {name} scenarios")
+        path = output / f"{name}.jsonl"
+        write_rows(path, sorted(selected[split], key=lambda value: value["id"]))
+        print(json.dumps(dict(event="detours_frozen", split=split, scenarios=len(selected[split]),
+            sites_lower_bound=len({value["site_id"] for value in selected[split] if value["site_id"]}),
+            by_goal_kind=dict(Counter(value["goal_kind"] for value in selected[split])),
+            by_obstacle_type=dict(Counter(value["obstacle_type"] for value in selected[split])),
+            confirmed_rock=0, sha256=hashlib.sha256(path.read_bytes()).hexdigest())), flush=True)
+
+
 def prepare(task, corpus):
     v3 = module("nav_teacher_v3")
     output = task / "detours"
@@ -273,6 +349,7 @@ def prepare(task, corpus):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("prepare", "freeze"), nargs="?", default="prepare")
     parser.add_argument("--task", type=Path, required=True)
     parser.add_argument("--corpus", type=Path, required=True)
     options = parser.parse_args()
@@ -280,4 +357,4 @@ if __name__ == "__main__":
             or options.task.resolve().is_relative_to(options.corpus.resolve())
             or options.corpus.resolve().is_relative_to(options.task.resolve())):
         parser.error("Task and read-only corpus must be distinct absolute paths")
-    prepare(options.task.resolve(), options.corpus.resolve())
+    {"prepare": prepare, "freeze": freeze}[options.command](options.task.resolve(), options.corpus.resolve())
