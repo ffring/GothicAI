@@ -14,7 +14,7 @@ config: {"glb": model with tile UVs in metres and zone-key materials (barrel.py)
          "measure_ao": {KEY: min baked AO},
          "crevice": {"distance": 0.02, "dirt": 0.7, "colour": [r, g, b]},
          "streaks": {"length": 0.25, "rust": 0.6, "dirt": 0.35, "rust_colour": [r, g, b], "column": 0.012},
-         "wet_roughness": 0.6}
+         "wet_roughness": 0.6, "metal_scale": 1.0}
 The tiling materials are sampled through the tile UVs and baked into a new atlas
 UV: per-part tone (the builder's "_part" attribute when present, otherwise
 angular sectors around the axis and lid planks along X), dark seams where a part's tile plank ends, worn light edges from the Bevel
@@ -44,6 +44,7 @@ Weathering placed by the model, as for the roofs made of pieces (docs/remaster-p
   metres, in vertical columns about "column" metres wide;
 - "wet_roughness": the wet bottom is smoother, down to this roughness; rust and dirt stay matte.
 The weathering darkens before each zone is scaled to its measured mean, like the AO.
+"metal_scale" multiplies the metallic of the "metal" zones: rusty, grimy iron is mostly not metal.
 """
 import json
 import math
@@ -276,6 +277,10 @@ for slot in obj.material_slots:
         rough_out = math_node(nodes, links, "ADD", rough, math_node(nodes, links, "MULTIPLY", edge, 0.15), clamp=True)
         metal_out = math_node(nodes, links, "MULTIPLY", metallic, math_node(nodes, links, "SUBTRACT", 1.0,
                               math_node(nodes, links, "MULTIPLY", edge, 0.5)), clamp=True)
+        if "metal_scale" in cfg:
+            # Rusty, grimy iron is mostly not metal: a metal gets no diffuse light, so in shade
+            # the original's mossy hoops, lighter than the staves, came out black.
+            metal_out = math_node(nodes, links, "MULTIPLY", metal_out, cfg["metal_scale"])
     else:
         worn = mix(nodes, links, 1.0, colour, (2.2, 2.05, 1.85, 1.0), "MULTIPLY")
         colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", edge, edge_wear(key)), colour, worn)
