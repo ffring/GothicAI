@@ -6,7 +6,8 @@
   "goal": "the same Gothic, better made",
   "namespaces": [
     "market-house",
-    "market-house-concept"
+    "market-house-concept",
+    "market-house-stone"
   ],
   "sources": [
     {
@@ -173,6 +174,131 @@
       "utc": "2026-10-20T22:33:40.000Z",
       "thread": null,
       "parent": "content-sources/market-house-concept/market-house-facade-attempt-2.png"
+    },
+    {
+      "file": "market-house-stone/reference-attempt-1.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 1,
+      "sha256": "f5715ba37eef7efd03cac0cddec9bef3292cd492d19a42c7451ad2cdaa232851",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-22T18:37:00Z",
+      "thread": "01a164e7-50a1-7361-a7be-e0ce436d4fb8",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-2.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 2,
+      "sha256": "a2937f04db158e7eb583cb20329f3f1631b8aaf2734b775bef8ac6a5e7692884",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-22T18:37:00Z",
+      "thread": "01a164e7-64ab-7560-be0a-adab22afd6d5",
+      "parent": null
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-2.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA",
+      "attempt": 2,
+      "sha256": "2a182c0f7eff486fc6ddeb53ca3346459b0350f9719941f1c69fbed51ed94e75",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-22T19:00:00Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-2.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-2.normal.png",
+          "sha256": "243a273629803afe46613a5ba06609e22748b8bde356fe727bb2012344077c8b"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-2.roughness.png",
+          "sha256": "714b82c56453a19f056e43f5f0e6e5b666688fd0f566d1bb082c27447f194d17"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-3.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA",
+      "attempt": 3,
+      "sha256": "64de859dffbf2da370d276b659160579b09ad9ca2850c411e8ee2d2d43e06989",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-22T19:00:00Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-2.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-3.normal.png",
+          "sha256": "577041ebff500ac1e25cc61b2e4ddeb9990929705d00f6ab9742c435839cf05e"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-3.roughness.png",
+          "sha256": "fc4de3a81531c608cb313f1f145b93ba650b29131ff6cb7f61eac6c6ee75deaa"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-2.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA",
+      "attempt": 2,
+      "sha256": "64def10c5a4d178e74a2ed8473506d24b4bb88bfb533596e979f36782ab8b9c8",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-22T19:00:00Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-2.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-2.normal.png",
+          "sha256": "cebaae25f549522a2456610b216933acce561fe6a2546e5fc1239698fc919846"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-2.roughness.png",
+          "sha256": "97aa0a56f2ef1c804b7fc544d20aa36b78357e0c4135c1f870a449fb32547fce"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_03-attempt-2.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_03.TGA",
+      "attempt": 2,
+      "sha256": "7c69bbf2dc0c0b5a51c9207b5944d9291843024345cdbae7a995c34e2f1b6cd5",
+      "c2pa": null,
+      "model": "derived: scripts/content/market_house.py",
+      "utc": "2026-10-21T08:00:00Z",
+      "thread": "none",
+      "parent": "market-house/NW_CITY_WALL_03-attempt-1.png",
+      "tool": "scripts/content/market_house.py"
+    },
+    {
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-3.png",
+      "role": "texture",
+      "texture": "NW_CITY_WINDOW_03.TGA",
+      "attempt": 3,
+      "sha256": "24dfcbdf1dd111ce63e2e7ab9b35fca997bc9ba90262974f605860f554720874",
+      "c2pa": null,
+      "model": "derived: scripts/content/market_house.py",
+      "utc": "2026-10-21T08:00:00Z",
+      "thread": "none",
+      "parent": "market-house/NW_CITY_WINDOW_03-attempt-2.png",
+      "tool": "scripts/content/market_house.py"
     }
   ],
   "selected": {
@@ -182,29 +308,29 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_03.TGA": {
-      "file": "market-house/NW_CITY_WALL_03-attempt-1.png",
-      "reason": "accepted concept-thread selection (house-1/house-2)",
-      "date": "2026-10-21"
+      "file": "market-house/NW_CITY_WALL_03-attempt-2.png",
+      "reason": "house-2 as the user accepted it",
+      "date": "2026-10-22"
     },
     "NW_CITY_WINDOW_03.TGA": {
-      "file": "market-house/NW_CITY_WINDOW_03-attempt-2.png",
-      "reason": "attempt 2: lintel spans the full bay with a plaster strip above, as the concept; attempt 1 stopped the lintel at the jambs",
-      "date": "2026-10-21"
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-3.png",
+      "reason": "house-2 as the user accepted it",
+      "date": "2026-10-22"
     },
     "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-2.png",
-      "reason": "attempt 2: square barred opening as specified; attempt 1 was vertically elongated",
-      "date": "2026-10-21"
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-3.png",
+      "reason": "model: the same wall, a square opening in a frame of nine dressed stones",
+      "date": "2026-10-22"
     },
     "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-1.png",
-      "reason": "accepted concept-thread selection (house-1/house-2)",
-      "date": "2026-10-21"
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-2.png",
+      "reason": "model: flat bedded rubble as in the original, sill beam, dressed blocks",
+      "date": "2026-10-22"
     },
     "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-1.png",
-      "reason": "accepted concept-thread selection (house-1/house-2)",
-      "date": "2026-10-21"
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-2.png",
+      "reason": "model: the same wall, a slit, a ring in the beam, two chains on rings",
+      "date": "2026-10-22"
     },
     "NW_CITY_WOODBEAM_02.TGA": {
       "file": "market-house/NW_CITY_WOODBEAM_02-attempt-2.png",
@@ -300,6 +426,27 @@
       "verdict": "PASS",
       "date": "2026-10-21",
       "path": "reviews/cal4-mh-front-house2/merged.json"
+    },
+    {
+      "id": "r3-m1-front",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-22"
+    },
+    {
+      "id": "r3-m1-basement-window",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-22"
+    },
+    {
+      "id": "r3-m1-basement-chain",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-22"
     }
   ],
   "gates": [
@@ -326,13 +473,36 @@
       "date": "2026-10-21",
       "quote": "да, все что мы ранее сделали, нужно переделать по новому пайплайну",
       "note": "house-2 принят до конвейера. Переделывается по конвейеру: набор на базе оригинала, WOODBEAM_02 уходит в общий ассет дерева города, ROOF_01 — в ассет кровель."
+    },
+    {
+      "gate": "preserve",
+      "verdict": "approved",
+      "by": "user",
+      "date": "2026-10-22",
+      "quote": "да, погнали",
+      "note": null
     }
   ],
   "build": {
-    "set": "house-2",
-    "base": "pilot-3b",
-    "tool": "market_house.py",
-    "date": "2026-10-21"
+    "set": "market-1",
+    "base": "original",
+    "date": "2026-10-22",
+    "albedo_sha256": {
+      "NW_CITY_WALL_03.TGA": "c5bf38479d7feae229af41aae861827e2b2394c47fe01fe8de26ab9e2e49e0e3",
+      "NW_CITY_WINDOW_03.TGA": "6e77b33594b609b2d10ad0ff149d6d859634d897e009e8409822b8698444f738",
+      "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": "9d81eb2aa8e3c50bb6d7ff5a4732a8c27a947cb4b3366453113b3c7be1bf7ea4",
+      "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": "9c39da055e6f769a83ff5dcf48a092ca303e43ac2282762d86984062017df90c",
+      "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": "1a4c77d8ad72e26266743256756f88283bef363323efbd2284ee01d2ee733372"
+    },
+    "entries": 5,
+    "replaced": [
+      "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA",
+      "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA",
+      "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA",
+      "NW_CITY_WALL_03.TGA",
+      "NW_CITY_WINDOW_03.TGA"
+    ],
+    "unchanged_entries": 0
   },
   "backup": null,
   "legacy": "built before the pipeline (PRs #348, #350, set house-2 from pilot-3b by market_house.py); its reviews are reviewer calibration only"
