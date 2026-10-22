@@ -106,7 +106,7 @@ for policy in bc3 hd; do
     --assets "$HOME/gothic-ai/game" --save "$corpus/input/save.sav" \
     --cache "$task/hd-measure-cache" --links "$corpus/input/accepted-links.txt" \
     --jump-links "$corpus/input/jump-links.txt" --roads "$corpus/input/places.json" \
-    --weights "$weights" --output "$output" --physics cv --parallel 20 \
+    --weights "$weights" --output "$output" --physics cv --parallel 18 \
     --action-mode sample --action-seeds 18102027,18102028,18102029 \
     --safety-fixtures "$HOME/gothic-ai/nav-perception/safety-check-1/fixtures.json" \
     --fence-control --limit-ms 30000 --watchdog-seconds 900 --resume
@@ -118,7 +118,7 @@ done
   --runner "$task/build/opengothic/gothic-body-runner" \
   --assets "$HOME/gothic-ai/game" --save "$corpus/input/save.sav" \
   --cache "$task/hd-measure-cache" --links "$corpus/input/accepted-links.txt" --roads "$corpus/input/places.json" \
-  --weights "$task/hd-run/policy.navbc" --output "$task/hd-detour" --physics cv --parallel 20 \
+  --weights "$task/hd-run/policy.navbc" --output "$task/hd-detour" --physics cv --parallel 18 \
   --action-mode sample --action-seeds 18102027,18102028,18102029 \
   --limit-ms 240000 --watchdog-seconds 900 --resume
 "$python" -B -I scripts/nav_rl.py summarize --source "$task/hd-detour" --output "$task/hd-detour"
@@ -154,7 +154,7 @@ print(json.dumps(dict(event="hd_detour_complete", episodes=363, bc3_arrived=orig
 CHECK
 df -h "$HOME"
 MEASURE
-  "$ROOT/scripts/gq" submit --class batch --threads 28 --cpu-quota 2800% --mem 22G --max 2h \
+  "$ROOT/scripts/gq" submit --class batch --threads 28 --cpu-quota 2800% --mem 20G --max 2h \
     --name "nav dagger3 HD vs BC3 lean validation" -- bash "$task/measure-hd.sh"
   exit
 fi
