@@ -155,8 +155,8 @@ struct Fixture final {
       steps=number("steps");hidden=number("hidden_size");
       if(header.HasMember("navdemo_version")) demoVersion=uint32_t(number("navdemo_version"));
       if(header.HasMember("weight_version")) weightVersion=uint32_t(number("weight_version"));
-      require(weightVersion==1 || weightVersion==2,"unsupported fixture weight version");
-      if(weightVersion==2) {
+      require(weightVersion==1 || weightVersion==2 || weightVersion==3,"unsupported fixture weight version");
+      if(weightVersion>=2) {
         heads={"forward","strafe","turn","walk","maneuver"};classes={3,3,3,2,3};
         }
       else {
@@ -169,6 +169,22 @@ struct Fixture final {
       require(number("record_bytes")==NavDemoWriter::recordBytes &&
               (vectorSize==NavPolicy::vectorSize || vectorSize==NavPolicy::legacyVectorSize),
               "fixture input dimensions differ from NAVDEMO");
+      if(weightVersion==3) {
+        expected.near.resize(NavPolicy::hdNearSize);
+        expected.far.resize(NavPolicy::hdFarSize);
+        }
+      const auto shape=[&](const char* name,std::initializer_list<size_t> dimensions) {
+        if(!header.HasMember(name)) return;
+        const auto& value=header[name];
+        require(value.IsArray() && value.Size()==dimensions.size(),std::string("fixture shape mismatch: ")+name);
+        size_t index=0;
+        for(const auto dimension:dimensions) {
+          const auto& item=value[rapidjson::SizeType(index++)];
+          require(item.IsUint() && item.GetUint()==dimension,std::string("fixture shape mismatch: ")+name);
+          }
+        };
+      if(weightVersion==3) { shape("near_shape",{10,64,64});shape("far_shape",{10,50,100}); }
+      else { shape("near_shape",{9,32,32});shape("far_shape",{9,25,25}); }
       expected.vector.resize(vectorSize);
       require(header.HasMember("carry_hidden") && header["carry_hidden"].IsTrue(),"fixture must carry GRU state");
       require(header.HasMember("heads") && header["heads"].IsArray() && header["heads"].Size()==heads.size(),
@@ -251,6 +267,8 @@ void parity(const std::string& weights,const std::string& path) {
   const NavPolicy policy(weights);
   Fixture fixture(path);
   require(policy.hiddenSize()==fixture.hidden,"weight/fixture hidden size mismatch");
+  require(policy.nearInputSize()==fixture.expected.near.size() &&
+          policy.farInputSize()==fixture.expected.far.size(),"weight/fixture map size mismatch");
   require(policy.vectorInputSize()==fixture.expected.vector.size(),"weight/fixture vector size mismatch");
   require(policy.navDemoVersion()==fixture.demoVersion,"weight/fixture NAVDEMO version mismatch");
   require(policy.weightVersion()==fixture.weightVersion,"weight/fixture policy version mismatch");
@@ -288,7 +306,7 @@ void parity(const std::string& weights,const std::string& path) {
     double localLogit=0;
     for(size_t h=0;h<fixture.heads.size();++h)
       localLogit=std::max(localLogit,difference(result.logits[h],fixture.logits[h]));
-    if(policy.weightVersion()==2) {
+    if(policy.weightVersion()>=2) {
       const auto& maneuver=result.logits[4];
       const auto action=size_t(std::max_element(maneuver.begin(),maneuver.end())-maneuver.begin());
       require(result.keys.jump==(action==1) && result.keys.climb==(action==2),"maneuver key decode mismatch");
@@ -299,8 +317,11 @@ void parity(const std::string& weights,const std::string& path) {
     require(localLogit<=1e-4,"logits differ at step "+std::to_string(fixture.readSteps)+": "+std::to_string(localLogit));
     require(localHidden<=1e-4,"hidden state differs at step "+std::to_string(fixture.readSteps)+": "+std::to_string(localHidden));
     if(fixture.readSteps==1) {
-      // The raw record has privileged annotations, but encode must ignore them.
-      observation.snapshot.position={99999,-77777,33333};observation.snapshot.bodyYawDeg=-177;
+      // HD uses physical feet Y only as the local height origin. All policies
+      // ignore absolute X/Z, yaw and the record's teacher annotations.
+      const float feetY=observation.snapshot.position[1];
+      observation.snapshot.position={99999,policy.weightVersion()==3 ? feetY : -77777,33333};
+      observation.snapshot.bodyYawDeg=-177;
       observation.snapshot.gameMs+=9876;
       observation.snapshot.keys.forward=12345;observation.snapshot.keys.strafe=-12345;
       observation.snapshot.keys.turn=999;observation.snapshot.keys.headYaw=888;observation.snapshot.keys.headPitch=-777;
@@ -379,9 +400,9 @@ void benchmark(const std::string& weights,const std::string& path,size_t npcs,si
   const auto micros=[](Clock::time_point a,Clock::time_point b) {
     return std::chrono::duration<double,std::micro>(b-a).count();
     };
-  std::vector<double> stepUs,tickUs,encodeUs;
+  std::vector<double> stepUs,tickUs,encodeUs,policyUs;
   const size_t ticks=(decisions+npcs-1)/npcs;
-  stepUs.reserve(ticks*npcs);tickUs.reserve(ticks);encodeUs.reserve(decisions);
+  stepUs.reserve(ticks*npcs);tickUs.reserve(ticks);encodeUs.reserve(decisions);policyUs.reserve(decisions);
   for(size_t tick=0;tick<ticks;++tick) {
     const auto begin=Clock::now();
     for(size_t npc=0;npc<npcs;++npc) {
@@ -403,11 +424,20 @@ void benchmark(const std::string& weights,const std::string& path,size_t npcs,si
     encodeUs.push_back(micros(before,after));
     checksum+=encoded.vector[i%encoded.vector.size()];
     }
+  for(size_t i=0;i<decisions;++i) {
+    observation.decode(records[i%records.size()],fixture.layout,fixture.demoVersion);
+    const auto before=Clock::now();
+    const auto result=policy.step(observation.snapshot,states[i%npcs]);
+    const auto after=Clock::now();
+    policyUs.push_back(micros(before,after));
+    checksum+=result.logits[0][0];
+    }
   std::cout<<"{\"benchmark\":\"navpolicy\",\"threads\":1,\"npcs\":"<<npcs
            <<",\"warmup_ticks\":30,\"decisions\":"<<stepUs.size()<<",\"ticks\":"<<ticks
            <<",\"decision_median_us\":"<<percentile(stepUs,.5)<<",\"decision_p95_us\":"<<percentile(stepUs,.95)
            <<",\"tick_median_us\":"<<percentile(tickUs,.5)<<",\"tick_p95_us\":"<<percentile(tickUs,.95)
            <<",\"encode_median_us\":"<<percentile(encodeUs,.5)<<",\"encode_p95_us\":"<<percentile(encodeUs,.95)
+           <<",\"policy_median_us\":"<<percentile(policyUs,.5)<<",\"policy_p95_us\":"<<percentile(policyUs,.95)
            <<",\"checksum\":"<<checksum<<"}\n";
   }
 }

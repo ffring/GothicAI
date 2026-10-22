@@ -3,11 +3,89 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 stage="${1:-}"
-[[ $# == 1 ]] || { echo 'Usage: nav-dagger3-remote.sh prepare-detours|baseline-detours' >&2; exit 2; }
-case "$stage" in prepare-detours|baseline-detours) ;; *) echo "Unknown phase: $stage" >&2; exit 2 ;; esac
+[[ $# == 1 ]] || { echo 'Usage: nav-dagger3-remote.sh prepare-detours|baseline-detours|train-hd' >&2; exit 2; }
+case "$stage" in prepare-detours|baseline-detours|train-hd) ;; *) echo "Unknown phase: $stage" >&2; exit 2 ;; esac
 export GQ_OWNER=nav-dagger3
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-dagger3" "$HOME"')"
 ssh ryzen 'df -h "$HOME"'
+if [[ "$stage" == train-hd ]]; then
+  # Keep the running baseline's source and build untouched.
+  ssh ryzen "mkdir -p '$task/hd-source' '$task/logs'"
+  rsync -a --exclude=build --exclude='build-*' --exclude=__pycache__ --exclude=.git \
+    "$ROOT/OpenGothic" "$ROOT/scripts" "$ROOT/AGENTS.md" "ryzen:$task/hd-source/"
+  ssh ryzen "cat > '$task/train-hd.sh'" <<'HD'
+#!/usr/bin/env bash
+set -euo pipefail
+task="$(cd "$(dirname "$0")" && pwd)"
+corpus="$HOME/gothic-ai/nav-demos-v4"
+bc3="$HOME/gothic-ai/nav-bc3"
+exec > >(tee -a "$task/logs/train-hd.log") 2>&1
+export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
+export PATH="$HOME/.local/bin:$VULKAN_SDK/bin:$PATH"
+export UV_CACHE_DIR="$HOME/.cache/uv"
+export OMP_NUM_THREADS=6 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+export OPENGOTHIC_BODY_TRACE=0 PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# Reuse the existing Torch environment read-only; -B also applies with -I.
+python="$bc3/.venv/bin/python"
+cd "$task/hd-source"
+df -h "$HOME"
+nvidia-smi
+"$python" -B -I - "$task" <<'SPACE'
+import shutil
+import sys
+if shutil.disk_usage(sys.argv[1]).free < 22 * 1024**3:
+    raise SystemExit("HD preparation needs 22 GiB free including the 20-GiB reserve")
+SPACE
+"$python" -B -m pytest -q -p no:cacheprovider \
+  scripts/tests/test_nav_bc_data.py scripts/tests/test_nav_bc_model.py scripts/tests/test_nav_bc_contract.py
+cmake -S "$task/hd-source/OpenGothic" -B "$task/build-hd" -G Ninja \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+  -DOPENGOTHIC_JOLT_X86=x86-64-v3 \
+  -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib"
+cmake --build "$task/build-hd" --target gothic-navpolicy-contract \
+  CMakeFiles/OpenGothic.dir/common/navdemos.cpp.o --parallel 3
+"$python" -B -I scripts/nav_bc_data.py prepare --source "$corpus/recordings" \
+  --manifest "$corpus/manifest.json" --output "$task/hd-cache" --input-variant hd
+"$python" -B -I - "$bc3/cache/index.json" "$task/hd-cache/index.json" <<'COHORT'
+import json
+from pathlib import Path
+import sys
+compact, hd = [json.loads(Path(path).read_text()) for path in sys.argv[1:]]
+def population(index):
+    return sorted((ep["id"], ep["steps"], ep["split"], tuple(ep["pair"])) for ep in index["episodes"])
+if population(compact) != population(hd) or len(hd["episodes"]) != 602:
+    raise ValueError("HD training population differs from the 602 BC3 episodes")
+for field in ("class_counts", "action_change_weight", "eye_layout"):
+    if compact[field] != hd[field]:
+        raise ValueError(f"HD training recipe differs: {field}")
+steps = sum(ep["steps"] for ep in hd["episodes"])
+if steps != 405626:
+    raise ValueError(f"HD training decision count differs: {steps}")
+print(json.dumps(dict(event="hd_cohort_checked", episodes=602, decisions=steps)))
+COHORT
+"$python" -B -I scripts/nav_bc_train.py train --cache "$task/hd-cache" --output "$task/hd-run" \
+  --init "$bc3/run/it35/last.pt" --epochs 20 --batch 8 --segment 64 \
+  --lr .0003 --seed 17 --device cuda --threads 6
+for version in 1 2 3; do
+  case "$version" in
+    1) weights="$HOME/gothic-ai/nav-ppo/run/iter-000035/update/policy.navbc" ;;
+    2) weights="$bc3/run/it35/policy.navbc" ;;
+    3) weights="$task/hd-run/policy.navbc" ;;
+  esac
+  "$python" -B -I scripts/check_nav_policy.py --weights "$weights" \
+    --source "$corpus/recordings" --output "$task/hd-parity/v$version" --steps 1000 --torch \
+    | tee "$task/logs/hd-parity-v$version-python.log"
+  "$task/build-hd/opengothic/gothic-navpolicy-contract" \
+    "$weights" "$task/hd-parity/v$version/parity.bin.gz" \
+    | tee "$task/logs/hd-parity-v$version-cpp.log"
+done
+sha256sum "$bc3/run/it35/policy.navbc" "$task/hd-run/policy.navbc"
+df -h "$HOME"
+HD
+  "$ROOT/scripts/gq" submit --class batch --threads 6 --cpu-quota 600% --mem 10G --gpu-mem 4G --max 2h \
+    --name "nav dagger3 HD BC training and contract" -- bash "$task/train-hd.sh"
+  exit
+fi
 ssh ryzen "mkdir -p '$task/source' '$task/logs'"
 rsync -a --exclude=build --exclude='build-*' --exclude=__pycache__ --exclude=.git \
   "$ROOT/OpenGothic" "$ROOT/scripts" "$ROOT/AGENTS.md" "ryzen:$task/source/"

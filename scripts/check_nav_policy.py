@@ -2,8 +2,9 @@
 """Create the asset-free C++/NumPy navigation-policy contract fixture.
 
 The default is deterministic small v2 weights and 1000 synthetic NAVDEMO v2 records.
-Use --navdemo-version 1 for the synthetic v1 preprocessing contract. Supplied
-weights select their input version from their own header.
+Use --navdemo-version 1 for the synthetic v1 preprocessing contract, or
+--weight-version 3 for the HD input contract. Supplied weights select their input
+version and map layout from their own header.
 For the recorded-step acceptance check, pass the trained weights and an episode
 with at least 1000 decisions (or a recording directory containing such an episode):
 
@@ -12,6 +13,9 @@ with at least 1000 decisions (or a recording directory containing such an episod
         --source /absolute/nav-demos --steps 1000 --torch
     /absolute/build/gothic-navpolicy-contract \
         /absolute/policy.navbc /absolute/build/navpolicy-real/parity.bin.gz
+    /absolute/build/gothic-navpolicy-contract --benchmark \
+        /absolute/policy.navbc /absolute/build/navpolicy-real/parity.bin.gz \
+        --npcs 1 --decisions 2000
 
 Only NumPy and the standard library are required. No weights or records belong in
 git; the output directory is deliberately explicit.
@@ -40,11 +44,14 @@ ROAD_FIELDS = {
 }
 
 
-def fixture_preprocessing(navdemo_version: int) -> dict:
-    """Describe the checker input without changing the v2-only training path."""
+def fixture_preprocessing(navdemo_version: int, input_variant: str = "compact") -> dict:
+    """Describe the checker input without changing training metadata globally."""
     if navdemo_version not in ROAD_FIELDS:
         raise ValueError(f"unsupported NAVDEMO version: {navdemo_version}")
-    preprocessing = {**data.PREPROCESSING, "navdemo_version": navdemo_version,
+    if input_variant not in ("compact", "hd") or (input_variant == "hd" and navdemo_version != 2):
+        raise ValueError("HD fixture input requires NAVDEMO v2")
+    preprocessing = {**(data.HD_PREPROCESSING if input_variant == "hd" else data.PREPROCESSING),
+                     "navdemo_version": navdemo_version,
                      "roads_schema": "carrot_v2" if navdemo_version == 2 else "next_v1",
                      "roads_fields": ROAD_FIELDS[navdemo_version].copy()}
     if navdemo_version == 1:
@@ -64,14 +71,24 @@ def weight_input_version(header: dict, vector_size: int) -> int:
     version = preprocessing.get("navdemo_version", 1)
     if type(version) is not int or version not in ROAD_FIELDS:
         raise ValueError(f"unsupported weight NAVDEMO version: {version}")
-    expected = fixture_preprocessing(version)
+    expected = fixture_preprocessing(version, weight_input_variant(header))
     for key in ("roads_schema", "roads_fields"):
         if (version == 2 or key in preprocessing) and preprocessing.get(key) != expected[key]:
             raise ValueError(f"weight {key} differs from NAVDEMO v{version} preprocessing")
     return version
 
 
-def fixture_features(record: np.ndarray, layout: np.ndarray, navdemo_version: int) -> dict[str, np.ndarray]:
+def weight_input_variant(header: dict) -> str:
+    """Read the declared HD layout while preserving headers from v1 and v2."""
+    variant = header.get("preprocessing", {}).get("input_variant", "compact")
+    expected = "hd" if header.get("version") == 3 else "compact"
+    if variant != expected:
+        raise ValueError(f"weight format v{header.get('version')} requires {expected} input_variant")
+    return variant
+
+
+def fixture_features(record: np.ndarray, layout: np.ndarray, navdemo_version: int,
+                     input_variant: str = "compact") -> dict[str, np.ndarray]:
     """Encode v1 only here; its ten road slots share the v2 numeric transform."""
     if navdemo_version not in demos.RECORD_DTYPES or record.dtype != demos.RECORD_DTYPES[navdemo_version]:
         raise ValueError("record dtype differs from the weight NAVDEMO version")
@@ -81,18 +98,23 @@ def fixture_features(record: np.ndarray, layout: np.ndarray, navdemo_version: in
         # distance, goal, remainder, then the version's own unchanged flag bit.
         # The checker only reads this view; the source record stays unchanged.
         inputs = {**inputs, "roads": inputs["roads"].view(demos.ROADS_V2_DTYPE)}
-    return data.encode_features(inputs, layout)
+    return data.encode_features(inputs, layout, input_variant=input_variant,
+                                feet_height_cm=record["position_cm"][:, 1] if input_variant == "hd" else None)
 
 
 def synthetic_weights(path: Path, navdemo_version: int = 2, format_version: int = 2,
                       temperatures: dict[str, float] | None = None) -> None:
     """A small valid export built without importing the Torch training module."""
-    preprocessing = fixture_preprocessing(navdemo_version)
+    input_variant = "hd" if format_version == 3 else "compact"
+    preprocessing = fixture_preprocessing(navdemo_version, input_variant)
+    near_shape = data.HD_NEAR_SHAPE if input_variant == "hd" else (9, 32, 32)
+    far_shape = data.HD_FAR_SHAPE if input_variant == "hd" else (9, 25, 25)
+    channels = near_shape[0]
     head_sizes = HEAD_SIZES[format_version]
     hidden = 8
     shapes = []
     for prefix in ("near_encoder", "far_encoder"):
-        shapes += [(prefix + ".0.weight", (8, 9, 3, 3)), (prefix + ".0.bias", (8,)),
+        shapes += [(prefix + ".0.weight", (8, channels, 3, 3)), (prefix + ".0.bias", (8,)),
                    (prefix + ".2.weight", (16, 8, 3, 3)), (prefix + ".2.bias", (16,))]
     shapes += [("vector_encoder.0.weight", (128, data.VECTOR_SIZE)), ("vector_encoder.0.bias", (128,)),
                ("fusion.0.weight", (128, 256)), ("fusion.0.bias", (128,)),
@@ -110,10 +132,10 @@ def synthetic_weights(path: Path, navdemo_version: int = 2, format_version: int 
         offset += len(values)
     architecture = {
         "name": "map-cnn-vector-gru", "version": 1,
-        "inputs": {"near": [9, 32, 32], "far": [9, 25, 25], "vector": [data.VECTOR_SIZE],
+        "inputs": {"near": list(near_shape), "far": list(far_shape), "vector": [data.VECTOR_SIZE],
                    "dtype": "float32", "map_layout": "CHW"},
         "map_encoders": {"separate_weights": True, "layers": [
-            {"type": "conv2d", "in_channels": 9, "out_channels": 8, "kernel": 3, "stride": 2, "padding": 1, "activation": "relu"},
+            {"type": "conv2d", "in_channels": channels, "out_channels": 8, "kernel": 3, "stride": 2, "padding": 1, "activation": "relu"},
             {"type": "conv2d", "in_channels": 8, "out_channels": 16, "kernel": 3, "stride": 2, "padding": 1, "activation": "relu"},
             {"type": "adaptive_avg_pool2d", "output": [2, 2],
              "bins": "start=floor(i*input/output); end=ceil((i+1)*input/output)"},
@@ -235,7 +257,7 @@ def main() -> None:
     parser.add_argument("--source", type=Path)
     parser.add_argument("--navdemo-version", type=int, choices=(1, 2),
                         help="synthetic weight/record input version (default: 2); supplied weights use their header")
-    parser.add_argument("--weight-version", type=int, choices=(1, 2),
+    parser.add_argument("--weight-version", type=int, choices=(1, 2, 3),
                         help="synthetic weight format (default: 2); supplied weights use their header")
     parser.add_argument("--torch", action="store_true", help="also compare exported weights with Torch on every step")
     parser.add_argument("--steps", type=int, default=1000)
@@ -258,6 +280,7 @@ def main() -> None:
         torch_policy = NavPolicy(policy.vector_size, policy.hidden_size, format_version=policy.format_version).eval()
         torch_policy.load_state_dict({name: torch.from_numpy(value.copy()) for name, value in policy.weights.items()})
     navdemo_version = weight_input_version(policy.header, policy.vector_size)
+    input_variant = weight_input_variant(policy.header)
     if args.source:
         source, layout, records = recorded_steps(args.source, args.steps, navdemo_version)
         source_name = str(source)
@@ -267,6 +290,8 @@ def main() -> None:
     header = {"format": "navpolicy-parity", "version": 1, "steps": args.steps,
               "navdemo_version": navdemo_version,
               "weight_version": policy.format_version,
+              "near_shape": policy.header["architecture"]["inputs"]["near"],
+              "far_shape": policy.header["architecture"]["inputs"]["far"],
               "record_bytes": demos.RECORD_BYTES, "vector_size": policy.vector_size,
               "hidden_size": policy.hidden_size, "heads": list(policy.head_names), "classes": list(policy.head_sizes.values()),
               "temperatures": policy.temperatures,
@@ -277,7 +302,7 @@ def main() -> None:
     with gzip.open(destination, "wb", compresslevel=1) as stream:
         stream.write(json.dumps(header, separators=(",", ":")).encode() + b"\n")
         for record in records:
-            features = fixture_features(record, layout, navdemo_version)
+            features = fixture_features(record, layout, navdemo_version, input_variant)
             logits, hidden = policy.step(features["near"][0], features["far"][0], features["vector"][0], hidden)
             if torch_policy is not None:
                 inputs = [torch.from_numpy(features[name][:, None]) for name in ("near", "far", "vector")]
@@ -300,6 +325,7 @@ def main() -> None:
     print(json.dumps({"weights": str(weights), "fixture": str(destination), "steps": count,
                       "source": source_name, "navdemo_version": navdemo_version,
                       "weight_version": policy.format_version,
+                      "input_variant": input_variant,
                       "hidden_size": policy.hidden_size, "carry_hidden": True,
                       "torch_checked": args.torch, "torch_max_logit_error": torch_logit_error,
                       "torch_max_hidden_error": torch_hidden_error}))
