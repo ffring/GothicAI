@@ -1234,7 +1234,9 @@ async def orders_scenario(
     if not ok or stood < 7.5:
         await diagnose("halt_failed")
 
-    ok, took = await order("За мной!", "follow")
+    ok, took = await order(
+        "Ну, ты, если что, не туда идешь, ты в стену куда-то идешь. Иди за мной.", "follow"
+    )
     closer = await _until(lambda: 0 <= dist() <= stood - 2, 15)
     results["follow"] = f"{'done' if ok and closer else 'failed'} (in {took}; {stood:.1f} -> {dist():.1f} m)"
     if not ok or not closer:

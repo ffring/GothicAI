@@ -14,9 +14,8 @@ from ..dialogue import DialogueManager
 from ..game import GameError, GameLink
 from ..llm import ToolCall
 from ..llm.fake import FakeBackend, FakeStep
-from ..perception import BEASTS
 from ..protocol import GameMessage, LineStarted, NpcSpec, RoutineEntry
-from .common import _ByNpc, _m5b_player_weapon, _until, _until_async
+from .common import _ByNpc, _clear_beasts, _m5b_player_weapon, _until, _until_async
 from .neural_load import _policy_resets
 
 log = logging.getLogger("gothic_ai.scenarios")
@@ -173,20 +172,6 @@ async def _wait_hero_fight(
     if not last_decisions:
         last_decisions = tuple(fight._policy_decisions)[-10:]
     return HeroFightWait(stall_broken, stalled_seconds, last_decisions, time.monotonic() - started_at)
-
-
-async def _clear_beasts(link: GameLink, npc: str) -> int:
-    cleared = 0
-    for other in (await link.snapshot(npc, fresh=True)).nearby_npcs:
-        if not other.dead and other.guild >= BEASTS:
-            await link.debug("kill", instance=other.id, near=npc)
-            cleared += 1
-    for view in await link.npc_view([npc]):
-        for seen in view.sees:
-            if seen.guild >= BEASTS and seen.body != "dead":
-                await link.debug("kill", instance=seen.id, near=npc)
-                cleared += 1
-    return cleared
 
 
 async def neural_knockout_segment(
