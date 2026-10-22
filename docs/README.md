@@ -145,6 +145,8 @@
 
 ## Движок: наши подсистемы
 
+Подготовка обходов DAgger3: `scripts/nav-dagger3-remote.sh prepare-detours` → `nav_dagger3_detours.py`, одна отдельная `gq batch` без ожидания; полный Detour, перекрытая прямая, отношение ≥1,3 и видимость объектов, с исходными split v4. Физические профили предшествуют классификации и заморозке наборов; политики и test пока не измеряются. [Текущее состояние](navigation.md).
+
 Навигационное BC v4 → bc3: `scripts/nav_bc_data.py prepare --manifest` читает только train; `nav_bc_train.py train --init` переносит совместимый PPO it35. Формат `.navbc` v2 хранит единый манёвр и температуры softmax; вспомогательные цели остаются в обучении. `nav_rl.py drive --manifest` исполняет только validation с тремя seed. `nav_rl.py summarize --object-probes` группирует доходимость объектов по отношению Detour к прямой, с отдельной корзиной обходов >1,2. [Сводка обученного BC3](../reports/navigation/2026-10-22-bc3/README.md): по 1491 эпизоду BC3/it35, результаты всех семейств, частоты манёвров, безопасность, десять неудач и отношения Detour для 179 объектов; этап BC закрыт. [Решения, ограничения и журнал](navigation.md).
 
 `OpenGothic/` — форк Try/OpenGothic. Сторонние библиотеки лежат в `lib/` обычными файлами ([`VENDORED.md`](../OpenGothic/lib/VENDORED.md)); `lib/cgltf/` содержит заголовок и MIT-лицензию парсера glTF 2.0. Целиком наше: `ai_bridge/`, `game/bodyrunner.cpp`, `tests/*_contract.cpp`. В `common/` наши `physics/`, `gltfmesh.*`, части `game/` и `graphics/mesh/`, `testbench.*`, `nav*`; остальное — апстрим с точечными правками. Эмуляция Ikarus/LeGo апстрима (`common/game/compatibility/`, кроме `phoenix.*`) удалена; при слиянии апстрима конфликт `modify/delete` в этой папке решается сохранением удаления.
