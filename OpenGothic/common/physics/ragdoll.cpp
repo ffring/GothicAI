@@ -309,7 +309,31 @@ struct Ragdoll::Impl final {
     for(const auto& cap:zones.caps)
       if(cap.owner<owners.size())
         owners[cap.owner]=true;
+    // HitZones never give the skeleton root flesh: for a human it is the floor
+    // point under the pelvis. An insect's root is its thorax (Bloodfly: BIP01
+    // CENTER carries legs, wings, pincers and tail). Without a part there, all
+    // limbs hang off whichever leg segment became part 0 and the chain explodes
+    // on landing. Give such a root a trunk to the owners directly under it.
+    std::vector<size_t> rootChildren;
+    size_t root=noBone;
+    for(size_t i=0;i<owners.size();++i) {
+      if(!owners[i]) continue;
+      size_t top=i;
+      bool nested=false;
+      for(size_t p=sk.nodes[i].parent,limit=0;p<sk.nodes.size() && limit<sk.nodes.size();p=sk.nodes[p].parent,++limit) {
+        if(owners[p]) { nested=true; break; }
+        top=p;
+        }
+      if(nested || top==i) continue;
+      if(root!=noBone && root!=top) { rootChildren.clear(); break; }
+      root=top;
+      size_t child=i;
+      while(sk.nodes[child].parent!=root) child=sk.nodes[child].parent;
+      if(child==i) rootChildren.push_back(i);
+      }
+    if(rootChildren.size()<2) root=noBone;
     std::vector<size_t> pending;
+    if(root!=noBone) pending.push_back(root);
     for(size_t i=0;i<owners.size();++i)
       if(owners[i]) pending.push_back(i);
     auto depth=[&](size_t bone) {
@@ -338,6 +362,16 @@ struct Ragdoll::Impl final {
         if(!std::isfinite(c.radius) || c.radius<=0.f) continue;
         part.volume+=pi*c.radius*c.radius*(c.b-c.a).Length()+4.f/3.f*pi*c.radius*c.radius*c.radius;
         part.capsules.push_back(c);
+        }
+      if(bone==root) {
+        // HitZones' trunk thickness (12 cm for a 160 cm human) at this creature's size.
+        const float radius=12.f/160.f*zones.size*.01f;
+        for(size_t child:rootChildren) {
+          Capsule c {inverse*sourcePoint(sk,bone,{}),inverse*sourcePoint(sk,child,{}),radius};
+          c.aBone=bone; c.bBone=child; c.aLocal=c.bLocal=Tempest::Vec3();
+          part.volume+=pi*c.radius*c.radius*(c.b-c.a).Length()+4.f/3.f*pi*c.radius*c.radius*c.radius;
+          part.capsules.push_back(c);
+          }
         }
       if(part.capsules.empty()) continue;
       boneToPart[bone]=int(result->parts.size());
