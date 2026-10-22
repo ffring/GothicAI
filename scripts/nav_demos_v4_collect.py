@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import importlib.util
 import math
+import os
 from pathlib import Path
 import random
 import shutil
@@ -36,6 +37,8 @@ jumps = module("nav_jump_record")
 demos = module("nav_demos")
 SEED = 19102026
 MEMORY_VERSION = 3
+V5_MAX_BYTES = 30_000_000_000
+V5_MIN_FREE_BYTES = 20 * 1024**3
 FAMILIES = ("point", "object", "approach", "follow", "jump")
 FOLLOW_BELOW_GATE = "follow_below_gate"
 FOLLOW_BELOW_GATE_MIN_FRACTION = .7
@@ -55,8 +58,9 @@ def atomic_json(path, value):
 
 class CollectionState:
     """Keep sample hashes and status outside immutable recording directories."""
-    def __init__(self, path, settings, previous=None):
+    def __init__(self, path, settings, previous=None, archive_root=None):
         self.path, self.lock = Path(path), threading.Lock()
+        self.archive_root = Path(archive_root) / "recordings" if archive_root is not None else None
         self.data = dict(previous if previous is not None else
                          v3.read_json(self.path) if self.path.is_file() else {})
         self.data["settings"] = settings
@@ -66,21 +70,25 @@ class CollectionState:
         if not isinstance(self.data.setdefault("rejected_candidates", {}), dict):
             raise ValueError("Unsupported rejected candidate registry")
         summary = self.path.with_name("collection-metrics.json")
-        self.saved = {str(Path(value["episode"])): value for value in
+        self.saved = {self.key(value["episode"]): value for value in
                       (v3.read_json(summary).get("episodes", []) if summary.is_file() else [])}
 
     def key(self, directory):
-        return str(Path(directory).relative_to(self.path.parent))
+        directory = Path(directory)
+        for root in (self.path.parent, self.archive_root):
+            if root is not None and directory.is_relative_to(root):
+                return str(directory.relative_to(root))
+        raise ValueError(f"Recording is outside the collection roots: {directory}")
 
     def saved_metrics(self, directory):
         with self.lock:
-            return self.saved.get(str(Path(directory)))
+            return self.saved.get(self.key(directory))
 
     def verify_samples(self, directory, metadata, *, allow_unpinned=False):
         digest = campaign.binary_digest(Path(directory) / "samples.bin.gz")
         with self.lock:
             pin = self.data["integrity"]["episodes"].get(self.key(directory), {})
-            saved = self.saved.get(str(Path(directory)), {})
+            saved = self.saved.get(self.key(directory), {})
             summaries = (metadata, metadata.get("collection_metrics", {}), saved, pin)
             recorded = [value["samples_sha256"] for value in summaries if value.get("samples_sha256")]
         if not recorded and not allow_unpinned:
@@ -100,7 +108,7 @@ class CollectionState:
 
     def remember_metrics(self, directory, measured):
         with self.lock:
-            self.saved[str(Path(directory))] = measured
+            self.saved[self.key(directory)] = measured
 
     def rejections(self):
         with self.lock:
@@ -124,6 +132,8 @@ class CollectionState:
         result = dict(candidate_rejected=True, id=value["id"], family=family(value),
             reason=reason, scenario=dict(value), training_eligible=False, recorded=False,
             directory=str(directory), teacher_version=version(value), navigation_memory_version=MEMORY_VERSION)
+        base = self.data["settings"].get("base_recording_identity", self.data["settings"])
+        result["navigation_memory_version"] = base.get("navigation_memory_version", MEMORY_VERSION)
         with self.lock:
             rejected = self.data["rejected_candidates"]
             key = self.key(directory)
@@ -142,7 +152,8 @@ class CollectionState:
 def recorded_parameters(metadata):
     fields = (*v3.SCENARIO_IDENTITY_FIELDS, "index", "site_id", "transition_id", "type",
               "dataset_family", "follow_below_gate", "minimum_follow_fraction", "command_seed",
-              "limit_ms", "teacher_version", "navigation_memory_version", "demo_version")
+              "limit_ms", "teacher_version", "navigation_memory_version", "demo_version",
+              "npc", "local", "residency", "knownroads_selection", "water_qualification")
     return {key: metadata[key] for key in fields if key in metadata}
 
 
@@ -298,6 +309,119 @@ def directory_for(task, value):
     return Path(task) / "recordings" / family(value) / "train" / identifier
 
 
+def recording_roots(options):
+    roots = [options.task / "recordings"]
+    if getattr(options, "archive_root", None) is not None:
+        roots.append(Path(options.archive_root) / "recordings")
+    return roots
+
+
+def resolve_directory(options, value):
+    """Resume archived attempts directly; active episodes always start locally."""
+    local = directory_for(options.task, value)
+    candidates = [root / local.relative_to(options.task / "recordings")
+                  for root in recording_roots(options)]
+    existing = [path for path in candidates if path.exists()]
+    if len(existing) > 1:
+        raise ValueError(f"Recording exists in both active and archived storage: {value['id']}")
+    return existing[0] if existing else local
+
+
+def v5(options):
+    return getattr(options, "corpus_version", 4) == 5
+
+
+def prepare_residency(options):
+    """Export native knownroads membership once, inside the caller's gq job."""
+    directory = options.task / "knownroads"
+    snapshots = directory / "roads-snapshots.jsonl"
+    if snapshots.is_file():
+        return
+    if directory.exists():
+        raise ValueError("Incomplete native knownroads export retained")
+    actors = [row for row in v3.rows(options.task / "discovery/roads-events.jsonl")
+              if row.get("kind") == "roads_actors"]
+    if len(actors) != 1:
+        raise ValueError("Expected one native knownroads actor export")
+    npcs = sorted({actor["instance"] for actor in actors[0]["actors"]
+                   if actor["instance"] != "PC_HERO" and any(
+                       routine["node"] is not None for routine in actor["routines"])})
+    if not npcs:
+        raise ValueError("Native knownroads export has no routine actors")
+    args = runner_args(options, "knownroads")
+    worker = campaign.Worker(args, 3, None)
+    try:
+        worker.scenario("demos-v5-knownroads", [f"roads load {args.roads}", *[
+            command for index, npc in enumerate(npcs)
+            for command in (f"roads on {npc}", f"roads snapshot actor-{index} {npc}")]], directory)
+    finally:
+        worker.close()
+    exported = list(v3.rows(snapshots))
+    if len(exported) != len(npcs) or {row["actor"] for row in exported} != set(npcs):
+        raise ValueError("Native knownroads membership export is incomplete")
+
+
+def residency_inputs(task):
+    graph = v3.read_json(task / "discovery/roads-graph.json")
+    positions = v3.load_start_positions(task / "discovery/points-v3.jsonl")
+    snapshots = list(v3.rows(task / "knownroads/roads-snapshots.jsonl"))
+    if not snapshots or any(row.get("kind") != "roads_snapshot" or row.get("stranger") is not False
+                            for row in snapshots):
+        raise ValueError("Expected ordinary native knownroads memberships")
+    return graph["nodes"], positions, snapshots
+
+
+def resident_scenario(value, inputs):
+    nodes, positions, snapshots = inputs
+    start = ([float(part) for part in value["start"][3:].split(",")]
+             if value["start"].startswith("cm:") else positions[value["start"]])
+    node = min(range(len(nodes)), key=lambda index: math.hypot(
+        nodes[index][1] - start[0], nodes[index][3] - start[2]))
+    candidates, known_candidates = [], []
+    for row in snapshots:
+        if row["actor"] == value.get("target"):
+            continue
+        routine_nodes = [routine["node"] for routine in row["routines"] if routine["node"] is not None]
+        if routine_nodes:
+            distance = min(math.hypot(nodes[index][1] - start[0], nodes[index][3] - start[2])
+                           for index in routine_nodes)
+            candidates.append((distance, row["actor"], row["spawn_cm"]))
+            if node in row["known_node_ids"]:
+                known_candidates.append(candidates[-1])
+    if not candidates:
+        raise ValueError(f"No native knownroads actor has routine membership: {value['id']}")
+    distance, npc, spawn = min(known_candidates or candidates)
+    # Scenario IDs are frozen; both groups therefore remain stable across phases.
+    import hashlib
+    local = (family(value) != "jump" and bool(known_candidates)
+             and int(hashlib.sha256(value["id"].encode()).hexdigest()[:8], 16) % 2 == 0)
+    selection = dict(source="native known_node_ids at nearest start node", nearest_start_node=node,
+                     nearest_routine_to_start_cm=distance, spawn_cm=spawn)
+    if family(value) == "jump":
+        selection["stranger_reason"] = "teacher v2 does not attach familiar memory"
+    return dict(value, npc=npc, local=local, residency="local" if local else "stranger",
+                knownroads_selection=selection)
+
+
+def prepare_v5_selections(task):
+    """Keep v4 scenario IDs, seeds and membership; add only the approved families."""
+    names = (*FAMILIES, "water")
+    selected = {name: list(v3.rows(task / "recording-input" / f"{name}.jsonl")) for name in names}
+    if (len(selected["point"]) != 400 or len(selected["jump"]) != 168
+            or len(selected["object"]) < 100 or len(selected["approach"]) < 60
+            or len(selected["follow"]) < 60 or len(selected["water"]) < 40):
+        raise ValueError("Frozen v5 candidate pools do not meet the approved family targets")
+    for name, values in selected.items():
+        if (len({value["id"] for value in values}) != len(values)
+                or any(value.get("split") != "train" or family(value) != name for value in values)):
+            raise ValueError(f"Invalid frozen train family: {name}")
+    follow = [dict(value, dataset_family=FOLLOW_BELOW_GATE, follow_below_gate=True,
+                   minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION) for value in selected["follow"]]
+    freeze_selection(task / "recording-input" / f"{FOLLOW_BELOW_GATE}.jsonl", follow)
+    selected[FOLLOW_BELOW_GATE] = follow
+    return selected
+
+
 def setup_rejection_reason(error, value):
     """Recognize only native candidate validation before a moving episode starts."""
     if not isinstance(error, RuntimeError) or value.get("goal_kind") not in ("follow", "approach"):
@@ -371,16 +495,19 @@ class StorageLimit(ValueError):
 
 
 class StorageBudget:
-    """One aggregate 15-GiB ceiling, including every family's failed attempts."""
-    def __init__(self, root, max_bytes=v3.MAX_BYTES):
+    """Aggregate active and archived recordings, including failed attempts."""
+    def __init__(self, root, max_bytes=v3.MAX_BYTES, *, archive_root=None, min_free_bytes=256 * 1024**2):
         self.root, self.max_bytes = Path(root), max_bytes
+        self.archive_root = Path(archive_root) if archive_root is not None else None
+        self.min_free_bytes = min_free_bytes
         self.root.mkdir(parents=True, exist_ok=True)
-        if not 0 < max_bytes <= v3.MAX_BYTES:
-            raise ValueError("Recording budget must be within 15 GiB")
+        if not 0 < max_bytes <= (V5_MAX_BYTES if self.archive_root is not None else v3.MAX_BYTES):
+            raise ValueError("Recording budget exceeds the corpus storage ceiling")
         self.reserved, self.lock = 0, threading.Lock()
 
     def used(self):
-        return campaign.tree_bytes(self.root)
+        return campaign.tree_bytes(self.root) + (campaign.tree_bytes(self.archive_root)
+            if self.archive_root is not None and not self.archive_root.is_relative_to(self.root) else 0)
 
     @staticmethod
     def estimate(limit_ms, jump=False):
@@ -389,7 +516,7 @@ class StorageBudget:
 
     def require_room(self, amount):
         used, free = self.used(), shutil.disk_usage(self.root).free
-        if used + self.reserved + amount > self.max_bytes or free < self.reserved + amount + 256 * 1024**2:
+        if used + self.reserved + amount > self.max_bytes or free < self.reserved + amount + self.min_free_bytes:
             raise StorageLimit(f"Disk budget: used={used}, reserved={self.reserved}, next={amount}, limit={self.max_bytes}, free={free}")
 
     def can_reserve_batch(self, limit_ms, count, jump=False):
@@ -412,7 +539,7 @@ class StorageBudget:
             with self.lock:
                 self.reserved -= amount
                 if self.used() > self.max_bytes:
-                    raise ValueError("Aggregate recording budget exceeded 15 GiB")
+                    raise ValueError("Aggregate recording budget exceeded its storage ceiling")
 
 
 def runner_args(options, index, jump=False):
@@ -423,20 +550,34 @@ def runner_args(options, index, jump=False):
         links=task / "input" / ("jump-links.txt" if jump else "accepted-links.txt"),
         roads=task / "input/places.json", npc="BAU_954_MALETH", ini=None, seed=SEED,
         physics="cv", watchdog_seconds=900, limit_ms=options.limit_ms,
-        contract=task / "build/opengothic/gothic-navmemoryteacher-contract")
+        contract=task / "build/opengothic/gothic-navmemoryteacher-contract", corpus_version=5 if v5(options) else 4,
+        familiar=task / "input/familiar.bin")
 
 
 def commands(args, value):
     directory_for(Path("/unused"), value)
-    start = (jumps.scenario_commands(args, value)[-2] if family(value) == "jump"
-             else v3.start_command(value, 3, args.npc, args.limit_ms))
-    return [f"roads load {args.roads}", f"roads on {args.npc}", "navdemos record on",
-            "navdemos perception-mode gaze", "navdemos oracle off", start, "navdemos wait"]
+    npc = value.get("npc", args.npc)
+    episode_args = SimpleNamespace(**dict(vars(args), npc=npc))
+    start = (jumps.scenario_commands(episode_args, value)[-2] if family(value) == "jump"
+             else v3.start_command(value, 3, npc, args.limit_ms))
+    initial = [f"roads load {args.roads}"]
+    if getattr(args, "corpus_version", 4) == 5:
+        spawn = "cm:" + ",".join(str(part) for part in value["knownroads_selection"]["spawn_cm"])
+        initial += [f"roads familiar-load {args.familiar}",
+            f"roads {'on' if value['local'] else 'stranger'} {npc} {spawn}",
+            f"roads snapshot recording {npc}", f"roads familiar-stats {npc} 300",
+            "navdemos perception-monitor on"]
+    else:
+        initial.append(f"roads on {npc}")
+    return [*initial, "navdemos record on", "navdemos perception-mode gaze",
+            "navdemos oracle off", start, "navdemos wait"]
 
 
 def validate_native(metadata, value, identity):
-    if (metadata.get("teacher_version") != version(value) or metadata.get("demo_version") != 2
-            or metadata.get("navigation_memory_version") != MEMORY_VERSION
+    memory_version = identity.get("navigation_memory_version", MEMORY_VERSION)
+    demo_version = identity.get("demo_version", 2)
+    if (metadata.get("teacher_version") != version(value) or metadata.get("demo_version") != demo_version
+            or metadata.get("navigation_memory_version") != memory_version
             or metadata.get("perception_mode") != "gaze" or metadata.get("physics_mode") != "cv"
             or metadata.get("oracle") is not False or metadata.get("record") is not True
             or metadata.get("demonstration_recorded") is not True
@@ -444,6 +585,9 @@ def validate_native(metadata, value, identity):
             or metadata.get("limit_ms") != identity["limit_ms"]
             or metadata.get("start") != value["start"] or metadata.get("goal_kind") != value["goal_kind"]):
         raise ValueError(f"Recording identity, memory or mode differs: {value['id']}")
+    if memory_version == 4 and (metadata.get("journey_memory") is not True
+            or metadata.get("familiar_map") is not value["local"] or metadata.get("perception_monitor") is not True):
+        raise ValueError(f"Recording lacks journey memory, native familiarity or physical monitoring: {value['id']}")
     if metadata.get("observation_source") != ("detour_teacher_v2" if family(value) == "jump" else "learner_memory"):
         raise ValueError("Wrong teacher observation source")
     if value["goal_kind"] not in ("follow", "approach") and metadata.get("goal") != value["goal"]:
@@ -457,18 +601,28 @@ def validate_native(metadata, value, identity):
             or metadata.get("target_final_down") is not False):
         raise ValueError("Approach fixture lacks immortal, nonhostile, surviving target evidence")
     if "id" in metadata and (metadata.get("recording_identity") != identity
-            or any(metadata.get(key) != value.get(key) for key in v3.SCENARIO_IDENTITY_FIELDS)
+            or any((metadata.get("command_seed") if key == "seed" and value["goal_kind"] in ("point", "object")
+                    else metadata.get(key)) != value.get(key) for key in v3.SCENARIO_IDENTITY_FIELDS)
             or (family(value) == "jump" and any(metadata.get(key) != value.get(key) for key in
                 ("index", "site_id", "transition_id", "type", "dataset_family")))
             or (family(value) == FOLLOW_BELOW_GATE and (any(metadata.get(key) != value.get(key) for key in
                 ("dataset_family", "follow_below_gate", "minimum_follow_fraction"))
                 or metadata.get("teacher_goal_success") != metadata.get("success")))):
         raise ValueError(f"Completed recording belongs to another frozen scenario: {value['id']}")
+    if "id" in metadata and memory_version == 4 and any(metadata.get(key) != value[key]
+            for key in ("npc", "local", "residency", "knownroads_selection")):
+        raise ValueError(f"Completed recording belongs to another resident: {value['id']}")
+    if "id" in metadata and memory_version == 4 and (metadata.get("teacher_familiar_hint") is not False
+            or metadata.get("teacher_variant") != ("v2" if family(value) == "jump" else "v3b")):
+        raise ValueError(f"Completed recording has another teacher variant or familiar hint: {value['id']}")
 
 
 def eligibility(metadata, moving=None):
     if metadata.get("dataset_family") == "jump":
         return metadata.get("transition_success") is True
+    if metadata.get("dataset_family") == "water":
+        return (metadata.get("success") is True and moving is not None
+                and moving.get("deep_water_frames") == 0 and moving.get("swimming_frames") == 0)
     if metadata.get("goal_kind") == "follow":
         moving = moving or {}
         if metadata.get("dataset_family") == FOLLOW_BELOW_GATE:
@@ -487,9 +641,56 @@ def eligibility(metadata, moving=None):
     return metadata.get("success") is True
 
 
+def native_residency(directory, value):
+    snapshots = [row for row in v3.rows(Path(directory) / "roads-snapshots.jsonl")
+                 if row.get("tag") == "recording"]
+    stats = [row for row in v3.rows(Path(directory) / "roads-events.jsonl")
+             if row.get("kind") == "familiar_stats"]
+    if len(snapshots) != 1 or len(stats) != 1:
+        raise ValueError(f"Missing native knownroads/familiarity evidence: {directory}")
+    known, familiar = snapshots[0], stats[0]
+    stranger = not value["local"]
+    if (known.get("actor") != value["npc"] or familiar.get("actor") != value["npc"]
+            or known.get("stranger") is not stranger or familiar.get("stranger") is not stranger):
+        raise ValueError(f"Native knownroads resident differs: {directory}")
+    if value["local"]:
+        if (value["knownroads_selection"]["nearest_start_node"] not in known.get("known_node_ids", [])
+                or familiar.get("known_tiles", 0) <= 0):
+            raise ValueError(f"Local actor lacks native start knowledge or familiar tiles: {directory}")
+    elif known.get("known_node_ids") or known.get("known_edge_ids") or any(familiar.get(key) != 0
+            for key in ("known_tiles", "known_2m_tiles_xz", "eligible_2m_tiles", "familiar_source_poses")):
+        raise ValueError(f"Stranger unexpectedly knows terrain: {directory}")
+    return dict(knownroads=known, familiar=familiar)
+
+
+def water_metrics(directory, metadata):
+    frames = list(v3.rows(Path(directory) / "perception-safety-frames.jsonl"))
+    if (len(frames) < 2 or frames[0].get("elapsed_ms") != 0
+            or any(right["elapsed_ms"] <= left["elapsed_ms"] for left, right in zip(frames, frames[1:]))
+            or frames[-1].get("elapsed_ms") != metadata["elapsed_ms"]):
+        raise ValueError(f"Missing or incomplete physical water evidence: {directory}")
+    for frame in frames:
+        if (type(frame.get("swimming")) is not bool or type(frame.get("cv_active")) is not bool
+                or not isinstance(frame.get("water_depth_cm"), (int, float))
+                or not math.isfinite(frame["water_depth_cm"]) or frame["water_depth_cm"] < 0
+                or not isinstance(frame.get("deep_water_threshold_cm"), (int, float))
+                or not math.isfinite(frame["deep_water_threshold_cm"]) or frame["deep_water_threshold_cm"] <= 0):
+            raise ValueError(f"Invalid physical water evidence: {directory}")
+    if not any(frame["cv_active"] for frame in frames):
+        raise ValueError(f"Physical monitor lacks CV frames: {directory}")
+    wet = [frame["water_depth_cm"] > 10 for frame in frames]
+    deep = [frame["water_depth_cm"] + 1 >= frame["deep_water_threshold_cm"] for frame in frames]
+    def entries(values):
+        return sum(value and not previous for previous, value in zip([False, *values[:-1]], values))
+    return dict(physical_frames=len(frames), entered_water_frames=sum(wet), deep_water_frames=sum(deep),
+                swimming_frames=sum(frame["swimming"] for frame in frames), water_entries=entries(wet),
+                deep_water_entries=entries(deep), max_water_depth_cm=max(frame["water_depth_cm"] for frame in frames))
+
+
 def measured_episode(directory, metadata, checked):
     result = {key: metadata.get(key) for key in ("id", "goal_kind", "split", "region", "place_id", "success",
-        "failure", "elapsed_ms", "decisions", "teacher_version", "navigation_memory_version", "transition_success")}
+        "failure", "elapsed_ms", "decisions", "teacher_version", "navigation_memory_version", "transition_success",
+        "travel_cm", "detour_length_cm", "journey_memory", "familiar_map", "demo_version")}
     result.update(family=metadata.get("dataset_family", metadata["goal_kind"]), episode=str(directory),
         key_counts=checked["key_counts"],
         payload_bytes=sum(path.stat().st_size for path in Path(directory).rglob("*")
@@ -500,6 +701,11 @@ def measured_episode(directory, metadata, checked):
         if trace.shape != (metadata["decisions"] + 1, 6):
             raise ValueError(f"Moving target trace is incomplete: {directory}")
         result.update(v3.follow_metrics(trace[:, 0], trace[:, 4], metadata["elapsed_ms"]))
+    if metadata.get("navigation_memory_version") == 4:
+        result.update({key: metadata[key] for key in ("npc", "local", "residency", "knownroads_selection")})
+        result.update(teacher_variant="v2" if result["family"] == "jump" else "v3b",
+                      teacher_familiar_hint=False,
+                      **native_residency(directory, metadata), **water_metrics(directory, metadata))
     result["training_eligible"] = eligibility(metadata, result)
     if result["family"] == FOLLOW_BELOW_GATE:
         result.update(follow_below_gate=True, minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION,
@@ -531,7 +737,9 @@ def replay_contract(binary, directory, decisions, *, write=False):
 class Worker(campaign.Worker):
     def __init__(self, options, index, budget, identity, state=None):
         self.options, self.index, self.identity = options, index, identity
-        self.state = state or CollectionState(options.task / "recordings/collection-state.json", identity)
+        self.state = state or CollectionState(options.task / "recordings/collection-state.json", identity,
+                                             archive_root=getattr(options, "archive_root", None))
+        self.residency = residency_inputs(options.task) if v5(options) else None
         self.jump = False
         super().__init__(runner_args(options, index), 3, budget)
 
@@ -540,10 +748,25 @@ class Worker(campaign.Worker):
         if not v3.complete(directory):
             raise ValueError(f"Incomplete recording retained: {directory}")
         metadata = v3.read_json(directory / "episode.json")
+        raw_v5 = v5(self.options) and "id" not in metadata
+        if v5(self.options):
+            validate_native(metadata, value, recording_identity(self.identity, value))
+        if raw_v5:
+            actual_seed = metadata.get("seed")
+            metadata.update(value, recording_identity=recording_identity(self.identity, value),
+                            command_seed=value["seed"], teacher_familiar_hint=False,
+                            teacher_variant="v2" if family(value) == "jump" else "v3b",
+                            **native_residency(directory, value))
+            metadata["seed"] = actual_seed
+            if family(value) == FOLLOW_BELOW_GATE:
+                metadata["teacher_goal_success"] = metadata["success"]
         parameters = recorded_parameters(metadata)
         saved = metadata.get("collection_metrics") or self.state.saved_metrics(directory)
         digest = self.state.verify_samples(directory, metadata, allow_unpinned=saved is None)
         checked = demos.summarize(directory, validate=True)
+        if v5(self.options) and (checked.get("navigation_memory_versions") != [4]
+                                or checked.get("format_versions") != [3]):
+            raise ValueError("Only memory-v4 NAVDEMO-v3 recordings are allowed")
         if saved is not None:
             measured = dict(saved)
         else:
@@ -558,8 +781,14 @@ class Worker(campaign.Worker):
             else:
                 replay_contract(self.args.contract, directory, metadata["decisions"])
             measured = measured_episode(directory, metadata, checked)
-        measured.update(seed=metadata.get("seed"), scenario=parameters,
+        if v5(self.options):
+            measured = measured_episode(directory, dict(value, **metadata), checked)
+        measured.update(episode=str(directory), seed=metadata.get("seed"), scenario=parameters,
                         samples_sha256=digest)
+        if raw_v5:
+            metadata.update(training_eligible=measured["training_eligible"], collection_metrics=measured,
+                            samples_sha256=digest)
+            atomic_json(directory / "episode.json", metadata)
         self.state.pin_samples(directory, digest)
         self.state.remember_metrics(directory, measured)
         campaign.emit("recording_complete", family=family(value), id=value["id"], resumed=True,
@@ -567,7 +796,9 @@ class Worker(campaign.Worker):
         return measured
 
     def trial(self, value):
-        directory = directory_for(self.options.task, value)
+        if self.residency is not None:
+            value = resident_scenario(value, self.residency)
+        directory = resolve_directory(self.options, value)
         rejected = self.state.rejected_candidate(directory)
         if rejected is not None:
             require_no_recording_output(directory)
@@ -579,8 +810,9 @@ class Worker(campaign.Worker):
         if jump != self.jump:
             self.close()
             self.jump, self.args = jump, runner_args(self.options, self.index, jump)
-        scenario_name = (f"demos-v4-{FOLLOW_BELOW_GATE}-{value['id']}" if family(value) == FOLLOW_BELOW_GATE
-                         else f"demos-v4-{value['id']}")
+        prefix = "demos-v5" if v5(self.options) else "demos-v4"
+        scenario_name = (f"{prefix}-{FOLLOW_BELOW_GATE}-{value['id']}" if family(value) == FOLLOW_BELOW_GATE
+                         else f"{prefix}-{value['id']}")
         expected = [f"seed {value['seed']}", "cheat god", "set time 10 0", "navdemos physics cv",
                     *commands(self.args, value), "label done"]
         started = time.monotonic()
@@ -618,6 +850,9 @@ class Worker(campaign.Worker):
         actual_seed = metadata.get("seed")
         metadata.update(value, recording_identity=identity, collector_wall_s=time.monotonic() - started,
                         command_seed=value["seed"])
+        if v5(self.options):
+            metadata.update(teacher_variant="v2" if jump else "v3b", teacher_familiar_hint=False,
+                            **native_residency(directory, value))
         metadata["seed"] = actual_seed
         if family(value) == FOLLOW_BELOW_GATE:
             metadata["teacher_goal_success"] = metadata["success"]
@@ -625,8 +860,9 @@ class Worker(campaign.Worker):
         if jump:
             metadata.update(jumps.assess_episode(directory, value))
         checked = demos.summarize(directory, validate=True)
-        if checked.get("navigation_memory_versions") != [3] or checked.get("format_versions") != [2]:
-            raise ValueError("Only memory-v3 NAVDEMO-v2 recordings are allowed")
+        if (checked.get("navigation_memory_versions") != [4 if v5(self.options) else 3]
+                or checked.get("format_versions") != [3 if v5(self.options) else 2]):
+            raise ValueError("Recording memory and NAVDEMO versions differ from this corpus")
         if not jump:
             replay_contract(self.args.contract, directory, metadata["decisions"], write=True)
         measured = measured_episode(directory, metadata, checked)
@@ -644,12 +880,23 @@ class Worker(campaign.Worker):
 def settings(options, include_follow):
     task = options.task
     validation = task / "validation/attempt-2/metrics.json"
-    return dict(schema_version=1, navigation_memory_version=3, demo_version=2, perception_mode="gaze", physics="cv",
+    result = dict(schema_version=1, navigation_memory_version=4 if v5(options) else 3,
+        demo_version=3 if v5(options) else 2, perception_mode="gaze", physics="cv",
         validation_attempt_2_sha256=campaign.binary_digest(validation) if validation.is_file() else None,
         input_sha256={name: campaign.binary_digest(task / "input" / name) for name in INPUTS},
         runner_sha256=campaign.binary_digest(task / "build/opengothic/gothic-body-runner"),
         contract_sha256=campaign.binary_digest(task / "build/opengothic/gothic-navmemoryteacher-contract"),
         limit_ms=options.limit_ms, include_follow=include_follow, seed=SEED, max_bytes=options.max_bytes)
+    if v5(options):
+        result.update(corpus_version=5, teacher_variant="v3b", student_input="hd", teacher_familiar_hint=False,
+            archive_root=str(options.archive_root), local_min_free_bytes=V5_MIN_FREE_BYTES,
+            selection_sha256={name: campaign.binary_digest(task / "recording-input" / f"{name}.jsonl")
+                              for name in (*FAMILIES, "water")},
+            v5_input_sha256={name: campaign.binary_digest(task / "input" / name) for name in
+                             ("v4-manifest.json", "detour-val.jsonl", "detour-test.jsonl", "familiar.bin")},
+            knownroads_sha256={name: campaign.binary_digest(task / name) for name in
+                ("knownroads/roads-snapshots.jsonl", "discovery/roads-graph.json", "discovery/points-v3.jsonl")})
+    return result
 
 
 def collection_settings(base_identity, prior_settings=None, *, follow_below_gate=False, source_follow_sha256=None):
@@ -703,16 +950,18 @@ def recording_identity(identity, value):
 
 
 def summarize(episodes, selections, include_follow, used, follow_below_gate=False, point_limit=None,
-              rejected_candidates=(), point_candidates=None):
+              rejected_candidates=(), point_candidates=None, corpus_version=4):
     groups = {}
-    for name in (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ())):
+    for name in (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ()),
+                 *(("water",) if corpus_version == 5 else ())):
         values = [value for value in episodes if value["family"] == name]
         rejected = [value for value in rejected_candidates if value["family"] == name]
         keys = sum((Counter(value["key_counts"]) for value in values), Counter())
         decisions = sum(value["decisions"] for value in values)
         eligible = sum(value["training_eligible"] for value in values)
         needed = (point_limit if name == "point" and point_limit is not None else
-                  len(selections[name]) if name in ("point", "jump") else 100 if name == "object" else 60)
+                  len(selections[name]) if name in ("point", "jump") else 100 if name == "object"
+                  else 40 if name == "water" else 60)
         complete = len(values) >= needed if name in ("point", "jump") else eligible >= needed
         if name == "follow" and not include_follow:
             complete = True
@@ -730,21 +979,42 @@ def summarize(episodes, selections, include_follow, used, follow_below_gate=Fals
         if name == FOLLOW_BELOW_GATE:
             groups[name].update(follow_below_gate=True,
                                 minimum_follow_fraction=FOLLOW_BELOW_GATE_MIN_FRACTION)
-    return dict(complete=all(value["complete"] for value in groups.values()), by_family=groups,
+        if corpus_version == 5:
+            groups[name].update(local_episodes=sum(value["local"] for value in values),
+                local_fraction=sum(value["local"] for value in values) / len(values) if values else None,
+                water_entries=sum(value["water_entries"] for value in values),
+                deep_water_entries=sum(value["deep_water_entries"] for value in values),
+                deep_water_frames=sum(value["deep_water_frames"] for value in values),
+                swimming_frames=sum(value["swimming_frames"] for value in values))
+    result = dict(complete=all(value["complete"] for value in groups.values()), by_family=groups,
                 point_limit=groups["point"]["target"],
-                navigation_memory_version=3, demo_version=2, dataset_bytes=used, episodes=episodes,
+                navigation_memory_version=4 if corpus_version == 5 else 3,
+                demo_version=3 if corpus_version == 5 else 2, dataset_bytes=used, episodes=episodes,
                 rejected_candidates=list(rejected_candidates),
                 student_training_run=False)
+    if corpus_version == 5:
+        result.update(corpus_version=5, student_input="hd", teacher_familiar_hint=False,
+            local_episodes=sum(value["local"] for value in episodes),
+            local_fraction=sum(value["local"] for value in episodes) / len(episodes) if episodes else None)
+    return result
 
 
 def run(options):
     deadline = time.monotonic() + options.wall_minutes * 60
     if sys.platform != "linux":
         raise ValueError("Run collection on Ryzen/Linux inside the caller's gq batch")
-    follow_below_gate = getattr(options, "follow_below_gate", False)
+    follow_below_gate = v5(options) or getattr(options, "follow_below_gate", False)
     point_limit = getattr(options, "point_limit", 400)
     verify_only = getattr(options, "verify_existing_only", False)
     expect_existing = getattr(options, "expect_existing", None)
+    if v5(options):
+        if point_limit != 400 or getattr(options, "archive_root", None) is None:
+            raise ValueError("V5 requires all 400 road pairs and an absolute archive root")
+        if not Path(options.archive_root).is_absolute():
+            raise ValueError("V5 archive root must be absolute")
+        os.environ["OPENGOTHIC_NAV_JOURNEY_MEMORY"] = "1"
+        # Unset attaches familiar memory while keeping the teacher hint disabled.
+        os.environ.pop("OPENGOTHIC_NAV_FAMILIAR_MAP", None)
     if follow_below_gate and options.include_follow == "yes":
         raise ValueError("--follow-below-gate is a separate family; it cannot enable ordinary follow")
     include_follow = False if follow_below_gate else follow_enabled(options.task, options.include_follow)
@@ -765,7 +1035,7 @@ def run(options):
             raise ValueError("Recording state belongs to another binary, input, selection or follow gate")
         if prior_settings.get("schema_version") == 2 and not follow_below_gate:
             raise ValueError("Existing follow_below_gate recordings require the explicit --follow-below-gate opt-in")
-        for name in (*FAMILIES, "moving-all-splits"):
+        for name in (*FAMILIES, *((FOLLOW_BELOW_GATE, "water") if v5(options) else ("moving-all-splits",))):
             if not (options.task / "recording-input" / f"{name}.jsonl").is_file():
                 raise ValueError(f"Existing collection lacks its frozen selection: {name}")
     elif output.exists() and any(output.iterdir()):
@@ -778,16 +1048,16 @@ def run(options):
         if (prior_settings is None or prior_settings.get("schema_version") != 2) and any(
                 path.is_file() for path in (output / FOLLOW_BELOW_GATE).rglob("*")):
             raise ValueError("Existing follow_below_gate recordings lack their frozen authorization policy")
-    if prior_settings is None:
+    if prior_settings is None and not v5(options):
         # Fresh collections have no old selections to preserve.
         prepare_selections(options.task)
     source_follow_sha256 = (campaign.binary_digest(options.task / "recording-input/follow.jsonl")
                             if follow_below_gate else None)
     identity = collection_settings(base_identity, prior_settings, follow_below_gate=follow_below_gate,
                                    source_follow_sha256=source_follow_sha256)
-    families = (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ()))
+    families = (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ()), *(("water",) if v5(options) else ()))
     if prior_settings is None:
-        selections = prepare_selections(options.task, follow_below_gate)
+        selections = prepare_v5_selections(options.task) if v5(options) else prepare_selections(options.task, follow_below_gate)
     else:
         # Completed IDs refer to these frozen candidate lists. Do not regenerate
         # old seeds, qualification or route parameters while resuming.
@@ -795,12 +1065,15 @@ def run(options):
                       for name in families}
         if any(value.get("split") != "train" for values in selections.values() for value in values):
             raise ValueError("Held-out scenario entered a recording selection")
-    allowed = {directory_for(options.task, value) for values in selections.values() for value in values}
-    if any(path.parent not in allowed for path in output.rglob("samples.bin*")):
+    allowed = {root / directory_for(options.task, value).relative_to(output)
+               for root in recording_roots(options) for values in selections.values() for value in values}
+    if any(path.parent not in allowed or path.is_symlink()
+           for root in recording_roots(options) for path in root.rglob("samples.bin*")):
         raise ValueError("Recording exists outside frozen train selections")
-    state = CollectionState(state_path, identity, prior_state)
+    state = CollectionState(state_path, identity, prior_state, getattr(options, "archive_root", None))
     state.update(status="verifying_existing" if verify_only else "running")
-    budget = StorageBudget(output, options.max_bytes)
+    budget = StorageBudget(output, options.max_bytes, archive_root=getattr(options, "archive_root", None),
+                           min_free_bytes=V5_MIN_FREE_BYTES if v5(options) else 256 * 1024**2)
     workers = [Worker(options, index, budget, identity, state) for index in range(options.parallel)]
     episodes, done = [], set()
     new = 0
@@ -809,17 +1082,17 @@ def run(options):
     scheduled_points = []
     def metrics():
         return dict(summarize(episodes, selections, include_follow, budget.used(), follow_below_gate, point_limit,
-                              state.rejections(), len(scheduled_points)),
+                              state.rejections(), len(scheduled_points), 5 if v5(options) else 4),
                     resume_verified_episodes=verified)
 
     try:
         # Rejected setup candidates have diagnostics rather than NAVDEMO
         # episodes. Their durable terminal IDs are never dispatched again.
-        by_directory = {directory_for(options.task, value): value
+        by_directory = {str(directory_for(options.task, value).relative_to(output)): value
                         for values in selections.values() for value in values}
         for rejected in state.rejections():
-            directory = Path(rejected["directory"])
-            candidate = by_directory.get(directory)
+            candidate = by_directory.get(state.key(rejected["directory"]))
+            directory = resolve_directory(options, candidate) if candidate is not None else Path(rejected["directory"])
             if (candidate is None or rejected.get("id") != candidate["id"]
                     or rejected.get("family") != family(candidate)
                     or rejected.get("candidate_rejected") is not True
@@ -831,12 +1104,14 @@ def run(options):
         # Verify prior attempts first; partial output is never automatically rerun.
         existing = []
         for name in families:
-            expected = {directory_for(options.task, value) for value in selections[name]}
-            for directory in (output / name / "train").glob("*"):
-                if directory not in expected:
-                    raise ValueError(f"Recording outside frozen train selection: {directory}")
+            expected = {root / directory_for(options.task, value).relative_to(output)
+                        for root in recording_roots(options) for value in selections[name]}
+            for root in recording_roots(options):
+                for directory in (root / name / "train").glob("*"):
+                    if directory not in expected or directory.is_symlink():
+                        raise ValueError(f"Recording outside frozen train selection: {directory}")
             for value in selections[name]:
-                directory = directory_for(options.task, value)
+                directory = resolve_directory(options, value)
                 if (name, value["id"]) in rejected_ids:
                     continue
                 if directory.exists():
@@ -948,6 +1223,9 @@ def run(options):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--task", type=Path, required=True)
+    parser.add_argument("--corpus-version", type=int, choices=(4, 5), default=4)
+    parser.add_argument("--archive-root", type=Path,
+                        help="V5 shared corpus root; archived attempts are resumed directly")
     parser.add_argument("--include-follow", choices=("auto", "yes", "no"), default="auto")
     parser.add_argument("--follow-below-gate", action="store_true",
                         help="Explicitly add separate follow_below_gate training data with the authorized 70%% per-episode rule")
@@ -962,8 +1240,10 @@ def main():
     parser.add_argument("--round-size", type=int, default=12)
     parser.add_argument("--parallel", type=int, choices=(1, 2, 3), default=3)
     parser.add_argument("--limit-ms", type=int, default=240000)
-    parser.add_argument("--max-bytes", type=int, default=v3.MAX_BYTES)
+    parser.add_argument("--max-bytes", type=int)
     options = parser.parse_args()
+    if options.max_bytes is None:
+        options.max_bytes = V5_MAX_BYTES if v5(options) else v3.MAX_BYTES
     if not options.task.is_absolute() or options.limit_ms != jumps.LIMIT_MS:
         parser.error("An absolute task and the unchanged 240000-ms collection horizon are required")
     if not 15 < options.wall_minutes <= 110 or min(options.max_new, options.round_size) <= 0:
@@ -972,6 +1252,8 @@ def main():
         parser.error("Expected existing episode count cannot be negative")
     if options.point_limit != 400 and (options.point_limit <= 0 or options.point_limit >= 400 or options.point_limit % 6):
         parser.error("Point limit must be 400 or a positive multiple of six below 400")
+    if v5(options) and (options.archive_root is None or not options.archive_root.is_absolute() or options.point_limit != 400):
+        parser.error("V5 requires an absolute archive root and all 400 road pairs")
     options.task = options.task.resolve()
     try:
         run(options)

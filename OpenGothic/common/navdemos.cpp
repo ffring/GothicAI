@@ -1704,7 +1704,7 @@ bool NavDemos::fullSimulation(const Npc& npc) {
 }
 void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settings{};preparingLegacy=nullptr;}
 void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player,const std::string& output) {
-  if(args.size()>=2 && (args[1]=="perception-hazards" || args[1]=="perception-shores")) {
+  if(args.size()>=2 && (args[1]=="perception-hazards" || args[1]=="perception-shores" || args[1]=="water-probes")) {
     if(running() || NavBench::running())throw std::runtime_error("navdemos cannot probe hazards during an episode");
     NavPerceptionSafety::command(args,w,output);
     return;

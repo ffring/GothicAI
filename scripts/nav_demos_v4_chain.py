@@ -97,21 +97,22 @@ def collector_options(task, plan):
         point_limit=plan["point_limit"])
 
 
-def submit_command(task):
+def submit_command(task, *, script=None, owner="nav-demos-v4", extra=()):
     command = [str(GQ), "submit", "--class", "batch", "--threads", "12",
         "--cpu-quota", "1200%", "--mem", "8G", "--max", "2h", "--name",
-        "nav demos v4 recording chain", "--", str(task / ".venv/bin/python"),
-        "-I", str(Path(__file__).resolve()), "--task", str(task)]
+        owner.replace("-", " ") + " recording chain", "--", str(task / ".venv/bin/python"),
+        "-I", str(Path(script or __file__).resolve()), "--task", str(task), *extra]
     return command
 
 
-def enqueue(task, request):
+def enqueue(task, request, *, script=None, owner="nav-demos-v4", extra=()):
     """Keep gq's detached pump alive in this separate transient user unit."""
     identifier = None
     try:
         disk_check()
-        result = subprocess.run(submit_command(task), check=True, capture_output=True, text=True,
-                            env={**os.environ, "GQ_OWNER": "nav-demos-v4"})
+        result = subprocess.run(submit_command(task, script=script, owner=owner, extra=extra),
+                            check=True, capture_output=True, text=True,
+                            env={**os.environ, "GQ_OWNER": owner})
         identifier = result.stdout.strip()
         if not re.fullmatch(r"[0-9a-f]{12}", identifier):
             raise ValueError(f"gq returned an invalid continuation ID: {identifier!r}")
@@ -120,7 +121,7 @@ def enqueue(task, request):
         # If publishing the ID fails, cancel only the exact request just made.
         if identifier and re.fullmatch(r"[0-9a-f]{12}", identifier):
             subprocess.run([str(GQ), "cancel", identifier], check=False,
-                           env={**os.environ, "GQ_OWNER": "nav-demos-v4"})
+                           env={**os.environ, "GQ_OWNER": owner})
         atomic_json(request, dict(status="failed", error=type(error).__name__, detail=str(error)))
         raise
     # gq submit leaves a pump in its caller's cgroup. Waiting here keeps the
@@ -132,10 +133,10 @@ def enqueue(task, request):
     return result.returncode
 
 
-def submit_next(task):
+def submit_next(task, *, script=None, owner="nav-demos-v4", extra=()):
     disk_check()
     token = uuid.uuid4().hex[:12]
-    unit = "nav-demos-v4-queue-" + token
+    unit = owner + "-queue-" + token
     request = task / "chain-queue" / (token + ".json")
     request.parent.mkdir(parents=True, exist_ok=True)
     command = ["systemd-run", "--user", "--collect", "--quiet", "--service-type=exec",
@@ -145,8 +146,8 @@ def submit_next(task):
     for name in runtime_names:
         if name in os.environ:
             command.append(f"--setenv={name}={os.environ[name]}")
-    command.extend(["--setenv=GQ_OWNER=nav-demos-v4", str(task / ".venv/bin/python"),
-                    "-I", str(Path(__file__).resolve()), "--task", str(task),
+    command.extend(["--setenv=GQ_OWNER=" + owner, str(task / ".venv/bin/python"),
+                    "-I", str(Path(script or __file__).resolve()), "--task", str(task), *extra,
                     "--enqueue", str(request)])
     subprocess.run(command, check=True, capture_output=True, text=True)
     deadline = time.monotonic() + 30

@@ -1,5 +1,7 @@
 # Карта проекта
 
+Пересъёмка навигационных демонстраций v5 на памяти 4: [`nav-demos-v5-remote.sh`](../scripts/nav-demos-v5-remote.sh) → [`nav_demos_v5_water.py`](../scripts/nav_demos_v5_water.py) (train-постановки у воды, команда `navdemos water-probes`) → [`nav_demos_v4_collect.py`](../scripts/nav_demos_v4_collect.py) (`--corpus-version 5`, местные/чужаки по `knownroads`, учитель v3b без знакомой подсказки) → [`nav_demos_v5_chain.py`](../scripts/nav_demos_v5_chain.py) (фазы `gq batch`, 30 ГБ, перенос с проверкой хешей) → [`nav_demos_v5_report.py`](../scripts/nav_demos_v5_report.py) (итоговый манифест для `hd` и отчёт только после полного сбора). Запись идёт локально в `~/gothic-ai/nav-demos-v5/`, завершённые фазы — `/mnt/shared/gothic-ai/nav-demos-v5/`; split v4 и detour-наборы сохраняются без записи validation/test. Сбор подготовлен; обучение не запускается. [Текущее состояние](navigation.md#как-работает-сейчас).
+
 С этой страницы начинается любая работа в репозитории. Она говорит, где что лежит и как части связаны. Подробности — в документах систем, ссылки на них ниже. Правила работы — в [`AGENTS.md`](../AGENTS.md), у `server/`, `OpenGothic/ai_bridge/` и `shorts/` — ещё свои короткие `AGENTS.md`. Сборка и запуск — в [`README.md`](../README.md).
 
 Карта описывает то, что есть сейчас. PR, который добавляет модуль, сервис, флаг, сценарий или документ, правит и эту страницу.
