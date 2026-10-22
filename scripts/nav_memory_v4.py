@@ -28,7 +28,7 @@ oracle = module("nav_teacher_v3_oracle")
 campaign, v3 = oracle.campaign, oracle.v3
 perception = module("nav_perception")
 safety = module("nav_perception_safety")
-MODES = ("baseline", "journey", "familiar-local", "familiar-stranger")
+MODES = ("baseline", "baseline-stranger", "journey", "journey-stranger", "familiar-local", "familiar-stranger")
 LIMIT_MS = 240000
 
 
@@ -66,7 +66,7 @@ def args_for(task, output, npc="BAU_954_MALETH"):
 def mode_environment(mode):
     if mode not in MODES:
         raise ValueError(f"Unknown memory comparison mode: {mode}")
-    os.environ["OPENGOTHIC_NAV_JOURNEY_MEMORY"] = "0" if mode == "baseline" else "1"
+    os.environ["OPENGOTHIC_NAV_JOURNEY_MEMORY"] = "0" if mode.startswith("baseline") else "1"
     os.environ["OPENGOTHIC_NAV_FAMILIAR_MAP"] = "1" if mode.startswith("familiar-") else "0"
 
 
@@ -74,7 +74,7 @@ def initial_commands(task, npc, mode):
     commands = [f"roads load {task / 'input/places.json'}"]
     if mode.startswith("familiar-"):
         commands.append(f"roads familiar-load {task / 'input/familiar.bin'}")
-    commands.append(f"roads {'stranger' if mode == 'familiar-stranger' else 'on'} {npc}")
+    commands.append(f"roads {'stranger' if mode.endswith('-stranger') else 'on'} {npc}")
     if mode.startswith("familiar-"):
         commands.append(f"roads familiar-stats {npc} 300")
     return commands
@@ -103,6 +103,46 @@ def bake(task):
           f"roads bake {task / 'input/familiar.bin'}"])
     if not (task / "input/familiar.bin").is_file():
         raise ValueError("Eye baking did not produce the familiar atlas")
+    bake_npc_stats(task)
+
+
+def frozen_safety(task):
+    fixtures = v3.read_json(task / "input/fixtures.json")
+    if len(fixtures) != 9 or any(not value.get("qualified") for value in fixtures):
+        raise ValueError("Expected 9 frozen qualified safety fixtures")
+    return fixtures
+
+
+def bake_npc_stats(task):
+    cases = frozen_cases(task)
+    safety_starts = [dict(start=safety.token(value["projected_start_cm"])) for value in frozen_safety(task)]
+    actors, nodes, positions = discovery(task)
+    npcs = sorted({local_actor(value, actors, nodes, positions)["npc"] for value in [*cases, *safety_starts]})
+    commands = [f"roads load {task / 'input/places.json'}", f"roads familiar-load {task / 'input/familiar.bin'}"]
+    for npc in npcs:
+        for residency in ("on", "stranger"):
+            commands.extend((f"roads {residency} {npc}", f"roads familiar-stats {npc} 300"))
+    directory = task / "bake-npcs"
+    stand(task, directory, commands)
+    stats = [row for row in v3.rows(directory / "roads-events.jsonl") if row.get("kind") == "familiar_stats"]
+    if (len(stats) != len(npcs) * 2 or any(type(row.get("stranger")) is not bool for row in stats)
+            or {(row.get("actor"), row["stranger"]) for row in stats} != {(npc, stranger) for npc in npcs for stranger in (False, True)}):
+        raise ValueError("Missing or duplicate native familiar stats for scenario NPCs")
+    for row in stats:
+        if (row["npc_count"] != 300 or row["max_bytes"] != 50_000_000
+                or not 0 < row["total_bytes_for_npcs"] <= 50_000_000
+                or not 0 <= row["known_2m_tiles_xz"] <= row["eligible_2m_tiles"]
+                or not 0 <= row["coverage_fraction"] <= 1):
+            raise ValueError(f"Invalid native familiar coverage or 300-NPC memory budget: {row['actor']}")
+        if row["stranger"] and any(row[key] != 0 for key in (
+                "known_tiles", "known_2m_tiles_xz", "eligible_2m_tiles", "familiar_source_poses", "coverage_fraction")):
+            raise ValueError(f"Stranger unexpectedly knows familiar terrain: {row['actor']}")
+    scenario_starts = len(cases) + len(safety_starts)
+    total_bytes = max(row["total_bytes_for_npcs"] for row in stats)
+    v3.write_json(directory / "memory-cost.json", dict(scenario_starts=scenario_starts, npc_count=300,
+        unique_npc_count=len(npcs), total_bytes_for_300_npcs=total_bytes, measurements=stats))
+    emit("memory_bake_npcs_complete", npcs=len(npcs), scenario_starts=scenario_starts,
+         total_bytes_for_300_npcs=total_bytes)
 
 
 def discovery(task):
@@ -155,8 +195,8 @@ def identity(task, mode):
 
 def validate_raw(directory, metadata, value, mode, limit_ms=LIMIT_MS):
     if (metadata.get("teacher_version") != 3 or metadata.get("demo_version") != 2
-            or metadata.get("navigation_memory_version") != (3 if mode == "baseline" else 4)
-            or metadata.get("journey_memory") is not (mode != "baseline")
+            or metadata.get("navigation_memory_version") != (3 if mode.startswith("baseline") else 4)
+            or metadata.get("journey_memory") is not (not mode.startswith("baseline"))
             or any(metadata.get(k) != value[k] for k in ("start", "goal", "goal_kind"))
             or metadata.get("limit_ms") != limit_ms or metadata.get("perception_mode") != "gaze"
             or metadata.get("oracle") is not False or metadata.get("observation_source") != "learner_memory"
@@ -236,9 +276,7 @@ def evaluate(options):
 
 def evaluate_safety(options):
     task = options.task
-    fixtures = v3.read_json(task / "input/fixtures.json")
-    if not fixtures or any(not v.get("qualified") for v in fixtures):
-        raise ValueError("Expected frozen qualified safety fixtures")
+    fixtures = frozen_safety(task)
     actors, nodes, positions = discovery(task)
     deadline = time.monotonic() + options.budget_seconds
     results = []

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Submit one memory-v4 phase and return its queue ID; never wait or poll.
+# Submit memory-v4 phases and return their queue IDs; never wait or poll.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-memory-v4-remote.sh build|bake|evaluate|safety|cleanup}"
-case "$stage" in build|bake|evaluate|safety|cleanup) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
+stage="${1:?Usage: nav-memory-v4-remote.sh build|bake|measure|evaluate|safety|cleanup}"
+case "$stage" in build|bake|measure|evaluate|safety|cleanup) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-memory-v4
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-memory-v4" "$HOME"')"
 ssh ryzen "TASK='$task' bash -s" <<'PREPARE'
@@ -60,10 +60,32 @@ if [[ "$stage" == build ]]; then
   cmake --build "$task/build" --target gothic-body-runner \
     check-navigation-memory check-navmemoryteacher --parallel 3
   "$task/.venv/bin/python" -m pytest -q scripts/tests/test_nav_memory_v4.py scripts/tests/test_nav_demos.py
+elif [[ "$stage" == measure-mode ]]; then
+  test -x "$task/build/opengothic/gothic-body-runner"
+  "$task/.venv/bin/python" -c 'import json,sys; result=json.load(open(sys.argv[1])); assert result["unique_npc_count"] > 0 and result["npc_count"] == 300 and 0 < result["total_bytes_for_300_npcs"] <= 50_000_000' \
+    "$task/bake-npcs/memory-cost.json"
+  mode="${1:?memory comparison mode}"
+  shift
+  timeout 110m "$task/.venv/bin/python" -I scripts/nav_memory_v4.py evaluate \
+    --task "$task" --budget-seconds 6500 --mode "$mode" "$@"
+  timeout 8m "$task/.venv/bin/python" -I scripts/nav_memory_v4.py safety \
+    --task "$task" --budget-seconds 420 --mode "$mode" "$@"
 else
   test -x "$task/build/opengothic/gothic-body-runner"
   timeout 110m "$task/.venv/bin/python" -I scripts/nav_memory_v4.py "$stage" --task "$task" --budget-seconds 6500 "$@"
 fi
 PHASE
+if [[ "$stage" == measure ]]; then
+  # A 16-thread batch cannot overlap another such batch on the 28-thread host.
+  # FIFO therefore finishes bake/discovery before any mode reads their outputs.
+  for mode in bake baseline baseline-stranger journey journey-stranger familiar-local familiar-stranger; do
+    phase_args=(measure-mode "$mode")
+    [[ "$mode" != bake ]] || phase_args=(bake)
+    identifier=$("$ROOT/scripts/gq" submit --class batch --threads 16 --mem 8G --max 2h --cpu-quota 1200% \
+      --name "nav memory v4 $mode" -- bash "$task/phase.sh" "${phase_args[@]}" "${@:2}")
+    printf '%s %s\n' "$mode" "$identifier"
+  done
+  exit 0
+fi
 "$ROOT/scripts/gq" submit --class batch --threads 12 --mem 8G --max 2h --cpu-quota 1200% \
   --name "nav memory v4 $stage" -- bash "$task/phase.sh" "$stage" "${@:2}"
