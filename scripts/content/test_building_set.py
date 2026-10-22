@@ -117,7 +117,7 @@ def test_compose_joins_parts_and_rejects_shared_texture(tmp_path, monkeypatch):
     staged(tmp_path, 'roofs-1', {'ROOF_01.TGA': 'roofs-1-roof-01'})
     staged(tmp_path, 'hut-4', {'WAND_01.TGA': 'hut-4-wand-01', 'WAND_02.TGA': 'hut-4-wand-02'})
     result = building_set.compose('hut-4-review', ['roofs-1', 'hut-4'])
-    assert result == {'set': 'hut-4-review', 'entries': 3, 'parts': {'roofs-1': 1, 'hut-4': 2}}
+    assert result == {'set': 'hut-4-review', 'entries': 3, 'meshes': 0, 'parts': {'roofs-1': 1, 'hut-4': 2}}
     out = tmp_path / 'content-staging/hut-4-review'
     index = json.loads((out / 'materials/materials.json').read_text())
     assert sorted(index) == ['ROOF_01.TGA', 'WAND_01.TGA', 'WAND_02.TGA']
@@ -128,6 +128,57 @@ def test_compose_joins_parts_and_rejects_shared_texture(tmp_path, monkeypatch):
         building_set.compose('mixed', ['roofs-1', 'house-3'])
     with pytest.raises(ValueError, match='staging set exists'):
         building_set.compose('hut-4-review', ['roofs-1', 'hut-4'])
+
+
+def staged_prop(root, name, prefix='OWN'):
+    """A prop like the barrel: two materials on one atlas and a GLB."""
+    staged(root, name, {f'{prefix}_WOOD.TGA': name})
+    folder = root / 'content-staging' / name
+    index = json.loads((folder / 'materials/materials.json').read_text())
+    index[f'{prefix}_IRON.TGA'] = dict(index[f'{prefix}_WOOD.TGA'])
+    (folder / 'materials/materials.json').write_text(json.dumps(index))
+    (folder / 'meshes' / name).mkdir(parents=True)
+    (folder / 'meshes' / name / 'model.glb').write_bytes(b'glb ' + name.encode())
+    (folder / 'meshes/meshes.json').write_text(json.dumps({'NW_HARBOUR_BARREL_01': {'glb': f'{name}/model.glb'}}))
+
+
+def test_compose_brings_a_props_meshes_and_shared_atlas(tmp_path, monkeypatch):
+    monkeypatch.setenv('GOTHIC_AI_DATA', str(tmp_path))
+    staged(tmp_path, 'roofs-1', {'ROOF_01.TGA': 'roofs-1-roof-01'})
+    staged_prop(tmp_path, 'barrel-1')
+    result = building_set.compose('city-1', ['roofs-1', 'barrel-1'])
+    assert result == {'set': 'city-1', 'entries': 3, 'meshes': 1, 'parts': {'roofs-1': 1, 'barrel-1': 3}}
+    out = tmp_path / 'content-staging/city-1'
+    assert json.loads((out / 'meshes/meshes.json').read_text()) == {'NW_HARBOUR_BARREL_01': {'glb': 'barrel-1/model.glb'}}
+    assert (out / 'meshes/barrel-1/model.glb').read_bytes() == b'glb barrel-1'
+    composition = json.loads((out / 'composition.json').read_text())
+    assert list(composition['glb_sha256']) == ['barrel-1/model.glb']
+    assert composition['parts']['barrel-1'] == ['OWN_IRON.TGA', 'OWN_WOOD.TGA', 'NW_HARBOUR_BARREL_01']
+    staged_prop(tmp_path, 'barrel-2', prefix='OTHER')
+    with pytest.raises(ValueError, match='visual NW_HARBOUR_BARREL_01: in both barrel-1 and barrel-2'):
+        building_set.compose('two-barrels', ['barrel-1', 'roofs-1', 'barrel-2'])
+
+
+def test_enable_replaces_only_materials_and_meshes(tmp_path, monkeypatch):
+    monkeypatch.setenv('GOTHIC_AI_DATA', str(tmp_path))
+    staged(tmp_path, 'roofs-1', {'ROOF_01.TGA': 'roofs-1-roof-01'})
+    staged_prop(tmp_path, 'barrel-1')
+    building_set.compose('city-1', ['roofs-1', 'barrel-1'])
+    live = tmp_path / 'content'
+    (live / 'bakeoff').mkdir(parents=True)
+    (live / 'materials').mkdir()
+    (live / 'materials/old.dds').write_bytes(b'old')
+    record = building_set.enable('city-1')
+    assert record['set'] == 'city-1' and record['materials'] == 3 and record['meshes'] == 1
+    assert record['parts']['roofs-1'] == ['ROOF_01.TGA']
+    assert not (live / 'materials/old.dds').exists() and (live / 'bakeoff').is_dir()
+    assert (live / 'meshes/barrel-1/model.glb').read_bytes() == b'glb barrel-1'
+    assert json.loads((live / 'enabled.json').read_text())['set'] == 'city-1'
+    assert not (live / '.enable').exists()
+    building_set.enable('roofs-1')                       # a set without meshes takes the old ones away
+    assert not (live / 'meshes').exists() and (live / 'materials/roofs-1-roof-01/albedo.dds').is_file()
+    with pytest.raises(ValueError, match='no materials'):
+        building_set.enable('missing')
 
 
 def test_crop_band_drops_grey_margins():

@@ -122,7 +122,11 @@ description: Remaster pipeline for Gothic content — rebuild a building, a set 
 3. `R backup <ассет>` — rsync на dev-ubuntu и сверка SHA.
 4. `R check <ассет> --stage done`.
 5. Отчёт ассета — `reports/content/remaster/<ассет>/README.md`.
-6. Включение в рабочий контент — только по слову пользователя (`--gate enable`).
+6. Включение в рабочий контент — только по слову пользователя (`--gate enable`). Порядок:
+   - `B compose working-<n> <наборы ассетов и предметов>` — номер новый, прежний набор не трогается;
+   - `B enable working-<n>` — копия в `~/.local/share/gothic-ai/content`, состав пишется в `enabled.json`.
+
+   Перед `enable` проверь `pgrep -fl Gothic2Notr`: игра не должна идти. На Ryzen каталог по умолчанию не заполняй: без `OPENGOTHIC_CONTENT` его возьмут бенчи и e2e других сессий.
 
 ## Рецензент
 
