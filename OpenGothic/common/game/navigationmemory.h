@@ -84,6 +84,9 @@ class NavigationMemory final {
     void reset();
     // Bench comparison with v3 decay; the representation and classifier stay v4.
     void setJourneyMemory(bool enabled) { journeyMemory = enabled; }
+    bool journeyMemoryEnabled() const { return journeyMemory; }
+    bool familiarMapEnabled() const { return familiarMap && !familiarMask.empty(); }
+    uint32_t representationVersion() const { return journeyMemory || familiarMapEnabled() ? RepresentationVersion : 3; }
     // The map outlives this memory. Empty mask means no familiar knowledge.
     void setFamiliarMap(const FamiliarMap* map, FamiliarMask mask);
     // Call for every body tick, including ticks without new eye observations.

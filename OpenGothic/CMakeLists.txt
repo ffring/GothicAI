@@ -304,7 +304,7 @@ endif()
 # Asset-free contracts; run explicitly with their check-* targets.
 if(NOT ANDROID AND NOT IOS)
   add_executable(gothic-navpolicy-contract EXCLUDE_FROM_ALL
-    tests/navpolicy_contract.cpp common/navpolicy.cpp)
+    tests/navpolicy_contract.cpp common/navpolicy.cpp common/game/navigationmemory.cpp)
   target_include_directories(gothic-navpolicy-contract PRIVATE
     common lib/Tempest/Engine/include lib/Tempest/Engine
     lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)

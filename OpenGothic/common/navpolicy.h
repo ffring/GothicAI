@@ -51,6 +51,10 @@ class NavPolicy final {
     size_t hiddenSize() const { return hidden; }
     size_t vectorInputSize() const { return vectorEncoder.inputs; }
     uint32_t navDemoVersion() const { return demoVersion; }
+    uint32_t navigationMemoryVersion() const { return memoryVersion; }
+    // Legacy weights omit the memory version and retain v3 decay. An explicit
+    // experiment override uses OPENGOTHIC_NAV_JOURNEY_MEMORY's 0/1 values.
+    void configureMemory(NavigationMemory& memory, const char* journeyOverride = nullptr) const;
     uint32_t weightVersion() const { return formatVersion; }
     size_t actionHeadCount() const { return formatVersion==2 ? bc3HeadNames.size() : headNames.size(); }
     const char* headName(size_t index) const { return formatVersion==2 ? bc3HeadNames.at(index) : headNames.at(index); }
@@ -72,6 +76,7 @@ class NavPolicy final {
     size_t hidden = 0;
     uint32_t formatVersion = 1;
     uint32_t demoVersion = 1;
+    uint32_t memoryVersion = 3;
     std::array<double,headCount> temperatures = {1,1,1,1,1,1};
     MapEncoder nearEncoder, farEncoder;
     Linear vectorEncoder, fusion, gruInput, gruHidden;
