@@ -39,6 +39,7 @@ from .deals import deal_debt as deal_debt
 from .deals import deal_demo as deal_demo
 from .deals import deal_window as deal_window
 from .deals import haggle as haggle
+from .deals import xardas_money as xardas_money
 from .frame import frame as frame
 from .gate import gate_scenario as gate_scenario
 from .gate import gate_vouch_scenario as gate_vouch_scenario
@@ -82,11 +83,14 @@ from .story import book_requires as book_requires
 from .story import book_stages as book_stages
 from .story import cast_character as cast_character
 from .story import cast_person as cast_person
+from .story import death_load as death_load
 from .story import director_casts as director_casts
 from .story import graph_dialogs as graph_dialogs
 from .story import graph_programs as graph_programs
+from .story import own_amend as own_amend
 from .story import own_repair as own_repair
 from .story import own_symbols as own_symbols
 from .story import repair_after_death as repair_after_death
 from .story import story_triggers as story_triggers
 from .trace_crime import trace_crime as trace_crime
+from .walks import check_walk as check_walk

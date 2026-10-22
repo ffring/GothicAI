@@ -605,9 +605,11 @@ class Npc final {
 
     bool      isAiQueueEmpty() const;
     bool      isAiBusy() const;
+    size_t    aiQueueSize() const { return aiQueue.size(); }
     void      clearAiQueue();
 
     auto      currentWayPoint() const -> const WayPoint* { return currentFp; }
+    auto      currentGoToPoint() const -> const WayPoint* { return go2.wp; }
     auto      currentTaPoint() const -> const WayPoint*;
     void      attachToPoint(const WayPoint* p);
     GoToHint  moveHint() const { return go2.flag; }

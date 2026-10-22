@@ -16,6 +16,7 @@ PR, который добавляет фичу или выключатель, д
 | Тайник пирата Грега и добавочные награды ванильных квестов один раз на ветку; награда известна до выдачи, одежда проверяется по `when` выбора | тайник — удалить запись из таблицы; ванильные поручения — `--no-director` | `contracts.py`, `vanilla.py`, `questlog.py`, `gamedata/stash.json`, `gamedata/quest_rewards.json` | `test_contracts.py`, `test_vanilla.py`; e2e `greg` | [contracts.md](contracts.md), [story-graph.md](story-graph.md) |
 | Голос героя: push-to-talk, текст на лету, Inworld STT и подсказки имён | `--no-voice` | `voice.py`, `asr-service/` | тесты `asr-service/`; e2e `m3`, `m5e` | [protocol.md](protocol.md#голос-push-to-talk) |
 | Голос NPC: TTS, потоковая озвучка | `--no-tts` (остаются субтитры) | `tts.py`, `tts-service/` | e2e `tts`; бенч `tts-record` | [protocol.md](protocol.md#голоса-npc-tts) |
+| Текстовые вызовы инструментов отбрасываются из речи, журнала и памяти с записью в warning | нет | `dialogue.py` | `test_dialogue.py`, `test_dialogue_text.py` | [npc-agent.md](npc-agent.md#как-работает-сейчас) |
 | Запросы к Responses по своему WebSocket на NPC (кэш промпта на подписке) | `--no-websocket` | `llm/openai_responses.py` | — | — |
 | Память NPC по веткам сохранений | нет | `memory.py` | e2e `m3` | [protocol.md](protocol.md#сессии-и-память) |
 | Разговор без окна: адресата выбирает сервер | нет | `talk.py`, `turn.py` | e2e `m5e` | [npc-agent.md](npc-agent.md#живой-разговор-m5e) |
@@ -73,6 +74,7 @@ PR, который добавляет фичу или выключатель, д
 | Хроника ветки сохранения | нет | `chronicle.py` | все сценарии лжи и сюжета | [story-graph.md](story-graph.md) |
 | Ложь героя о квестах и её раскрытие | нет | `quests.py`, `trust.py` | e2e `lie` | [story-graph.md](story-graph.md) |
 | Заказчик помнит увиденные смерти целей квеста; его собственная ошибка не считается ложью героя | `--no-director` | `vanilla.py` | pytest `test_vanilla.py`; e2e `vspare`, `vgive`, `vcheck` | [story-graph.md](story-graph.md) |
+| Заказчик меняет уговор квеста: снимает пункты (`amend_quest`), отменяет поручение (`drop_quest`), засчитывает без своей платы (`pay: none`) | `--no-director` | `vanilla.py`, `questbook.py`, `quest_tools.py`, `quests.py` | pytest `test_vanilla.py`, `test_questbook.py`, `test_quests.py`; e2e `vspare`, `own_amend` | [story-graph.md](story-graph.md#шестая-итерация-квест-решается-любым-путём--проект-2026-10-21) |
 | Проверка слов через свидетеля | нет | `witnesses.py` | e2e `witness` | [npc-tools.md](npc-tools.md#сделано-свидетель) |
 | Расследование и подстава: показания о NPC, вера пострадавшего, возврат по вере и раскрытие ложного обвинения | `--no-npc-crimes` или `--no-crimes` | `blame.py`, `witnesses.py`, `npc_will.py`, `npc_far.py`, `people_knowledge.py`, `amends.py`, `crime_meet.py` | `frame` на сохранении 1, `LLM=fake`: три подряд по 43/43; pytest Ryzen 2981 passed / 14 skipped, целевые 70 passed; шесть соседей 187/187; живой ответ Лобарта — отказ верить без доказательств; Ruff чистый | [npc-wave3.md](npc-wave3.md#как-работает-сейчас) |
 | Прикрытие героя свидетелем: сделка, страх, раскрытие | `--no-cover` или `--no-crimes` | `deals.py`, `witnesses.py`, `crimes.py` | e2e `cover`; pytest `test_cover.py`, `test_deals.py` | [npc-wave3.md](npc-wave3.md#как-работает-сейчас) |
@@ -97,6 +99,7 @@ PR, который добавляет фичу или выключатель, д
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
 | Сделки: окно, торг, долги | нет | `deals.py` | e2e `deal`, `debt`, `haggle` (живой); бенч `deal` | [npc-tools.md](npc-tools.md#сделки) |
+| Помощь Ксардаса деньгами по просьбе: до 50 даром за ветку, до 200 неоплаченного долга | удалить запись NPC из таблицы `purse` в `gamedata/stash.json`, как у тайника | `purse.py`, `deals.py`, `gamedata/stash.json` | `test_purse.py`; e2e `xardas_money` (`LLM=fake`; живой режим — вручную) | [contracts.md](contracts.md#как-работает-сейчас) |
 | Опыт, обучение, платные задания, тайник | нет | `contracts.py`, `gamedata/stash.json` | e2e `contract` | [contracts.md](contracts.md) |
 | Сундуки NPC | `--no-chests` | `chests.py`; мост — `ai_bridge/npcchests*` | e2e `chests`, `chests_lobart` | [npc-tools.md](npc-tools.md#сундуки) |
 | Проводник: отвести героя | `--no-lead` | `guide.py` | e2e `lead` | [npc-tools.md](npc-tools.md#сделано-проводник) |

@@ -18,6 +18,7 @@ from ..game import GameError, GameLink
 from ..incidents import IncidentDesk
 from ..llm import ToolCall
 from ..llm.fake import FakeBackend, FakeStep
+from ..parley import Parley
 from ..perception import BEASTS, PerceptionDesk
 from ..persona import PersonaProvider
 from ..protocol import (
@@ -1233,7 +1234,9 @@ async def orders_scenario(
     if not ok or stood < 7.5:
         await diagnose("halt_failed")
 
-    ok, took = await order("За мной!", "follow")
+    ok, took = await order(
+        "Ну, ты, если что, не туда идешь, ты в стену куда-то идешь. Иди за мной.", "follow"
+    )
     closer = await _until(lambda: 0 <= dist() <= stood - 2, 15)
     results["follow"] = f"{'done' if ok and closer else 'failed'} (in {took}; {stood:.1f} -> {dist():.1f} m)"
     if not ok or not closer:
@@ -1936,6 +1939,7 @@ async def companion_scenario(
     link: GameLink,
     dialogue: DialogueManager,
     talk: TalkDesk,
+    parley: Parley,
     npc: str = "BAU_4300_ADDON_CAVALORN",
     bandit: str = "BDT_1013_BANDIT_L",
     cave: tuple[str, ...] = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
@@ -1948,7 +1952,8 @@ async def companion_scenario(
     - freed: the bandit at the steps does not start his scripted "Where are you going?" (story.FREED);
     - go_to: told to go into the cave first, it walks into the bandits' cave and waits there; the freed
       bandits in it do not fall on it;
-    - attack: the bandit's own model decides to attack the hero (scripted): the scripts' attack;
+    - attack: the bandit's model sets a 30-second ultimatum, then attacks through the scripts after
+      the hero's personal reply; the scenario waits for the active ultimatum before replying;
     - defend: the companion, told «Погоди.» 20 m off (an order now: 2026-10-14 the model took it for «I
       no longer need you», and Cavalorn stood by while the bandits beat the hero 20 m from him), fights
       him at once, with no order, and follows the hero again after;
@@ -1966,14 +1971,17 @@ async def companion_scenario(
     def check(name: str, ok: bool, detail: object = "") -> None:
         results[name] = f"{'done' if ok else 'failed'}{f' ({detail})' if detail != '' else ''}"
 
-    calls: list[tuple[float, str, str, dict[str, Any]]] = []  # (sent, action, status, args)
+    sent: list[tuple[float, str]] = []
+    calls: list[tuple[float, str, str, dict[str, Any], float]] = []  # (sent, action, status, args, completed)
     act = link.act
 
     async def recorded(who: str, action: Any, /, **kw: Any) -> Any:
         t = time.monotonic()
+        if who.upper() == npc:
+            sent.append((t, action))
         res = await act(who, action, **kw)
         if who.upper() == npc:
-            calls.append((t, action, res.status, kw))
+            calls.append((t, action, res.status, kw, time.monotonic()))
         return res
 
     link.act = recorded  # type: ignore[method-assign]
@@ -1999,8 +2007,16 @@ async def companion_scenario(
                 ],
                 FakeStep("Держись, я с тобой!"),
             ),
-            "Бандит": FakeBackend(
-                script=[FakeStep("Ну всё, сам напросился!", [ToolCall("set_intent", fight)])], delay=0
+            "Бандит": _OnWords(
+                [
+                    ("отойди с дороги", FakeStep("Это ты мне? Сто золотых за проход — или проваливай.", [
+                        ToolCall("ultimatum", {
+                            "demand": "Заплати сто золотых за проход или уходи", "seconds": 30,
+                        }),
+                    ])),
+                    ("Сам проваливай.", FakeStep("Ну всё, сам напросился!", [ToolCall("set_intent", fight)])),
+                ],
+                FakeStep("Хм."),
             ),
         },
         FakeBackend("Хм.", delay=0),
@@ -2009,7 +2025,7 @@ async def companion_scenario(
     def dist(who: str = npc) -> float:
         return talk.people[who].distance / 100 if who in talk.people else -1.0
 
-    def since(t0: float, action: str) -> list[tuple[float, str, str, dict[str, Any]]]:
+    def since(t0: float, action: str) -> list[tuple[float, str, str, dict[str, Any], float]]:
         return [c for c in calls if c[0] >= t0 and c[1] == action]
 
     try:
@@ -2052,15 +2068,19 @@ async def companion_scenario(
     await _until(lambda: 0 <= dist() <= 6, 30)  # it has caught up from its fire: it hears its name
     t0 = time.monotonic()
     talk.hear("Кавалорн, иди в пещеру первым.", None, {"via": "scenario"})
-    walked = await _until(lambda: since(t0, "go_to_waypoint"), 20)
+    walked = await _until(lambda: any(t >= t0 and action == "go_to_waypoint" for t, action in sent), 20)
     arrived = await _until(lambda: any(c[2] == "done" for c in since(t0, "go_to_waypoint")), 100)
     walk = since(t0, "go_to_waypoint")
+    first_done = next((c for c in walk if c[2] == "done"), None)
+    done_detail = f"first done after {first_done[4] - t0:.1f} s" if first_done else "no done"
     snap = await link.snapshot(npc, fresh=True)
     standing = talk.orders.standing.get(npc) if talk.orders else None
     check(
         "go_to",
         walked and arrived and standing is not None and standing.kind == "go",
-        f"{walk[-1][2] if walk else 'not sent'}, at {snap.npc.waypoint or snap.npc.nearest_waypoint}",
+        f"{walk[-1][2] if walk else 'not sent'}, {done_detail}, "
+        f"standing {standing.kind if standing is not None else 'none'}, "
+        f"at {snap.npc.waypoint or snap.npc.nearest_waypoint}",
     )
     # it looks around in there before it says what it found
     told = await _until(
@@ -2128,8 +2148,16 @@ async def companion_scenario(
     await _until(lambda: 0 <= dist(bandit) <= 5 and dist() >= 12, 15)
     far = dist()
     exp = await link.evaluate(["field", hero, "EXP"])
-    t0 = time.monotonic()
     talk.hear("Эй, ты! А ну отойди с дороги.", bandit, {"via": "scenario"})
+    required = await _until(lambda: bool(
+        (ultimatum := parley.ultimatum(bandit)) and ultimatum.get("status") == "active"
+    ), 20)
+    if not required:
+        check("attack", False, "no active ultimatum")
+        link.act = act  # type: ignore[method-assign]
+        return _logged(results)
+    t0 = time.monotonic()
+    talk.hear("Сам проваливай.", bandit, {"via": "scenario"})
     attacked = await _until(lambda: any(e["kind"] == "attack" for e in entries), 20)
     check("attack", attacked, "the scripts' attack" if attacked else "no attack")
     defended = await _until(
@@ -2158,12 +2186,14 @@ async def calm_scenario(
     link: GameLink,
     dialogue: DialogueManager,
     talk: TalkDesk,
+    parley: Parley,
     bandit: str = "BDT_1013_BANDIT_L",
     gang: tuple[str, ...] = ("BDT_1014_BANDIT_L", "BDT_1015_BANDIT_L"),
 ) -> dict[str, str]:
     """Talking an attacker down (the user, 2026-10-14: attacked by a bandit, he spoke to him and was told
-    nobody heard; he wants to calm one with words). The bandit at the steps decides to attack the hero (its
-    model scripted); the hero, looking at no one, says «Воу, воу, ты чего? Спокуха!». Checks:
+    nobody heard; he wants to calm one with words). The bandit at the steps sets a 30-second ultimatum
+    (its model scripted); after the scenario confirms it is active, the hero replies to him personally
+    and the bandit attacks. The hero, looking at no one, says «Воу, воу, ты чего? Спокуха!». Checks:
     - attack: the scripts' attack, the bandit in ZS_ATTACK;
     - addressed: the words go to whoever is at the hero, though not in his focus;
     - calm: its model calls the fight off (scripted) and the effect `calm` goes to the game;
@@ -2192,7 +2222,12 @@ async def calm_scenario(
         {
             "Бандит": _OnWords(
                 [
-                    ("отойди", FakeStep("Ну всё, сам напросился!", [ToolCall("set_intent", fight)])),
+                    ("отойди с дороги", FakeStep("Это ты мне? Сто золотых за проход — или проваливай.", [
+                        ToolCall("ultimatum", {
+                            "demand": "Заплати сто золотых за проход или уходи", "seconds": 30,
+                        }),
+                    ])),
+                    ("Сам проваливай.", FakeStep("Ну всё, сам напросился!", [ToolCall("set_intent", fight)])),
                     ("спокуха", FakeStep("Ладно, ладно. Живи пока.", [ToolCall("set_intent", calm)])),
                 ],
                 FakeStep("Хм."),
@@ -2223,6 +2258,13 @@ async def calm_scenario(
         return _logged({"near": f"failed ({bandit} is not near the hero)"})
 
     talk.hear("Эй, ты! А ну отойди с дороги.", bandit, {"via": "scenario"})
+    required = await _until(lambda: bool(
+        (ultimatum := parley.ultimatum(bandit)) and ultimatum.get("status") == "active"
+    ), 20)
+    if not required:
+        check("attack", False, "no active ultimatum")
+        return _logged(results)
+    talk.hear("Сам проваливай.", bandit, {"via": "scenario"})
     attacked = await _until(
         lambda: any(e["kind"] == "attack" for e in entries) and state() == "ZS_ATTACK", 20
     )
