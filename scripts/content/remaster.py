@@ -507,6 +507,8 @@ def cmd_decide(args) -> int:
     manifest = load_manifest(args.asset)
     entry = dict(gate=args.gate, verdict=args.verdict, by=args.by, date=args.date or today(), quote=args.quote,
                  note=args.note)
+    if args.gate == 'enable':                # the set that goes into the working content: later builds don't move it
+        entry['set'] = args.set or (manifest.get('build') or {}).get('set')
     manifest['gates'].append(entry)
     save_manifest(args.asset, manifest)
     line = f"\n**{entry['date']} — {args.gate}: {args.verdict}** ({args.by}). «{args.quote}»"
@@ -628,8 +630,11 @@ def queue_status(manifest: dict) -> str:
         status, after = 'начат', 0
     else:
         status, after = GATE_PASSED[approved[-1]], GATES.index(approved[-1]) + 1
-        if approved[-1] == 'enable' and manifest.get('build'):
-            status += f", набор {manifest['build']['set']}"
+        if approved[-1] == 'enable':
+            enabled = [gate for gate in manifest['gates'] if gate['gate'] == 'enable'][-1]
+            name = enabled.get('set') or (manifest.get('build') or {}).get('set')
+            if name:
+                status += f", набор {name}"
     for gate in GATES[after:]:
         if latest.get(gate) in ('changes', 'rejected'):
             status += f"; {GATE_NAMES[gate]} — {'правки' if latest[gate] == 'changes' else 'отклонено'}"
@@ -760,6 +765,7 @@ def main(argv=None) -> int:
     p.add_argument('--verdict', required=True, choices=GATE_VERDICTS)
     p.add_argument('--quote', required=True); p.add_argument('--note'); p.add_argument('--date')
     p.add_argument('--by', default='user')
+    p.add_argument('--set', help='enable: the set enabled (default: the last built set)')
     p.set_defaults(func=cmd_decide)
     p = sub.add_parser('check'); p.add_argument('asset'); p.add_argument('--stage', required=True, choices=STAGES)
     p.set_defaults(func=cmd_check)

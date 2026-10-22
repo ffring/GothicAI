@@ -51,8 +51,8 @@ GAP = (.008, .004)                   # half the gap: mean and spread, metres (1.
 RAILS = (.14, .63)                   # v of the rails behind the boards: the nails
 NAIL = (.007, .0022)                # nail head radius and dome height, metres
 GROUND = .84                         # v where the soil splashed over the boards' feet begins
-BOARD_STYLE = dict(adze=None, grain=(.0009, (.003, .009)), pits=((.006, .06), .003, .07, .12),
-                   arris=(.018, .010), cup=.004)
+BOARD_STYLE = dict(adze=None, grain=(.0018, (.003, .009)), pits=((.006, .06), .006, .08, .12),
+                   arris=(.030, .016), cup=.010)   # split boards: cupped a centimetre, edges well rounded
 # The window of HOLZWAND_02 as (u0, u1, v0, v1): a head and a sill across, two jambs, the opening
 # between them closed from inside by a shutter of upright boards.
 HEAD = (.345, .627, .283, .310)
@@ -67,12 +67,12 @@ SHUTTER_BOARDS = 6
 # Lower edges of the eight rows (v), the u of the butt joints in the row above each edge.
 ROWS = [(.156, [.59]), (.262, [.59]), (.385, []), (.535, [.59]), (.638, [.59]), (.765, [.435]), (.858, []),
         (.955, [.545])]
-LAP = (.042, .006, .05)              # a board's height over the one below at its lower edge, at its top; overlap
+LAP = (.055, .008, .05)              # a board's height over the one below at its lower edge, at its top; overlap
 EDGE_WAVE = (.035, (3., 1.5))    # the waney lower edge sweeps: amplitude in metres, wavelengths across
 EDGE_BITES = (2, (.008, .025), (.5, 1.2))   # and dips where the log was narrower: count, depth, length
-WANE = (.035, .010)                  # the rounded waney edge: width, drop
+WANE = (.050, .016)                  # the rounded waney edge: width, drop
 JOINT_GAP = .004
-GABLE_STYLE = dict(adze=None, grain=(.0006, (.004, .012)), pits=((.006, .08), .0025, .05, .15),
+GABLE_STYLE = dict(adze=None, grain=(.0012, (.004, .012)), pits=((.006, .08), .004, .06, .15),
                    arris=(.004, .002), cup=.0)
 
 
@@ -130,7 +130,8 @@ def wall(seed: int, window: bool):
         local = gx - left[:, None]
         face = _face_along_y(rng, local, gy, np.broadcast_to(width, gx.shape), BOARD_STYLE, STEP)
         # every board sits a little differently: proud or sunk, leaning across and along
-        face += rng.normal(0, .003) + rng.normal(0, .012) * (local - width / 2) + rng.normal(0, .001) * gy
+        face += rng.normal(0, .006) + rng.normal(0, .03) * (local - width / 2) + rng.normal(0, .002) * gy \
+            + rng.normal(0, .02) * (local - width / 2) * (gy / py - .5)          # and twisted
         # knots and short checks along the grain, in the board's middle
         u_mid = ((EDGES[i] + EDGES[j] + (1 if j == 0 else 0)) / 2) % 1
         board_knots = [dict(v=float(rng.uniform(.05, .8)), u=float((u_mid + rng.normal(0, .015)) % 1),
@@ -303,11 +304,11 @@ def _linear(srgb) -> np.ndarray:
 
 
 LOOKS = {
-    'wall': dict(dark=(40, 36, 20), light=(106, 99, 78), mean=(68, 62, 43), median=61., desaturate=.6, grain=1.3,
+    'wall': dict(dark=(42, 38, 18), light=(106, 99, 78), mean=(68, 62, 43), median=61., desaturate=.6, grain=1.3,
                  streaks=((.015, .5), .5), moss=(.26, (.035, .45), (42, 56, 20)), eaves=(.07, .5), contrast=1.35,
-                 soil=((70, 64, 50), (.05, .012)), foot=((54, 64, 26), (.16, .22)), opening=(23, 22, 12), jamb=(105, 96, 78), shade=None),
-    'gable': dict(dark=(46, 43, 28), light=(112, 108, 94), mean=(71, 67, 47), median=71., desaturate=.65, grain=1.0,
-                  streaks=((.4, .015), .2), moss=(.17, (.04, .45), (46, 62, 22)), eaves=None, soil=None, contrast=1.2,
+                 soil=((70, 64, 50), (.05, .012)), shadow=((60, 50, 14), 1.), foot=((54, 64, 26), (.16, .22)), opening=(23, 22, 12), jamb=(105, 96, 78), shade=None),
+    'gable': dict(dark=(48, 45, 26), light=(112, 108, 94), mean=(71, 67, 47), median=71., desaturate=.65, grain=1.0,
+                  shadow=((60, 52, 14), 1.), weather=(.45, .75), streaks=((.4, .015), .12), moss=(.17, (.04, .45), (46, 62, 22)), eaves=None, soil=None, contrast=1.2,
                   shade=((22., 28.), .12, .95)),
 }
 LOOKS['window'] = LOOKS['wall']
@@ -338,7 +339,8 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     rel = lum / np.median(lum[wood])
     weather = np.zeros((rows, cols))
     for p in spec['pieces']:
-        weather[piece == p['id']] = rng.uniform(0, 1) ** .9
+        lo, hi = look.get('weather', (0., 1.))   # how far the boards' own weathering spreads
+        weather[piece == p['id']] = lo + (hi - lo) * rng.uniform(0, 1) ** .9
     weather += .12 * pb.noise_metres(rng, (rows, cols), period, .4)
     weather = np.clip(weather, 0, 1)
     dark, light = _linear(look['dark']), _linear(look['light'])
@@ -365,7 +367,9 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
     across, along = sizes                    # runs along the grain: down the boards, along the laps
     fx, fy = (px / across, py / along) if spec['wall'] != 'gable' else (px / along, py / across)
     field = pb.periodic_noise(rng, (rows, cols), fx, fy) + .5 * pb.noise_metres(rng, (rows, cols), period, .08)
-    field += 2.5 * shade + 1.2 * np.clip(v - .4, 0, 1)
+    field += 2.5 * shade
+    if spec['wall'] != 'gable':              # the wall's foot is wetter; the gable's rows are all alike
+        field += 1.2 * np.clip(v - .4, 0, 1)
     moss = np.clip((field - np.quantile(field[wood], 1 - share)) * .7 + .4, 0, 1) * wood
     green = _linear(moss_srgb) * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .03))[..., None]
     out = out * (1 - .75 * moss[..., None]) + green * .75 * moss[..., None]
@@ -421,6 +425,14 @@ def compose(passes: dict, spec: dict, seed: int = 0) -> dict:
         shade = pb.overhang_shade(passes['height'], py / rows, elevations, reach, softness=.002)
         out *= (1 - depth * shade)[..., None]
     out[(piece < 0) & (soil < .5)] = .002    # the dark behind the gaps, above the soil
+    # the dark of the original's wood is olive brown (sRGB B/R .39 against .78 of its light boards): the
+    # shade, the damp and the dirt take that hue, the light stays grey
+    lum_out = out @ tb.LUM
+    median = np.median(lum_out[wood])
+    olive = _linear(look['shadow'][0])
+    olive = olive / (olive @ tb.LUM)
+    w = look["shadow"][1] * np.clip(1.6 * (1 - lum_out / median), 0, 1)[..., None] * (wood | (soil > 0))[..., None]
+    out = out * (1 - w) + lum_out[..., None] * olive * w
     # the original's median light over the whole square (sRGB luminance); the gaps and the shutter keep
     # their dark
     target = (look['median'] / 255) ** 2.2
