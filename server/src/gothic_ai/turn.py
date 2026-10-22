@@ -4,6 +4,7 @@ A turn is up to `MAX_STEPS` model calls. After each step the tool calls are hand
 goes on only when the model has to see a result before it is done:
 - a read (`recall`) brought something back;
 - a check rejected a call (no such item...);
+- an accepted amendment made quest completion available in this turn;
 - the model committed to something but has not said a word in the whole turn.
 
 The last step offers the tools with `tool_choice="none"`: the request (and the provider's prompt cache)
@@ -29,10 +30,11 @@ class ToolOutcome:
 
     output: str  # what the model is told if the turn goes on
     status: OutcomeStatus
+    continue_turn: bool = False  # an accepted call opened a next action for this turn
 
     @property
     def needs_reply(self) -> bool:
-        return self.status in ("rejected", "read")
+        return self.continue_turn or self.status in ("rejected", "read")
 
 
 def tool_choice(step: int) -> ToolChoice | None:
