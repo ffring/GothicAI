@@ -86,6 +86,30 @@ void NavigationMemory::setFamiliarMap(const FamiliarMap* map, FamiliarMask mask)
     throw std::invalid_argument("familiar mask does not match the map's tile count");
   familiarMap = map;
   familiarMask = std::move(mask);
+  familiarWindow.clear();
+  refreshFamiliarWindow();
+  }
+
+void NavigationMemory::refreshFamiliarWindow() {
+  if(!familiarMap || familiarMask.empty())
+    return;
+  if(!familiarWindow.empty() && familiarMinX==farGrid.minX && familiarMinZ==farGrid.minZ)
+    return;
+  familiarMinX=farGrid.minX;
+  familiarMinZ=farGrid.minZ;
+  familiarWindow.assign(farGrid.size*farGrid.size,nullptr);
+  const auto& tiles=familiarMap->tiles;
+  for(int x=farGrid.minX; x<farGrid.minX+int(farGrid.size); ++x) {
+    auto next=std::lower_bound(tiles.begin(),tiles.end(),std::pair(x,farGrid.minZ),
+                               [](const FamiliarTile& tile,const auto& key) {
+      return std::pair(tile.x,tile.z)<key;
+      });
+    for(; next!=tiles.end() && next->x==x && next->z<farGrid.minZ+int(farGrid.size); ++next) {
+      const size_t index=size_t(next-tiles.begin());
+      if((familiarMask[index/64]&(uint64_t(1)<<(index%64)))!=0)
+        familiarWindow[ringCoordinate(next->z,farGrid.size)*farGrid.size+ringCoordinate(x,farGrid.size)]=&*next;
+      }
+    }
   }
 
 void NavigationMemory::FamiliarMap::bake(const NavigationMemory& observed, uint32_t source) {
@@ -172,6 +196,7 @@ void NavigationMemory::update(const std::vector<NavigationEye::Ray>& rays, const
     pathHistory.push_back({pose.gameMs,pathCm});
   nearGrid.center(body.position);
   farGrid.center(body.position);
+  refreshFamiliarWindow();
   if(rayStamps.size()<rays.size())
     rayStamps.resize(rays.size());
 
@@ -464,30 +489,21 @@ NavigationMemory::Cell NavigationMemory::classify(const Grid& grid, int x, int z
   return output;
   }
 
-NavigationMemory::Cell NavigationMemory::familiarCell(int x, int z, const Cell& live) const {
-  if(!familiarMap || familiarMask.empty() || live.confidence>=Constants::familiarConfidence)
-    return live;
-  const auto& tiles=familiarMap->tiles;
-  const auto next=std::lower_bound(tiles.begin(),tiles.end(),std::pair(x,z),[](const FamiliarTile& tile,const auto& key) {
-    return std::pair(tile.x,tile.z)<key;
-    });
-  if(next==tiles.end() || next->x!=x || next->z!=z)
-    return live;
-  const size_t index=size_t(next-tiles.begin());
-  if((familiarMask[index/64]&(uint64_t(1)<<(index%64)))==0)
+NavigationMemory::Cell NavigationMemory::familiarCell(const FamiliarTile& tile, const Cell& live) const {
+  if(live.confidence>=Constants::familiarConfidence)
     return live;
   // A measured support surface can disprove this tile's floor. Without one,
   // retain the same two-dimensional limitation as the live far grid.
   const float bodyHeight=std::isfinite(body.bodyHeightCm) && body.bodyHeightCm>0.f ?
                          body.bodyHeightCm : Constants::bodyHeightCm;
-  if(std::isfinite(live.groundHeightCm) && std::isfinite(next->groundHeightCm) &&
-     std::abs(live.groundHeightCm-next->groundHeightCm)>bodyHeight)
+  if(std::isfinite(live.groundHeightCm) && std::isfinite(tile.groundHeightCm) &&
+     std::abs(live.groundHeightCm-tile.groundHeightCm)>bodyHeight)
     return live;
   Cell output;
   output.confidence=Constants::familiarConfidence;
   output.familiar=1.f;
-  output.groundHeightCm=next->groundHeightCm;
-  const auto value=[&](uint8_t channel) { return (next->channels&channel)!=0 ? Constants::familiarConfidence : 0.f; };
+  output.groundHeightCm=tile.groundHeightCm;
+  const auto value=[&](uint8_t channel) { return (tile.channels&channel)!=0 ? Constants::familiarConfidence : 0.f; };
   output.free=value(FamiliarTile::Free);
   output.wall=value(FamiliarTile::Wall);
   output.ledge=value(FamiliarTile::Ledge);
@@ -504,10 +520,11 @@ void NavigationMemory::read(const Grid& grid, Layer& result) const {
   std::fill(result.cells.begin(),result.cells.end(),Cell{});
   const Vec3 right(-body.forward.z,0,body.forward.x);
   const auto limits=classificationLimits();
-  const bool hasFamiliar=&grid==&farGrid && familiarMap && !familiarMask.empty();
+  const bool hasFamiliar=&grid==&farGrid && !familiarWindow.empty();
   for(int z=grid.minZ; z<grid.minZ+int(grid.size); ++z)
     for(int x=grid.minX; x<grid.minX+int(grid.size); ++x) {
-      if(grid.at(x,z).known==0 && !hasFamiliar)
+      const auto* familiar=hasFamiliar ? familiarWindow[ringCoordinate(z,grid.size)*grid.size+ringCoordinate(x,grid.size)] : nullptr;
+      if(grid.at(x,z).known==0 && !familiar)
         continue;
       const float dx = (float(x)+.5f)*grid.cellCm-body.position.x;
       const float dz = (float(z)+.5f)*grid.cellCm-body.position.z;
@@ -516,8 +533,8 @@ void NavigationMemory::read(const Grid& grid, Layer& result) const {
       if(vx<0 || vz<0 || vx>=int(grid.size) || vz>=int(grid.size))
         continue;
       auto cell=classify(grid,x,z,limits);
-      if(hasFamiliar)
-        cell=familiarCell(x,z,cell);
+      if(familiar)
+        cell=familiarCell(*familiar,cell);
       if(cell.confidence<=0.f)
         continue;
       auto& output=result.cells[size_t(vz)*grid.size+size_t(vx)];

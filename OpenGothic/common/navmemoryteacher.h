@@ -14,6 +14,7 @@ class NavMemoryTeacher final {
     struct Cell final {
       // confidence, free, wall, ledge, drop, water, movable (NAVDEMO order).
       std::array<uint8_t,7> channels = {};
+      uint8_t familiar = 0; // NAVDEMO v3's existing eighth learner channel.
       float groundHeightCm = 0;
       uint8_t heightValid = 0;
       };
@@ -35,7 +36,7 @@ class NavMemoryTeacher final {
       float rightCm = 0, forwardCm = 0;
       };
 
-    // Production defaults are a 15-cm margin and unknown cost four. Alternate
+    // Production defaults are a 15-cm margin (75 cm at live water) and unknown cost four. Alternate
     // values are read-only probes, never parameters of decide(). Near-only plans to a
     // bounded local proxy and must not be read as reaching a distant goal.
     struct DiagnosticsOptions final {

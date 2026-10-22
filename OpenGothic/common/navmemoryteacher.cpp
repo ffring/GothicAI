@@ -19,21 +19,34 @@ constexpr int NearSize = 64, FarSize = 100;
 constexpr int NearCount = NearSize*NearSize, Count = NearCount+FarSize*FarSize;
 constexpr float NearCell = 25, FarCell = 200, NearExtent = 800;
 constexpr float Infinity = std::numeric_limits<float>::infinity();
+constexpr float WaterMarginCm = 75.f;
 
 float length(Point p) { return std::hypot(p.rightCm,p.forwardCm); }
 float distance(Point a,Point b) { return length({a.rightCm-b.rightCm,a.forwardCm-b.forwardCm}); }
 float sign(float v) { return v<0 ? -1.f : 1.f; }
-bool dangerous(const Cell& c) {
-  // Even faded evidence remains an obstacle until the learner's own memory
-  // quantizes it to zero. Confidence/free never erase a dangerous channel.
-  for(size_t k=2;k<c.channels.size();++k)
+bool familiarDanger(const Cell& c) {
+  for(size_t k=2;k<6;++k)
     if(c.channels[k]!=0) return true;
   return false;
   }
+bool dangerous(const Cell& c) {
+  // Movable evidence is always live, including when the static map is familiar.
+  // Live static danger retains its hard veto even after confidence has faded.
+  return c.channels[6]!=0 || (c.familiar==0 && familiarDanger(c));
+  }
+bool liveWater(const Cell& c) { return c.familiar==0 && c.channels[5]!=0; }
 bool knownFree(const Cell& c) {
-  return c.channels[0]>0 && c.channels[1]>0 && !dangerous(c);
+  return c.channels[0]>0 && c.channels[1]>0 && !familiarDanger(c) && !dangerous(c);
   }
 float cost(const Cell& c,float unknownCost) {
+  // Two-metre familiar tiles mix walls and passages. Their existing familiar
+  // channel selects a soft prior; fresh live observations have already won in
+  // memory. Initial measured candidate: familiar free 2, unknown 4, danger 6.
+  if(c.familiar!=0) {
+    if(familiarDanger(c)) return unknownCost*1.5f;
+    if(c.channels[1]!=0) return std::max(1.f,unknownCost*.5f);
+    return unknownCost;
+    }
   // Optimism: an unobserved cell costs four times clear observed ground,
   // rather than becoming an artificial wall at the edge of perception.
   const float knownFree=float(std::min(c.channels[0],c.channels[1]))/255.f;
@@ -59,11 +72,16 @@ class Grid final {
     explicit Grid(const Input& input):Grid(input,DiagnosticsOptions{}) {}
     Grid(const Input& input,const DiagnosticsOptions& parameters)
       :in(input),options(parameters),blocked(Count),active(Count),costs(Count) {
+      waterLayers={std::any_of(in.near.begin(),in.near.end(),liveWater),
+                   std::any_of(in.far.begin(),in.far.end(),liveWater)};
       // Only already occupied near cells touching the current body footprint
       // lose their inflation. Their raw square remains blocked. The exemption
       // cannot propagate to the rest of a wall or to far coarse cells.
       for(int i=0;i<NearCount;++i) {
         if(!dangerous(cell(in,i))) continue;
+        // Water must never use the occupied-start exemption to step deeper
+        // through adjacent wet cells. Stop before entering its safety margin.
+        if(liveWater(cell(in,i))) continue;
         const Point p=center(i);
         const float dx=std::max(0.f,std::abs(p.rightCm)-NearCell*.5f);
         const float dz=std::max(0.f,std::abs(p.forwardCm)-NearCell*.5f);
@@ -108,10 +126,12 @@ class Grid final {
         if(!near && options.nearOnly) return true;
         const int size=near ? NearSize : FarSize;
         const float step=near ? NearCell : FarCell;
-        const int x0=std::max(0,int(std::floor((p.rightCm-radius)/step+float(size)*.5f)));
-        const int x1=std::min(size-1,int(std::floor((p.rightCm+radius)/step+float(size)*.5f)));
-        const int z0=std::max(0,int(std::floor((p.forwardCm-radius)/step+float(size)*.5f)));
-        const int z1=std::min(size-1,int(std::floor((p.forwardCm+radius)/step+float(size)*.5f)));
+        const bool waterMargin=radius>0 && waterLayers[near ? 0 : 1];
+        const float searchRadius=waterMargin ? std::max(radius,WaterMarginCm) : radius;
+        const int x0=std::max(0,int(std::floor((p.rightCm-searchRadius)/step+float(size)*.5f)));
+        const int x1=std::min(size-1,int(std::floor((p.rightCm+searchRadius)/step+float(size)*.5f)));
+        const int z0=std::max(0,int(std::floor((p.forwardCm-searchRadius)/step+float(size)*.5f)));
+        const int z1=std::min(size-1,int(std::floor((p.forwardCm+searchRadius)/step+float(size)*.5f)));
         for(int z=z0;z<=z1;++z)for(int x=x0;x<=x1;++x) {
           const int index=z*size+x+(near ? 0 : NearCount);
           const Point q=center(index);
@@ -128,7 +148,8 @@ class Grid final {
             }
           const float dx=std::max(0.f,std::abs(p.rightCm-q.rightCm)-step*.5f);
           const float dz=std::max(0.f,std::abs(p.forwardCm-q.forwardCm)-step*.5f);
-          if(dx*dx+dz*dz<=radius*radius) return false;
+          const float margin=waterMargin && liveWater(evidence) ? std::max(radius,WaterMarginCm) : radius;
+          if(dx*dx+dz*dz<=margin*margin) return false;
           }
         return true;
         };
@@ -203,6 +224,7 @@ class Grid final {
   private:
     const Input& in;
     const DiagnosticsOptions options;
+    std::array<bool,2> waterLayers = {};
     std::array<uint8_t,NearCount> bodyOverlap = {};
     uint32_t overlapCount = 0;
     std::vector<uint8_t> blocked,active;
@@ -306,6 +328,9 @@ void quantize(const NavigationMemory::Layer& from,size_t size,float step,NavMemo
         throw std::runtime_error("memory teacher: invalid learner memory channel");
       out[i].channels[k]=uint8_t(std::lround(channels[k]*255.f));
       }
+    if(!std::isfinite(c.familiar) || c.familiar<0 || c.familiar>1)
+      throw std::runtime_error("memory teacher: invalid learner familiarity");
+    out[i].familiar=uint8_t(std::lround(c.familiar*255.f));
     if(!std::isfinite(c.groundHeightCm) && !std::isnan(c.groundHeightCm))
       throw std::runtime_error("memory teacher: infinite learner memory height");
     out[i].heightValid=std::isfinite(c.groundHeightCm);
