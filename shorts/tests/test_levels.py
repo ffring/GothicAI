@@ -1110,6 +1110,7 @@ def test_unvoiced_master_keeps_original_two_pass_filters(tmp_path, monkeypatch, 
     render = Mock()
     monkeypatch.setattr(comparison_cut.subprocess, "run", probe)
     monkeypatch.setattr(comparison_cut, "run", render)
+    monkeypatch.setattr(levels, "dual_mono_peak", lambda _path: -91.0)
     comparison_cut.master(["-i", "joined.mp4"], "[0:a]anull", tmp_path / "short.mp4", 12)
     graph = render.call_args.args[0][render.call_args.args[0].index("-filter_complex") + 1]
     assert graph == (
@@ -1323,8 +1324,8 @@ def test_mastering_rejects_a_true_peak_hidden_by_the_rounded_summary(
         pytest.skip("ffmpeg is required for synthetic mastering")
     # AAC at 192k reproduces the earlier limiter's overshoot on every platform.
     # The current limiter uses the production 256k fallback, which must also preserve dual mono.
-    bitrate = "192k" if unsafe_limit else "256k"
-    monkeypatch.setattr(levels, "aac_encoder", lambda: ("-c:a", "aac", "-b:a", bitrate))
+    encoder = ("-c:a", "aac", "-b:a", "192k") if unsafe_limit else levels.AAC_FALLBACK
+    monkeypatch.setattr(levels, "aac_encoder", lambda: encoder)
     if unsafe_limit:
         monkeypatch.setattr(levels, "PEAK_LIMIT", 0.79)
     else:
@@ -2000,23 +2001,37 @@ def test_publish_balanced_synthetic_video_writes_the_final_report(
     assert all(track in output for track in ("voice", "music_pause", "game_speech", "true_peak", "clicks"))
 
 
-@pytest.mark.parametrize("encoder", [None, ("-c:a", "aac", "-b:a", "256k")],
+@pytest.mark.parametrize("encoder", [None, levels.AAC_FALLBACK],
                          ids=["platform-aac", "ffmpeg-aac-256k"])
+@pytest.mark.parametrize("sound", ["tones", "pink-noise"])
 def test_publish_folds_panned_game_stereo_music_and_mono_voice(
-    tmp_path, publication_inputs, monkeypatch, encoder,
+    tmp_path, publication_inputs, monkeypatch, encoder, sound,
 ):
     if encoder is not None:
         monkeypatch.setattr(levels, "aac_encoder", lambda: encoder)
     source, _music, voice, speech, total, length = publication_inputs
     joined, music, out = (tmp_path / name for name in ("panned.mkv", "stereo.wav", "short.mp4"))
+    inputs = ["-i", str(source)]
+    game_channel = "0:a"
+    game_filters = "pan=stereo|c0=c0|c1=0*c0"
+    music_source = "aevalsrc='0.05*sin(2*PI*220*t)|0.08*sin(2*PI*330*t)':s=48000:d=12:c=stereo"
+    if sound == "pink-noise":
+        inputs += ["-f", "lavfi", "-i", f"anoisesrc=d={length}:c=pink:a=0.02:s=48000:seed=42"]
+        game_channel = "1:a"
+        game_filters += f",afade=t=in:d=0.06,afade=t=out:st={length - 0.06}:d=0.06"
+        music_source = (
+            "anoisesrc=d=12:c=pink:a=0.05:s=48000:seed=43[l];"
+            "anoisesrc=d=12:c=pink:a=0.08:s=48000:seed=44[r];[l][r]amerge=inputs=2"
+        )
     subprocess.run(
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(source), "-af",
-         "pan=stereo|c0=c0|c1=0*c0", "-c:v", "copy", "-c:a", "pcm_f32le", str(joined)],
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", *inputs,
+         "-map", "0:v", "-map", game_channel, "-af", game_filters,
+         "-c:v", "copy", "-c:a", "pcm_f32le", str(joined)],
         check=True, capture_output=True,
     )
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
-         "aevalsrc='0.05*sin(2*PI*220*t)|0.08*sin(2*PI*330*t)':s=48000:d=12:c=stereo",
+         music_source,
          "-c:a", "pcm_f32le", str(music)], check=True, capture_output=True,
     )
     report = levels.publish(joined, music, voice, speech, total, length, out)

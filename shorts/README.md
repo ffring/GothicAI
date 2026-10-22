@@ -19,6 +19,8 @@ is cut on the same timeline as the picture and effects. `levels.publish` calibra
 and ending against that voice, masters it to −14 LUFS, and checks the decoded AAC (true peak and clicks
 included). All stems are averaged to dual mono before levelling and loudness measurements, keeping a
 stereo layout. Published AAC has two identical channels; the `dual_mono` gate requires max L−R ≤ −90 dBFS.
+AAC uses AudioToolbox where available; the FFmpeg fallback uses 256k with PNS and intensity stereo
+disabled and M/S forced to keep noisy audio in dual mono.
 It prints the levels table and writes `short-<lang>.levels.json`; a failed check leaves no
 published MP4. Old takes without NPC stems or verified `musicVolume=0` and `worldSounds=0` must be filmed again. `--lang en`
 changes the captions and keeps the same sound.
@@ -187,7 +189,9 @@ or the visual model bounds of an item or intact prop; it marks departures from t
 - `cut.py` stacks each beat, grades both halves the same (a little brighter), takes the sound of the "on"
   take (with the bed under it), folds each stem to dual mono before levelling, limits the peaks and brings
   it to -14 LUFS by one gain (loudnorm in two passes,
-  linear: one pass lifts the quiet stretches), fading out over the last 80 ms.
+  linear: one pass lifts the quiet stretches), fading out over the last 80 ms. Parts and the sting use
+  the same AAC encoder at 48 kHz stereo. The unvoiced master also checks decoded AAC with `dual_mono`
+  and removes the output if L−R exceeds −90 dBFS.
 
 ### The brand: the end sting
 
@@ -420,4 +424,6 @@ channel but the project's (GothicAI, `UCbeAoPh3V7yFVpiuWNI-wkw`; `--channel` or 
 
 - 2026-10-22: fold audio stems to dual mono before levelling and measurements; publish identical AAC
   channels and reject voiced publication when the decoded `dual_mono` gate exceeds −90 dBFS L−R.
+- 2026-10-22: disable PNS and intensity stereo and force M/S in the 256k AAC fallback; use the shared
+  encoder for comparison parts and stings, and check unvoiced comparison AAC with `dual_mono`.
 

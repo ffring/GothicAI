@@ -20,6 +20,7 @@ from gothic_shorts import clicks
 
 DUAL_MONO = "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1"
 DUAL_MONO_MAX_DIFF_DB = -90.0
+AAC_FALLBACK = ("-c:a", "aac", "-b:a", "256k", "-aac_pns", "0", "-aac_is", "0", "-aac_ms", "1")
 BASE_LUFS = -14.0
 TRUE_PEAK_DBTP = -1.0
 # R128 prints linear peaks to 0.001. Scale by a power of two before metering,
@@ -450,14 +451,15 @@ def aac_encoder() -> tuple[str, ...]:
 
     ffmpeg's own encoder at 192k turned one voice transient of an AI take into a lone +0.15 dBFS
     sample, 3 dB over the limiter (-2.50 dBTP before it); at 256k, and with AudioToolbox, it stays
-    near -2.6. Popen keeps the probe out of tests that replace subprocess.run.
+    near -2.6. Disable PNS and intensity stereo and force M/S to preserve identical channels on noise.
+    Popen keeps the probe out of tests that replace subprocess.run.
     """
     with subprocess.Popen(["ffmpeg", "-hide_banner", "-encoders"], stdout=subprocess.PIPE,
                           stderr=subprocess.DEVNULL, text=True) as probe:
         listing = probe.communicate()[0]
     if re.search(r"^\s*A\S*\s+aac_at\b", listing, re.MULTILINE):
         return ("-c:a", "aac_at", "-b:a", "192k")
-    return ("-c:a", "aac", "-b:a", "256k")
+    return AAC_FALLBACK
 
 
 def meter_file(path: Path) -> tuple[float, float]:
