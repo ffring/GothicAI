@@ -1840,7 +1840,7 @@ class DialogueManager:
                 full.cancel()  # done by now, unless the turn ended before the line
 
         self._commit(conv, trigger, state.text, kind, state.to)
-        if kind == "player" and state.to is None and not state.end_requested:
+        if kind == "player" and state.to is None and not state.end_requested and not state.follow_set:
             self._repair_follow_agreement(conv, trigger.content, state.text)
         trace.close(status)
         total = time.monotonic() - state.started
@@ -2200,7 +2200,10 @@ class DialogueManager:
                 state.end_requested = True
                 return ToolOutcome("Разговор закончится, когда ты договоришь.", "accepted")
             case npc_tools.SET_INTENT:
-                return self._set_intent(conv, call, snap)
+                outcome = self._set_intent(conv, call, snap)
+                if outcome.status == "accepted" and conv.intent.goal in executor.COMPANION_GOALS:
+                    state.follow_set = True
+                return outcome
             case npc_tools.RECALL:
                 if state.recalled:
                     return ToolOutcome("Больше ничего не вспоминается.", "ignored")
@@ -2333,14 +2336,34 @@ class DialogueManager:
         if intent is None:
             return ToolOutcome(f"Отклонено: {reason}", "rejected")
         if executor.same(conv.intent, intent):
-            return ToolOutcome("Намерение не изменилось.", "accepted")
+            if (
+                intent.goal not in executor.COMPANION_GOALS
+                or snap is None
+                or snap.npc.following
+                or self.fighting(conv.npc)
+            ):
+                return ToolOutcome("Намерение не изменилось.", "accepted")
+
+            async def follow() -> tuple[str, bool]:
+                if not await self._hold(conv, "follow"):
+                    return "Тело не смогло выполнить намерение: ты занят", False
+                return await self._body(conv, [("follow", {"npc": "PLAYER"})])
+
+            self._journal_call(conv, call.name, call.arguments)
+            self._after_speech(conv, follow)
+            return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
         self._journal_call(conv, call.name, call.arguments)
         self._change_intent(conv, intent, snap)
         return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
 
     def _repair_follow_agreement(self, conv: Conversation, heard: str, reply: str) -> None:
         """Carry out a spoken commitment when the conversational model forgot its tool call."""
-        if conv.intent.goal == "follow_hero" or not follow_agreement(heard, reply, conv.persona.name):
+        if not follow_agreement(heard, reply, conv.persona.name):
+            return
+        snap = self.link.snapshots.get(conv.npc)
+        if conv.intent.goal == "follow_hero" and (
+            snap is None or snap.npc.following or self.fighting(conv.npc)
+        ):
             return
         outcome = self._set_intent(
             conv,
@@ -2353,7 +2376,7 @@ class DialogueManager:
                     "agenda": None,
                 },
             ),
-            self.link.snapshots.get(conv.npc),
+            snap,
         )
         if outcome.status == "accepted":
             self._note(conv, f"Герой позвал тебя: «{heard}» — идти за ним. Ты согласился и идёшь за героем.")
@@ -2520,6 +2543,7 @@ class TurnState:
     taken: set[str] = field(default_factory=set)  # things picked up off the ground in this turn
     relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
     recalled: bool = False  # recall is used once per turn
+    follow_set: bool = False  # the model already accepted following this turn; snapshots may lag
     filler: str = ""  # said at once (the quick model's "Хм...", "Что?!"): the answer does not repeat it
     overlay: bool = False  # said on the move (an urgent incident): the body does not stop for it
     tools: list[Tool] = field(default_factory=list)  # offered to the model in this turn

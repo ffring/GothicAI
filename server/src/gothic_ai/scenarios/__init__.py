@@ -94,3 +94,4 @@ from .story import repair_after_death as repair_after_death
 from .story import story_triggers as story_triggers
 from .trace_crime import trace_crime as trace_crime
 from .walks import check_walk as check_walk
+from .walks import follow_back as follow_back

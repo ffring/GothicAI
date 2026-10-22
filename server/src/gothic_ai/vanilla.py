@@ -1246,6 +1246,8 @@ class VanillaQuests:
         held = await self.dialogue.borrow_body(conv, "check")
         try:
             walked = await self._go(conv, target.npc, LOOK_CM) if held else "ты был занят"
+            if walked == "cancelled":
+                return "Ты не дошёл проверить: герой позвал тебя назад.", False
             if held and not walked:
                 await self._face(conv, target.npc)  # to see it, it looks that way
             if any(f.get("quest") == offer.quest for f in self.chronicle.facts("quest_outcome")):
@@ -1311,6 +1313,8 @@ class VanillaQuests:
                 res.detail,
                 res.distance,
             )
+            if res.status == "cancelled":
+                return res.status
             return "" if res.status == "done" else res.detail or res.status
         except (GameError, TimeoutError) as err:
             log.info(

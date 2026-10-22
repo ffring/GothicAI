@@ -3,7 +3,8 @@ import pytest
 from gothic_ai.dialogue import DialogueManager, follow_agreement
 from gothic_ai.executor import Intent
 from gothic_ai.journal import Journal
-from gothic_ai.llm import FakeBackend, ToolCall
+from gothic_ai.llm import FakeBackend, ToolCall, ToolResult
+from gothic_ai.llm.fake import FakeStep
 from gothic_ai.persona import PersonaProvider
 from tests.fake_game import FakeGame, connected
 from tests.test_dialogue import _until
@@ -118,6 +119,82 @@ async def test_the_models_follow_intent_is_not_applied_twice():
     assert conv.intent.goal == "follow_hero"
     assert len([m for m in fake.received if m.get("action") == "follow"]) == 1
     assert not any("Ты согласился и идёшь за героем" in m.content for m in conv.history)
+
+
+@pytest.mark.parametrize("goal", ["follow_hero", "guard_hero"])
+@pytest.mark.parametrize("body", ["walking", "following", "fighting", "unknown"])
+async def test_the_models_repeated_companion_intent_resumes_following(goal, body):
+    fake = FakeGame()
+    llm = FakeBackend(
+        script=[
+            FakeStep(tool_calls=[ToolCall("set_intent", {"goal": goal, "target": "PLAYER"})]),
+            FakeStep("Ладно, возвращаюсь."),
+        ],
+        delay=0,
+    )
+    held = []
+
+    async def take_body(npc, why):
+        held.append((npc, why))
+        return True
+
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        dialogue.take_body = take_body
+        dialogue.fighting = lambda npc: body == "fighting"
+        await link.attach(CAVALORN)
+        conv = dialogue.open(CAVALORN, "Кавалорн")
+        conv.intent = Intent(goal, "PLAYER")
+        snap = await link.snapshot(CAVALORN, fresh=True)
+        link.snapshots[CAVALORN] = snap.model_copy(update={
+            "npc": snap.npc.model_copy(update={
+                "busy": True, "action": "go_to_npc", "following": body == "following",
+            }),
+        })
+        if body == "unknown":
+            link.snapshots.pop(CAVALORN)
+
+        await dialogue.say_as_player(CAVALORN, "Хватит бродить, возвращайся ко мне")
+        await _until(lambda: not conv.actions)
+
+    follows = [m for m in fake.received if m.get("action") == "follow"]
+    assert len(follows) == (1 if body == "walking" else 0)
+    result = next(m for m in llm.calls[1][1] if isinstance(m, ToolResult))
+    if body == "walking":
+        assert follows[0]["args"] == {"npc": "PLAYER"}
+        assert held == [(CAVALORN, "follow")]
+        assert result.output.startswith("Принято:")
+    else:
+        assert held == []
+        assert result.output == "Намерение не изменилось."
+
+
+@pytest.mark.parametrize("model_sets_intent", [False, True])
+@pytest.mark.parametrize("goal", ["follow_hero", "guard_hero"])
+async def test_a_follow_agreement_recalls_a_companion_whose_body_is_walking(model_sets_intent, goal):
+    fake = FakeGame()
+    calls = [ToolCall("set_intent", {"goal": goal, "target": "PLAYER"})]
+    llm = FakeBackend(
+        "Иду, прикроешь мне спину.", delay=0, tool_calls=calls if model_sets_intent else []
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None))
+        await link.attach(CAVALORN)
+        conv = dialogue.open(CAVALORN, "Кавалорн")
+        conv.intent = Intent(goal, "PLAYER")
+        snap = await link.snapshot(CAVALORN, fresh=True)
+        link.snapshots[CAVALORN] = snap.model_copy(update={
+            "npc": snap.npc.model_copy(update={
+                "busy": True, "action": "go_to_npc", "following": False,
+            }),
+        })
+
+        await dialogue.say_as_player(CAVALORN, "Ну ты идешь, нет?")
+        await _until(lambda: not conv.actions)
+
+    assert len([m for m in fake.received if m.get("action") == "follow"]) == 1
+    notes = [m for m in conv.history if "Ты согласился и идёшь за героем" in m.content]
+    assert len(notes) == (0 if model_sets_intent else 1)
 
 
 async def test_an_event_turn_cannot_make_a_follow_agreement():
