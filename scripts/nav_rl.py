@@ -1624,7 +1624,7 @@ def main():
     parser.add_argument("--candidates-per-region", type=int, default=200)
     parser.add_argument("--npc", default="BAU_954_MALETH")
     parser.add_argument("--population", type=int, default=20)
-    parser.add_argument("--parallel", type=int, choices=(1, 4, 8), default=1)
+    parser.add_argument("--parallel", type=int, default=1)
     parser.add_argument("--episodes", type=int, help="Global episode cap; default N, or 1000000 with --run-ms")
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--action-mode", choices=("sample", "argmax"),
@@ -1641,6 +1641,8 @@ def main():
     for name in ("runner", "assets", "save", "cache", "ini", "weights"):
         parser.add_argument("--" + name, type=Path)
     args = parser.parse_args()
+    if args.parallel < 1:
+        parser.error("--parallel must be a positive integer")
     if args.action_mode is None:
         args.action_mode = "sample"
     for key, value in vars(args).items():

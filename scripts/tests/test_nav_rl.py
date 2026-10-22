@@ -269,6 +269,36 @@ def test_population_cli_allows_parallel_recording(tmp_path, monkeypatch):
     assert len(calls) == 1 and calls[0].parallel == 4 and calls[0].record
 
 
+@pytest.mark.parametrize("parallel", [None, 1, 2, 4, 8, 18, 28])
+def test_drive_cli_accepts_positive_parallel_counts(tmp_path, monkeypatch, parallel):
+    calls = []
+    monkeypatch.setattr(rl, "drive", calls.append)
+    argv = ["nav_rl.py", "drive", "--output", str(tmp_path),
+            "--pairs", str(tmp_path / "pairs.jsonl")]
+    if parallel is not None:
+        argv.extend(["--parallel", str(parallel)])
+    monkeypatch.setattr(rl.sys, "argv", argv)
+    rl.main()
+    assert len(calls) == 1
+    assert calls[0].parallel == (1 if parallel is None else parallel)
+
+
+@pytest.mark.parametrize("parallel,error", [("0", "--parallel must be a positive integer"),
+                                           ("-1", "--parallel must be a positive integer"),
+                                           ("1.5", "invalid int value")])
+def test_drive_cli_rejects_invalid_parallel_counts(tmp_path, monkeypatch, capsys, parallel, error):
+    calls = []
+    monkeypatch.setattr(rl, "drive", calls.append)
+    monkeypatch.setattr(rl.sys, "argv", ["nav_rl.py", "drive", "--output", str(tmp_path),
+                                      "--pairs", str(tmp_path / "pairs.jsonl"),
+                                      "--parallel", parallel])
+    with pytest.raises(SystemExit) as exc:
+        rl.main()
+    assert exc.value.code == 2
+    assert error in capsys.readouterr().err
+    assert not calls
+
+
 def test_drive_requires_previously_frozen_teacher_set():
     with pytest.raises(ValueError, match="frozen"):
         # Exercise the guard before any runner or weights can be loaded.
