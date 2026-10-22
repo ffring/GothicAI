@@ -368,6 +368,9 @@ def test_queue_status_follows_the_users_gates():
     assert remaster.queue_status(gates(('concept', 'approved'), ('ingame', 'approved'), ('ingame', 'changes'))) \
         == 'концепт принят; игра — правки'
     assert remaster.queue_status(gates(('concept', 'approved'), ('enable', 'approved'))) == 'включён, набор roofs-8'
+    enabled = gates(('concept', 'approved'), ('enable', 'approved'))
+    enabled['gates'][-1]['set'] = 'roofs-7'                # a later build does not move what is enabled
+    assert remaster.queue_status(enabled) == 'включён, набор roofs-7'
 
 
 def test_queue_table_matches_the_gates(capsys):

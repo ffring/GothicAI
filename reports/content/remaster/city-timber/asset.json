@@ -727,7 +727,8 @@
       "by": "user",
       "date": "2026-10-22",
       "quote": "Да, давай включать.",
-      "note": "Набор timber-7 (резьба восьмёрками) в рабочем контенте: working-2 = roofs-8 + timber-7 + barrel-wear-metal0."
+      "note": "Набор timber-7 (резьба восьмёрками) в рабочем контенте: working-2 = roofs-8 + timber-7 + barrel-wear-metal0.",
+      "set": "timber-7"
     }
   ],
   "build": {
