@@ -44,7 +44,7 @@ cmake -S "$task/hd-source/OpenGothic" -B "$task/build-hd" -G Ninja \
   -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib"
 cmake --build "$task/build-hd" --target gothic-navpolicy-contract \
   CMakeFiles/OpenGothic.dir/common/navdemos.cpp.o --parallel 3
-"$python" -B -I scripts/nav_bc_data.py prepare --source "$corpus/recordings" \
+"$python" -B -I scripts/nav_bc_data.py prepare --source "$corpus" \
   --manifest "$corpus/manifest.json" --output "$task/hd-cache" --input-variant hd
 "$python" -B -I - "$bc3/cache/index.json" "$task/hd-cache/index.json" <<'COHORT'
 import json
