@@ -2356,7 +2356,8 @@ class DialogueManager:
             self._after_speech(conv, follow)
             return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
         self._journal_call(conv, call.name, call.arguments)
-        self._change_intent(conv, intent, snap)
+        body = not (state is not None and state.follow_set and intent.goal in executor.COMPANION_GOALS)
+        self._change_intent(conv, intent, snap, body=body)
         return ToolOutcome(f"Принято: {intent.describe()}.", "accepted")
 
     def _repair_follow_agreement(self, conv: Conversation, heard: str, reply: str) -> None:
