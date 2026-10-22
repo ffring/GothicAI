@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -69,6 +70,7 @@ struct Episode {
   std::string tracedPlan;
   bool active=false,replay=false,drive=false,success=false;
   bool oracle=false;
+  bool journeyMemory=true;
   bool perceptionMonitor=false;
   bool population=false,record=true,sampled=false,pending=false,fell=false;
   bool trainingValid=true,accounted=false;
@@ -101,6 +103,8 @@ struct Episode {
   size_t replayIndex=0;
   uint64_t replans=0,fallbacks=0;
   double writeUs=0,maxWriteUs=0;
+  double memoryUpdateUs=0,memoryViewUs=0;
+  uint64_t memoryUpdates=0,memoryViews=0;
   std::shared_ptr<const NavPolicy> policy;
   std::vector<NavPolicy::State> policyStates;
   std::vector<double> policyUs,encodeUs,populationUs;
@@ -318,8 +322,13 @@ void finish(Episode& ep,World& world) {
      <<",\"goal\":"<<std::quoted(ep.to)<<",\"elapsed_ms\":"<<elapsed<<",\"limit_ms\":"<<ep.limit
      <<",\"distance_cm\":";jsonNumber(out,(ep.npc->position()-ep.goal).length());
   out<<",\"failure\":"<<std::quoted(ep.failure)
-     <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"<<(ep.teacherVersion==3?2:ep.teacherVersion)
-     <<",\"navigation_memory_version\":"<<NavigationMemory::RepresentationVersion
+     <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"
+     <<(ep.teacherVersion==3?(ep.record && ep.journeyMemory && !ep.drive?3:2):ep.teacherVersion)
+     <<",\"navigation_memory_version\":"<<(ep.journeyMemory?NavigationMemory::RepresentationVersion:3)
+     <<",\"journey_memory\":"<<ep.journeyMemory
+     <<",\"memory_update_us\":"<<(ep.memoryUpdates?ep.memoryUpdateUs/double(ep.memoryUpdates):0.)
+     <<",\"memory_view_us\":"<<(ep.memoryViews?ep.memoryViewUs/double(ep.memoryViews):0.)
+     <<",\"memory_updates\":"<<ep.memoryUpdates<<",\"memory_views\":"<<ep.memoryViews
      <<",\"perception_mode\":"<<std::quoted(perceptionMode(ep.eye.config().floorSampling))
      <<",\"perception_monitor\":"<<ep.perceptionMonitor
      <<",\"oracle\":"<<ep.oracle<<",\"record\":"<<bool(ep.writer)
@@ -906,7 +915,9 @@ void observe(Episode& ep,World& w) {
   pose.stepHeightCm=step>0.f?step:50.f;
   pose.maxSlopeDegrees=std::acos(std::clamp(std::cos(float(guild.slide_angle[n.guild()])*Pi/180.f),0.f,1.f))*180.f/Pi;
   ep.memory.update(ep.eye.memorySamples(),pose);
-  if(ep.population)ep.phaseUs[1]+=micros(memoryStart);
+  const auto memoryUs=micros(memoryStart);
+  ep.memoryUpdateUs+=memoryUs;++ep.memoryUpdates;
+  if(ep.population)ep.phaseUs[1]+=memoryUs;
 }
 void tracePerceptionWater(Episode& ep,const NavDemoWriter::Snapshot& sample) {
   if(!ep.perceptionMonitor)return;
@@ -965,7 +976,9 @@ NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance
   const auto position=ep.teacherVersion>=2 ? NpcKeys::physicalPosition(n) : n.position();
   const auto viewStart=Clock::now();
   ep.memory.view(ep.view);
-  if(ep.population)ep.phaseUs[1]+=micros(viewStart);
+  const auto viewUs=micros(viewStart);
+  ep.memoryViewUs+=viewUs;++ep.memoryViews;
+  if(ep.population)ep.phaseUs[1]+=viewUs;
   NavDemoWriter::Snapshot sample;
   sample.gameMs=w.tickCount();sample.position=array(NpcKeys::physicalPosition(n));sample.bodyYawDeg=n.rotation();
   sample.body.velocityCmS=local(ep.velocity,n.rotationRad());
@@ -1955,6 +1968,12 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     throw std::runtime_error("navdemos rows is evaluation-only; use record off");
   ep.cvMode=settings.cv;ep.heroNear=!current && settings.heroNear;
   ep.teacherVersion=(memory || object || moving)?scenarioTeacher:(carrot?2:1);
+  if(ep.teacherVersion==3 && !learner && !replay) {
+    const auto* journey=std::getenv("OPENGOTHIC_NAV_JOURNEY_MEMORY");
+    ep.journeyMemory=journey==nullptr || std::string_view(journey)!="0";
+    ep.memory.setJourneyMemory(ep.journeyMemory);
+    KnownRoadsBench::attachFamiliar(w,*npc,ep.memory);
+  }
   ep.oracle=settings.oracle;
   if(ep.oracle && ep.teacherVersion!=3) {
     throw std::runtime_error("navdemos oracle evaluation requires teacher v3");
@@ -2072,7 +2091,8 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
   } else {
     ep.actions=file(ep,"actions.txt");
     if(settings.recordDemos && !ep.oracle) {
-      ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion==3?2:ep.teacherVersion);
+      ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),
+          ep.teacherVersion==3?(ep.journeyMemory && !ep.drive?3:2):ep.teacherVersion);
     }
     if(ep.teacherVersion>=2) {
       ep.knownPaths=file(ep,"known-paths.jsonl");

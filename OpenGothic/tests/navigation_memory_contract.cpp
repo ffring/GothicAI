@@ -110,7 +110,7 @@ void timeAndDistanceDecay() {
     }
   const auto stone = strongest(view.far,&Memory::Cell::wall);
   close(stone.forward,2000,200,"after thirty metres the fifty-metre object remains at the right relative position");
-  close(stone.confidence,float(std::exp(-5./30.-1.)),1.e-5f,"time and path confidence formula");
+  close(stone.confidence,float(std::exp(-5./300.-.1)),1.e-5f,"time and path confidence formula");
   std::printf("decay: static %.6f -> %.6f, movable %.6f -> %.6f; after 30 m %.6f at %.1f cm\n",
               firstStatic,timedStatic,firstMovable,timedMovable,stone.confidence,stone.forward);
   }
@@ -125,12 +125,12 @@ void cachedRaysAndIncompleteRays() {
   memory.view(view);
   auto stone = strongest(view.far,&Memory::Cell::wall);
   close(stone.forward,-2000,200,"cached far ray keeps its world pose");
-  close(stone.confidence,float(std::exp(-1./30.-1.)),1.e-5f,"cached far ray never refreshes its timestamp or path");
+  close(stone.confidence,float(std::exp(-1./300.-.1)),1.e-5f,"cached far ray never refreshes its timestamp or path");
   auto freshNear = ray({3250,150,0},Kind::World,0,1100,{3000,150,0});
   memory.update({freshNear},{{3000,0,0},{-1,0,0},1100});
   memory.update({cached},{{3000,0,0},{-1,0,0},2000});
   memory.view(view);
-  close(around(view.far,0,-2000,&Memory::Cell::wall),float(std::exp(-2./30.-1.)),1.e-5f,
+  close(around(view.far,0,-2000,&Memory::Cell::wall),float(std::exp(-2./300.-.1)),1.e-5f,
         "an older far cache returning after a near hit is not ingested again");
 
   Memory partial;
@@ -265,7 +265,7 @@ void windowAndTravelHistory() {
   memory.update({ray({5000,150,0})},{{0,0,0},{1,0,0},3000});
   memory.view(view);
   close(float(view.traveledCm),2000,1.e-4f,"empty observation ticks accumulate path");
-  close(strongest(view.far,&Memory::Cell::wall).confidence,float(std::exp(-3./30.-2./3.)),1.e-5f,
+  close(strongest(view.far,&Memory::Cell::wall).confidence,float(std::exp(-3./300.-2./30.)),1.e-5f,
         "returning to the same place does not restore confidence");
   memory.update({},{{20000,0,0},{1,0,0},4000});
   memory.update({},{{0,0,0},{1,0,0},5000});
@@ -277,7 +277,7 @@ void windowAndTravelHistory() {
   late.update({},{{3000,0,0},{1,0,0},1000});
   late.update({ray({5000,150,0})},{{3000,0,0},{1,0,0},1000});
   late.view(view);
-  close(strongest(view.far,&Memory::Cell::wall).confidence,float(std::exp(-1./30.-1.)),1.e-5f,
+  close(strongest(view.far,&Memory::Cell::wall).confidence,float(std::exp(-1./300.-.1)),1.e-5f,
         "first ingestion of a cached observation uses its original path timestamp");
   std::puts("windows: world positions survive movement; eviction permanent; per-tick path and late cached observation correct");
   }
@@ -290,7 +290,7 @@ void farCellClearingNeedsActualIntersection() {
   memory.update({ray({5100,150,25},Kind::World,0,0,{0,150,25})},{{0,0,0},{1,0,0},0});
   memory.update({ray({5500,150,175},Kind::None,0,1000,{0,150,175})},{{0,0,0},{1,0,0},1000});
   memory.view(view);
-  close(around(view.far,25,5100,&Memory::Cell::wall),float(std::exp(-1./30.)),1.e-5f,
+  close(around(view.far,25,5100,&Memory::Cell::wall),float(std::exp(-1./300.)),1.e-5f,
         "parallel free ray 150 cm away in the same far cell does not erase a wall hit");
   memory.update({ray({5500,150,25},Kind::None,0,2000,{0,150,25})},{{0,0,0},{1,0,0},2000});
   memory.view(view);
@@ -352,6 +352,131 @@ void boundedWaterPatches() {
     }
   std::puts("water patches: bounded same-sample coplanar triangles; no dry-land, long-gap or height extrapolation");
   }
+
+Memory::FamiliarMask allTiles(const Memory::FamiliarMap& map) {
+  return Memory::FamiliarMask((map.tiles.size()+63)/64,~uint64_t(0));
+  }
+
+void journeyMemoryLastsMinutes() {
+  Memory memory;
+  Memory baseline;
+  baseline.setJourneyMemory(false);
+  Memory::View view;
+  for(auto* current:{&memory,&baseline}) {
+    current->update({ray({5000,150,0})},{{0,0,0},{1,0,0},0});
+    current->update({},{{7500,0,0},{1,0,0},60000});
+    current->update({},{{0,0,0},{1,0,0},120000});
+    }
+  memory.view(view);
+  const float confidence=strongest(view.far,&Memory::Cell::wall).confidence;
+  close(confidence,float(std::exp(-120./300.-150./300.)),1.e-5f,
+        "rock seen two minutes and 150 travelled metres ago is still remembered");
+  require(confidence>.4f,"journey rock retains useful confidence after two minutes and 150 metres");
+  baseline.view(view);
+  close(strongest(view.far,&Memory::Cell::wall).confidence,float(std::exp(-120./30.-150./30.)),1.e-6f,
+        "comparison switch preserves v3 static decay");
+  std::printf("journey: after 120 s / 150 m rock confidence %.6f\n",confidence);
+  }
+
+void familiarMapHonestyAndLivePriority() {
+  Memory observed;
+  observed.update({ray({5100,150,25})},{{0,0,0},{1,0,0},0});
+  Memory::FamiliarMap map;
+  map.bake(observed,17);
+  map.finish();
+  require(!map.tiles.empty(),"eye observations create shared familiar tiles");
+  require(sizeof(Memory::FamiliarTile)==24,"familiar shared tile remains compact");
+
+  Memory stranger;
+  Memory local;
+  local.setFamiliarMap(&map,allTiles(map));
+  Memory maskedStranger;
+  maskedStranger.setFamiliarMap(&map,{});
+  Memory::View view;
+  for(auto* current:{&stranger,&maskedStranger,&local})
+    current->update({},{{0,0,0},{1,0,0},1000});
+  for(auto* current:{&stranger,&maskedStranger}) {
+    current->view(view);
+    require(strongest(view.far,&Memory::Cell::wall).confidence==0,
+            "stranger has no unseen rock, including when a shared map exists without a mask");
+    }
+  local.view(view);
+  close(strongest(view.far,&Memory::Cell::wall).confidence,Memory::Constants::familiarConfidence,1.e-6f,
+        "local has a familiar rock in far map before seeing it");
+  require(strongest(view.far,&Memory::Cell::familiar).confidence==1,
+          "familiar fallback has a separate source channel");
+  require(strongest(view.near,&Memory::Cell::familiar).confidence==0,"familiar map never fills near memory");
+  local.reset();
+  local.update({},{{0,0,0},{1,0,0},1000});
+  local.view(view);
+  close(strongest(view.far,&Memory::Cell::wall).confidence,Memory::Constants::familiarConfidence,1.e-6f,
+        "resetting live eye observations preserves local familiar knowledge");
+  stranger.update({ray({5100,150,25},Kind::World,0,1100)},{{0,0,0},{1,0,0},1100});
+  stranger.view(view);
+  require(strongest(view.far,&Memory::Cell::wall).confidence>.99f,
+          "stranger remembers the rock after its own eye observes it");
+
+  local.update({ray({5500,150,25},Kind::None,0,1200,{0,150,25})},{{0,0,0},{1,0,0},1200});
+  local.view(view);
+  require(around(view.far,25,5100,&Memory::Cell::wall)==0,
+          "fresh observed passage overrides familiar wall");
+  require(around(view.far,25,5100,&Memory::Cell::familiar)==0,
+          "fresh partial free channel prevents every familiar channel in its cell");
+  local.update({},{{0,0,0},{1,0,0},400000});
+  local.view(view);
+  close(around(view.far,25,5100,&Memory::Cell::wall),Memory::Constants::familiarConfidence,1.e-6f,
+        "familiar map returns only after live evidence is older than the fallback threshold");
+  std::printf("familiar: %zu shared tiles / %zu bytes, stranger unknown, local .35, fresh passage wins\n",
+              map.tiles.size(),map.storageBytes());
+  }
+
+void movableIsNeverLongTermKnowledge() {
+  Memory observed;
+  observed.update({ray({5100,150,25},Kind::MovableVob)},{{0,0,0},{1,0,0},0});
+  Memory::FamiliarMap map;
+  map.bake(observed);
+  map.finish();
+  Memory local;
+  local.setFamiliarMap(&map,allTiles(map));
+  local.update({},{{0,0,0},{1,0,0},60000});
+  Memory::View view;
+  local.view(view);
+  require(strongest(view.far,&Memory::Cell::movable).confidence==0,"movable is never baked into familiar map");
+  observed.update({},{{0,0,0},{1,0,0},60000});
+  observed.view(view);
+  close(strongest(view.far,&Memory::Cell::movable).confidence,float(std::exp(-60./5.)),1.e-7f,
+        "movable retains five-second decay despite longer journey memory");
+  std::puts("movable: familiar map excludes it, live confidence after 60 s is below .00001");
+  }
+
+void familiarSourcesDoNotShareHiddenChannels() {
+  Memory wall;
+  wall.update({ray({5100,150,25})},{{0,0,0},{1,0,0},0});
+  Memory water;
+  water.update({ray({5100,0,25},Kind::Water)},{{0,0,0},{1,0,0},0});
+  Memory::FamiliarMap map;
+  map.bake(wall,3);
+  map.bake(water,4);
+  map.finish();
+  Memory::FamiliarMask mask((map.tiles.size()+63)/64,0);
+  for(size_t i=0; i<map.tiles.size(); ++i) {
+    if(map.tiles[i].source==3)
+      mask[i/64]|=uint64_t(1)<<(i%64);
+    if(map.tiles[i].x==25 && map.tiles[i].z==0) {
+      require(map.tiles[i].source==3,"equal canonical sources use stable lowest source id");
+      require((map.tiles[i].channels&Memory::FamiliarTile::Water)==0,
+              "another source's water cannot leak into the canonical wall tile");
+      }
+    }
+  Memory local;
+  local.setFamiliarMap(&map,std::move(mask));
+  local.update({},{{0,0,0},{1,0,0},0});
+  Memory::View view;
+  local.view(view);
+  require(strongest(view.far,&Memory::Cell::water).confidence==0,
+          "local cannot read a hidden classification supplied by another source pose");
+  std::puts("familiar provenance: canonical tiles never union hidden observations from another source");
+  }
 }
 
 int main() {
@@ -365,5 +490,9 @@ int main() {
   farCellClearingNeedsActualIntersection();
   waterSurfaceIsNotEmptyAirOrSubmergedGround();
   boundedWaterPatches();
+  journeyMemoryLastsMinutes();
+  familiarMapHonestyAndLivePriority();
+  movableIsNeverLongTermKnowledge();
+  familiarSourcesDoNotShareHiddenChannels();
   std::puts("navigation memory contracts passed");
   }
