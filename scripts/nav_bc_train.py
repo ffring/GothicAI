@@ -19,7 +19,8 @@ import numpy as np
 import torch
 from torch import nn
 
-from nav_bc_data import CACHE_VERSION, HEADS, CLASSES, PREPROCESSING, VECTOR_SIZE, load_cached
+from nav_bc_data import (CACHE_VERSION, BC3_CACHE_VERSION, HEADS, CLASSES, BC3_HEADS,
+                         BC3_CLASSES, PREPROCESSING, VECTOR_SIZE, load_cached)
 from nav_bc_model import NavPolicy, export_weights
 
 
@@ -29,7 +30,7 @@ def write_json(path, value):
 
 def read_index(cache):
     index = json.loads((cache / "index.json").read_text())
-    if (index.get("cache_version") != CACHE_VERSION or index.get("vector_size") != VECTOR_SIZE or
+    if (index.get("cache_version") not in (CACHE_VERSION, BC3_CACHE_VERSION) or index.get("vector_size") != VECTOR_SIZE or
             index.get("preprocessing") != PREPROCESSING):
         raise ValueError("rebuild cache for NAVDEMO v2 carrot inputs without previous_keys")
     train = {tuple(ep["pair"]) for ep in index["episodes"] if ep["split"] == "train"}
@@ -93,7 +94,7 @@ def cap_dagger_steps(mask, dagger_rows, rng):
         mask[omitted[:, 0], omitted[:, 1]] = False
 
 
-def batch_tensors(episodes, start, length, device, dagger_rows=None, rng=None):
+def batch_tensors(episodes, start, length, device, dagger_rows=None, rng=None, heads=HEADS):
     stop = start + length
     arrays = {}
     for name in ("near", "far", "vector"):
@@ -103,7 +104,7 @@ def batch_tensors(episodes, start, length, device, dagger_rows=None, rng=None):
             n = max(0, min(stop, len(ep["labels"])) - start)
             a[row, :n] = ep[name][start:start+n]
         arrays[name] = torch.from_numpy(a).to(device)
-    labels = np.zeros((len(episodes), length, len(HEADS)), np.int64)
+    labels = np.zeros((len(episodes), length, len(heads)), np.int64)
     mask = np.zeros((len(episodes), length), bool)
     for row, ep in enumerate(episodes):
         n = max(0, min(stop, len(ep["labels"])) - start)
@@ -173,6 +174,8 @@ def train(args):
     cache, out = Path(args.cache), Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     index = read_index(cache)
+    if index["cache_version"] == BC3_CACHE_VERSION:
+        return train_bc3(args, index)
     train_eps = [e for e in index["episodes"] if e["split"] == "train"]
     val_eps = [e for e in index["episodes"] if e["split"] != "train"]
     random.seed(args.seed)
@@ -247,6 +250,151 @@ def train(args):
                "best": is_best}), flush=True)
 
 
+def initialize_bc3(model, path, index):
+    """Reuse compatible actor inputs/GRU; condition v1 maneuvers on exclusivity."""
+    from nav_bc_numpy import NumpyPolicy
+    source = NumpyPolicy(path)
+    preprocessing = source.header.get("preprocessing", {})
+    if source.vector_size != model.vector_size or source.hidden_size != model.hidden_size:
+        raise ValueError("initial policy dimensions differ from the BC3 learner")
+    for key, value in index["preprocessing"].items():
+        if preprocessing.get(key) != value:
+            raise ValueError(f"initial policy preprocessing differs: {key}")
+    if not np.array_equal(preprocessing.get("eye_layout"), index["eye_layout"]):
+        raise ValueError("initial policy eye layout differs from the demonstrations")
+    state = model.state_dict()
+    for name, values in source.weights.items():
+        if name in state:
+            state[name] = torch.from_numpy(values.copy())
+        elif not name.startswith(("head_jump.", "head_climb.")):
+            raise ValueError(f"unexpected initial policy tensor: {name}")
+    if source.header["version"] == 1:
+        for suffix in ("weight", "bias"):
+            jump, climb = (torch.from_numpy(source.weights[f"head_{head}.{suffix}"].copy())
+                           for head in ("jump", "climb"))
+            state[f"head_maneuver.{suffix}"] = torch.stack(
+                (jump[0] + climb[0], jump[1] + climb[0], jump[0] + climb[1]))
+    model.load_state_dict(state)
+
+
+def bc3_targets(episodes, start, length, device):
+    """Targets may use annotations; none are passed to the policy encoder."""
+    result = {}
+    for name in ("action_change", "maneuver_weight", "stuck", "stuck_valid",
+                 "next_near_valid", "detour", "detour_valid"):
+        shape = (len(episodes), length, *episodes[0][name].shape[1:])
+        values = np.zeros(shape, np.float32)
+        for row, episode in enumerate(episodes):
+            count = max(0, min(length, len(episode["labels"]) - start))
+            values[row, :count] = episode[name][start:start + count]
+        result[name] = torch.from_numpy(values).to(device)
+    target = np.zeros((len(episodes), length, 9, 32, 32), np.float32)
+    for row, episode in enumerate(episodes):
+        count = max(0, min(length, len(episode["labels"]) - start - 1))
+        if count:
+            target[row, :count] = episode["near"][start + 1:start + count + 1]
+    result["next_near"] = torch.from_numpy(target).to(device)
+    return result
+
+
+def bc3_loss(logits, auxiliary, labels, mask, targets, class_weights, change_weight):
+    step_weights = torch.where(targets["action_change"] != 0, change_weight, 1.)[mask]
+    terms = {}
+    for column, head in enumerate(BC3_HEADS):
+        values, truth = logits[head][mask], labels[:, :, column][mask]
+        ce = nn.functional.cross_entropy(values, truth, weight=class_weights[column], reduction="none")
+        weights = step_weights
+        if head == "maneuver":
+            probability = values.log_softmax(-1).gather(-1, truth[:, None]).squeeze(-1).exp()
+            ce = ce * (1 - probability).square()
+            weights = weights * targets["maneuver_weight"][mask]
+        terms[head] = (ce * weights).sum() / step_weights.sum()
+    for head in ("stuck", "next_near", "detour"):
+        valid = mask & targets[head + "_valid"].bool()
+        if valid.any():
+            if head == "stuck":
+                terms[head] = nn.functional.binary_cross_entropy_with_logits(
+                    auxiliary[head][valid], targets[head][valid])
+            else:
+                terms[head] = nn.functional.smooth_l1_loss(auxiliary[head][valid], targets[head][valid])
+        else:
+            terms[head] = auxiliary[head].sum() * 0
+    action = sum(scale * terms[head] for head, scale in zip(BC3_HEADS, (2, 1, 2, 1, 1))) / 7
+    return action + .1 * terms["stuck"] + .1 * terms["next_near"] + .5 * terms["detour"], terms
+
+
+def train_bc3(args, index):
+    """Fixed-epoch BC on manifest train only; selection requires closed-loop validation."""
+    cache, out = Path(args.cache), Path(args.output)
+    if any(entry["split"] != "train" for entry in index["episodes"]):
+        raise ValueError("BC3 cache must contain only manifest training episodes")
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.set_num_threads(args.threads)
+    device = torch.device(args.device)
+    config = dict(vector_size=index["vector_size"], hidden_size=256, format_version=2, auxiliary=True)
+    model = NavPolicy(**config).to(device)
+    if args.init and not args.resume:
+        initialize_bc3(model, args.init, index)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    history = []
+    if args.resume:
+        state = torch.load(out / "last.pt", map_location="cpu", weights_only=False)
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+        history = state["history"]
+    counts = [np.asarray(index["class_counts"]["train"][head]) for head in BC3_HEADS]
+    weights = []
+    for count in counts:
+        present = count > 0
+        weight = np.ones(len(count), np.float32)
+        weight[present] = np.clip(np.sqrt(count.sum() / (present.sum() * count[present])), .5, 3.)
+        weights.append(torch.tensor(weight, device=device))
+    change_weight = float(index["action_change_weight"])
+    write_json(out / "training_config.json", dict(vars(args), architecture=model.architecture(),
+        class_weights=[weight.cpu().tolist() for weight in weights],
+        action_change_weight=change_weight, maneuver_window_weight=5, focal_gamma=2,
+        auxiliary_weights=dict(stuck=.1, next_near=.1, detour=.5),
+        auxiliary_targets=index["auxiliary"], selection="fixed final epoch; closed-loop validation pending"))
+    for epoch in range(len(history), args.epochs):
+        started = time.perf_counter()
+        model.train()
+        total, steps, losses = 0., 0, {}
+        for entries in training_batches(index["episodes"], args.batch, args.seed + epoch):
+            group = [load(cache, entry) for entry in entries]
+            hidden = None
+            for start in range(0, max(len(ep["labels"]) for ep in group), args.segment):
+                # Legacy batching uses six labels; BC3 explicitly supplies its five heads.
+                features, labels, mask = batch_tensors(group, start, args.segment, device,
+                                                      heads=BC3_HEADS)
+                targets = bc3_targets(group, start, args.segment, device)
+                optimizer.zero_grad(set_to_none=True)
+                logits, hidden, auxiliary = model(**features, hidden=hidden, return_auxiliary=True)
+                hidden = hidden.detach()
+                loss, terms = bc3_loss(logits, auxiliary, labels, mask, targets, weights, change_weight)
+                if not torch.isfinite(loss):
+                    raise ValueError("nonfinite BC3 loss")
+                loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), 1.)
+                optimizer.step()
+                count = int(mask.sum())
+                total += loss.item() * count
+                steps += count
+                for name, value in terms.items():
+                    losses[name] = losses.get(name, 0.) + value.item() * count
+        record = dict(epoch=epoch + 1, loss=total / steps, decisions=steps,
+                      seconds=time.perf_counter() - started,
+                      losses={name: value / steps for name, value in losses.items()})
+        history.append(record)
+        torch.save(dict(config=config, model=model.state_dict(), optimizer=optimizer.state_dict(),
+                        history=history), out / "last.pt")
+        export_weights(model, out / "policy.navbc",
+                       preprocessing={**index["preprocessing"], "eye_layout": index["eye_layout"]})
+        write_json(out / "history.json", history)
+        print(json.dumps(record), flush=True)
+
+
 def timed_step(step, iterations):
     for _ in range(30):
         step()
@@ -266,15 +414,17 @@ def verify(args):
     torch.set_num_interop_threads(1)
     cache, out = Path(args.cache), Path(args.output)
     index = read_index(cache)
-    model, state = checkpoint_model(out / "best.pt", "cpu")
+    bc3 = index["cache_version"] == BC3_CACHE_VERSION
+    model, state = checkpoint_model(out / ("last.pt" if bc3 else "best.pt"), "cpu")
+    heads = tuple(model.head_sizes)
     model.eval()
     export_weights(model, out / "policy.navbc", preprocessing={**index["preprocessing"], "eye_layout": index["eye_layout"]})
     reference = NumpyPolicy(out / "policy.navbc")
-    entries = [e for e in index["episodes"] if e["split"] != "train"]
+    entries = [e for e in index["episodes"] if bc3 or e["split"] != "train"]
     # Prefer one uninterrupted episode >=1000, otherwise reset only at episode boundaries.
     entries.sort(key=lambda e: (e["steps"] < args.steps, e["id"]))
     n, max_logit_error, max_hidden_error = 0, 0., 0.
-    checked, golden = [], {k: [] for k in ("near", "far", "vector", "hidden", "reset", *HEADS)}
+    checked, golden = [], {k: [] for k in ("near", "far", "vector", "hidden", "reset", *heads)}
     example = None
     for meta in entries:
         ep = load(cache, meta)
@@ -285,13 +435,13 @@ def verify(args):
             t = {k: torch.from_numpy(v[None, None]) for k, v in a.items()}
             logits, th = model(**t, hidden=th)
             nl, nh = reference.step(**a, hidden=nh)
-            max_logit_error = max(max_logit_error, *(float(np.max(np.abs(logits[h][0, 0].numpy()-nl[h]))) for h in HEADS))
+            max_logit_error = max(max_logit_error, *(float(np.max(np.abs(logits[h][0, 0].numpy()-nl[h]))) for h in heads))
             max_hidden_error = max(max_hidden_error, float(np.max(np.abs(th[0, 0].numpy()-nh))))
             for key, value in a.items():
                 golden[key].append(value)
             golden["hidden"].append(th[0, 0].numpy().copy())
             golden["reset"].append(j == 0)
-            for head in HEADS:
+            for head in heads:
                 golden[head].append(logits[head][0, 0].numpy().copy())
             example = a
         checked.append({"id": meta["id"], "steps": length})
@@ -327,6 +477,8 @@ def final_evaluate(args):
     torch.set_num_threads(args.threads)
     cache, out = Path(args.cache), Path(args.output)
     index = read_index(cache)
+    if index["cache_version"] == BC3_CACHE_VERSION:
+        raise ValueError("BC3 validation is unrecorded; use nav_rl.py drive --manifest in closed loop")
     model, _ = checkpoint_model(out / "best.pt", args.device)
     result = evaluate(model, cache, [e for e in index["episodes"] if e["split"] != "train"], args.device, True)
     result["acceptance"] = {"turn_macro_f1": all(result["model"]["turn"]["macro_f1"] > result[b]["turn"]["macro_f1"]
@@ -377,6 +529,7 @@ def main():
             p.add_argument("--lr", type=float, default=3e-4)
             p.add_argument("--seed", type=int, default=17)
             p.add_argument("--resume", action="store_true")
+            p.add_argument("--init", help="compatible .navbc actor initialization for manifest BC3")
         if command == "verify":
             p.add_argument("--steps", type=int, default=1000)
             p.add_argument("--iterations", type=int, default=1000)

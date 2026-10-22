@@ -20,8 +20,10 @@ import math
 import os
 from pathlib import Path
 import random
+import shutil
 import statistics
 import sys
+import tempfile
 import threading
 import time
 
@@ -30,6 +32,8 @@ REGIONS = ("market", "harbour", "onar", "lobart", "port_streets", "upper_streets
 HEADS = ("forward", "strafe", "turn", "walk", "jump", "climb")
 CLASSES = (3, 3, 3, 2, 2, 2)
 REWARDS = ("progress_cm", "arrived", "blocked", "fall_damage", "death", "jump", "climb", "time_ms")
+VALIDATION_FAMILIES = ("point", "object", "approach", "follow_below_gate", "jump")
+ACTION_SEEDS = (18102027, 18102028, 18102029)
 
 
 def module(name):
@@ -451,6 +455,8 @@ def qualify(args):
 
 
 def drive(args):
+    if getattr(args, "manifest", None) is not None:
+        return drive_validation(args)
     pairs = load_pairs(args.pairs)
     if not all(pair.get("final_test") and pair.get("teacher_success") and pair.get("teacher_version") == 2 for pair in pairs):
         raise ValueError("drive requires a frozen teacher-qualified final test set")
@@ -467,7 +473,7 @@ def drive(args):
         if args.parallel > 1:
             worker.output = args.output / "drive-workers" / f"w{worker_index}"
         worker.command = "collect"
-        worker.action_mode = getattr(args, "action_mode", "argmax")
+        worker.action_mode = getattr(args, "action_mode", "sample")
         worker.teacher_beta = 0
         worker.dagger_collection = False
         worker.split = "validation"
@@ -478,6 +484,230 @@ def drive(args):
         worker.start_index = 0
         worker.count = None
         module("nav_drive").collect(worker)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(collect, index) for index in range(workers)]
+        for future in futures:
+            future.result()
+
+
+def validation_scenarios(manifest, families=None):
+    """Read only the frozen validation scenarios; never inspect train/test members."""
+    value = read_json(manifest)
+    if value.get("schema_version") != 1:
+        raise ValueError("Unsupported demonstration manifest schema")
+    groups = value.get("splits", {}).get("validation")
+    if not isinstance(groups, dict):
+        raise ValueError("Manifest must contain splits.validation scenarios")
+    requested = VALIDATION_FAMILIES if families is None else tuple(families.split(","))
+    if not requested or len(set(requested)) != len(requested) or set(requested) - set(VALIDATION_FAMILIES):
+        raise ValueError("--families must contain distinct validation family names")
+    result, seen = [], set()
+    for family in requested:
+        values = groups.get(family)
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"Missing validation family: {family}")
+        for original in values:
+            if (not isinstance(original, dict) or original.get("split") != "validation"
+                    or original.get("family") != family or original.get("recorded") is not False
+                    or original.get("episode") is not None):
+                raise ValueError(f"Invalid unrecorded validation scenario in {family}")
+            value = dict(original)
+            for key in ("id", "region", "start", "goal"):
+                token = value.get(key)
+                if not isinstance(token, str) or not token or any(c.isspace() for c in token):
+                    raise ValueError(f"Invalid validation scenario token: {key}")
+            identifier = value["id"]
+            if Path(identifier).name != identifier or identifier in (".", "..") or identifier in seen:
+                raise ValueError(f"Unsafe or duplicate validation scenario ID: {identifier}")
+            if value.get("goal_kind") not in ("point", "object", "approach", "follow"):
+                raise ValueError(f"Unknown validation goal kind: {identifier}")
+            if type(value.get("seed")) is not int or not 0 <= value["seed"] <= 0xffffffff:
+                raise ValueError(f"Invalid validation scenario seed: {identifier}")
+            seen.add(identifier)
+            result.append(value)
+    return result
+
+
+def action_seeds(value):
+    try:
+        seeds = list(ACTION_SEEDS) if value is None else [int(item) for item in value.split(",")]
+    except ValueError as exc:
+        raise ValueError("--action-seeds must contain distinct uint32 seeds") from exc
+    if not seeds or len(set(seeds)) != len(seeds) or any(not 0 <= seed <= 0xffffffff for seed in seeds):
+        raise ValueError("--action-seeds must contain distinct uint32 seeds")
+    return seeds
+
+
+def validation_commands(args, value, action_seed):
+    """Keep world/target randomness frozen while varying only policy sampling."""
+    if value.get("split") != "validation":
+        raise ValueError("Policy validation cannot run another split")
+    kind, npc = value["goal_kind"], args.npc
+    limit = value.get("limit_ms", args.limit_ms)
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("Validation scenario limit must be positive")
+    suffix = f"{limit} {args.weights} 0 {action_seed} sample"
+    commands = [f"roads load {args.roads}", f"roads on {npc}", "navdemos record on",
+                "navdemos perception-mode gaze", "navdemos oracle off"]
+    if value.get("family") == "safety":
+        commands.append("navdemos perception-monitor on")
+    if value.get("fence_control"):
+        commands.extend(["goto NW_FARM1_ENTRANCE_03", f"put {npc} 0 0 -1400",
+                         "goto NW_FARM1_ENTRANCE_01", "wait 1000",
+                         f"navdemos drive-current {npc} {value['goal']} {suffix}"])
+    elif kind in ("follow", "approach"):
+        route = value.get("route", [])
+        if (not isinstance(route, list) or len(route) < (3 if kind == "follow" else 2)
+                or any(not isinstance(name, str) or not name or any(c.isspace() for c in name) or "," in name for name in route)):
+            raise ValueError("Invalid frozen moving-target route")
+        target = value.get("target")
+        if not isinstance(target, str) or not target or any(c.isspace() for c in target):
+            raise ValueError("Invalid frozen moving-target symbol")
+        commands.append(f"navdemos drive-moving {npc} {value['start']} {target} {','.join(route)} "
+                        f"{kind} {limit} {value['seed']} {args.weights} 0 {action_seed} sample")
+    else:
+        command = "drive-object" if kind == "object" else "drive"
+        watch = ""
+        if value.get("family") == "jump":
+            identifier = value.get("transition_id")
+            if type(identifier) is not int or identifier <= 0:
+                raise ValueError("Jump validation needs its frozen transition ID")
+            watch = f" {identifier}"
+        commands.append(f"navdemos {command} {npc} {value['start']} {value['goal']} {suffix}{watch}")
+    return [*commands, "navdemos wait"]
+
+
+def safety_scenarios(args):
+    values = []
+    fixtures_path = getattr(args, "safety_fixtures", None)
+    if fixtures_path is not None:
+        safety = module("nav_perception_safety")
+        fixtures = read_json(fixtures_path)
+        if not isinstance(fixtures, list) or not fixtures:
+            raise ValueError("--safety-fixtures must contain qualified fixtures")
+        for fixture in fixtures:
+            if fixture.get("qualified") is not True or fixture.get("kind") not in safety.KINDS:
+                raise ValueError("Safety fixture must be physically qualified")
+            values.append(dict(id=fixture["label"], family="safety", goal_kind="point", split="validation",
+                region=fixture["kind"], start=safety.token(fixture["projected_start_cm"]),
+                goal=safety.token(fixture["goal_cm"]), seed=7, limit_ms=args.limit_ms, safety_fixture=fixture))
+    if getattr(args, "fence_control", False):
+        values.append(dict(id="maleth-fence", family="safety", goal_kind="point", split="validation",
+            region="fence", start="pasture_fence_current_pose", goal="FP_ROAM_FARM1_SHEEP_09",
+            seed=7, limit_ms=args.limit_ms, fence_control=True))
+    for value in values:
+        if Path(value["id"]).name != value["id"] or value["id"] in ("", ".", ".."):
+            raise ValueError("Unsafe safety fixture label")
+    if len({value["id"] for value in values}) != len(values):
+        raise ValueError("Duplicate safety fixture label")
+    return values
+
+
+def drive_validation(args):
+    if args.action_mode != "sample":
+        raise ValueError("Frozen manifest validation requires softmax sampling")
+    checked_paths(args, policy=True)
+    values = validation_scenarios(args.manifest, getattr(args, "families", None))
+    if args.indices is not None:
+        selected = [int(value) for value in args.indices.split(",")]
+        if not selected or len(set(selected)) != len(selected) or any(not 0 <= index < len(values) for index in selected):
+            raise ValueError("--indices must contain distinct valid validation indices")
+        values = [values[index] for index in selected]
+    values += safety_scenarios(args)
+    seeds = action_seeds(getattr(args, "action_seeds", None))
+    jobs = [(index, value, seed) for index, value in enumerate(values) for seed in seeds]
+    rejections = args.output.parent / "setup-rejections"
+    if any(value["family"] == "jump" for value in values) and getattr(args, "jump_links", None) is None:
+        raise ValueError("Jump validation requires --jump-links from the frozen corpus inputs")
+    workers = min(args.parallel, len(jobs))
+    def collect(worker_index):
+        assigned = jobs[worker_index::workers]
+        for jumping in (False, True):
+            group = [job for job in assigned if (job[1]["family"] == "jump") == jumping]
+            if not group:
+                continue
+            worker = copy(args)
+            worker.output = args.output / "validation-workers" / str(worker_index) / ("jump" if jumping else "ordinary")
+            worker.cache = args.cache / ("jump" if jumping else "ordinary")
+            worker.cache.mkdir(parents=True, exist_ok=True)
+            if jumping:
+                worker.links = args.jump_links
+            runner = new_runner(worker, "validation")
+            try:
+                for index, value, seed in group:
+                    directory = args.output / "validation" / value["family"] / value["id"] / f"seed-{seed}"
+                    rejection = rejections / f"{value['id']}.json"
+                    if rejection.is_file():
+                        if read_json(rejection)["validation_scenario"] != value:
+                            raise ValueError(f"Different rejected validation scenario: {rejection}")
+                        continue
+                    if (directory / "episode.json").is_file():
+                        existing = read_json(directory / "episode.json")
+                        if (not args.resume or existing.get("validation_scenario", value) != value
+                                or existing.get("action_seed", seed) != seed
+                                or existing.get("weights", str(args.weights)) != str(args.weights)):
+                            raise ValueError(f"Existing or different validation episode: {directory}")
+                        episode = existing
+                        started = None
+                    else:
+                        if directory.exists() and any(directory.iterdir()):
+                            if not args.resume:
+                                raise ValueError(f"Incomplete validation episode; use --resume: {directory}")
+                            shutil.rmtree(directory)
+                        worker.seed = value["seed"]
+                        started = time.monotonic()
+                        try:
+                            scenario(worker, runner, f"validation-{value['id']}-{seed}",
+                                     validation_commands(worker, value, seed), directory)
+                        except RuntimeError as error:
+                            reason = str(error)
+                            if (value["goal_kind"] not in ("approach", "follow") or reason !=
+                                    "Runner rejected advance: navdemos moving route needs distinct connected points"):
+                                raise
+                            process = getattr(runner, "process", None)
+                            if process is not None and process.poll() is not None:
+                                raise RuntimeError(f"Runner exited during setup refusal: {process.returncode}") from error
+                            if any(path.name in ("episode.json", "actions.txt", "trajectory.txt", "target-trajectory.txt")
+                                   or path.name.startswith("samples.bin") for path in directory.rglob("*")):
+                                raise
+                            rejected = dict(id=value["id"], family=value["family"],
+                                            validation_scenario=value, reason=reason)
+                            rejections.mkdir(parents=True, exist_ok=True)
+                            with tempfile.NamedTemporaryFile(mode="w", dir=rejections, delete=False) as stream:
+                                json.dump(rejected, stream, ensure_ascii=False, indent=2)
+                                temporary = Path(stream.name)
+                            temporary.replace(rejection)
+                            print(json.dumps(dict(setup_rejected=True, **rejected)), flush=True)
+                            # A rejected advance remains pending in the native
+                            # protocol. Recreate this worker before another reset.
+                            runner.close()
+                            runner = new_runner(worker, "validation")
+                            continue
+                        episode = read_json(directory / "episode.json")
+                    if (episode.get("demo_version") != 2 or episode.get("navigation_memory_version") != 3
+                            or episode.get("physics_mode") != args.physics or episode.get("oracle") is not False
+                            or episode.get("action_mode") != "sample" or episode.get("teacher_beta") != 0
+                            or episode.get("mixing_seed") != seed or episode.get("drive") is not True
+                            or episode.get("observation_source") != "learner_memory"):
+                        raise ValueError(f"Runner validation identity differs: {directory}")
+                    if (directory / "drive-metrics.json").is_file():
+                        module("nav_ppo_final").retain_tail(directory)
+                        continue
+                    for key in ("id", "family", "split", "region", "place_id"):
+                        if key in value:
+                            episode[key] = value[key]
+                    episode.update(index=index, validation_scenario=value, scenario_seed=value["seed"], action_seed=seed,
+                                   weights=str(args.weights))
+                    if started is not None:
+                        episode["collector_wall_s"] = time.monotonic() - started
+                    write_json(directory / "episode.json", episode)
+                    measured = validation_episode_metrics(directory)
+                    write_json(directory / "drive-metrics.json", measured)
+                    module("nav_ppo_final").retain_tail(directory)
+                    print(json.dumps(dict(id=value["id"], family=value["family"], action_seed=seed,
+                                          success=measured["success"], elapsed_ms=episode["elapsed_ms"])), flush=True)
+            finally:
+                runner.close()
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(collect, index) for index in range(workers)]
         for future in futures:
@@ -612,7 +842,232 @@ def population(args):
     print(json.dumps(result, ensure_ascii=False))
 
 
+def maneuver_press_metrics(times, teacher, applied, window_ms=1000):
+    """Match rising button edges one-to-one by type within a fixed +/-1s window."""
+    import numpy as np
+    times, teacher, applied = np.asarray(times), np.asarray(teacher, dtype=bool), np.asarray(applied, dtype=bool)
+    if teacher.shape != applied.shape or teacher.shape != (len(times), 2):
+        raise ValueError("Maneuver labels/actions must align with decision timestamps")
+    result = {}
+    for column, name in enumerate(("jump", "climb")):
+        reference = times[teacher[:, column] & ~np.r_[False, teacher[:-1, column]]]
+        selected = times[applied[:, column] & ~np.r_[False, applied[:-1, column]]]
+        teacher_index = selected_index = hits = 0
+        while teacher_index < len(reference) and selected_index < len(selected):
+            if selected[selected_index] < reference[teacher_index] - window_ms:
+                selected_index += 1
+            elif selected[selected_index] > reference[teacher_index] + window_ms:
+                teacher_index += 1
+            else:
+                hits += 1
+                teacher_index += 1
+                selected_index += 1
+        false = len(selected) - hits
+        result[name] = dict(teacher_presses=len(reference), recalled_presses=hits,
+                            learner_presses=len(selected), false_presses=false,
+                            recall=hits / len(reference) if len(reference) else None,
+                            false_presses_per_1000_decisions=1000 * false / len(times) if len(times) else None)
+    return result
+
+
+def applied_transition_trace(route, actions, frames):
+    """Build passage witnesses from the frozen link and executed actions only.
+
+    The watched topology is passive outcome evidence. A takeoff press counts
+    only within 150cm of its frozen source; learner path labels are not actions.
+    """
+    import numpy as np
+    if not frames:
+        raise ValueError("Jump validation has no passive physical transition frames")
+    source = np.asarray(route["transition_start_m"]) * 100
+    frame_times = np.asarray([frame["elapsed_ms"] for frame in frames])
+    trace = []
+    for action in actions[:-1]:
+        index = min(len(frames) - 1, max(0, int(np.searchsorted(frame_times, action[0], side="right")) - 1))
+        frame = frames[index]
+        if frame.get("transition_id") != route["transition_id"]:
+            raise ValueError("Passive transition monitor differs from the frozen scheduled link")
+        near_source = math.dist(frame["position_cm"], source) <= 150
+        trace.append(dict(elapsed_ms=int(action[0]), position_cm=frame["position_cm"],
+            transitions=[dict(id=route["transition_id"], type=route["type"])],
+            active_transition_id=route["transition_id"], active_transition_type=route["type"],
+            on_transition=near_source, jump=bool(action[5]), climb=bool(action[6])))
+    return trace
+
+
+def validation_episode_metrics(directory):
+    import numpy as np
+    directory = Path(directory)
+    metadata = read_json(directory / "episode.json")
+    demos = module("nav_demos")
+    result = module("nav_drive").episode_metrics(directory, demos)
+    actions = np.loadtxt(directory / "actions.txt", ndmin=2)
+    labels = np.concatenate([np.column_stack((chunk["keys"]["jump"], chunk["keys"]["climb"]))
+                             for chunk in demos.iter_chunks(directory)])
+    result.update({key: metadata[key] for key in ("id", "family", "goal_kind", "action_seed", "scenario_seed")})
+    result["maneuver_presses"] = maneuver_press_metrics(actions[:-1, 0], labels, actions[:-1, 5:7])
+    if metadata["goal_kind"] in ("follow", "approach"):
+        moving = module("nav_demos_v4").text_metrics(directory)
+        for key in ("first_contact_ms", "follow_observed_ms", "follow_in_band_ms", "follow_fraction",
+                    "follow_full_horizon", "follow_failure", "follow_success", "approach_success"):
+            if key in moving:
+                result[key] = moving[key]
+    if metadata["family"] == "jump":
+        jumps = module("nav_jump_record")
+        frames = list(rows(directory / "transition-frames.jsonl"))
+        route = metadata["validation_scenario"]
+        trace = applied_transition_trace(route, actions, frames)
+        evidence, failure = jumps.transition_evidence(route, trace, frames=frames)
+        evidence["action_source"] = "actions.txt; takeoff <=150cm from frozen scheduled transition source"
+        result.update(goal_success=result["success"], success=bool(result["success"] and not failure),
+                      transition_success=bool(result["success"] and not failure),
+                      transition_failure=failure, transition_evidence=evidence)
+        if failure:
+            result["observed_reason"] = failure
+    if metadata["family"] == "safety":
+        safety = module("nav_perception_safety")
+        frames = list(rows(directory / "perception-safety-frames.jsonl"))
+        intervals = safety.fall_intervals(frames)
+        result.update(falls=sum(value["descent_cm"] > safety.CV_STEP_CM for value in intervals),
+            entered_deep_water=any(frame["water_depth_cm"] + safety.WATER_DEPTH_EPSILON_CM >= frame["deep_water_threshold_cm"]
+                                   for frame in frames), swimming=any(frame["swimming"] for frame in frames))
+        fixture = metadata["validation_scenario"].get("safety_fixture")
+        if fixture is not None:
+            result["safety"] = safety.assess(fixture, metadata, frames)
+    return result
+
+
+def validation_group_metrics(episodes):
+    result = module("nav_drive").group_metrics(episodes)
+    result.update(turn_in_place_fraction=result["action_fraction"]["turn_only"],
+                  idle_fraction=result["action_fraction"]["idle"])
+    presses = {}
+    for name in ("jump", "climb"):
+        counts = {key: sum(ep["maneuver_presses"][name][key] for ep in episodes)
+                  for key in ("teacher_presses", "recalled_presses", "learner_presses", "false_presses")}
+        counts.update(recall=counts["recalled_presses"] / counts["teacher_presses"] if counts["teacher_presses"] else None,
+                      false_presses_per_1000_decisions=1000 * counts["false_presses"] / result["decisions"])
+        presses[name] = counts
+    result["maneuver_presses"] = presses
+    following = [ep for ep in episodes if ep["goal_kind"] == "follow"]
+    if following:
+        observed = sum(ep["follow_observed_ms"] for ep in following)
+        band = sum(ep["follow_in_band_ms"] for ep in following)
+        result.update(follow_observed_ms=observed, follow_in_band_ms=band,
+                      follow_fraction=band / observed if observed else None,
+                      follow_contact_episodes=sum(ep["first_contact_ms"] is not None for ep in following),
+                      follow_full_horizon_episodes=sum(ep["follow_full_horizon"] for ep in following))
+    safety = [ep for ep in episodes if ep["family"] == "safety"]
+    if safety:
+        result.update(falls=sum(ep["falls"] for ep in safety),
+                      episodes_with_falls=sum(ep["falls"] > 0 for ep in safety),
+                      deep_water_episodes=sum(ep["entered_deep_water"] for ep in safety),
+                      swimming_episodes=sum(ep["swimming"] for ep in safety))
+    return result
+
+
+def validation_summary(episodes):
+    def families(values):
+        return {family: validation_group_metrics([ep for ep in values if ep["family"] == family])
+                for family in sorted({ep["family"] for ep in values})}
+    return dict(all=validation_group_metrics(episodes), by_family=families(episodes),
+        by_seed={str(seed): dict(all=validation_group_metrics([ep for ep in episodes if ep["action_seed"] == seed]),
+                                by_family=families([ep for ep in episodes if ep["action_seed"] == seed]))
+                 for seed in sorted({ep["action_seed"] for ep in episodes})},
+        metric_definitions=dict(follow="sum in-band ms / sum post-contact ms; first <=500cm, band 200..500cm",
+            maneuver_presses="rising edges, matched one-to-one by type within +/-1000ms of online teacher rising edge; unmatched learner edges per 1000 decisions",
+            turn_in_place="nonzero turn, zero forward/strafe; fraction of decisions",
+            idle="zero forward/strafe/turn/jump/climb; fraction of decisions",
+            jump_success="goal reached plus scheduled transition, applied button, native dynamics and completed landing-side evidence",
+            falls="physical unsupported descent >60cm; harmful falls reported separately by original safety assessor"), episodes=episodes)
+
+
+def object_detour_summary(episodes, probes_path):
+    """Stratify objects with frozen Detour labels, independent of policy outcomes."""
+    objects = defaultdict(list)
+    for episode in episodes:
+        if episode["family"] == "object":
+            objects[episode["id"]].append(episode)
+    probes = {}
+    for probe in rows(probes_path):
+        identifier = probe.get("label")
+        if identifier in objects:
+            if identifier in probes:
+                raise ValueError(f"Duplicate object Detour probe: {identifier}")
+            probes[identifier] = probe
+    scenarios, ratios = [], {}
+    for identifier, samples in sorted(objects.items()):
+        probe = probes.get(identifier)
+        if probe is None:
+            raise ValueError(f"Missing object Detour probe: {identifier}")
+        direct, detour = float(probe["direct_cm"]), float(probe["detour_length_cm"])
+        if (probe.get("detour_complete") is not True or not math.isfinite(direct)
+                or not math.isfinite(detour) or min(direct, detour) <= 0
+                or any((sample["start"], sample["goal"]) != (probe["start"], probe["goal"])
+                       for sample in samples)):
+            raise ValueError(f"Invalid object Detour probe: {identifier}")
+        ratio = detour / direct
+        ratios[identifier] = ratio
+        bucket = "<1.2" if ratio < 1.2 else "1.2-1.5" if ratio <= 1.5 else ">1.5"
+        successes = sum(bool(sample["success"]) for sample in samples)
+        scenarios.append(dict(id=identifier, start=probe["start"], goal=probe["goal"],
+            detour_length_cm=detour, direct_cm=direct, detour_ratio=ratio, bucket=bucket,
+            episodes=len(samples), successes=successes, success_fraction=successes / len(samples),
+            by_seed={str(sample["action_seed"]): bool(sample["success"]) for sample in samples}))
+
+    def aggregate(selected):
+        values = [episode for identifier in selected for episode in objects[identifier]]
+        successes = sum(bool(episode["success"]) for episode in values)
+        by_seed = {}
+        for seed in sorted({episode["action_seed"] for episode in values}):
+            repeated = [episode for episode in values if episode["action_seed"] == seed]
+            wins = sum(bool(episode["success"]) for episode in repeated)
+            by_seed[str(seed)] = dict(episodes=len(repeated), successes=wins, success_fraction=wins / len(repeated))
+        return dict(scenarios=len(selected), episodes=len(values), successes=successes,
+                    success_fraction=successes / len(values) if values else None, by_seed=by_seed)
+
+    return {"source": str(probes_path), "scenarios": scenarios,
+        "by_bucket": {bucket: aggregate([value["id"] for value in scenarios if value["bucket"] == bucket])
+                      for bucket in ("<1.2", "1.2-1.5", ">1.5")},
+        "detours_over_1.2": aggregate([identifier for identifier, ratio in ratios.items() if ratio > 1.2])}
+
+
+def object_failure_summaries(episodes, count=10):
+    failures = [ep for ep in episodes if ep["family"] == "object" and not ep["success"]]
+    selected, seen = [], set()
+    for episode in failures:
+        if episode["id"] not in seen:
+            selected.append(episode)
+            seen.add(episode["id"])
+    selected.extend(ep for ep in failures if ep not in selected)
+    analyzer, results = module("nav_ppo_failures"), []
+    for measured in selected[:count]:
+        result, _, _, _ = analyzer.summarize_episode(Path(measured["episode"]), measured)
+        results.append(dict(id=measured["id"], action_seed=measured["action_seed"],
+            episode=measured["episode"], behaviour=result["behaviour"], eye_tail=result["eye_tail"],
+            final_eye=result["final_eye"], final_memory=result["memory_snapshots"][-1],
+            goal=result["carrot"], body_final=result["body_final"]))
+    return results
+
+
 def summarize(args):
+    cached = sorted(args.source.rglob("drive-metrics.json"))
+    if cached:
+        episodes = [read_json(path) for path in cached]
+        if any(ep.get("split") != "validation" for ep in episodes):
+            raise ValueError("Manifest summary requires validation-only episodes")
+        rejections = [read_json(path) for path in sorted((args.source.parent / "setup-rejections").glob("*.json"))]
+        excluded = {value["id"] for value in rejections}
+        episodes = [episode for episode in episodes if episode["id"] not in excluded]
+        result = validation_summary(episodes)
+        result["setup_rejections"] = rejections
+        if getattr(args, "object_probes", None) is not None:
+            result["object_detour"] = object_detour_summary(episodes, args.object_probes)
+        result["object_failures_last_10s"] = object_failure_summaries(episodes)
+        write_json(args.output / "metrics.json", result)
+        print(json.dumps({key: value for key, value in result.items()
+                          if key not in ("episodes", "object_failures_last_10s")}, ensure_ascii=False))
+        return
     paths = sorted(args.source.rglob("episode.json"))
     episodes = []
     for path in paths:
@@ -943,6 +1398,13 @@ def main():
     parser.add_argument("command", choices=("generate", "qualify", "drive", "population", "check", "summarize", "history", "compare", "equivalence", "death-smoke"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--pairs", type=Path)
+    parser.add_argument("--manifest", type=Path, help="Frozen v4 corpus manifest; drive reads splits.validation only")
+    parser.add_argument("--families", help="Comma-separated validation families; default all five")
+    parser.add_argument("--object-probes", type=Path, help="Frozen object Detour probes for validation summary")
+    parser.add_argument("--action-seeds", help="Fixed sampling seeds; default 18102027,18102028,18102029")
+    parser.add_argument("--jump-links", type=Path, help="Frozen jump links, used only for the jump family")
+    parser.add_argument("--safety-fixtures", type=Path, help="Existing physically qualified nav-perception-safety fixtures")
+    parser.add_argument("--fence-control", action="store_true", help="Include the existing Maleth fence control")
     parser.add_argument("--source", type=Path)
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--exclude", type=Path, action="append", default=[])
@@ -960,7 +1422,7 @@ def main():
     parser.add_argument("--episodes", type=int, help="Global episode cap; default N, or 1000000 with --run-ms")
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--action-mode", choices=("sample", "argmax"),
-                        help="Action selection: drive defaults to argmax, population to sample")
+                        help="Action selection, default sample; manifest validation requires sample")
     parser.add_argument("--hero", choices=("near", "far"), default="far")
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--run-ms", type=int, default=0, help="Population game-time span; 0 runs all episodes")
@@ -974,7 +1436,7 @@ def main():
         parser.add_argument("--" + name, type=Path)
     args = parser.parse_args()
     if args.action_mode is None:
-        args.action_mode = "argmax" if args.command == "drive" else "sample"
+        args.action_mode = "sample"
     for key, value in vars(args).items():
         if isinstance(value, Path):
             setattr(args, key, value.expanduser().resolve())
@@ -983,7 +1445,9 @@ def main():
         args.episodes = 1000000 if args.run_ms else args.population
     if not 0 <= args.seed <= 0xffffffff or args.per_region < 1 or args.max_teacher_candidates < 1 or args.count < 1 or args.min_far_cm < 0 or args.population < 1 or args.episodes < 1 or args.limit_ms < 1 or args.run_ms < 0:
         parser.error("seed must be uint32; per-region, population, episodes and limit-ms must be positive")
-    if args.command in ("qualify", "drive", "population", "equivalence", "death-smoke") and args.pairs is None:
+    if args.manifest is not None and (args.command != "drive" or args.pairs is not None):
+        parser.error("--manifest is exclusive with --pairs and only supports validation drive")
+    if args.command in ("qualify", "drive", "population", "equivalence", "death-smoke") and args.pairs is None and args.manifest is None:
         parser.error("--pairs is required")
     if args.command in ("check", "summarize", "compare") and args.source is None:
         parser.error("--source is required")

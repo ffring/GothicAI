@@ -8,11 +8,14 @@ Only numpy is required. Preparation streams the recordings one episode at a time
 Only NAVDEMO v2 recordings are accepted. The cache contains successful teacher
 episodes and all DAgger episodes from training pairs. A saved split preserves
 the held-out (start, goal) pairs; new successful v2 pairs join training.
+With --manifest, BC3 uses exactly the listed memory-v3 training episodes,
+including failed follow trials, without creating a new split.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -27,9 +30,12 @@ import nav_demos
 
 HEADS = ("forward", "strafe", "turn", "walk", "jump", "climb")
 CLASSES = (3, 3, 3, 2, 2, 2)
+BC3_HEADS = ("forward", "strafe", "turn", "walk", "maneuver")
+BC3_CLASSES = (3, 3, 3, 2, 3)
 SITUATIONS = ("wall", "turn", "beginning")
 VECTOR_SIZE = nav_demos.RAY_COUNT * 9 + 10 + 14
 CACHE_VERSION = 3
+BC3_CACHE_VERSION = 4
 INPUT_NAMES = frozenset(("body", "roads", "previous_keys", "eye", "memory_near", "memory_far"))
 
 PREPROCESSING = {
@@ -139,6 +145,72 @@ def encode_labels(keys: np.ndarray) -> np.ndarray:
     return labels
 
 
+def encode_bc3_labels(keys: np.ndarray) -> np.ndarray:
+    """Mutually exclusive maneuver labels: none=0, jump=1, climb=2."""
+    jump, climb = keys["jump"] != 0, keys["climb"] != 0
+    if (jump & climb).any():
+        raise ValueError("simultaneous jump and climb cannot form a BC3 maneuver label")
+    return np.column_stack((encode_labels(keys)[:, :4], jump + 2 * climb)).astype(np.uint8)
+
+
+def label_action_changes(labels: np.ndarray) -> np.ndarray:
+    """The initial episode action has no preceding teacher decision."""
+    changed = np.zeros(len(labels), dtype=np.uint8)
+    changed[1:] = np.any(labels[1:] != labels[:-1], axis=1)
+    return changed
+
+
+def action_change_weight(decisions: int, changes: int) -> float:
+    """Global Wijmans weight; it is applied only to changed teacher decisions."""
+    return float(np.clip(decisions / changes, 1, 10)) if changes else 1.
+
+
+def maneuver_weights(time_ms: np.ndarray, maneuver: np.ndarray) -> np.ndarray:
+    """Weight the inclusive +/-1 s neighborhood of each teacher press by five."""
+    pressed = (maneuver != 0) & np.r_[True, maneuver[1:] != maneuver[:-1]]
+    result = np.ones(len(maneuver), dtype=np.float32)
+    # Search on game time rather than assuming every episode is exactly 10 Hz.
+    stamps = np.asarray(time_ms, dtype=np.int64)
+    for stamp in stamps[pressed]:
+        result[np.searchsorted(stamps, stamp - 1000):np.searchsorted(stamps, stamp + 1000, side="right")] = 5
+    return result
+
+
+def future_stuck(time_ms: np.ndarray, position_cm: np.ndarray,
+                 labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Requested translation with <25 cm XZ excursion over a complete next 2 s."""
+    stamps = np.asarray(time_ms, dtype=np.int64)
+    if len(stamps) > 1 and (np.diff(stamps) <= 0).any():
+        raise ValueError("BC3 episode game time must increase strictly")
+    target = np.zeros(len(stamps), dtype=np.float32)
+    valid = (stamps + 2000 <= stamps[-1]).astype(np.uint8) if len(stamps) else np.zeros(0, np.uint8)
+    translating = (labels[:, 0] != 1) | (labels[:, 1] != 1)
+    xz = position_cm[:, [0, 2]]
+    for index in np.flatnonzero(valid & translating):
+        end = np.searchsorted(stamps, stamps[index] + 2000, side="right")
+        target[index] = np.max(np.linalg.norm(xz[index:end] - xz[index], axis=1)) < 25
+    return target, valid
+
+
+def detour_targets(records: np.ndarray, teacher_version: int) -> tuple[np.ndarray, np.ndarray]:
+    """Privileged supervision only; v3 teacher hints describe its remembered map."""
+    target = np.zeros((len(records), 4), dtype=np.float32)
+    valid = np.zeros(len(records), dtype=np.uint8)
+    if teacher_version not in (1, 2) or "teacher_hint" not in records.dtype.names:
+        return target, valid
+    hint = records["teacher_hint"]
+    delta = hint["next_corner_cm"] - records["position_cm"]
+    yaw = np.deg2rad(records["body_yaw_deg"])
+    local = np.column_stack((-delta[:, 0] * np.sin(yaw) + delta[:, 2] * np.cos(yaw),
+                             delta[:, 1], delta[:, 0] * np.cos(yaw) + delta[:, 2] * np.sin(yaw)))
+    norm = np.linalg.norm(local, axis=1)
+    valid[:] = (np.isfinite(local).all(axis=1) & np.isfinite(hint["path_cm"]) & (hint["path_cm"] >= 0))
+    target[:, 0] = np.clip(hint["path_cm"] / 1000, 0, 50)
+    np.divide(local, norm[:, None], out=target[:, 1:], where=norm[:, None] > 1e-6)
+    target[valid == 0] = 0
+    return target, valid
+
+
 def action_change_mask(records: np.ndarray, previous_teacher: np.ndarray | None = None) -> np.ndarray:
     """Changes between consecutive teacher answers, never preceding actor keys.
 
@@ -244,6 +316,12 @@ def load_cached(path: str | Path) -> dict[str, np.ndarray]:
                   "baseline": source["baseline"].astype(np.int64),
                   "situations": source["situations"].astype(np.uint8),
                   "action_change": source["action_change"].astype(np.uint8)}
+        for name in ("maneuver_weight", "stuck", "detour"):
+            if name in source:
+                result[name] = source[name].astype(np.float32)
+        for name in ("stuck_valid", "next_near_valid", "detour_valid"):
+            if name in source:
+                result[name] = source[name].astype(np.uint8)
         for name in ("near", "far"):
             result[name] = np.concatenate((source[f"{name}_channels"].astype(np.float32) / 255,
                                            source[f"{name}_height"].astype(np.float32),
@@ -251,9 +329,169 @@ def load_cached(path: str | Path) -> dict[str, np.ndarray]:
     return result
 
 
+def load_training_manifest(path: Path, source: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Resolve only explicit splits.train IDs; held-out scenarios are never opened."""
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    expected = {"name": "NAVDEMO", "version": 2, "navigation_memory_version": 3,
+                "perception_mode": "gaze", "physics": "cv"}
+    if (manifest.get("schema_version") != 1 or manifest.get("dataset") != "nav-demos-v4"
+            or manifest.get("consumer") != "nav-bc3" or manifest.get("complete") is not True
+            or manifest.get("format") != expected):
+        raise ValueError("BC3 requires a complete nav-demos-v4 memory-v3 manifest")
+    if Path(manifest["root"]).resolve() != source.resolve():
+        raise ValueError("BC3 source differs from the manifest root")
+    by_id = {}
+    for entry in manifest["episodes"]:
+        if entry["id"] in by_id:
+            raise ValueError(f"duplicate episode ID in manifest: {entry['id']}")
+        by_id[entry["id"]] = entry
+    selected, seen = [], set()
+    annotations = None
+    for family, identities in manifest["splits"]["train"].items():
+        if not isinstance(identities, list):
+            raise ValueError(f"training split must list episode IDs: {family}")
+        for identity in identities:
+            if identity in seen:
+                raise ValueError(f"duplicate training episode ID: {identity}")
+            seen.add(identity)
+            if identity not in by_id:
+                raise ValueError(f"training episode missing from manifest: {identity}")
+            entry = by_id[identity]
+            scenario = entry["scenario"]
+            if (entry.get("split") != "train" or entry.get("family") != family
+                    or entry.get("training_eligible") is not True or scenario.get("split", entry["split"]) != "train"
+                    or scenario.get("navigation_memory_version") != 3):
+                raise ValueError(f"ineligible BC3 training episode: {identity}")
+            directory = Path(entry["episode"])
+            if not directory.is_absolute() or not directory.resolve().is_relative_to(source.resolve()):
+                raise ValueError(f"training episode is outside the corpus: {identity}")
+            if "region" not in scenario:
+                # Early raw episodes lack collector annotations. Eligibility and
+                # split belong to the manifest; only the missing region comes
+                # from the finalized summary, never physical scenario values.
+                if annotations is None:
+                    summary = Path(manifest["sources"]["recordings/collection-metrics.json"]["path"])
+                    annotations = {value["id"]: value for value in
+                                   json.loads(summary.read_text(encoding="utf-8"))["episodes"]}
+                scenario = {**scenario, "region": annotations[identity]["region"]}
+            selected.append({**entry, "scenario": scenario, "directory": directory})
+    if not selected:
+        raise ValueError("manifest has no BC3 training episodes")
+    totals = manifest["totals"]
+    if (len(selected) != totals["train_episodes"]
+            or sum(entry["decisions"] for entry in selected) != totals["train_decisions"]):
+        raise ValueError("manifest training totals differ from splits.train")
+    return manifest, selected
+
+
+def prepare_manifest(source: Path, output: Path, manifest_path: Path,
+                     chunk_records: int = 32) -> dict[str, Any]:
+    """Prepare the frozen BC3 training population, including failed follow trials."""
+    if any(not path.is_absolute() for path in (source, output, manifest_path)):
+        raise ValueError("source, output and manifest paths must be absolute")
+    if output.resolve().is_relative_to(source.resolve()):
+        raise ValueError("cache must be outside the source recordings")
+    _, episodes = load_training_manifest(manifest_path, source)
+    index: dict[str, Any] = {
+        "cache_version": BC3_CACHE_VERSION, "navdemo_version": 2, "navigation_memory_version": 3,
+        "manifest": str(manifest_path), "heads": list(BC3_HEADS), "classes": list(BC3_CLASSES),
+        "vector_size": VECTOR_SIZE, "near_shape": [9, 32, 32], "far_shape": [9, 25, 25],
+        "preprocessing": PREPROCESSING, "situations": list(SITUATIONS), "episodes": [],
+        "class_counts": {"train": {head: [0] * count for head, count in zip(BC3_HEADS, BC3_CLASSES)}},
+        "auxiliary": {"stuck": {"horizon_ms": 2000, "excursion_xz_cm": 25,
+                                  "requires_requested_translation": True, "requires_full_horizon": True},
+                      "next_near": {"target": "next encoded near map", "last_step_valid": False},
+                      "detour": {"weight": .5, "available_steps": 0,
+                                 "target_order": ["path_cm/1000 clipped [0,50]", "right", "up", "forward"],
+                                 "teacher_versions": [1, 2], "memory_teacher_hints_excluded": True},
+                      "true_map": {"available": False, "reason": "not recorded in NAVDEMO v2"}},
+    }
+    common_layout, changes, decisions = None, 0, 0
+    (output / "episodes").mkdir(parents=True, exist_ok=True)
+    for number, entry in enumerate(episodes, start=1):
+        directory, scenario = entry["directory"], entry["scenario"]
+        samples = directory / "samples.bin.gz"
+        if nav_demos.episode_version(samples) != 2 or nav_demos.episode_memory_version(samples) != 3:
+            raise ValueError(f"BC3 training episode is not NAVDEMO v2 memory-v3: {directory}")
+        metadata = json.loads((directory / "episode.json").read_text(encoding="utf-8"))
+        if metadata.get("decisions") != entry["decisions"]:
+            raise ValueError(f"manifest decision count differs from recording: {directory}")
+        with samples.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != entry["samples_sha256"]:
+                raise ValueError(f"manifest sample checksum differs: {directory}")
+        layout = nav_demos.ray_layout(samples)
+        if common_layout is None:
+            common_layout = layout
+            index["eye_layout"] = layout.tolist()
+        elif not np.array_equal(layout, common_layout):
+            raise ValueError("episodes have inconsistent ray layouts")
+        parts: dict[str, list[np.ndarray]] = {}
+        teacher_version = metadata.get("teacher_version", scenario.get("teacher_version"))
+        steps = 0
+        for records in nav_demos.iter_chunks(samples, chunk_records):
+            inputs = nav_demos.learner_input(records)
+            labels = encode_bc3_labels(records["keys"])
+            features = _pack(encode_features(inputs, layout))
+            detour, detour_valid = detour_targets(records, teacher_version)
+            baseline = np.column_stack((road_baseline(inputs)[:, :4], np.zeros(len(records), np.uint8)))
+            features.update(labels=labels, baseline=baseline,
+                            situations=situation_masks(inputs, layout, labels, steps),
+                            time_ms=records["time_ms"].copy(), position_cm=records["position_cm"].copy(),
+                            detour=detour, detour_valid=detour_valid)
+            for name, values in features.items():
+                parts.setdefault(name, []).append(values)
+            steps += len(records)
+        if not steps or steps != entry["decisions"]:
+            raise ValueError(f"record count differs from manifest decisions: {directory}")
+        arrays = {name: np.concatenate(values) for name, values in parts.items()}
+        del parts
+        stamps, positions = arrays.pop("time_ms"), arrays.pop("position_cm")
+        arrays["action_change"] = label_action_changes(arrays["labels"])
+        arrays["maneuver_weight"] = maneuver_weights(stamps, arrays["labels"][:, 4])
+        arrays["stuck"], arrays["stuck_valid"] = future_stuck(stamps, positions, arrays["labels"])
+        arrays["next_near_valid"] = np.r_[np.ones(steps - 1, np.uint8), np.uint8(0)]
+        identity = entry["id"]
+        if not isinstance(identity, str) or Path(identity).name != identity or identity in (".", ".."):
+            raise ValueError(f"invalid cache episode ID: {identity!r}")
+        relative_file = Path("episodes") / f"{identity}.npz"
+        destination = output / relative_file
+        temporary = destination.with_suffix(".npz.tmp")
+        with temporary.open("wb") as stream:
+            np.savez_compressed(stream, **arrays)
+        temporary.replace(destination)
+        for head_index, (head, count) in enumerate(zip(BC3_HEADS, BC3_CLASSES)):
+            counts = np.bincount(arrays["labels"][:, head_index], minlength=count)
+            index["class_counts"]["train"][head] = (np.asarray(index["class_counts"]["train"][head]) + counts).tolist()
+        index["episodes"].append({
+            "id": identity, "family": entry["family"], "pair": [scenario["start"], scenario["goal"]],
+            "start": scenario["start"], "goal": scenario["goal"], "region": scenario["region"],
+            "split": "train", "steps": steps, "file": relative_file.as_posix(), "source_kind": "teacher",
+            "success": entry.get("teacher_goal_success") is True,
+        })
+        changes += int(arrays["action_change"].sum())
+        decisions += steps
+        index["auxiliary"]["detour"]["available_steps"] += int(arrays["detour_valid"].sum())
+        del arrays
+        print(f"cache {number}/{len(episodes)} {identity}: {steps} steps (train)", flush=True)
+    index["action_change_weight"] = action_change_weight(decisions, changes)
+    index["action_change"] = {"N": decisions, "n_I": changes, "clip": [1, 10], "first_decision_excluded": True}
+    index["maneuver_windows"] = {"radius_ms": 1000, "weight": 5, "event": "rising teacher press"}
+    index["splits"] = {"train": {"pairs": len({tuple(ep["pair"]) for ep in index["episodes"]}),
+                                 "episodes": len(episodes), "steps": decisions}}
+    temporary_index = output / "index.json.tmp"
+    temporary_index.write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temporary_index.replace(output / "index.json")
+    print(json.dumps(index["splits"], ensure_ascii=False), flush=True)
+    return index
+
+
 def prepare(source: Path, output: Path, seed: int = 17, validation_fraction: float = .2,
             chunk_records: int = 32, split_index: Path | None = None,
-            dagger_sources: list[Path] | None = None) -> dict[str, Any]:
+            dagger_sources: list[Path] | None = None, manifest: Path | None = None) -> dict[str, Any]:
+    if manifest is not None:
+        if split_index is not None or dagger_sources:
+            raise ValueError("BC3 manifest preparation does not accept legacy split-index or DAgger sources")
+        return prepare_manifest(source, output, manifest, chunk_records)
     dagger_sources = dagger_sources or []
     paths = [source, output, *dagger_sources, *([split_index] if split_index else [])]
     if any(not path.is_absolute() for path in paths):
@@ -404,9 +642,11 @@ def main() -> None:
                                  help="preserve train/validation pairs from an earlier cache index")
     prepare_command.add_argument("--dagger-source", type=Path, action="append", default=[],
                                  help="add all labelled learner drives from original training pairs; repeat per round")
+    prepare_command.add_argument("--manifest", type=Path,
+                                 help="use only the frozen nav-demos-v4 splits.train recordings (BC3)")
     args = parser.parse_args()
     prepare(args.source, args.output, args.seed, args.validation_fraction, args.chunk_records,
-            args.split_index, args.dagger_source)
+            args.split_index, args.dagger_source, args.manifest)
 
 
 if __name__ == "__main__":

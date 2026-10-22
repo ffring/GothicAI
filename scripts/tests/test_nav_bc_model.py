@@ -21,7 +21,7 @@ from torch.nn import functional as F
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from nav_bc_model import HEAD_SIZES, NavPolicy, export_weights
+from nav_bc_model import HEAD_SIZES, BC3_HEAD_SIZES, NavPolicy, export_weights
 from nav_bc_numpy import NumpyPolicy, _adaptive_avg_pool2d
 from nav_bc_data import PREPROCESSING
 
@@ -122,6 +122,36 @@ class NavPolicyReferenceTest(unittest.TestCase):
         self.path.write_bytes(json.dumps(header).encode("utf-8") + b"\n" + payload)
         with self.assertRaisesRegex(ValueError, "invalid payload range"):
             NumpyPolicy(self.path)
+
+    def test_v2_auxiliary_heads_are_training_only_and_recurrent_logits_match(self) -> None:
+        model = NavPolicy(37, hidden_size=16, format_version=2, auxiliary=True).eval()
+        temperatures = dict.fromkeys(BC3_HEAD_SIZES, .8)
+        header = export_weights(model, self.path, self.preprocessing, temperatures)
+        self.assertEqual(header["version"], 2)
+        self.assertEqual(header["temperatures"], temperatures)
+        self.assertEqual(header["architecture"]["heads"]["maneuver"]["values"], [0, 1, 2])
+        self.assertFalse(any(tensor["name"].startswith("aux_") for tensor in header["tensors"]))
+        policy = NumpyPolicy(self.path)
+        rng = np.random.default_rng(14)
+        near = rng.normal(size=(1, 5, 9, 32, 32)).astype(np.float32)
+        far = rng.normal(size=(1, 5, 9, 25, 25)).astype(np.float32)
+        vector = rng.normal(size=(1, 5, 37)).astype(np.float32)
+        with torch.inference_mode():
+            logits, hidden, auxiliary = model(*(torch.from_numpy(a) for a in (near, far, vector)),
+                                               return_auxiliary=True)
+        self.assertEqual(auxiliary["next_near"].shape, (1, 5, 9, 32, 32))
+        carried = None
+        for step in range(5):
+            actual, carried = policy.step(near[0, step], far[0, step], vector[0, step], carried)
+            for head in BC3_HEAD_SIZES:
+                np.testing.assert_allclose(actual[head], logits[head][0, step].numpy(), atol=1e-5)
+        np.testing.assert_allclose(carried, hidden[0, 0].numpy(), atol=1e-5)
+
+    def test_export_rejects_invalid_head_temperatures(self) -> None:
+        for temperatures in ({"turn": 1.}, dict.fromkeys(HEAD_SIZES, 0.),
+                             dict.fromkeys(HEAD_SIZES, float("nan"))):
+            with self.assertRaisesRegex(ValueError, "temperatures"):
+                export_weights(self.model, self.path, temperatures=temperatures)
 
 
 if __name__ == "__main__":

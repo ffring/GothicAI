@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Create the asset-free C++/NumPy navigation-policy contract fixture.
 
-The default is deterministic small weights and 1000 synthetic NAVDEMO v2 records.
+The default is deterministic small v2 weights and 1000 synthetic NAVDEMO v2 records.
 Use --navdemo-version 1 for the synthetic v1 preprocessing contract. Supplied
 weights select their input version from their own header.
 For the recorded-step acceptance check, pass the trained weights and an episode
@@ -9,7 +9,7 @@ with at least 1000 decisions (or a recording directory containing such an episod
 
     OPENBLAS_NUM_THREADS=1 python3 -I scripts/check_nav_policy.py \
         --output /absolute/build/navpolicy-real --weights /absolute/policy.navbc \
-        --source /absolute/nav-demos --steps 1000
+        --source /absolute/nav-demos --steps 1000 --torch
     /absolute/build/gothic-navpolicy-contract \
         /absolute/policy.navbc /absolute/build/navpolicy-real/parity.bin.gz
 
@@ -30,7 +30,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import nav_bc_data as data
-from nav_bc_numpy import NumpyPolicy
+from nav_bc_numpy import HEAD_SIZES, NumpyPolicy
 import nav_demos as demos
 
 
@@ -84,9 +84,11 @@ def fixture_features(record: np.ndarray, layout: np.ndarray, navdemo_version: in
     return data.encode_features(inputs, layout)
 
 
-def synthetic_weights(path: Path, navdemo_version: int = 2) -> None:
+def synthetic_weights(path: Path, navdemo_version: int = 2, format_version: int = 2,
+                      temperatures: dict[str, float] | None = None) -> None:
     """A small valid export built without importing the Torch training module."""
     preprocessing = fixture_preprocessing(navdemo_version)
+    head_sizes = HEAD_SIZES[format_version]
     hidden = 8
     shapes = []
     for prefix in ("near_encoder", "far_encoder"):
@@ -96,7 +98,7 @@ def synthetic_weights(path: Path, navdemo_version: int = 2) -> None:
                ("fusion.0.weight", (128, 256)), ("fusion.0.bias", (128,)),
                ("gru.weight_ih_l0", (3 * hidden, 128)), ("gru.weight_hh_l0", (3 * hidden, hidden)),
                ("gru.bias_ih_l0", (3 * hidden,)), ("gru.bias_hh_l0", (3 * hidden,))]
-    for name, classes in zip(data.HEADS, data.CLASSES):
+    for name, classes in head_sizes.items():
         shapes += [("head_" + name + ".weight", (classes, hidden)), ("head_" + name + ".bias", (classes,))]
     rng = np.random.default_rng(1705)
     tensors, payload, offset = [], [], 0
@@ -120,12 +122,14 @@ def synthetic_weights(path: Path, navdemo_version: int = 2) -> None:
         "fusion": {"concat": ["near", "far", "vector"], "in": 256, "out": 128, "activation": "relu"},
         "gru": {"input_size": 128, "hidden_size": hidden, "layers": 1,
                 "gate_order": ["reset", "update", "new"], "initial_hidden": "zeros"},
-        "heads": {name: {"classes": classes, "values": [-1, 0, 1] if classes == 3 else [0, 1]}
-                  for name, classes in zip(data.HEADS, data.CLASSES)},
+        "heads": {name: {"classes": classes, "values": [-1, 0, 1] if index < 3 else list(range(classes))}
+                  for index, (name, classes) in enumerate(head_sizes.items())},
     }
-    header = {"format": "gothic-nav-bc", "version": 1, "byte_order": "little", "data_nbytes": offset,
+    header = {"format": "gothic-nav-bc", "version": format_version, "byte_order": "little", "data_nbytes": offset,
               "offset_origin": "first byte after JSON header newline", "architecture": architecture,
               "preprocessing": preprocessing, "tensors": tensors}
+    if temperatures is not None:
+        header["temperatures"] = temperatures
     with path.open("wb") as stream:
         stream.write(json.dumps(header, separators=(",", ":")).encode() + b"\n")
         for values in payload:
@@ -231,17 +235,28 @@ def main() -> None:
     parser.add_argument("--source", type=Path)
     parser.add_argument("--navdemo-version", type=int, choices=(1, 2),
                         help="synthetic weight/record input version (default: 2); supplied weights use their header")
+    parser.add_argument("--weight-version", type=int, choices=(1, 2),
+                        help="synthetic weight format (default: 2); supplied weights use their header")
+    parser.add_argument("--torch", action="store_true", help="also compare exported weights with Torch on every step")
     parser.add_argument("--steps", type=int, default=1000)
     args = parser.parse_args()
     if not args.output.is_absolute() or args.steps < 1:
         parser.error("--output must be absolute and --steps must be positive")
-    if args.weights is not None and args.navdemo_version is not None:
-        parser.error("--navdemo-version is only for generated weights; --weights selects its version from its header")
+    if args.weights is not None and (args.navdemo_version is not None or args.weight_version is not None):
+        parser.error("--navdemo-version/--weight-version are only for generated weights; supplied weights select their versions")
     args.output.mkdir(parents=True, exist_ok=True)
     weights = args.weights or args.output / "fixture.navbc"
     if args.weights is None:
-        synthetic_weights(weights, args.navdemo_version or 2)
+        synthetic_weights(weights, args.navdemo_version or 2, args.weight_version or 2)
     policy = NumpyPolicy(weights)
+    torch_policy = torch_hidden = None
+    torch_logit_error = torch_hidden_error = 0.0
+    if args.torch:
+        import torch
+        from nav_bc_model import NavPolicy
+        torch.set_num_threads(1)
+        torch_policy = NavPolicy(policy.vector_size, policy.hidden_size, format_version=policy.format_version).eval()
+        torch_policy.load_state_dict({name: torch.from_numpy(value.copy()) for name, value in policy.weights.items()})
     navdemo_version = weight_input_version(policy.header, policy.vector_size)
     if args.source:
         source, layout, records = recorded_steps(args.source, args.steps, navdemo_version)
@@ -251,8 +266,10 @@ def main() -> None:
         source_name = "deterministic synthetic NAVDEMO records"
     header = {"format": "navpolicy-parity", "version": 1, "steps": args.steps,
               "navdemo_version": navdemo_version,
+              "weight_version": policy.format_version,
               "record_bytes": demos.RECORD_BYTES, "vector_size": policy.vector_size,
-              "hidden_size": policy.hidden_size, "heads": list(data.HEADS), "classes": list(data.CLASSES),
+              "hidden_size": policy.hidden_size, "heads": list(policy.head_names), "classes": list(policy.head_sizes.values()),
+              "temperatures": policy.temperatures,
               "eye_layout": layout.tolist(), "source": source_name, "carry_hidden": True}
     destination = args.output / "parity.bin.gz"
     hidden = None
@@ -262,10 +279,19 @@ def main() -> None:
         for record in records:
             features = fixture_features(record, layout, navdemo_version)
             logits, hidden = policy.step(features["near"][0], features["far"][0], features["vector"][0], hidden)
+            if torch_policy is not None:
+                inputs = [torch.from_numpy(features[name][:, None]) for name in ("near", "far", "vector")]
+                with torch.inference_mode():
+                    torch_logits, torch_hidden = torch_policy(*inputs, torch_hidden)
+                torch_logit_error = max(torch_logit_error, *(float(np.abs(logits[name] - torch_logits[name][0, 0].numpy()).max())
+                                                            for name in policy.head_names))
+                torch_hidden_error = max(torch_hidden_error, float(np.abs(hidden - torch_hidden[0, 0].numpy()).max()))
+                if max(torch_logit_error, torch_hidden_error) > 1e-4:
+                    raise ValueError(f"Torch/NumPy parity failed at step {count + 1}: logits={torch_logit_error}, hidden={torch_hidden_error}")
             stream.write(record.tobytes())
             for name in ("near", "far", "vector"):
                 stream.write(features[name].astype("<f4", copy=False).tobytes())
-            for name in data.HEADS:
+            for name in policy.head_names:
                 stream.write(logits[name].astype("<f4", copy=False).tobytes())
             stream.write(hidden.astype("<f4", copy=False).tobytes())
             count += 1
@@ -273,7 +299,10 @@ def main() -> None:
         raise ValueError(f"expected {args.steps} steps, wrote {count}")
     print(json.dumps({"weights": str(weights), "fixture": str(destination), "steps": count,
                       "source": source_name, "navdemo_version": navdemo_version,
-                      "hidden_size": policy.hidden_size, "carry_hidden": True}))
+                      "weight_version": policy.format_version,
+                      "hidden_size": policy.hidden_size, "carry_hidden": True,
+                      "torch_checked": args.torch, "torch_max_logit_error": torch_logit_error,
+                      "torch_max_hidden_error": torch_hidden_error}))
 
 
 if __name__ == "__main__":

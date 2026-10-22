@@ -77,3 +77,63 @@ def test_evaluate_action_changes_uses_mask_and_handles_no_changes(monkeypatch, m
             assert changed["model"][head]["accuracy"] == expected
         else:
             assert changed["model"][head]["accuracy"] == 0
+
+
+def test_bc3_loss_weights_action_changes_and_maneuver_windows():
+    import torch
+    logits = {head: torch.zeros(1, 2, classes, requires_grad=True)
+              for head, classes in zip(train.BC3_HEADS, train.BC3_CLASSES)}
+    labels = torch.zeros(1, 2, 5, dtype=torch.long)
+    mask = torch.ones(1, 2, dtype=torch.bool)
+    auxiliary = dict(stuck=torch.zeros(1, 2, requires_grad=True),
+                     next_near=torch.zeros(1, 2, 9, 32, 32, requires_grad=True),
+                     detour=torch.zeros(1, 2, 4, requires_grad=True))
+    targets = dict(action_change=torch.tensor([[0., 1.]]),
+                   maneuver_weight=torch.tensor([[1., 5.]]),
+                   stuck=torch.zeros(1, 2), stuck_valid=torch.zeros(1, 2),
+                   next_near=torch.zeros(1, 2, 9, 32, 32), next_near_valid=torch.zeros(1, 2),
+                   detour=torch.zeros(1, 2, 4), detour_valid=torch.zeros(1, 2))
+    loss, terms = train.bc3_loss(logits, auxiliary, labels, mask, targets,
+                                [torch.ones(c) for c in train.BC3_CLASSES], 10.)
+    expected = np.log(3) * (1 - 1/3)**2 * (1 + 10 * 5) / 11
+    assert terms["maneuver"].item() == pytest.approx(expected)
+    loss.backward()
+    for head in train.BC3_HEADS:
+        gradient = logits[head].grad
+        ratio = gradient[0, 1].abs().sum() / gradient[0, 0].abs().sum()
+        assert ratio.item() == pytest.approx(50 if head == "maneuver" else 10)
+    assert all(terms[name].item() == 0 for name in auxiliary)
+
+
+def test_bc3_next_frame_targets_cross_tbptt_boundary_without_episode_leak():
+    episode = dict(labels=np.zeros((3, 5), np.int64),
+                   near=np.stack([np.full((9, 32, 32), i, np.float32) for i in range(3)]))
+    for name in ("action_change", "maneuver_weight", "stuck", "stuck_valid",
+                 "next_near_valid", "detour_valid"):
+        episode[name] = np.ones(3, np.float32)
+    episode["next_near_valid"][-1] = 0
+    episode["detour"] = np.zeros((3, 4), np.float32)
+    targets = train.bc3_targets([episode], 1, 3, "cpu")
+    np.testing.assert_array_equal(targets["next_near"][0, 0].numpy(), 2)
+    np.testing.assert_array_equal(targets["next_near"][0, 1:].numpy(), 0)
+    np.testing.assert_array_equal(targets["next_near_valid"].numpy(), [[1, 0, 0]])
+
+
+def test_bc3_initialization_preserves_actor_and_conditions_exclusive_maneuvers(tmp_path):
+    import torch
+    from nav_bc_model import NavPolicy, export_weights
+    legacy = NavPolicy(train.VECTOR_SIZE, 8)
+    current = NavPolicy(train.VECTOR_SIZE, 8, format_version=2, auxiliary=True)
+    index = dict(preprocessing=train.PREPROCESSING, eye_layout=[[0, 0, 1]])
+    path = tmp_path / "initial.navbc"
+    export_weights(legacy, path, preprocessing={**index["preprocessing"], "eye_layout": index["eye_layout"]})
+    train.initialize_bc3(current, path, index)
+    torch.testing.assert_close(current.gru.weight_ih_l0, legacy.gru.weight_ih_l0)
+    torch.testing.assert_close(current.head_forward.weight, legacy.head_forward.weight)
+    jump, climb = legacy.head_jump, legacy.head_climb
+    torch.testing.assert_close(current.head_maneuver.weight,
+                               torch.stack((jump.weight[0] + climb.weight[0],
+                                            jump.weight[1] + climb.weight[0],
+                                            jump.weight[0] + climb.weight[1])))
+    with pytest.raises(ValueError, match="eye layout"):
+        train.initialize_bc3(current, path, {**index, "eye_layout": [[1, 0, 1]]})

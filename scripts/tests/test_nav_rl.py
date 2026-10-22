@@ -479,7 +479,7 @@ def test_single_drive_keeps_original_output_layout(tmp_path, monkeypatch):
     rl.drive(args)
     assert calls[0].output == tmp_path
     assert calls[0].indices == '0'
-    assert calls[0].action_mode == 'argmax'
+    assert calls[0].action_mode == 'sample'
 
 
 def test_far_comparison_accepts_improved_speed_and_reachability():
@@ -687,10 +687,10 @@ def test_far_improvement_with_exact_drive_population_parity_uses_no_outlier_budg
     assert report['comparisons']['drive_vs_population_far']['passed']
 
 
-@pytest.mark.parametrize("command,requested,expected", [("drive", None, "argmax"),
+@pytest.mark.parametrize("command,requested,expected", [("drive", None, "sample"),
     ("drive", "sample", "sample"), ("drive", "argmax", "argmax"),
     ("population", None, "sample"), ("population", "argmax", "argmax")])
-def test_action_mode_cli_keeps_greedy_drive_and_sampled_population_defaults(tmp_path, monkeypatch, command, requested, expected):
+def test_action_mode_cli_defaults_to_sampling(tmp_path, monkeypatch, command, requested, expected):
     captured = []
     argv = ['nav_rl.py', command, '--output', str(tmp_path), '--pairs', '/frozen.jsonl']
     if requested is not None:
@@ -699,3 +699,412 @@ def test_action_mode_cli_keeps_greedy_drive_and_sampled_population_defaults(tmp_
     monkeypatch.setattr(rl, command, lambda args: captured.append(args))
     rl.main()
     assert captured[0].action_mode == expected
+
+
+def validation_manifest(tmp_path):
+    scenarios = {family: [dict(id=family + "-case", family=family, goal_kind=(
+        "follow" if family == "follow_below_gate" else "point" if family == "jump" else family),
+        region="onar", start="A", goal="B", split="validation", seed=19, episode=None,
+        recorded=False, decisions=0, limit_ms=240000)] for family in rl.VALIDATION_FAMILIES}
+    scenarios["approach"][0].update(target="SHEEP", route=["B", "A"])
+    scenarios["follow_below_gate"][0].update(target="BAU_954_MALETH", route=["B", "A", "C"])
+    scenarios["jump"][0].update(transition_id=43)
+    path = tmp_path / "corpus.json"
+    rl.write_json(path, dict(schema_version=1, splits=dict(validation=scenarios,
+        train="must not be inspected", test="must not be inspected")))
+    return path, scenarios
+
+
+def test_manifest_validation_uses_exact_frozen_scenarios_and_ignores_other_splits(tmp_path):
+    path, groups = validation_manifest(tmp_path)
+    values = rl.validation_scenarios(path)
+    assert values == [groups[family][0] for family in rl.VALIDATION_FAMILIES]
+    assert rl.validation_scenarios(path, "point,object") == values[:2]
+    with pytest.raises(ValueError, match="validation family"):
+        rl.validation_scenarios(path, "test")
+
+
+@pytest.mark.parametrize("corruption", [dict(split="test"), dict(recorded=True), dict(episode="/old"),
+                                      dict(id="../escape"), dict(family="object"), dict(seed=-1)])
+def test_manifest_validation_rejects_changed_identity(tmp_path, corruption):
+    path, groups = validation_manifest(tmp_path)
+    groups["point"][0].update(corruption)
+    rl.write_json(path, dict(schema_version=1, splits=dict(validation=groups)))
+    with pytest.raises(ValueError):
+        rl.validation_scenarios(path)
+
+
+def test_validation_commands_preserve_world_seed_and_force_sampled_zero_teacher(tmp_path):
+    path, groups = validation_manifest(tmp_path)
+    args = SimpleNamespace(npc="NPC", limit_ms=100, weights=Path("/policy.navbc"), roads=Path("/roads"))
+    point = rl.validation_commands(args, groups["point"][0], 43)
+    assert point[-2] == "navdemos drive NPC A B 240000 /policy.navbc 0 43 sample"
+    object_commands = rl.validation_commands(args, groups["object"][0], 43)
+    assert object_commands[-2].startswith("navdemos drive-object NPC A B ")
+    moving = rl.validation_commands(args, groups["follow_below_gate"][0], 43)
+    assert moving[-2] == ("navdemos drive-moving NPC A BAU_954_MALETH B,A,C follow "
+                           "240000 19 /policy.navbc 0 43 sample")
+    assert "navdemos oracle off" in moving
+    assert "navdemos perception-mode gaze" in moving
+    assert rl.validation_commands(args, groups["jump"][0], 43)[-2].endswith("sample 43")
+    assert rl.action_seeds(None) == list(rl.ACTION_SEEDS)
+    assert rl.action_seeds("7,19,43") == [7, 19, 43]
+    with pytest.raises(ValueError, match="uint32"):
+        rl.action_seeds("7,7")
+
+
+def test_maneuver_press_metrics_count_edges_and_typed_windows():
+    times = np.arange(50) * 100
+    teacher = np.zeros((50, 2))
+    selected = np.zeros_like(teacher)
+    teacher[12:16, 0] = 1
+    teacher[30:32, 1] = 1
+    selected[5:8, 0] = 1  # Within one second of the teacher jump.
+    selected[30:32, 0] = 1  # Wrong maneuver at the climb label.
+    selected[45:47, 1] = 1  # Too late to recall climb.
+    result = rl.maneuver_press_metrics(times, teacher, selected)
+    assert result["jump"] == dict(teacher_presses=1, recalled_presses=1, learner_presses=2,
+        false_presses=1, recall=1, false_presses_per_1000_decisions=20)
+    assert result["climb"]["recall"] == 0
+    assert result["climb"]["false_presses"] == 1
+
+
+def test_maneuver_press_recall_requires_one_to_one_matches():
+    teacher = np.zeros((20, 2))
+    selected = np.zeros_like(teacher)
+    teacher[[8, 12], 0] = 1
+    selected[10, 0] = 1
+    result = rl.maneuver_press_metrics(np.arange(20) * 100, teacher, selected)
+    assert result["jump"]["teacher_presses"] == 2
+    assert result["jump"]["recall"] == .5
+
+
+def test_jump_passage_uses_executed_buttons_and_frozen_source():
+    route = dict(transition_id=43, type="jump", transition_start_m=[0, 0, 0])
+    actions = np.zeros((4, 9))
+    actions[:, 0] = [0, 100, 200, 300]
+    actions[:2, 5] = 1
+    frames = [dict(elapsed_ms=time, transition_id=43, position_cm=position)
+              for time, position in ((0, [0, 0, 0]), (100, [50, 0, 0]), (200, [200, 0, 0]))]
+    trace = rl.applied_transition_trace(route, actions, frames)
+    assert [row["jump"] for row in trace] == [True, True, False]
+    assert [row["on_transition"] for row in trace] == [True, True, False]
+    assert all(row["active_transition_id"] == 43 for row in trace)
+
+
+def test_validation_summary_pools_follow_by_time_and_keeps_each_action_seed(monkeypatch):
+    monkeypatch.setattr(rl, "module", lambda _: SimpleNamespace(group_metrics=lambda episodes: dict(
+        n=len(episodes), arrived=sum(ep["success"] for ep in episodes), decisions=sum(ep["decisions"] for ep in episodes),
+        action_fraction=dict(turn_only=.1, idle=.2))))
+    counts = {name: dict(teacher_presses=1, recalled_presses=1, learner_presses=2, false_presses=1)
+              for name in ("jump", "climb")}
+    episodes = [dict(id="follow-case", family="follow_below_gate", goal_kind="follow", success=False,
+        action_seed=seed, decisions=100, maneuver_presses=counts, follow_observed_ms=observed,
+        follow_in_band_ms=band, first_contact_ms=0, follow_full_horizon=True)
+        for seed, observed, band in ((7, 1000, 1000), (19, 9000, 0))]
+    result = rl.validation_summary(episodes)
+    assert result["by_family"]["follow_below_gate"]["follow_fraction"] == .1
+    assert set(result["by_seed"]) == {"7", "19"}
+    assert result["all"]["maneuver_presses"]["jump"]["false_presses_per_1000_decisions"] == 10
+
+
+def test_manifest_drive_cli_does_not_require_pairs_and_forbids_argmax(tmp_path, monkeypatch):
+    captured = []
+    monkeypatch.setattr(rl.sys, "argv", ["nav_rl.py", "drive", "--output", str(tmp_path),
+                                      "--manifest", "/frozen.json"])
+    monkeypatch.setattr(rl, "drive", lambda args: captured.append(args))
+    rl.main()
+    assert captured[0].manifest == Path("/frozen.json")
+    assert captured[0].pairs is None
+    assert captured[0].action_mode == "sample"
+    with pytest.raises(ValueError, match="sampling"):
+        rl.drive_validation(SimpleNamespace(action_mode="argmax"))
+
+
+def test_manifest_drive_repeats_scenario_seed_for_three_policy_seeds(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    calls, closed, tails = [], [], []
+    monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: closed.append(True)))
+    def scenario(args, runner, name, commands, directory):
+        seed = int(commands[-2].split()[-2])
+        calls.append((args.seed, seed, commands[-2]))
+        rl.write_json(directory / "episode.json", dict(demo_version=2, navigation_memory_version=3,
+            physics_mode="cv", oracle=False, action_mode="sample", teacher_beta=0, mixing_seed=seed,
+            drive=True, observation_source="learner_memory", elapsed_ms=100, success=False))
+    monkeypatch.setattr(rl, "scenario", scenario)
+    monkeypatch.setattr(rl, "validation_episode_metrics", lambda path: dict(success=False))
+    monkeypatch.setattr(rl, "module", lambda name: SimpleNamespace(retain_tail=lambda path: tails.append(path)))
+    args = SimpleNamespace(manifest=manifest, families="point", action_mode="sample", action_seeds=None,
+        indices=None, parallel=1, output=tmp_path / "out", cache=tmp_path / "cache", seed=7, resume=False,
+        npc="NPC", roads=Path("/roads"), weights=Path("/policy"), limit_ms=240000, physics="cv")
+    rl.drive_validation(args)
+    assert [(world, seed) for world, seed, _ in calls] == [(19, seed) for seed in rl.ACTION_SEEDS]
+    assert len(closed) == 1
+    assert len(tails) == 3
+
+
+def validation_drive_args(tmp_path, manifest, policy="bc3", family="approach", resume=False):
+    return SimpleNamespace(manifest=manifest, families=family, action_mode="sample", action_seeds=None,
+        indices=None, parallel=1, output=tmp_path / "validation" / policy, cache=tmp_path / "cache", seed=7,
+        resume=resume, npc="NPC", roads=Path("/roads"), weights=Path(f"/{policy}.navbc"),
+        limit_ms=240000, physics="cv")
+
+
+def validation_runner_metadata(value, seed):
+    return dict(demo_version=2, navigation_memory_version=3, physics_mode="cv", oracle=False,
+        action_mode="sample", teacher_beta=0, mixing_seed=seed, drive=True,
+        observation_source="learner_memory", goal_kind=value["goal_kind"], elapsed_ms=100, success=False)
+
+
+def stub_validation_runner(monkeypatch):
+    monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(rl, "module", lambda name: SimpleNamespace(retain_tail=lambda path: None))
+
+
+def test_validation_setup_refusal_continues_and_is_shared_between_policies(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    rejected = groups["approach"][0]
+    healthy = dict(rejected, id="approach-connected", route=["B", "C"])
+    groups["approach"].append(healthy)
+    rl.write_json(manifest, dict(schema_version=1, splits=dict(validation=groups)))
+    stub_validation_runner(monkeypatch)
+    calls, runners, healthy_runners = [], [], []
+    reason = "Runner rejected advance: navdemos moving route needs distinct connected points"
+
+    class FakeRunner:
+        pending = False
+        closes = 0
+
+        def close(self):
+            self.closes += 1
+
+    def new_runner(*args):
+        runner = FakeRunner()
+        runners.append(runner)
+        return runner
+
+    monkeypatch.setattr(rl, "new_runner", new_runner)
+    def scenario(args, runner, name, commands, directory):
+        if runner.pending:
+            raise RuntimeError("Runner rejected reset: advance is pending")
+        scenario_id = directory.parent.name
+        seed = int(directory.name.removeprefix("seed-"))
+        calls.append((args.weights.stem, scenario_id, seed))
+        if scenario_id == rejected["id"]:
+            runner.pending = True
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "runner.log").write_text(reason)
+            raise RuntimeError(reason)
+        healthy_runners.append(runner)
+        rl.write_json(directory / "episode.json", validation_runner_metadata(healthy, seed))
+
+    monkeypatch.setattr(rl, "scenario", scenario)
+    monkeypatch.setattr(rl, "validation_episode_metrics", lambda path: dict(success=False))
+    for policy in ("bc3", "it35"):
+        args = validation_drive_args(tmp_path, manifest, policy, resume=True)
+        seed = rl.ACTION_SEEDS[0]
+        ready = args.output / "validation/approach" / healthy["id"] / f"seed-{seed}"
+        metadata = dict(validation_runner_metadata(healthy, seed), validation_scenario=healthy,
+                        action_seed=seed, weights=str(args.weights))
+        rl.write_json(ready / "episode.json", metadata)
+        rl.write_json(ready / "drive-metrics.json", dict(success=False))
+        (ready / "samples.bin.gz").write_bytes(b"ready original samples")
+        rl.drive_validation(args)
+        assert rl.read_json(ready / "episode.json") == metadata
+        assert (ready / "samples.bin.gz").read_bytes() == b"ready original samples"
+
+    assert calls == [("bc3", rejected["id"], rl.ACTION_SEEDS[0])] + [
+        (policy, healthy["id"], seed) for policy in ("bc3", "it35") for seed in rl.ACTION_SEEDS[1:]]
+    assert [runner.closes for runner in runners] == [1, 1, 1]
+    assert runners[0].pending
+    assert healthy_runners == [runners[1], runners[1], runners[2], runners[2]]
+    saved = rl.read_json(tmp_path / "validation/setup-rejections" / f"{rejected['id']}.json")
+    assert saved["id"] == rejected["id"]
+    assert saved["family"] == "approach"
+    assert saved["validation_scenario"] == rejected
+    assert saved["reason"] == reason
+    for policy in ("bc3", "it35"):
+        assert len(list((tmp_path / "validation" / policy).rglob("episode.json"))) == 3
+
+
+@pytest.mark.parametrize("failure_stage", ["close", "restart"])
+def test_validation_setup_refusal_keeps_runner_replacement_failures_fatal(tmp_path, monkeypatch, failure_stage):
+    manifest, _ = validation_manifest(tmp_path)
+    stub_validation_runner(monkeypatch)
+    started, calls = [], []
+
+    def close():
+        if failure_stage == "close":
+            raise RuntimeError("Runner close failed")
+
+    def new_runner(*args):
+        started.append(True)
+        if len(started) > 1:
+            raise RuntimeError("Runner restart failed")
+        return SimpleNamespace(close=close)
+
+    def scenario(*args):
+        calls.append(True)
+        raise RuntimeError("Runner rejected advance: navdemos moving route needs distinct connected points")
+
+    monkeypatch.setattr(rl, "new_runner", new_runner)
+    monkeypatch.setattr(rl, "scenario", scenario)
+    with pytest.raises(RuntimeError, match=f"Runner {failure_stage} failed"):
+        rl.drive_validation(validation_drive_args(tmp_path, manifest))
+    assert calls == [True]
+    assert len(started) == (1 if failure_stage == "close" else 2)
+
+
+@pytest.mark.parametrize("family,failure", [("approach", RuntimeError("Runner exited with code 1")),
+    ("approach", ValueError("NAVDEMO record is corrupt")), ("approach", OSError("No space left on device")),
+    ("point", RuntimeError("Runner rejected advance: navdemos moving route needs distinct connected points"))])
+def test_validation_keeps_runner_record_and_disk_failures_fatal(tmp_path, monkeypatch, family, failure):
+    manifest, _ = validation_manifest(tmp_path)
+    stub_validation_runner(monkeypatch)
+    calls = []
+
+    def scenario(*args):
+        calls.append(True)
+        raise failure
+
+    monkeypatch.setattr(rl, "scenario", scenario)
+    with pytest.raises(type(failure), match=str(failure)):
+        rl.drive_validation(validation_drive_args(tmp_path, manifest, family=family))
+    assert calls == [True]
+    assert not list((tmp_path / "validation/setup-rejections").glob("*.json"))
+
+
+def test_validation_summary_removes_shared_setup_refusals_from_both_policies(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    rejected = groups["approach"][0]
+    reason = "Runner rejected advance: navdemos moving route needs distinct connected points"
+    rl.write_json(tmp_path / "validation/setup-rejections" / f"{rejected['id']}.json",
+        dict(id=rejected["id"], family="approach", validation_scenario=rejected, reason=reason))
+    captured = []
+    monkeypatch.setattr(rl, "validation_summary", lambda episodes: captured.append(episodes) or dict(episodes=episodes))
+    monkeypatch.setattr(rl, "object_failure_summaries", lambda episodes: [])
+    for policy in ("bc3", "it35"):
+        output = validation_drive_args(tmp_path, manifest, policy).output
+        for identifier in (rejected["id"], "approach-connected"):
+            rl.write_json(output / "validation/approach" / identifier / "seed-7/drive-metrics.json",
+                dict(id=identifier, family="approach", split="validation", success=False, action_seed=7))
+        rl.summarize(SimpleNamespace(source=output, output=output))
+        summary = rl.read_json(output / "metrics.json")
+        assert [episode["id"] for episode in summary["episodes"]] == ["approach-connected"]
+        assert summary["setup_rejections"][0]["id"] == rejected["id"]
+        assert summary["setup_rejections"][0]["reason"] == reason
+    assert [[episode["id"] for episode in episodes] for episodes in captured] == [
+        ["approach-connected"], ["approach-connected"]]
+
+
+def test_validation_resume_recovers_completed_episode_without_collector_metadata(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    args = validation_drive_args(tmp_path, manifest, family="point", resume=True)
+    args.action_seeds = "7"
+    value = groups["point"][0]
+    directory = args.output / "validation/point" / value["id"] / "seed-7"
+    rl.write_json(directory / "episode.json", validation_runner_metadata(value, 7))
+    (directory / "samples.bin.gz").write_bytes(b"completed original samples")
+    stub_validation_runner(monkeypatch)
+    monkeypatch.setattr(rl, "scenario", lambda *args: pytest.fail("Completed episode was rerun"))
+    measured = []
+
+    def metrics(path):
+        measured.append(path)
+        metadata = rl.read_json(path / "episode.json")
+        assert metadata["validation_scenario"] == value
+        assert metadata["action_seed"] == 7
+        assert metadata["weights"] == str(args.weights)
+        return dict(success=False)
+
+    monkeypatch.setattr(rl, "validation_episode_metrics", metrics)
+    rl.drive_validation(args)
+    assert measured == [directory]
+    assert (directory / "samples.bin.gz").read_bytes() == b"completed original samples"
+    assert rl.read_json(directory / "drive-metrics.json") == dict(success=False)
+
+
+def test_validation_resume_recreates_only_incomplete_episode(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    args = validation_drive_args(tmp_path, manifest, family="point", resume=True)
+    args.action_seeds = "7"
+    value = groups["point"][0]
+    directory = args.output / "validation/point" / value["id"] / "seed-7"
+    directory.mkdir(parents=True)
+    (directory / "partial-samples.bin.gz").write_bytes(b"incomplete")
+    neighbour = directory.parent / "seed-19" / "episode.json"
+    rl.write_json(neighbour, dict(sentinel="other episode"))
+    stub_validation_runner(monkeypatch)
+    calls = []
+
+    def scenario(args, runner, name, commands, output):
+        assert output == directory
+        assert not (output / "partial-samples.bin.gz").exists()
+        calls.append(output)
+        rl.write_json(output / "episode.json", validation_runner_metadata(value, 7))
+
+    monkeypatch.setattr(rl, "scenario", scenario)
+    monkeypatch.setattr(rl, "validation_episode_metrics", lambda path: dict(success=False))
+    rl.drive_validation(args)
+    assert calls == [directory]
+    assert rl.read_json(neighbour) == dict(sentinel="other episode")
+
+
+def test_object_detour_summary_counts_scenarios_and_keeps_exact_ratio_boundaries(tmp_path):
+    probes, episodes = [], []
+    cases = [("short", 110, [True, False, False]), ("lower-boundary", 120, [False, True, True]),
+             ("upper-boundary", 150, [True, True, True]), ("long", 200, [False, False, False])]
+    for identifier, length, wins in cases:
+        probes.append(dict(label=identifier, start=f"{identifier}-A", goal=f"{identifier}-B",
+                           detour_complete=True, detour_length_cm=length, direct_cm=100))
+        episodes.extend(dict(id=identifier, family="object", start=f"{identifier}-A", goal=f"{identifier}-B",
+                             action_seed=seed, success=success) for seed, success in zip(rl.ACTION_SEEDS, wins))
+    episodes.append(dict(family="point", success=True))
+    path = tmp_path / "object-probes.jsonl"
+    path.write_text("".join(json.dumps(probe) + "\n" for probe in probes))
+
+    result = rl.object_detour_summary(episodes, path)
+
+    assert result["source"] == str(path)
+    scenarios = {value["id"]: value for value in result["scenarios"]}
+    assert set(scenarios) == {identifier for identifier, _, _ in cases}
+    for identifier, length, wins in cases:
+        value = scenarios[identifier]
+        assert value["start"] == f"{identifier}-A"
+        assert value["goal"] == f"{identifier}-B"
+        assert value["detour_length_cm"] == length
+        assert value["direct_cm"] == 100
+        assert value["detour_ratio"] == pytest.approx(length / 100)
+        assert value["episodes"] == 3
+        assert value["successes"] == sum(wins)
+        assert value["success_fraction"] == pytest.approx(sum(wins) / 3)
+    assert {identifier: value["bucket"] for identifier, value in scenarios.items()} == {
+        "short": "<1.2", "lower-boundary": "1.2-1.5", "upper-boundary": "1.2-1.5", "long": ">1.5"}
+    for bucket, scenario_count, successes, count in (("<1.2", 1, 1, 3), ("1.2-1.5", 2, 5, 6), (">1.5", 1, 0, 3)):
+        value = result["by_bucket"][bucket]
+        assert (value["scenarios"], value["episodes"], value["successes"]) == (scenario_count, count, successes)
+        assert value["success_fraction"] == pytest.approx(successes / count)
+    middle = result["by_bucket"]["1.2-1.5"]["by_seed"]
+    for seed, successes in zip(rl.ACTION_SEEDS, (1, 2, 2)):
+        assert middle[str(seed)] == dict(episodes=2, successes=successes, success_fraction=successes / 2)
+    detours = result["detours_over_1.2"]
+    assert (detours["scenarios"], detours["episodes"], detours["successes"]) == (2, 6, 3)
+    assert detours["success_fraction"] == .5
+    assert detours["by_seed"] == {str(seed): dict(episodes=2, successes=1, success_fraction=.5)
+                                  for seed in rl.ACTION_SEEDS}
+
+
+@pytest.mark.parametrize("corruption", [None, dict(detour_complete=False), dict(detour_length_cm=float("nan")),
+    dict(direct_cm=float("inf")), dict(direct_cm=0), dict(start="WRONG-A"), dict(goal="WRONG-B")])
+def test_object_detour_summary_rejects_missing_or_invalid_selected_probe(tmp_path, corruption):
+    identifier = "object-case"
+    probe = dict(label=identifier, start="A", goal="B", detour_complete=True, detour_length_cm=150, direct_cm=100)
+    if corruption is not None:
+        probe.update(corruption)
+    path = tmp_path / "object-probes.jsonl"
+    path.write_text("" if corruption is None else json.dumps(probe) + "\n")
+    episode = dict(id=identifier, family="object", start="A", goal="B", action_seed=7, success=False)
+    with pytest.raises(ValueError, match=identifier):
+        rl.object_detour_summary([episode], path)

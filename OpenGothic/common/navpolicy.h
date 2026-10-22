@@ -17,6 +17,9 @@ class NavPolicy final {
     inline static constexpr std::array<const char*,headCount> headNames = {
       "forward","strafe","turn","walk","jump","climb"
       };
+    inline static constexpr std::array<const char*,5> bc3HeadNames = {
+      "forward","strafe","turn","walk","maneuver"
+      };
 
     struct Features final {
       std::array<float,nearSize> near = {};
@@ -48,6 +51,11 @@ class NavPolicy final {
     size_t hiddenSize() const { return hidden; }
     size_t vectorInputSize() const { return vectorEncoder.inputs; }
     uint32_t navDemoVersion() const { return demoVersion; }
+    uint32_t weightVersion() const { return formatVersion; }
+    size_t actionHeadCount() const { return formatVersion==2 ? bc3HeadNames.size() : headNames.size(); }
+    const char* headName(size_t index) const { return formatVersion==2 ? bc3HeadNames.at(index) : headNames.at(index); }
+    size_t headSize(size_t index) const { return index<3 || (formatVersion==2 && index==4) ? 3 : 2; }
+    double headTemperature(size_t index) const { return temperatures.at(index); }
 
   private:
     struct Linear final {
@@ -62,7 +70,9 @@ class NavPolicy final {
     static std::array<float,64> map(const float* input, size_t size, const MapEncoder& encoder);
 
     size_t hidden = 0;
+    uint32_t formatVersion = 1;
     uint32_t demoVersion = 1;
+    std::array<double,headCount> temperatures = {1,1,1,1,1,1};
     MapEncoder nearEncoder, farEncoder;
     Linear vectorEncoder, fusion, gruInput, gruHidden;
     std::array<Linear,headCount> heads;

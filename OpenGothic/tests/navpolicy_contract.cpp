@@ -18,9 +18,6 @@
 #include <vector>
 
 namespace {
-constexpr std::array<size_t,6> classes={3,3,3,2,2,2};
-constexpr std::array<const char*,6> heads={"forward","strafe","turn","walk","jump","climb"};
-
 void require(bool condition,const std::string& message) {
   if(!condition) throw std::runtime_error(message);
   }
@@ -124,11 +121,15 @@ struct Fixture final {
   gzFile stream=nullptr;
   size_t steps=0,hidden=0,readSteps=0;
   uint32_t demoVersion=1;
+  uint32_t weightVersion=1;
+  std::vector<std::string> heads;
+  std::vector<size_t> classes;
+  std::vector<double> temperatures;
   std::vector<std::array<float,3>> layout;
   std::string source;
   std::vector<uint8_t> raw;
   NavPolicy::Features expected;
-  std::array<std::vector<float>,6> logits;
+  std::vector<std::vector<float>> logits;
   std::vector<float> hiddenState;
 
   explicit Fixture(const std::string& path) {
@@ -153,6 +154,15 @@ struct Fixture final {
         };
       steps=number("steps");hidden=number("hidden_size");
       if(header.HasMember("navdemo_version")) demoVersion=uint32_t(number("navdemo_version"));
+      if(header.HasMember("weight_version")) weightVersion=uint32_t(number("weight_version"));
+      require(weightVersion==1 || weightVersion==2,"unsupported fixture weight version");
+      if(weightVersion==2) {
+        heads={"forward","strafe","turn","walk","maneuver"};classes={3,3,3,2,3};
+        }
+      else {
+        heads={"forward","strafe","turn","walk","jump","climb"};classes={3,3,3,2,2,2};
+        }
+      logits.resize(heads.size());temperatures.assign(heads.size(),1.);
       require(demoVersion==1 || demoVersion==2,"unsupported fixture NAVDEMO version");
       require(steps>0 && steps<=100000 && hidden>0 && hidden<=4096,"fixture dimensions out of bounds");
       const auto vectorSize=number("vector_size");
@@ -171,6 +181,13 @@ struct Fixture final {
         require(header["classes"][rapidjson::SizeType(i)].IsUint() &&
                 header["classes"][rapidjson::SizeType(i)].GetUint()==classes[i],"fixture head classes mismatch");
         logits[i].resize(classes[i]);
+        if(header.HasMember("temperatures")) {
+          const auto& values=header["temperatures"];
+          require(values.IsObject() && values.HasMember(heads[i].c_str()) && values[heads[i].c_str()].IsNumber(),
+                  "fixture temperatures mismatch");
+          temperatures[i]=values[heads[i].c_str()].GetDouble();
+          require(std::isfinite(temperatures[i]) && temperatures[i]>0,"invalid fixture temperature");
+          }
         }
       require(header.HasMember("eye_layout") && header["eye_layout"].IsArray() &&
               header["eye_layout"].Size()==NavDemoWriter::rayCount,"fixture eye layout mismatch");
@@ -236,6 +253,12 @@ void parity(const std::string& weights,const std::string& path) {
   require(policy.hiddenSize()==fixture.hidden,"weight/fixture hidden size mismatch");
   require(policy.vectorInputSize()==fixture.expected.vector.size(),"weight/fixture vector size mismatch");
   require(policy.navDemoVersion()==fixture.demoVersion,"weight/fixture NAVDEMO version mismatch");
+  require(policy.weightVersion()==fixture.weightVersion,"weight/fixture policy version mismatch");
+  require(policy.actionHeadCount()==fixture.heads.size(),"weight/fixture head count mismatch");
+  for(size_t i=0;i<fixture.heads.size();++i) {
+    require(policy.headName(i)==fixture.heads[i] && policy.headSize(i)==fixture.classes[i],"weight/fixture head schema mismatch");
+    require(policy.headTemperature(i)==fixture.temperatures[i],"weight/fixture temperature mismatch");
+    }
   NavPolicy::State state;
   Observation observation;
   double featureError=0,logitError=0,hiddenError=0;
@@ -263,8 +286,13 @@ void parity(const std::string& weights,const std::string& path) {
       }
     const auto result=policy.step(actual,state);
     double localLogit=0;
-    for(size_t h=0;h<heads.size();++h)
+    for(size_t h=0;h<fixture.heads.size();++h)
       localLogit=std::max(localLogit,difference(result.logits[h],fixture.logits[h]));
+    if(policy.weightVersion()==2) {
+      const auto& maneuver=result.logits[4];
+      const auto action=size_t(std::max_element(maneuver.begin(),maneuver.end())-maneuver.begin());
+      require(result.keys.jump==(action==1) && result.keys.climb==(action==2),"maneuver key decode mismatch");
+      }
     logitError=std::max(logitError,localLogit);
     const double localHidden=difference(state.hidden,fixture.hiddenState);
     hiddenError=std::max(hiddenError,localHidden);
@@ -309,13 +337,14 @@ void parity(const std::string& weights,const std::string& path) {
               difference(actual.vector,other.vector)==0,"privileged annotation leaked into features");
       NavPolicy::State fresh;
       const auto reset=policy.step(observation.snapshot,fresh);
-      for(size_t h=0;h<heads.size();++h)
+      for(size_t h=0;h<fixture.heads.size();++h)
         require(difference(result.logits[h],reset.logits[h])==0,"NPC state is shared across evaluations");
       }
     }
   fixture.finish();
   std::cout<<"{\"contract\":\"navpolicy\",\"steps\":"<<fixture.readSteps
            <<",\"navdemo_version\":"<<fixture.demoVersion
+           <<",\"weight_version\":"<<fixture.weightVersion
            <<",\"carry_hidden\":true,\"max_feature_error\":"<<featureError
            <<",\"max_logit_error\":"<<logitError<<",\"max_hidden_error\":"<<hiddenError<<"}\n";
   }
