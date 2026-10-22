@@ -71,7 +71,7 @@ from .protocol import (
 from .quest_tools import AMEND
 from .trace import CallTrace, StepTrace, TraceWriter, TurnTrace
 from .tts import TtsClient, TtsError
-from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice
+from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice, tool_output
 
 if TYPE_CHECKING:
     from .perception import Sight
@@ -1738,10 +1738,10 @@ class DialogueManager:
         if quick:
             self._yield_to(conv.npc)
         first: asyncio.Task[str] | None = None
-        full: asyncio.Task[tuple[str, Snapshot | None]] | None = None
+        full: asyncio.Task[tuple[str, Snapshot | None, Sight | None]] | None = None
         try:
             # the quick model's words do not wait for the extensions: they ready the whole situation meanwhile
-            situation_text, snap = await self._situation(conv, body, brief=quick or react)
+            situation_text, snap, sight = await self._situation(conv, body, brief=quick or react)
             if quick or react:
                 full = asyncio.create_task(self._situation(conv, body))
             if kind == "player":  # its first reaction at once: words (outside a fight) and a gesture
@@ -1750,7 +1750,7 @@ class DialogueManager:
                 first = asyncio.create_task(self._first_reaction(conv, trigger.content, words))
             sound = await first if first is not None else ""
             if react and full is not None:  # the answer: the conversational model's, on the whole situation
-                situation_text, _ = await full
+                situation_text, _, sight = await full
         except asyncio.CancelledError:
             for task in (first, full):
                 if task is not None:
@@ -1768,7 +1768,8 @@ class DialogueManager:
         state = TurnState(
             relevant=relevant,
             overlay=overlay,
-            tools=self._offered(conv.npc) if tools is None else tools,
+            tools=self._offered(conv.npc, sight) if tools is None else tools,
+            sight=sight,
             dynamic_tools=tools is None,
             reply=f"R{next(self._reply_ids)}",
             # voiced, the first line is synthesized before it is heard: cut it at the first clause
@@ -1799,7 +1800,7 @@ class DialogueManager:
                 status = await self._act_on_line(conv, state, trigger, full, sound, trace)
             else:
                 if quick and full is not None:  # the quick model said nothing: the whole situation, as usual
-                    situation_text, _ = await full
+                    situation_text, _, state.sight = await full
                     if sound:
                         situation_text += SOUND_SAID.format(sound)
                     request = [*conv.history, Message("developer", situation_text), trigger]
@@ -1915,7 +1916,11 @@ class DialogueManager:
                 return "completed"
             if step == MAX_STEPS - 1:
                 return "step_cap"
-            results = [ToolResult(c.call_id, o.output) for c, o in zip(calls, outcomes, strict=True)]
+            said = " ".join(s for s in (state.filler, to_game_text(state.text)) if s) if speak else ""
+            results = [
+                ToolResult(c.call_id, tool_output(o, said))
+                for c, o in zip(calls, outcomes, strict=True)
+            ]
             added = [*done.items, *results]
             request += added
         return "completed"
@@ -1939,7 +1944,7 @@ class DialogueManager:
         conv: Conversation,
         state: TurnState,
         trigger: Message,
-        full: asyncio.Task[tuple[str, Snapshot | None]],
+        full: asyncio.Task[tuple[str, Snapshot | None, Sight | None]],
         sound: str,
         trace: TurnTrace,
     ) -> str:
@@ -1948,7 +1953,7 @@ class DialogueManager:
         only loses the acts, the line is said already."""
         conv.acting = True  # the hero may speak again: a new turn, not an interruption
         await self._status(conv, "idle")
-        situation_text, _ = await full
+        situation_text, _, state.sight = await full
         said = " ".join(s for s in (sound, state.text.strip()) if s)
         situation_text += (
             f"\nТы уже сказал вслух: «{said}». Новых слов не нужно: реши, что ты делаешь, и сделай это "
@@ -1965,7 +1970,7 @@ class DialogueManager:
 
     async def _situation(
         self, conv: Conversation, body: str | None, *, brief: bool = False
-    ) -> tuple[str, Snapshot | None]:
+    ) -> tuple[str, Snapshot | None, Sight | None]:
         """The situation of a turn, from what the game and the extensions say now. `brief`: for the quick
         model's line in a fight, what the npc perceives and does, the extensions not asked; the events that
         came meanwhile are kept for the whole situation that follows."""
@@ -1995,7 +2000,7 @@ class DialogueManager:
             situation_text += "\nТолько что: " + "; ".join(c.strip("[]") for c in conv.pending) + "."
             if not brief:
                 conv.pending = []
-        return situation_text, snap
+        return situation_text, snap, sight
 
     async def _step(
         self,
@@ -2219,7 +2224,7 @@ class DialogueManager:
                 self._after_speech(conv, lambda: self._give(conv, give, snap))
                 return ToolOutcome("Принято: отдашь после реплики.", "accepted")
             case npc_tools.TAKE_ITEM:
-                sight = self.sight(conv.npc, snap) if self.sight is not None else None
+                sight = state.sight
                 item = str(call.arguments.get("item", "")).strip().upper()
                 thing = sight.things.get(item) if sight is not None else None
                 if thing is None:
@@ -2239,7 +2244,7 @@ class DialogueManager:
                     from .vanilla import ACCEPT, ACCEPT_NOW
 
                     before = {t.name for t in state.tools}
-                    state.tools = self._offered(conv.npc)
+                    state.tools = self._offered(conv.npc, state.sight)
                     if ACCEPT not in before and any(t.name == ACCEPT for t in state.tools):
                         outcome = replace(
                             outcome, output=f"{outcome.output}\n{ACCEPT_NOW}", continue_turn=True
@@ -2257,10 +2262,11 @@ class DialogueManager:
             unique.setdefault(tool.name, tool)
         return list(unique.values())
 
-    def _offered(self, npc: str) -> list[Tool]:
+    def _offered(self, npc: str, sight: Sight | None = None) -> list[Tool]:
         """The tools for a turn with the hero: the npc's own and those of the extensions."""
         tools = [*self.tools, *(t for ext in self.extensions for t in ext.tools(npc))]
-        sight = self.sight(npc, None) if self.sight is not None else None
+        if sight is None and self.sight is not None:
+            sight = self.sight(npc, None)
         if sight is None or not sight.things:  # nothing lying about that it sees: nothing to pick up
             tools = [t for t in tools if t.name != npc_tools.TAKE_ITEM]
         unique = {}
@@ -2518,6 +2524,7 @@ class TurnState:
     end_requested: bool = False
     given: set[tuple[str, str]] = field(default_factory=set)  # (item, reply) handed over in this turn
     taken: set[str] = field(default_factory=set)  # things picked up off the ground in this turn
+    sight: Sight | None = None  # the same ground items shown in this turn's situation
     relevant: Callable[[], bool] | None = None  # an event turn: is it still worth saying?
     recalled: bool = False  # recall is used once per turn
     filler: str = ""  # said at once (the quick model's "Хм...", "Что?!"): the answer does not repeat it

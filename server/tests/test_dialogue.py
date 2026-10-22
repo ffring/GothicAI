@@ -11,7 +11,7 @@ from websockets.asyncio.server import serve
 from gothic_ai import dialogue as dialogue_module
 from gothic_ai.dialogue import QUIET_STYLE, SCENE_GAP_S, TTS_PAUSE, DialogueManager, FirstReaction
 from gothic_ai.journal import Journal
-from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall
+from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
 from gothic_ai.scenarios import basics as scenarios
@@ -1493,3 +1493,33 @@ async def test_words_with_a_hostile_heart_do_not_end_the_fight():
         await _until(lambda: dialogue.conversations[XARDAS].intent.attitude == "hostile")
         await asyncio.sleep(0.1)
     assert not [m for m in fake.story if m["type"] == "story_effect"]
+
+
+async def test_a_rejection_after_the_quick_fight_line_keeps_the_next_step_silent():
+    fake = FakeGame()
+    quick = FakeBackend("[hostile] Держись!", delay=0)
+    llm = FakeBackend(
+        script=[
+            FakeStep(
+                "Этого никто не услышит.",
+                [ToolCall("give_item", {"item": "ITSC_FIREBALL", "count": 1})],
+            ),
+            FakeStep("И эту поправку никто не услышит."),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        dialogue.in_fight = lambda npc: True
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.event_turn(XARDAS, "[Событие: Волк нападает на тебя]")
+        await _until(lambda: fake.said == ["Держись!"])
+
+    assert len(llm.calls) == 2
+    result = next(i for i in llm.calls[1][1] if isinstance(i, ToolResult))
+    assert result.output.startswith("Отклонено: У тебя нет предмета ITSC_FIREBALL")
+    assert "Ты уже сказал вслух" not in result.output
+    assert "ничего не говори" not in result.output
+    history = dialogue.conversations[XARDAS].history
+    assert history[-1].content == "Держись!"

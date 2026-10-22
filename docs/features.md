@@ -28,6 +28,7 @@ PR, который добавляет фичу или выключатель, д
 | Настроение реплики: лицо и голос | нет | `dialogue.py`; мост — `ai_bridge/aibridge.cpp` (`moodFace`) | бенчи `mood-ai`, `faces`, `face-fade` | [npc-agent.md](npc-agent.md#лицо) |
 | Реплики в бою от быстрой модели (Gemma) | `--no-quick`; без `--quick-url` и `--decider-url` её нет | `dialogue.py`, `server/deploy/gemma/` | e2e `m5` с `QUICK_URL` | [npc-agent.md](npc-agent.md#реплики-в-бою-быстрая-модель) |
 | Трейсы ходов и их повтор | `--no-trace` | `trace.py`, `replay.py` | e2e `m5` с `QUICK_URL` (читает трейс) | [npc-agent.md](npc-agent.md#трасса-и-воспроизведение) |
+| Продолжение записанного хода после отказа | вручную: `replay --after-step N` | `replay.py`, `turn.py` | `test_replay.py`, живой replay бандита и Кавалорна | [npc-agent.md](npc-agent.md#трасса-и-воспроизведение) |
 | Приказы спутнику без модели | нет | `commands.py`, `orders.py` | e2e `orders`, `companion` | [npc-agent.md](npc-agent.md#приказы-спутникам) |
 | Успокоить нападающего словами (`calm`) | нет | `dialogue.py`, `orders.py` | e2e `calm` | [npc-agent.md](npc-agent.md#успокоить-словами) |
 | Общая беседа: по слову за раз | нет | `group.py` | e2e `group` | [npc-tools.md](npc-tools.md#сделано-б2-одно-слово-за-раз) |
