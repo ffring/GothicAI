@@ -514,6 +514,7 @@ def cmd_decide(args) -> int:
         line += f' {args.note}'
     with (asset_dir(args.asset) / 'decisions.md').open('a') as stream:
         stream.write(line + '\n')
+    print(f'{args.asset}: update its «Статус» in {QUEUE_DOC.relative_to(ROOT)} to: {queue_status(manifest)}')
     return 0
 
 
@@ -607,6 +608,61 @@ def cmd_status(args) -> int:
     else:
         print('  done')
     return 0
+
+
+# --- the queue -----------------------------------------------------------------------------
+
+GATES = ('preserve', 'concept', 'textures', 'ingame', 'enable')
+GATE_PASSED = {'preserve': 'список сохранения принят', 'concept': 'концепт принят', 'textures': 'текстуры приняты',
+               'ingame': 'принят в игре', 'enable': 'включён'}
+GATE_NAMES = {'preserve': 'список сохранения', 'concept': 'концепт', 'textures': 'текстуры', 'ingame': 'игра',
+              'enable': 'включение'}
+QUEUE_DOC = ROOT / 'docs/remaster-pipeline.md'
+
+
+def queue_status(manifest: dict) -> str:
+    """The user's gates in one phrase: the furthest approved one, then every later gate sent back."""
+    latest = {gate['gate']: gate['verdict'] for gate in manifest['gates']}
+    approved = [gate for gate in GATES if latest.get(gate) == 'approved']
+    if not approved:
+        status, after = 'начат', 0
+    else:
+        status, after = GATE_PASSED[approved[-1]], GATES.index(approved[-1]) + 1
+        if approved[-1] == 'enable' and manifest.get('build'):
+            status += f", набор {manifest['build']['set']}"
+    for gate in GATES[after:]:
+        if latest.get(gate) in ('changes', 'rejected'):
+            status += f"; {GATE_NAMES[gate]} — {'правки' if latest[gate] == 'changes' else 'отклонено'}"
+    return status
+
+
+def queue_rows(doc: Path) -> dict[str, str]:
+    """Asset slug → the «Статус» cell of its row in the queue table."""
+    rows = {}
+    match = re.search(r'^### Очередь переделки\s*\n(.*?)(?=^#{2,3} |\Z)', doc.read_text(), re.S | re.M)
+    for line in (match.group(1) if match else '').splitlines():
+        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+        match = re.fullmatch(r'`([a-z0-9-]+)`', cells[1]) if len(cells) > 2 else None
+        if match:
+            rows[match.group(1)] = cells[-1]
+    return rows
+
+
+def cmd_queue(args) -> int:
+    assets = sorted(path.parent.name for path in assets_root().glob('*/asset.json'))
+    statuses = {asset: queue_status(load_manifest(asset)) for asset in assets}
+    if not args.check:
+        for asset in assets:
+            print(f'{asset}\t{statuses[asset]}')
+        return 0
+    rows = queue_rows(Path(args.check))
+    stale = [f'{asset}: «{rows.get(asset, "нет строки")}», должно быть «{statuses[asset]}»'
+             for asset in assets if rows.get(asset) != statuses[asset]]
+    stale += [f'{asset}: нет папки ассета, статус должен быть «не начат»'
+              for asset in rows if asset not in statuses and rows[asset] != 'не начат']
+    for line in stale:
+        print(line)
+    return 1 if stale else 0
 
 
 def cmd_sheet(args) -> int:
@@ -708,6 +764,8 @@ def main(argv=None) -> int:
     p = sub.add_parser('check'); p.add_argument('asset'); p.add_argument('--stage', required=True, choices=STAGES)
     p.set_defaults(func=cmd_check)
     p = sub.add_parser('status'); p.add_argument('asset'); p.set_defaults(func=cmd_status)
+    p = sub.add_parser('queue', help='status of every asset; --check DOC compares the queue table with the gates')
+    p.add_argument('--check', metavar='DOC'); p.set_defaults(func=cmd_queue)
     p = sub.add_parser('bench'); p.add_argument('asset'); p.set_defaults(func=cmd_bench)
     p = sub.add_parser('sheet'); p.add_argument('out'); p.add_argument('images', nargs='+')
     p.add_argument('--cols', type=int, default=2); p.add_argument('--width', type=int, default=2048)

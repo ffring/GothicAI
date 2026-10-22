@@ -358,3 +358,18 @@ def test_material_concepts_are_named_per_texture(env, tmp_path):
     (remaster.asset_dir('roofs') / 'concept.md').write_text('x')
     run('select', 'roofs', '--key', 'concept:NW_CITY_ROOF_04.TGA', '--file', source['file'], '--reason', 'r')
     assert not any('selected concept' in m for m in remaster.missing_for('roofs', 'textures'))
+
+
+def test_queue_status_follows_the_users_gates():
+    gates = lambda *pairs: {'gates': [dict(gate=g, verdict=v) for g, v in pairs], 'build': {'set': 'roofs-8'}}
+    assert remaster.queue_status(gates()) == 'начат'
+    assert remaster.queue_status(gates(('concept', 'changes'), ('concept', 'approved'), ('textures', 'changes'))) \
+        == 'концепт принят; текстуры — правки'
+    assert remaster.queue_status(gates(('concept', 'approved'), ('ingame', 'approved'), ('ingame', 'changes'))) \
+        == 'концепт принят; игра — правки'
+    assert remaster.queue_status(gates(('concept', 'approved'), ('enable', 'approved'))) == 'включён, набор roofs-8'
+
+
+def test_queue_table_matches_the_gates(capsys):
+    # every decide changes an asset's status: the queue table in the pipeline doc must follow in the same change
+    assert remaster.main(['queue', '--check', str(remaster.QUEUE_DOC)]) == 0, capsys.readouterr().out
