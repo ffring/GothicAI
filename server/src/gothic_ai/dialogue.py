@@ -1884,6 +1884,7 @@ class DialogueManager:
         The turn's status: "completed", or "step_cap" when the model wanted to go on still."""
         added: list[Item] = list(request)
         retries = STEP_RETRIES
+        first_said = state.filler
         for step in range(MAX_STEPS):
             st = trace.step(added, tool_choice(step), silent=not speak)
             while True:
@@ -1916,7 +1917,7 @@ class DialogueManager:
                 return "completed"
             if step == MAX_STEPS - 1:
                 return "step_cap"
-            said = " ".join(s for s in (state.filler, to_game_text(state.text)) if s) if speak else ""
+            said = " ".join(s for s in (first_said, to_game_text(state.text)) if s) if speak else ""
             results = [
                 ToolResult(c.call_id, tool_output(o, said))
                 for c, o in zip(calls, outcomes, strict=True)

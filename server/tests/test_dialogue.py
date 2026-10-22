@@ -1303,6 +1303,37 @@ async def test_out_of_a_fight_the_quick_model_only_says_the_first_words():
     assert [m.content for m in dialogue.conversations[XARDAS].history][:2] == ["Ты старый дурак", "Не спеши."]
 
 
+async def test_a_rejection_remembers_the_first_words_and_the_main_reply():
+    fake = FakeGame()
+    quick = FakeBackend("[angry] Ишь ты!", delay=0)
+    llm = FakeBackend(
+        script=[
+            FakeStep(
+                "Держи свиток.",
+                [ToolCall("give_item", {"item": "ITSC_FIREBALL", "count": 1})],
+            ),
+            FakeStep(""),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дай мне свиток.")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert fake.said == ["Ишь ты!", "Держи свиток."]
+    assert len(llm.calls) == 2
+    result = next(i for i in llm.calls[1][1] if isinstance(i, ToolResult))
+    assert result.output.startswith("Отклонено: У тебя нет предмета ITSC_FIREBALL")
+    assert result.output.endswith(
+        " Ты уже сказал вслух: «Ишь ты! Держи свиток.». "
+        "Если отказ этого не меняет — ничего не говори. "
+        "Если меняет — поправься одной короткой фразой, не повторяя сказанного."
+    )
+
+
 async def test_no_first_words_to_a_greeting_or_without_the_quick_model_in_time(monkeypatch):
     monkeypatch.setattr(dialogue_module, "REACTION_S", 0.2)
     fake = FakeGame()
