@@ -332,9 +332,16 @@ NavPolicy::NavPolicy(const std::string& path) {
   formatVersion = version.GetUint();
   expectString(field(header,"byte_order"),"little");
   expectString(field(header,"offset_origin"),"first byte after JSON header newline");
-  const size_t vectorInputs = parseVectorInputSize(field(header,"preprocessing"),demoVersion,formatVersion);
+  const auto& preprocessing = field(header,"preprocessing");
+  const size_t vectorInputs = parseVectorInputSize(preprocessing,demoVersion,formatVersion);
   if(formatVersion==3)
-    validateHdPreprocessing(field(header,"preprocessing"),demoVersion);
+    validateHdPreprocessing(preprocessing,demoVersion);
+  if(preprocessing.HasMember("navigation_memory_version")) {
+    const auto& memory = preprocessing["navigation_memory_version"];
+    if(!memory.IsUint() || (memory.GetUint()!=3 && memory.GetUint()!=4))
+      fail("unsupported navigation memory version");
+    memoryVersion = memory.GetUint();
+    }
   validateArchitecture(field(header,"architecture"),hidden,vectorInputs,formatVersion);
   if(header.HasMember("temperatures")) {
     const auto& values = header["temperatures"];
@@ -451,6 +458,20 @@ NavPolicy::NavPolicy(const std::string& path) {
     loadLinear(heads[i],std::string("head_")+headName(i),hidden,headSize(i));
   if(!tensors.empty())
     fail("unknown weight tensors");
+  }
+
+void NavPolicy::configureMemory(NavigationMemory& memory, const char* journeyOverride) const {
+  bool journey = memoryVersion==4;
+  if(journeyOverride) {
+    const std::string_view value(journeyOverride);
+    if(value!="0" && value!="1")
+      fail("OPENGOTHIC_NAV_JOURNEY_MEMORY must be 0 or 1");
+    journey = value=="1";
+    }
+  memory.setJourneyMemory(journey);
+  // Each episode starts without inherited familiarity. The stand may attach
+  // the resident's map only after this selects v4 memory.
+  memory.setFamiliarMap(nullptr,{});
   }
 
 NavPolicy::Features NavPolicy::encode(const NavDemoWriter::Snapshot& observation) const {

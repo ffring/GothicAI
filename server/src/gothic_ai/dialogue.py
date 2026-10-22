@@ -68,6 +68,7 @@ from .protocol import (
     Session,
     Snapshot,
 )
+from .quest_tools import AMEND
 from .trace import CallTrace, StepTrace, TraceWriter, TurnTrace
 from .tts import TtsClient, TtsError
 from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice
@@ -1768,6 +1769,7 @@ class DialogueManager:
             relevant=relevant,
             overlay=overlay,
             tools=self._offered(conv.npc) if tools is None else tools,
+            dynamic_tools=tools is None,
             reply=f"R{next(self._reply_ids)}",
             # voiced, the first line is synthesized before it is heard: cut it at the first clause
             splitter=SentenceSplitter(first_clause=self.tts is not None),
@@ -1898,7 +1900,13 @@ class DialogueManager:
             if state.relevant is not None and not state.relevant() and not (speak and state.text.strip()):
                 raise StaleTurn  # the incident is over: nothing said yet, or only late acts are left
             calls = [i for i in done.items if isinstance(i, ToolCall)]
-            outcomes = [await self._tool(conv, call, state) for call in calls]
+            outcomes = []
+            for call in calls:
+                before = [t.name for t in state.tools]
+                outcomes.append(await self._tool(conv, call, state))
+                after = [t.name for t in state.tools]
+                if before != after:
+                    trace.event("tools_changed", step=step, before=before, after=after)
             for call, outcome in zip(calls, outcomes, strict=True):
                 st.calls.append(
                     CallTrace(call.name, call.arguments, call.call_id, outcome.output, outcome.status)
@@ -2227,6 +2235,15 @@ class DialogueManager:
                 return ToolOutcome("Принято: поднимешь после реплики.", "accepted")
         for ext in self.extensions:
             if (outcome := await ext.handle(self, conv, call, snap)) is not None:
+                if call.name == AMEND and outcome.status == "accepted" and state.dynamic_tools:
+                    from .vanilla import ACCEPT, ACCEPT_NOW
+
+                    before = {t.name for t in state.tools}
+                    state.tools = self._offered(conv.npc)
+                    if ACCEPT not in before and any(t.name == ACCEPT for t in state.tools):
+                        outcome = replace(
+                            outcome, output=f"{outcome.output}\n{ACCEPT_NOW}", continue_turn=True
+                        )
                 return outcome
         return ToolOutcome(f"Отклонено: нет такого инструмента {call.name}.", "rejected")
 
@@ -2506,4 +2523,5 @@ class TurnState:
     filler: str = ""  # said at once (the quick model's "Хм...", "Что?!"): the answer does not repeat it
     overlay: bool = False  # said on the move (an urgent incident): the body does not stop for it
     tools: list[Tool] = field(default_factory=list)  # offered to the model in this turn
+    dynamic_tools: bool = False  # no explicit tools: amendments refresh the offered list
     to: str | None = None  # the npc its lines are said to now, None: the hero

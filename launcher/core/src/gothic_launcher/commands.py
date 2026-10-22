@@ -38,6 +38,7 @@ def default_log_root() -> Path:
 # sharper textures of the characters, made from the game's own by scripts/hd-textures.sh (never in git)
 HD_TEXTURES = default_hd_textures()
 FRACTURE_CACHE = Path.home() / ".local" / "share" / "gothic-ai" / "fracture"
+PLAY_CONTENT = Path.home() / ".local" / "share" / "gothic-ai" / "play-content"
 LOG_ROOT = default_log_root()
 KEEP_LOGS = 20
 UV_CANDIDATES = ("~/.local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv", "~/.cargo/bin/uv")
@@ -70,6 +71,7 @@ class Layout:
     game_home: Path
     hd_textures: Path | None = None  # the game loads them instead of its own (OPENGOTHIC_TEXTURES)
     fracture_cache: Path | None = None  # pre-cut breakable meshes (OPENGOTHIC_FRACTURE)
+    play_content: Path | None = None  # the personal Linux install's content (OPENGOTHIC_CONTENT)
 
 
 @dataclass(frozen=True)
@@ -145,7 +147,8 @@ def find_layout(config: Config) -> Layout:
         raise LaunchError("\n".join(problems))
     hd = HD_TEXTURES if HD_TEXTURES.is_dir() else None
     fracture = FRACTURE_CACHE if FRACTURE_CACHE.is_dir() else None
-    return Layout(repo, uv, game_bin, game_dir, paths.game_home or GAME_HOME, hd, fracture)
+    content = PLAY_CONTENT if sys.platform == "linux" else None
+    return Layout(repo, uv, game_bin, game_dir, paths.game_home or GAME_HOME, hd, fracture, content)
 
 
 def texture_env(layout: Layout) -> dict[str, str]:
@@ -158,6 +161,16 @@ def fracture_env(layout: Layout) -> dict[str, str]:
     if "OPENGOTHIC_FRACTURE" in os.environ:
         return {"OPENGOTHIC_FRACTURE": os.environ["OPENGOTHIC_FRACTURE"]}
     return {"OPENGOTHIC_FRACTURE": str(layout.fracture_cache)} if layout.fracture_cache is not None else {}
+
+
+def content_env(layout: Layout) -> dict[str, str]:
+    """An explicit override, including empty, takes precedence over the personal content set."""
+    if "OPENGOTHIC_CONTENT" in os.environ:
+        return {"OPENGOTHIC_CONTENT": os.environ["OPENGOTHIC_CONTENT"]}
+    content = layout.play_content
+    if content is not None and (content / "materials" / "materials.json").is_file():
+        return {"OPENGOTHIC_CONTENT": str(content)}
+    return {}
 
 
 def tools(config: Config) -> tuple[Path, Path]:
@@ -264,7 +277,12 @@ def game(config: Config, layout: Layout, ports: Ports, save: str | None = None, 
         argv.append("-nomenu")
     if s.dev_mode:
         argv.append("-devmode")
-    env = {"GOTHIC_AI_URL": f"ws://127.0.0.1:{ports.server}", **texture_env(layout), **fracture_env(layout)}
+    env = {
+        "GOTHIC_AI_URL": f"ws://127.0.0.1:{ports.server}",
+        **texture_env(layout),
+        **fracture_env(layout),
+        **content_env(layout),
+    }
     if s.chat_scale is not None:
         env["GOTHIC_AI_CHAT_SCALE"] = f"{s.chat_scale:g}"
     return Proc("game", argv, layout.game_home, env, restart=False, stamp=True)

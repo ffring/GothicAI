@@ -11,7 +11,10 @@ config: {"glb": model with tile UVs in metres and zone-key materials (barrel.py)
          "edge_radius": 0.006, "wet_height": 0.18, "algae": 0.7, "bleach": 0.35,
          "planks_per_tile": {KEY: n}, "seam_width": 0.07, "seam_dark": 0.75, "contrast": {KEY: gamma},
          "nodes": [NODE NAME, ...], "tile_normal": {KEY: strength}, "edge_wear": {KEY: share},
-         "measure_ao": {KEY: min baked AO}}
+         "measure_ao": {KEY: min baked AO},
+         "crevice": {"distance": 0.02, "dirt": 0.7, "colour": [r, g, b]},
+         "streaks": {"length": 0.25, "rust": 0.6, "dirt": 0.35, "rust_colour": [r, g, b], "column": 0.012},
+         "wet_roughness": 0.6, "metal_scale": 1.0}
 The tiling materials are sampled through the tile UVs and baked into a new atlas
 UV: per-part tone (the builder's "_part" attribute when present, otherwise
 angular sectors around the axis and lid planks along X), dark seams where a part's tile plank ends, worn light edges from the Bevel
@@ -33,6 +36,15 @@ plank area is plank backs against the dark core, ends under posts and edges in t
 and the visible planks baked 1.9 times lighter than the target (reports/engine/2026-10-21-
 rough-specular). "measure_ao" measures such a zone only over texels whose baked AO is at
 least the given value, the faces open to the outside; the gain still reaches every texel.
+Weathering placed by the model, as for the roofs made of pieces (docs/remaster-pipeline.md,
+«Материал из модели»); each is off unless its key is set, so older props bake as before:
+- "crevice": dirt (or moss, by its colour) packed in the joints between parts, from a short AO;
+- "streaks": water runs down from the parts above a point; a ray from every texel up along its
+  surface finds them. Under iron it leaves rust, under another part dirt, fading over "length"
+  metres, in vertical columns about "column" metres wide;
+- "wet_roughness": the wet bottom is smoother, down to this roughness; rust and dirt stay matte.
+The weathering darkens before each zone is scaled to its measured mean, like the AO.
+"metal_scale" multiplies the metallic of the "metal" zones: rusty, grimy iron is mostly not metal.
 """
 import json
 import math
@@ -145,6 +157,8 @@ if light:
     tones[light[0]] = light[1]
 tone_attr = mesh.attributes.new("tone", "FLOAT", "FACE")
 tone_attr.data.foreach_set("value", tones[part].astype(np.float32))
+part_attr = mesh.attributes.new("part_id", "FLOAT", "FACE")    # which part a texel belongs to, for the streaks
+part_attr.data.foreach_set("value", part.astype(np.float32))
 zone_attr = mesh.attributes.new("zone", "FLOAT", "FACE")
 # Faces pointing down (a barrel's bottom on the ground) are left out of the measured mean, but still
 # get their zone's gain: a canopy's underside is seen. They carry half a step on top of their zone.
@@ -263,6 +277,10 @@ for slot in obj.material_slots:
         rough_out = math_node(nodes, links, "ADD", rough, math_node(nodes, links, "MULTIPLY", edge, 0.15), clamp=True)
         metal_out = math_node(nodes, links, "MULTIPLY", metallic, math_node(nodes, links, "SUBTRACT", 1.0,
                               math_node(nodes, links, "MULTIPLY", edge, 0.5)), clamp=True)
+        if "metal_scale" in cfg:
+            # Rusty, grimy iron is mostly not metal: a metal gets no diffuse light, so in shade
+            # the original's mossy hoops, lighter than the staves, came out black.
+            metal_out = math_node(nodes, links, "MULTIPLY", metal_out, cfg["metal_scale"])
     else:
         worn = mix(nodes, links, 1.0, colour, (2.2, 2.05, 1.85, 1.0), "MULTIPLY")
         colour = mix(nodes, links, math_node(nodes, links, "MULTIPLY", edge, edge_wear(key)), colour, worn)
@@ -283,8 +301,21 @@ for slot in obj.material_slots:
     links.new(bevel_n.outputs[0], bsdf.inputs["Normal"])
     emission = node(nodes, "ShaderNodeEmission")
     zone_val = node(nodes, "ShaderNodeAttribute", attribute_type="GEOMETRY", attribute_name="zone").outputs["Fac"]
+    # where a texel lies on the model and which way it faces, for the weathering placed by geometry
+    rel = node(nodes, "ShaderNodeVectorMath", operation="SUBTRACT")
+    links.new(geo.outputs["Position"], rel.inputs[0])
+    rel.inputs[1].default_value = tuple(float(v) for v in lo)
+    rel_scaled = node(nodes, "ShaderNodeVectorMath", operation="DIVIDE")
+    links.new(rel.outputs[0], rel_scaled.inputs[0])
+    rel_scaled.inputs[1].default_value = tuple(float(max(v, 1e-6)) for v in hi - lo)
+    facing = node(nodes, "ShaderNodeVectorMath", operation="MULTIPLY_ADD")
+    links.new(geo.outputs["Normal"], facing.inputs[0])
+    facing.inputs[1].default_value = (0.5, 0.5, 0.5)
+    facing.inputs[2].default_value = (0.5, 0.5, 0.5)
+    part_val = node(nodes, "ShaderNodeAttribute", attribute_type="GEOMETRY", attribute_name="part_id").outputs["Fac"]
     passes[mat.name] = dict(nodes=nodes, links=links, output=output, emission=emission, bsdf=bsdf,
-                            colour=colour, rough=rough_out, metal=metal_out, zone=zone_val)
+                            colour=colour, rough=rough_out, metal=metal_out, zone=zone_val,
+                            position=rel_scaled.outputs[0], facing=facing.outputs[0], part_id=part_val)
     targets[key] = cfg["targets"][key]
 
 
@@ -336,6 +367,85 @@ ao = bake_pass("ao", "AO", samples=cfg.get("ao_samples", 64))[:, :, 0]
 
 strength = cfg.get("ao_strength", 0.85)
 albedo = colour * (1 - strength * (1 - ao))[..., None]
+weathering = {}
+if any(k in cfg for k in ("crevice", "streaks", "wet_roughness")):
+    position = lo + bake_pass("position", "EMIT", "position", samples=1, margin=16) * (hi - lo)
+    texel_part = np.rint(bake_pass("part", "EMIT", "part_id", samples=1, margin=16)[:, :, 0]).astype(int)
+    facing = bake_pass("facing", "EMIT", "facing", samples=1, margin=16) * 2 - 1
+    is_metal = np.array([keys[i] in metal_keys for i in range(len(keys))])
+    zone_index = np.floor(zone + 1e-3).astype(int) - 1
+    zone_metal = (zone_index >= 0) & is_metal[np.clip(zone_index, 0, len(keys) - 1)]
+    if "crevice" in cfg:
+        spec = cfg["crevice"]
+        world.light_settings.distance = spec.get("distance", 0.02)
+        crevice = bake_pass("crevice", "AO", samples=cfg.get("ao_samples", 64))[:, :, 0]
+        world.light_settings.distance = cfg.get("ao_distance", 0.15)
+        gap = np.clip((1 - crevice) / 0.5, 0, 1) * ~zone_metal
+        dirt = spec.get("dirt", 0.7) * gap
+        albedo = albedo * (1 - dirt[..., None]) + np.array(spec.get("colour", [0.008, 0.007, 0.005])) * dirt[..., None]
+        weathering["crevice"] = gap
+    if "streaks" in cfg:
+        from mathutils import Vector
+        from mathutils.bvhtree import BVHTree
+        spec = cfg["streaks"]
+        length = spec.get("length", 0.25)
+        tree = BVHTree.FromObject(obj, bpy.context.evaluated_depsgraph_get())
+        rows, cols = np.nonzero(inside)
+        rust = np.zeros((size, size))
+        drip = np.zeros((size, size))
+        for r, c in zip(rows.tolist(), cols.tolist()):
+            p, n = position[r, c], facing[r, c]
+            # Water runs down along the surface, so its source lies up along the surface: on a barrel
+            # that is up the stave to the hoop sitting on it. Tops and bottoms get no streaks.
+            along = Vector((-n[2] * n[0], -n[2] * n[1], 1 - n[2] * n[2]))
+            if along.length < 0.3:
+                continue
+            along.normalize()
+            origin = Vector((p[0] + n[0] * 0.003, p[1] + n[1] * 0.003, p[2] + n[2] * 0.003))
+            travelled, face = 0.0, None
+            for _ in range(4):                      # a part does not drip on itself: look past it
+                hit, _normal, found, distance = tree.ray_cast(origin, along, length - travelled)
+                if hit is None:
+                    break
+                travelled += distance
+                if part[found] != texel_part[r, c] or mat_index[found] != zone_index[r, c]:
+                    face = found
+                    break
+                origin = hit + along * 0.002
+                travelled += 0.002
+            if face is None or travelled < 0.004:
+                continue
+            distance = travelled
+            fade = (1 - distance / length) ** 1.5
+            if keys[mat_index[face]] in metal_keys:
+                rust[r, c] = fade
+            else:
+                drip[r, c] = fade
+        # streaks run in vertical columns: a noise over the horizontal plane only
+        column = spec.get("column", 0.012)
+        grid = 256
+        field = rng.standard_normal((grid, grid))
+        fy = np.fft.fftfreq(grid)[:, None] * grid
+        fx = np.fft.fftfreq(grid)[None, :] * grid
+        extent = max(hi[0] - lo[0], hi[1] - lo[1])
+        field = np.fft.ifft2(np.fft.fft2(field) * np.exp(-(fx ** 2 + fy ** 2) / (extent / column / 2) ** 2)).real
+        field = (field - field.mean()) / (field.std() + 1e-9)
+        gx = np.clip(((position[..., 0] - lo[0]) / extent * (grid - 1)).astype(int), 0, grid - 1)
+        gy = np.clip(((position[..., 1] - lo[1]) / extent * (grid - 1)).astype(int), 0, grid - 1)
+        columns = np.clip(0.4 + 0.6 * field[gy, gx], 0, 1)
+        rust *= columns * ~zone_metal
+        drip *= columns * ~zone_metal
+        tint = spec.get("rust", 0.6) * rust
+        albedo = albedo * (1 - tint[..., None]) + np.array(spec.get("rust_colour", [0.045, 0.022, 0.010])) * tint[..., None]
+        albedo *= (1 - spec.get("dirt", 0.35) * drip)[..., None]
+        weathering["rust"], weathering["drip"] = rust, drip
+    if "wet_roughness" in cfg:
+        wet = np.clip((cfg.get("wet_height", 0.18) - (position[..., 2] - z0)) / cfg.get("wet_height", 0.18), 0, 1)
+        wet *= inside & ~zone_metal
+        rough = rough - (rough - cfg["wet_roughness"]) * np.clip(wet, 0, 1) * (rough > cfg["wet_roughness"])
+        matte = np.maximum(weathering.get("rust", 0) * 1.5, weathering.get("drip", 0))
+        rough = np.maximum(rough, np.clip(matte, 0, 0.95))
+        weathering["wet"] = wet
 zone_id = np.floor(zone + 1e-3).astype(int)
 down = zone - zone_id > 0.25
 report = {}
@@ -396,6 +506,8 @@ for key, (atlas_key, _group) in cfg["slots"].items():
         save_png(folder / "metallic.png", metal)
         save_png(folder / "ao.png", np.ones_like(ao))  # AO is already in the albedo
         save_png(out / "atlas-ao.png", ao)
+        for name, mask in weathering.items():
+            save_png(out / f"atlas-{name}.png", np.clip(mask, 0, 1))
         first = folder
     elif not folder.exists():
         shutil.copytree(first, folder)
@@ -403,6 +515,7 @@ for key, (atlas_key, _group) in cfg["slots"].items():
 # --- export: atlas UV only, zone materials merged into atlas materials ---
 mesh.uv_layers.remove(mesh.uv_layers["Tile"])
 mesh.attributes.remove(mesh.attributes["tone"])
+mesh.attributes.remove(mesh.attributes["part_id"])
 if "_PART" in mesh.attributes:
     mesh.attributes.remove(mesh.attributes["_PART"])
 mesh.attributes.remove(mesh.attributes["zone"])

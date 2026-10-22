@@ -3,6 +3,7 @@ import json
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from copy import deepcopy
 
 import pytest
 from websockets.asyncio.server import serve
@@ -193,6 +194,88 @@ async def test_amend_quest_routes_to_the_extension_owning_its_id(tmp_path, own):
             )
         else:
             assert fake.vars[QUEST] == 1  # the terms change, the scripts' quest still runs
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
+@pytest.mark.parametrize("remaining_alive,explicit_tools", [(False, False), (True, False), (False, True)])
+async def test_amending_refreshes_automatic_tools_and_continues_only_when_accept_opens(
+    tmp_path, remaining_alive, explicit_tools
+):
+    from gothic_ai.gamedata.storygraph import load
+    from gothic_ai.llm import ToolResult
+    from gothic_ai.memory import MemoryStore
+    from gothic_ai.trace import TraceWriter, find_turn
+    from gothic_ai.vanilla import ACCEPT_NOW
+    from tests.test_director import GRAPH, QUEST, RUNNING
+    from tests.test_vanilla import BANDIT, _setup
+
+    raw = deepcopy(GRAPH)
+    dead = [
+        "&&",
+        ["call", "NPC_ISDEAD", ["inst", "BANDIT"]],
+        ["call", "NPC_ISDEAD", ["inst", "SECOND_BANDIT"]],
+    ]
+    ending = next(n for n in raw["nodes"] if n["id"] == "DIA_LOBART_RUEBENRUNNING")
+    ending.update(condition=RUNNING, effects=[
+        {"do": "set", "var": QUEST, "value": ["int", 2, "LOG_SUCCESS"], "when": dead},
+        {"do": "xp", "amount": ["int", 100], "when": dead},
+    ])
+    raw["instances"].update(BANDIT=BANDIT, SECOND_BANDIT="BDT_2_BANDIT")
+    path = tmp_path / "story.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    llm = FakeBackend(script=[
+        FakeStep("Его пощадим.", [ToolCall(
+            "amend_quest", {"quest": QUEST, "drop": [BANDIT], "why": "Пощадил."}, "m1"
+        )]),
+        FakeStep("Дело сделано.", [ToolCall("accept_quest", {"quest": QUEST}, "a1")]),
+    ], delay=0)
+    fake = FakeGame(branch="A")
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, llm, load(path), MemoryStore(":memory:"))
+    fake.instances["SECOND_BANDIT"] = "BDT_2_BANDIT"
+    fake.npc_states.update({
+        BANDIT: {"state": "alive", "name": "Бандит", "distance": 500, "seen": True},
+        "BDT_2_BANDIT": {
+            "state": "alive" if remaining_alive else "dead", "name": "Бандит",
+            "distance": 500, "seen": True,
+        },
+    })
+    dialogue.trace = TraceWriter(tmp_path / "traces")
+    try:
+        conv = dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        offered = dialogue._offered(LOBART)
+        assert "accept_quest" not in {t.name for t in offered}
+        await dialogue._turn(
+            conv, Message("user", "Пощади его, с остальными покончено."), "player",
+            tools=offered if explicit_tools else None,
+        )
+        trace, _ = find_turn(dialogue.trace.path(), None)
+        assert trace["steps"][0]["calls"][0]["outcome"] == "accepted"
+        assert chronicle.facts("quest_terms")[0]["drop"] == [BANDIT]
+        assert fake.npc_states[BANDIT]["state"] == "alive"
+        if not remaining_alive and not explicit_tools:
+            await _until(lambda: bool(chronicle.facts("quest_outcome")))
+            assert len(llm.calls) == len(trace["steps"]) == 2
+            assert "accept_quest" in {t.name for t in llm.calls[1][2]}
+            assert llm.sent_tools[0] == llm.sent_tools[1]  # the schema prefix stays fixed
+            result = next(m for m in llm.calls[1][1] if isinstance(m, ToolResult))
+            assert result.output.endswith(ACCEPT_NOW)
+            assert trace["steps"][1]["calls"][0]["outcome"] == "accepted"
+            change = next(e for e in trace["events"] if e["kind"] == "tools_changed")
+            assert "accept_quest" not in change["before"] and "accept_quest" in change["after"]
+            effects = next(i for i, m in enumerate(fake.received) if m["type"] == "story_effect")
+            assert {"do": "set", "var": QUEST, "value": 2} in fake.received[effects]["effects"]
+            assert {"do": "xp", "amount": 100} in fake.received[effects]["effects"]
+            assert chronicle.facts("quest_outcome")[0]["how"] == "amended"
+            said = [i for i, m in enumerate(fake.received) if m["type"] == "say"]
+            assert fake.said == ["Его пощадим.", "Дело сделано."] and max(said) < effects
+        else:
+            assert len(llm.calls) == len(trace["steps"]) == 1
+            assert not trace["steps"][0]["calls"][0]["result"].endswith(ACCEPT_NOW)
+            assert fake.vars[QUEST] == 1 and chronicle.facts("quest_outcome") == []
+            if explicit_tools:
+                assert not any(e["kind"] == "tools_changed" for e in trace["events"])
     finally:
         await link_cm.__aexit__(None, None, None)
 

@@ -22,6 +22,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+MODEL_MAPS = {'normal', 'roughness', 'ao'}   # maps a model bake may bring with its albedo
 TEMPLATES = ROOT / '.claude/skills/remaster/templates'
 DEFAULTS = ROOT / 'docs/remaster-defaults.md'
 MAX_EDGE = 2576
@@ -195,7 +196,9 @@ def cmd_import(args) -> int:
     raw = source.read_bytes()
     if raw[:8] != b'\x89PNG\r\n\x1a\n':
         raise ValueError(f'{source}: expected a PNG from image_gen')
-    stem = Path(args.texture).stem if args.role == 'texture' else args.role
+    # A shared material keeps one concept image per texture: concept-<TEXTURE>-attempt-<n>.png.
+    stem = (Path(args.texture).stem if args.role == 'texture'
+            else f'concept-{Path(args.texture).stem}' if args.texture else args.role)
     if args.role == 'texture' and not args.texture:
         raise ValueError('--texture is required for --role texture')
     numbers = [int(m['n']) for p in folder.glob(f'{stem}-attempt-*.png') if (m := ATTEMPT.fullmatch(p.stem))]
@@ -204,20 +207,39 @@ def cmd_import(args) -> int:
     prompt = Path(args.prompt_file).read_text().strip()
     start = datetime.fromisoformat(args.start.replace('Z', '+00:00'))
     end = datetime.fromisoformat(args.end.replace('Z', '+00:00'))
+    maps = dict(item.split('=', 1) for item in args.map or [])
+    if maps and not args.tool:
+        raise ValueError('--map needs --tool: only our own model bakes carry their own maps')
+    unknown = set(maps) - MODEL_MAPS
+    if unknown:
+        raise ValueError(f'--map: unknown map {sorted(unknown)}, expected {sorted(MODEL_MAPS)}')
     target.write_bytes(raw)
     c2pa = c2pa_agent(target)
-    meta = dict(texture=args.texture if args.role == 'texture' else None, role=args.role, attempt=attempt,
+    copies = []
+    for name, path in sorted(maps.items()):
+        copy = target.with_name(f'{target.stem}.{name}.png')
+        copy.write_bytes(Path(path).read_bytes())
+        copies.append(copy)
+    meta = dict(texture=args.texture, role=args.role, attempt=attempt,
         prompt=prompt, utc=args.start, utc_end=args.end, seconds=max(0, round((end - start).total_seconds())),
         generator='image_gen in a fresh Codex thread (ChatGPT plan); judged by Claude', thread=args.thread,
-        parent=args.parent, reason=args.reason, c2pa=c2pa, source_sha256=sha256(target))
+        parent=args.parent, reason=args.reason, c2pa=c2pa, source_sha256=sha256(target), tool=args.tool)
+    if copies:
+        meta['maps'] = {name: dict(file=f'{namespace}/{copy.name}', sha256=sha256(copy))
+                        for name, copy in zip(sorted(maps), copies)}
     target.with_suffix('.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2) + '\n')
-    for path in (target, target.with_suffix('.json')):
+    for path in (target, target.with_suffix('.json'), *copies):
         path.chmod(0o444)
     entry = _source_entry(target, meta, namespace)
+    if args.tool:
+        # Assembled by our code from image_gen sources (the parents); it has no C2PA of its own.
+        entry.update(tool=args.tool, model=f'derived: {args.tool}')
+    if copies:
+        entry['maps'] = meta['maps']
     manifest['sources'].append(entry)
     if namespace not in manifest['namespaces']:
         manifest['namespaces'].append(namespace)
-    models = {s['model'] for s in manifest['sources']}
+    models = {s['model'] for s in manifest['sources'] if not s.get('tool')}
     save_manifest(args.asset, manifest)
     print(f'{target} ({entry["model"]})')
     if len(models) > 1:
@@ -324,7 +346,7 @@ def cmd_pair(args) -> int:
     images = [Path(args.a), Path(args.b)]
     orders = [(0, 1), (1, 0)] if blind else [(0, 1)]
     key = {'stage': args.stage, 'mode': args.mode, 'a': str(images[0]), 'b': str(images[1]),
-           'ours': args.ours, 'orders': {}}
+           'ours': args.ours, 'orders': {}, 'private_a': bool(args.private_a)}
     defaults = DEFAULTS.read_text().split('\n## ', 1)[-1]
     defaults = '## ' + defaults if not defaults.startswith('## ') else defaults
     defaults = re.sub(r'^## ', '### ', defaults, flags=re.M)
@@ -339,7 +361,7 @@ def cmd_pair(args) -> int:
             described = '\n'.join(f'- `image-{i}.png`: кадр из игры, {w}×{h}' for i, (w, h) in enumerate(sizes, 1))
         else:
             mode_text = 'с эталоном: изображение 1 — оригинал (эталон), изображение 2 — кандидат'
-            described = (f'- `image-1.png`: эталон, оригинал в игре, {sizes[0][0]}×{sizes[0][1]}\n'
+            described = (f'- `image-1.png`: эталон, {args.a_label}, {sizes[0][0]}×{sizes[0][1]}\n'
                          f'- `image-2.png`: кандидат, {sizes[1][0]}×{sizes[1][1]}')
         text = fill((TEMPLATES / 'packet.md').read_text(), packet=f'{args.asset}/{args.id}/order-{number}',
             stage=args.stage, mode_text=mode_text, images=described, subject=args.subject,
@@ -457,13 +479,14 @@ def cmd_merge(args) -> int:
 
 
 def _pair_preview(key: dict, target: Path, height: int = 432) -> None:
-    """Small side-by-side for the user and git: original/reference left, ours/candidate right."""
+    """Small side-by-side for the user and git: original/reference left, ours/candidate right.
+    A private reference (original texture pixels) stays out of git: only the candidate is shown."""
     from PIL import Image
     first, second = Path(key['a']), Path(key['b'])
     if key.get('ours') == 'a':
         first, second = second, first
     tiles = []
-    for path in (first, second):
+    for path in (second,) if key.get('private_a') else (first, second):
         with Image.open(path) as image:
             image = image.convert('RGB')
             tiles.append(image.resize((round(image.width * height / image.height), height), Image.Resampling.LANCZOS))
@@ -484,6 +507,8 @@ def cmd_decide(args) -> int:
     manifest = load_manifest(args.asset)
     entry = dict(gate=args.gate, verdict=args.verdict, by=args.by, date=args.date or today(), quote=args.quote,
                  note=args.note)
+    if args.gate == 'enable':                # the set that goes into the working content: later builds don't move it
+        entry['set'] = args.set or (manifest.get('build') or {}).get('set')
     manifest['gates'].append(entry)
     save_manifest(args.asset, manifest)
     line = f"\n**{entry['date']} — {args.gate}: {args.verdict}** ({args.by}). «{args.quote}»"
@@ -491,6 +516,7 @@ def cmd_decide(args) -> int:
         line += f' {args.note}'
     with (asset_dir(args.asset) / 'decisions.md').open('a') as stream:
         stream.write(line + '\n')
+    print(f'{args.asset}: update its «Статус» in {QUEUE_DOC.relative_to(ROOT)} to: {queue_status(manifest)}')
     return 0
 
 
@@ -519,8 +545,9 @@ def missing_for(asset: str, stage: str) -> list[str]:
         missing.append('concept.md')
     if stage == 'concept':
         return missing
-    if 'concept' not in manifest['selected']:
-        missing.append('selected concept (remaster.py select --key concept)')
+    concepts = [key for key in manifest['selected'] if key == 'concept' or key.startswith('concept:')]
+    if not concepts:
+        missing.append('selected concept (remaster.py select --key concept, or concept:<TEXTURE> per texture)')
     if not _review_ok(manifest, 'concept'):
         missing.append('reviewer Р1 on the concept (PASS or DISPUTED)')
     if not _gate_ok(manifest, 'concept'):
@@ -583,6 +610,64 @@ def cmd_status(args) -> int:
     else:
         print('  done')
     return 0
+
+
+# --- the queue -----------------------------------------------------------------------------
+
+GATES = ('preserve', 'concept', 'textures', 'ingame', 'enable')
+GATE_PASSED = {'preserve': 'список сохранения принят', 'concept': 'концепт принят', 'textures': 'текстуры приняты',
+               'ingame': 'принят в игре', 'enable': 'включён'}
+GATE_NAMES = {'preserve': 'список сохранения', 'concept': 'концепт', 'textures': 'текстуры', 'ingame': 'игра',
+              'enable': 'включение'}
+QUEUE_DOC = ROOT / 'docs/remaster-pipeline.md'
+
+
+def queue_status(manifest: dict) -> str:
+    """The user's gates in one phrase: the furthest approved one, then every later gate sent back."""
+    latest = {gate['gate']: gate['verdict'] for gate in manifest['gates']}
+    approved = [gate for gate in GATES if latest.get(gate) == 'approved']
+    if not approved:
+        status, after = 'начат', 0
+    else:
+        status, after = GATE_PASSED[approved[-1]], GATES.index(approved[-1]) + 1
+        if approved[-1] == 'enable':
+            enabled = [gate for gate in manifest['gates'] if gate['gate'] == 'enable'][-1]
+            name = enabled.get('set') or (manifest.get('build') or {}).get('set')
+            if name:
+                status += f", набор {name}"
+    for gate in GATES[after:]:
+        if latest.get(gate) in ('changes', 'rejected'):
+            status += f"; {GATE_NAMES[gate]} — {'правки' if latest[gate] == 'changes' else 'отклонено'}"
+    return status
+
+
+def queue_rows(doc: Path) -> dict[str, str]:
+    """Asset slug → the «Статус» cell of its row in the queue table."""
+    rows = {}
+    match = re.search(r'^### Очередь переделки\s*\n(.*?)(?=^#{2,3} |\Z)', doc.read_text(), re.S | re.M)
+    for line in (match.group(1) if match else '').splitlines():
+        cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+        match = re.fullmatch(r'`([a-z0-9-]+)`', cells[1]) if len(cells) > 2 else None
+        if match:
+            rows[match.group(1)] = cells[-1]
+    return rows
+
+
+def cmd_queue(args) -> int:
+    assets = sorted(path.parent.name for path in assets_root().glob('*/asset.json'))
+    statuses = {asset: queue_status(load_manifest(asset)) for asset in assets}
+    if not args.check:
+        for asset in assets:
+            print(f'{asset}\t{statuses[asset]}')
+        return 0
+    rows = queue_rows(Path(args.check))
+    stale = [f'{asset}: «{rows.get(asset, "нет строки")}», должно быть «{statuses[asset]}»'
+             for asset in assets if rows.get(asset) != statuses[asset]]
+    stale += [f'{asset}: нет папки ассета, статус должен быть «не начат»'
+              for asset in rows if asset not in statuses and rows[asset] != 'не начат']
+    for line in stale:
+        print(line)
+    return 1 if stale else 0
 
 
 def cmd_sheet(args) -> int:
@@ -653,6 +738,9 @@ def main(argv=None) -> int:
     p.add_argument('--start', required=True); p.add_argument('--end', required=True)
     p.add_argument('--thread', required=True); p.add_argument('--parent'); p.add_argument('--reason')
     p.add_argument('--namespace')
+    p.add_argument('--tool', help='our script that assembled this PNG from the --parent image_gen sources')
+    p.add_argument('--map', action='append', metavar='NAME=PNG',
+                   help='a map baked from our model with this albedo: normal, roughness, ao (with --tool)')
     p.set_defaults(func=cmd_import)
     p = sub.add_parser('select'); p.add_argument('asset'); p.add_argument('--key', required=True)
     p.add_argument('--file', required=True); p.add_argument('--reason', required=True)
@@ -666,6 +754,9 @@ def main(argv=None) -> int:
     p.add_argument('--b', required=True, help='ours / candidate image')
     p.add_argument('--ours', choices=('a', 'b'), default='b')
     p.add_argument('--subject', required=True); p.add_argument('--measurements')
+    p.add_argument('--a-label', default='оригинал в игре', help='what the reference image shows (reference mode)')
+    p.add_argument('--private-a', action='store_true',
+                   help='the reference holds original texture pixels: keep it out of pair.jpg in git')
     p.set_defaults(func=cmd_pair)
     p = sub.add_parser('merge'); p.add_argument('asset'); p.add_argument('--id', required=True)
     p.set_defaults(func=cmd_merge)
@@ -674,10 +765,13 @@ def main(argv=None) -> int:
     p.add_argument('--verdict', required=True, choices=GATE_VERDICTS)
     p.add_argument('--quote', required=True); p.add_argument('--note'); p.add_argument('--date')
     p.add_argument('--by', default='user')
+    p.add_argument('--set', help='enable: the set enabled (default: the last built set)')
     p.set_defaults(func=cmd_decide)
     p = sub.add_parser('check'); p.add_argument('asset'); p.add_argument('--stage', required=True, choices=STAGES)
     p.set_defaults(func=cmd_check)
     p = sub.add_parser('status'); p.add_argument('asset'); p.set_defaults(func=cmd_status)
+    p = sub.add_parser('queue', help='status of every asset; --check DOC compares the queue table with the gates')
+    p.add_argument('--check', metavar='DOC'); p.set_defaults(func=cmd_queue)
     p = sub.add_parser('bench'); p.add_argument('asset'); p.set_defaults(func=cmd_bench)
     p = sub.add_parser('sheet'); p.add_argument('out'); p.add_argument('images', nargs='+')
     p.add_argument('--cols', type=int, default=2); p.add_argument('--width', type=int, default=2048)
