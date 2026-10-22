@@ -393,12 +393,10 @@ def resident_scenario(value, inputs):
     distance, npc, spawn = min(known_candidates or candidates)
     # Scenario IDs are frozen; both groups therefore remain stable across phases.
     import hashlib
-    local = (family(value) != "jump" and bool(known_candidates)
+    local = (bool(known_candidates)
              and int(hashlib.sha256(value["id"].encode()).hexdigest()[:8], 16) % 2 == 0)
     selection = dict(source="native known_node_ids at nearest start node", nearest_start_node=node,
                      nearest_routine_to_start_cm=distance, spawn_cm=spawn)
-    if family(value) == "jump":
-        selection["stranger_reason"] = "teacher v2 does not attach familiar memory"
     return dict(value, npc=npc, local=local, residency="local" if local else "stranger",
                 knownroads_selection=selection)
 
@@ -751,7 +749,7 @@ class Worker(campaign.Worker):
         metadata = v3.read_json(directory / "episode.json")
         raw_v5 = v5(self.options) and "id" not in metadata
         if v5(self.options):
-            validate_native(metadata, value, recording_identity(self.identity, value))
+            validate_native(metadata, value, resumed_recording_identity(self.identity, value, metadata))
         if raw_v5:
             actual_seed = metadata.get("seed")
             metadata.update(value, recording_identity=recording_identity(self.identity, value),
@@ -900,20 +898,47 @@ def settings(options, include_follow):
     return result
 
 
-def collection_settings(base_identity, prior_settings=None, *, follow_below_gate=False, source_follow_sha256=None):
+def v2_memory4_upgrade_base(base_identity, prior_settings, *, upgrade_v2_memory=False):
+    """Authorize only the one-time v5 runner replacement for v2 memory recording."""
+    error = "Recording state belongs to another binary, input, selection or follow gate"
+    if prior_settings is None:
+        if upgrade_v2_memory:
+            raise ValueError("The v2 memory upgrade requires an existing frozen v5 collection")
+        return None
+    prior_base = (prior_settings.get("base_recording_identity")
+                  if prior_settings.get("schema_version") == 2 else prior_settings)
+    previous = prior_settings.get("v2_memory4_previous_base")
+    if previous is not None:
+        if (prior_settings.get("schema_version") != 2 or not isinstance(previous, dict)
+                or previous.get("corpus_version") != 5 or previous.get("navigation_memory_version") != 4
+                or previous.get("demo_version") != 3 or previous.get("runner_sha256") == prior_base.get("runner_sha256")
+                or dict(previous, runner_sha256=prior_base.get("runner_sha256")) != prior_base):
+            raise ValueError("Invalid frozen v2 memory upgrade provenance")
+    if prior_base == base_identity:
+        if upgrade_v2_memory and previous is None:
+            raise ValueError("The v2 memory upgrade requires a changed runner")
+        return previous
+    if (not upgrade_v2_memory or previous is not None or prior_settings.get("schema_version") != 2
+            or base_identity.get("corpus_version") != 5 or base_identity.get("navigation_memory_version") != 4
+            or base_identity.get("demo_version") != 3
+            or not prior_base.get("runner_sha256") or not base_identity.get("runner_sha256")
+            or dict(prior_base, runner_sha256=base_identity["runner_sha256"]) != base_identity):
+        raise ValueError(error)
+    return prior_base
+
+
+def collection_settings(base_identity, prior_settings=None, *, follow_below_gate=False, source_follow_sha256=None,
+                        upgrade_v2_memory=False):
     """Authorize an additive family while preserving the original recording identity.
 
     All old core inputs must match before the caller creates selections, changes
     state, or launches a runner. Subsequent resumes require exactly the same
     explicit opt-in and family policy.
     """
-    prior_base = prior_settings
+    previous = v2_memory4_upgrade_base(base_identity, prior_settings, upgrade_v2_memory=upgrade_v2_memory)
     if prior_settings is not None and prior_settings.get("schema_version") == 2:
         if not follow_below_gate:
             raise ValueError("Existing follow_below_gate recordings require the explicit --follow-below-gate opt-in")
-        prior_base = prior_settings.get("base_recording_identity")
-    if prior_settings is not None and prior_base != base_identity:
-        raise ValueError("Recording state belongs to another binary, input, selection or follow gate")
     if not follow_below_gate:
         return base_identity
     if base_identity.get("include_follow") is not False:
@@ -928,8 +953,14 @@ def collection_settings(base_identity, prior_settings=None, *, follow_below_gate
         source_validation_attempt_2_sha256=base_identity["validation_attempt_2_sha256"])
     result = dict(schema_version=2, base_recording_identity=base_identity,
                   family_policies={FOLLOW_BELOW_GATE: policy})
-    if prior_settings is not None and prior_settings.get("schema_version") == 2 and prior_settings != result:
-        raise ValueError("Frozen follow_below_gate authorization policy or source selection changed")
+    if previous is not None:
+        result["v2_memory4_previous_base"] = previous
+    if prior_settings is not None and prior_settings.get("schema_version") == 2:
+        expected = dict(prior_settings, base_recording_identity=base_identity)
+        if previous is not None:
+            expected["v2_memory4_previous_base"] = previous
+        if expected != result:
+            raise ValueError("Frozen follow_below_gate authorization policy or source selection changed")
     return result
 
 
@@ -948,6 +979,84 @@ def recording_identity(identity, value):
         raise ValueError("Scenario differs from the frozen follow_below_gate policy")
     return dict(base, schema_version=2, dataset_family=FOLLOW_BELOW_GATE, follow_below_gate=True,
                 minimum_follow_fraction=policy["minimum_follow_fraction"], family_policy=policy)
+
+
+def resumed_recording_identity(identity, value, metadata):
+    current = recording_identity(identity, value)
+    recorded = metadata.get("recording_identity")
+    if "id" not in metadata or recorded == current:
+        return current
+    previous = identity.get("v2_memory4_previous_base")
+    if previous is not None:
+        prior = recording_identity(dict(identity, base_recording_identity=previous), value)
+        if recorded == prior:
+            return prior
+    raise ValueError(f"Completed recording belongs to another frozen binary: {value['id']}")
+
+
+def v2_memory3_file_hashes(directory):
+    """Inventory obsolete native v2 output before moving it out of the corpus."""
+    directory = Path(directory)
+    if directory.is_symlink():
+        raise ValueError(f"Symbolic link in obsolete v2 recording: {directory}")
+    result = {}
+    for path in directory.rglob("*"):
+        if path.is_symlink() or (not path.is_file() and not path.is_dir()):
+            raise ValueError(f"Nonregular file in obsolete v2 recording: {path}")
+        if path.is_file():
+            result[str(path.relative_to(directory))] = campaign.binary_digest(path)
+    return result
+
+
+def archive_v2_memory3(options, selections, state):
+    """Preserve raw v2 attempts superseded by the authorized memory-v4 runner."""
+    if not state.data["settings"].get("v2_memory4_previous_base"):
+        return
+    archived = dict(state.data.get("superseded_v2_memory3", {}))
+    archive_root = Path(options.archive_root)
+    for value in selections["jump"]:
+        directory = directory_for(options.task, value)
+        if not (directory / "episode.json").is_file():
+            continue
+        metadata = v3.read_json(directory / "episode.json")
+        if (metadata.get("teacher_version") != 2 or metadata.get("demo_version") != 2
+                or metadata.get("navigation_memory_version") != 3 or metadata.get("journey_memory") is not False):
+            continue
+        key = state.key(directory)
+        if ("id" in metadata or "recording_identity" in metadata or "collection_metrics" in metadata
+                or "samples_sha256" in metadata or key in state.data["integrity"]["episodes"]
+                or state.saved_metrics(directory) is not None or state.rejected_candidate(directory) is not None
+                or directory_for(archive_root, value).exists()):
+            raise ValueError(f"Obsolete v2 recording collides with finalized corpus state: {directory}")
+        if not v3.complete(directory):
+            raise ValueError(f"Incomplete obsolete v2 recording retained: {directory}")
+        old_identity = dict(state.data["settings"]["v2_memory4_previous_base"],
+                            navigation_memory_version=3, demo_version=2)
+        validate_native(metadata, value, old_identity)
+        checked = demos.summarize(directory, validate=True)
+        if checked.get("navigation_memory_versions") != [3] or checked.get("format_versions") != [2]:
+            raise ValueError(f"Obsolete v2 sample format differs: {directory}")
+        destination = archive_root / "superseded-v2-memory3" / key
+        expected = v2_memory3_file_hashes(directory)
+        present = v2_memory3_file_hashes(destination)
+        if any(expected.get(name) != digest for name, digest in present.items()):
+            raise ValueError(f"Conflicting obsolete v2 archive retained: {destination}")
+        additional = sum((directory / name).stat().st_size for name in expected if name not in present)
+        if campaign.tree_bytes(options.task / "recordings") + campaign.tree_bytes(archive_root) + additional > options.max_bytes:
+            raise ValueError("Obsolete v2 archival would exceed the corpus byte budget")
+        destination.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["rsync", "-a", "--no-links", "--", str(directory) + "/", str(destination) + "/"], check=True)
+        if v2_memory3_file_hashes(destination) != expected:
+            raise ValueError(f"Obsolete v2 archive checksum mismatch: {destination}")
+        event = dict(id=value["id"], directory=str(destination), files_sha256=expected)
+        if key in archived and archived[key] != event:
+            raise ValueError(f"Obsolete v2 archive event differs: {directory}")
+        archived[key] = event
+        # Save the completed transfer before deleting its local copy. A retry
+        # checks the same files if interrupted between these two operations.
+        state.update(superseded_v2_memory3=archived)
+        shutil.rmtree(directory)
+        campaign.emit("recording_v2_memory3_archived", id=value["id"], directory=str(destination))
 
 
 def summarize(episodes, selections, include_follow, used, follow_below_gate=False, point_limit=None,
@@ -1008,6 +1117,9 @@ def run(options):
     point_limit = getattr(options, "point_limit", 400)
     verify_only = getattr(options, "verify_existing_only", False)
     expect_existing = getattr(options, "expect_existing", None)
+    upgrade_v2_memory = getattr(options, "upgrade_v2_memory", False)
+    if upgrade_v2_memory and not v5(options):
+        raise ValueError("The v2 memory upgrade is restricted to the v5 corpus")
     if v5(options):
         if point_limit != 400 or getattr(options, "archive_root", None) is None:
             raise ValueError("V5 requires all 400 road pairs and an absolute archive root")
@@ -1031,9 +1143,7 @@ def run(options):
             raise ValueError("Existing recording state lacks its frozen collection identity")
         # Check every old core identity field before making any new file. The
         # policy check below additionally freezes the new family's source hash.
-        prior_base = prior_settings.get("base_recording_identity") if prior_settings.get("schema_version") == 2 else prior_settings
-        if prior_base != base_identity:
-            raise ValueError("Recording state belongs to another binary, input, selection or follow gate")
+        v2_memory4_upgrade_base(base_identity, prior_settings, upgrade_v2_memory=upgrade_v2_memory)
         if prior_settings.get("schema_version") == 2 and not follow_below_gate:
             raise ValueError("Existing follow_below_gate recordings require the explicit --follow-below-gate opt-in")
         for name in (*FAMILIES, *((FOLLOW_BELOW_GATE, "water") if v5(options) else ("moving-all-splits",))):
@@ -1055,7 +1165,7 @@ def run(options):
     source_follow_sha256 = (campaign.binary_digest(options.task / "recording-input/follow.jsonl")
                             if follow_below_gate else None)
     identity = collection_settings(base_identity, prior_settings, follow_below_gate=follow_below_gate,
-                                   source_follow_sha256=source_follow_sha256)
+                                   source_follow_sha256=source_follow_sha256, upgrade_v2_memory=upgrade_v2_memory)
     families = (*FAMILIES, *((FOLLOW_BELOW_GATE,) if follow_below_gate else ()), *(("water",) if v5(options) else ()))
     if prior_settings is None:
         selections = prepare_v5_selections(options.task) if v5(options) else prepare_selections(options.task, follow_below_gate)
@@ -1073,6 +1183,8 @@ def run(options):
         raise ValueError("Recording exists outside frozen train selections")
     state = CollectionState(state_path, identity, prior_state, getattr(options, "archive_root", None))
     state.update(status="verifying_existing" if verify_only else "running")
+    if v5(options):
+        archive_v2_memory3(options, selections, state)
     budget = StorageBudget(output, options.max_bytes, archive_root=getattr(options, "archive_root", None),
                            min_free_bytes=V5_MIN_FREE_BYTES if v5(options) else 256 * 1024**2)
     workers = [Worker(options, index, budget, identity, state) for index in range(options.parallel)]
@@ -1232,6 +1344,8 @@ def main():
                         help="Explicitly add separate follow_below_gate training data with the authorized 70%% per-episode rule")
     parser.add_argument("--verify-existing-only", action="store_true",
                         help="Validate all existing recordings and refresh the global summary without starting scenarios")
+    parser.add_argument("--upgrade-v2-memory", action="store_true",
+                        help="Authorize the one-time v5 runner update that records teacher-v2 episodes with memory 4")
     parser.add_argument("--expect-existing", type=int,
                         help="Require this exact number of existing episodes before verification")
     parser.add_argument("--wall-minutes", type=float, default=100)
