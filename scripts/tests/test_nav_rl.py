@@ -753,6 +753,24 @@ def test_validation_commands_preserve_world_seed_and_force_sampled_zero_teacher(
         rl.action_seeds("7,7")
 
 
+def test_lean_validation_commands_disable_recording_for_every_family(tmp_path, monkeypatch):
+    manifest, groups = validation_manifest(tmp_path)
+    args = validation_drive_args(tmp_path, manifest, family=None)
+    args.lean = True
+    for family in rl.VALIDATION_FAMILIES:
+        assert "navdemos record off" in rl.validation_commands(args, groups[family][0], 7)
+    captured = []
+    monkeypatch.setattr(rl.sys, "argv", ["nav_rl.py", "drive", "--output", str(tmp_path),
+        "--manifest", str(manifest), "--lean"])
+    monkeypatch.setattr(rl, "drive", lambda value: captured.append(value))
+    rl.main()
+    assert captured[0].lean
+    monkeypatch.setattr(rl.sys, "argv", ["nav_rl.py", "population", "--output", str(tmp_path),
+        "--pairs", "/pairs.jsonl", "--lean"])
+    with pytest.raises(SystemExit):
+        rl.main()
+
+
 def test_maneuver_press_metrics_count_edges_and_typed_windows():
     times = np.arange(50) * 100
     teacher = np.zeros((50, 2))
@@ -963,8 +981,10 @@ def test_manifest_drive_repeats_scenario_seed_for_three_policy_seeds(tmp_path, m
 
 
 def validation_drive_args(tmp_path, manifest, policy="bc3", family="approach", resume=False):
+    output = tmp_path / "validation" / policy
+    output.mkdir(parents=True, exist_ok=True)
     return SimpleNamespace(manifest=manifest, families=family, action_mode="sample", action_seeds=None,
-        indices=None, parallel=1, output=tmp_path / "validation" / policy, cache=tmp_path / "cache", seed=7,
+        indices=None, parallel=1, output=output, cache=tmp_path / "cache", seed=7,
         resume=resume, npc="NPC", roads=Path("/roads"), weights=Path(f"/{policy}.navbc"),
         limit_ms=240000, physics="cv")
 
@@ -979,6 +999,179 @@ def stub_validation_runner(monkeypatch):
     monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
     monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(rl, "module", lambda name: SimpleNamespace(retain_tail=lambda path: None))
+
+
+def lean_text_episode(directory, family="point", seed=7):
+    kind = "follow" if family == "follow_below_gate" else "point" if family in ("jump", "safety", "fence") else family
+    value = dict(id=f"{family}-case", family="safety" if family == "fence" else family,
+        goal_kind=kind, split="validation", region="onar", start="A", goal="B", seed=19)
+    if family == "jump":
+        value.update(type="jump", transition_id=43, transition_start_m=[0, 0, 0], transition_end_m=[2, 0, 0])
+    if family == "safety":
+        value["safety_fixture"] = dict(label="cliff-bridge", kind="cliff", link_id=123,
+            hazard_cm=[0, 0, 200], start_to_hazard_cm=200)
+    if family == "fence":
+        value["fence_control"] = True
+    metadata = dict(validation_runner_metadata(value, seed), **{key: value[key] for key in
+        ("id", "family", "split", "region", "start", "goal")})
+    metadata.update(scenario_seed=19, action_seed=seed, decisions=4, elapsed_ms=400, limit_ms=400,
+        success=True, blocked_spans=1, blocked_ms=100, max_blocked_ms=100, teacher_control_decisions=0,
+        failure="", distance_cm=0, validation_scenario=value, record=False)
+    rl.write_json(directory / "episode.json", metadata)
+    actions = np.zeros((5, 9))
+    actions[:, 0] = np.arange(5) * 100
+    actions[:, 4] = 1
+    actions[0, 5] = 1
+    actions[1, 3] = 1
+    actions[2, 1] = 1
+    np.savetxt(directory / "actions.txt", actions)
+    np.savetxt(directory / "trajectory.txt", [[i * 100, i * 50, 100, 0, 0] for i in range(5)])
+    if kind in ("follow", "approach"):
+        np.savetxt(directory / "target-trajectory.txt", [[i * 100, 300 + i * 50, 100, 0, 300, 0] for i in range(5)])
+    if family == "jump":
+        common = dict(transition_id=43, type="jump", native_jump=False, native_climb=False, in_air=False,
+            falling=False, supported=False, landing_path_complete=False, landing_path_m=99., landing_snap_m=99.,
+            cv_active=True, source_polygon=11, end_polygon=22, current_polygon=11, source_component=1,
+            end_component=2, current_component=1, side_method="component",
+            source_position_cm=[0, 0, 0], end_position_cm=[200, 0, 0])
+        frames = [dict(common, elapsed_ms=0, position_cm=[0, 100, 0]),
+            dict(common, elapsed_ms=16, position_cm=[80, 160, 0], native_jump=True),
+            dict(common, elapsed_ms=32, position_cm=[200, 0, 0], supported=True, current_polygon=22,
+                current_component=2, landing_path_complete=True, landing_path_m=.25, landing_snap_m=.1)]
+        rl.write_pairs(directory / "transition-frames.jsonl", frames)
+    if family in ("safety", "fence"):
+        common = dict(cv_active=True, supported=True, in_air=False, falling=False, native_jump=False,
+            native_climb=False, swimming=False, water_depth_cm=0, deep_water_threshold_cm=140,
+            hitpoints=200, hitpoints_max=200)
+        frames = [dict(common, elapsed_ms=0, position_cm=[0, 100, 0]),
+            dict(common, elapsed_ms=100, position_cm=[0, 80, 0], supported=False, falling=True),
+            dict(common, elapsed_ms=200, position_cm=[0, 10, 0], hitpoints=175, water_depth_cm=140)]
+        rl.write_pairs(directory / "perception-safety-frames.jsonl", frames)
+    return value
+
+
+@pytest.mark.parametrize("family", ["point", "object", "approach", "follow_below_gate", "jump", "safety", "fence"])
+def test_lean_metrics_match_recorded_physical_outcomes_without_navdemo(tmp_path, monkeypatch, family):
+    value = lean_text_episode(tmp_path, family)
+    original_module = rl.module
+    samples = np.zeros(4, dtype=demos.RECORD_V2_DTYPE)
+    fake_demos = SimpleNamespace(iter_chunks=lambda directory: iter([samples]))
+    monkeypatch.setattr(rl, "module", lambda name: fake_demos if name == "nav_demos" else original_module(name))
+    recorded = rl.validation_episode_metrics(tmp_path)
+    def lean_module(name):
+        assert name not in ("nav_demos", "nav_drive", "nav_ppo_final")
+        return original_module(name)
+    monkeypatch.setattr(rl, "module", lean_module)
+    measured = rl.lean_validation_episode_metrics(tmp_path)
+    for key in ("success", "elapsed_ms", "decisions", "travelled_xz_cm", "blocked_ms"):
+        assert measured[key] == recorded[key]
+    for key in ("turn_only", "idle", "jump", "climb", "walk", "forward"):
+        assert measured["action_counts"][key] == recorded["action_counts"][key]
+    for key in ("first_contact_ms", "follow_fraction", "follow_success", "approach_success", "transition_success",
+                "transition_evidence", "safety", "falls", "entered_deep_water", "swimming"):
+        if key in recorded:
+            assert measured[key] == recorded[key]
+    assert measured["action_presses"]["jump"]["presses"] == 1
+    assert measured["recording"] == "text_only"
+    assert "maneuver_presses" not in measured and "disagreement_counts" not in measured
+    if value["family"] == "jump":
+        assert measured["transition_success"]
+    if value["family"] == "safety":
+        assert measured["safety"]["harmful_fall"] and measured["entered_deep_water"]
+
+
+def test_lean_summary_pools_families_seeds_and_physical_evidence_without_samples(tmp_path, monkeypatch):
+    episodes = []
+    for seed in (7, 19, 43):
+        for family in ("point", "object", "follow_below_gate", "jump", "safety"):
+            directory = tmp_path / "validation" / family / f"seed-{seed}"
+            lean_text_episode(directory, family, seed)
+            measured = rl.lean_validation_episode_metrics(directory)
+            episodes.append(measured)
+            rl.write_json(directory / "drive-metrics.json", measured)
+            rl.clean_lean_diagnostics(directory)
+    summary = rl.validation_summary(episodes, lean=True)
+    assert summary["all"]["n"] == 15
+    assert summary["all"]["confirmed_transitions"] == 3
+    assert summary["all"]["deep_water_episodes"] == summary["all"]["harmful_fall_episodes"] == 3
+    assert summary["by_family"]["jump"]["arrival_fraction"] == 1
+    assert summary["by_family"]["follow_below_gate"]["follow_fraction"] == 1
+    assert summary["by_seed"]["7"]["all"]["n"] == 5
+    assert summary["by_seed"]["7"]["by_family"]["safety"]["harmful_fall_episodes"] == 1
+    assert "maneuver_presses" not in summary["all"]
+    assert summary["all"]["action_presses"]["jump"]["per_1000_decisions"] == 250
+    monkeypatch.setattr(rl, "module", lambda name: pytest.fail("Lean cached summary must not open NAVDEMO/tails"))
+    monkeypatch.setattr(rl, "object_failure_summaries", lambda *args: pytest.fail("Lean summary has no sensor tails"))
+    output = tmp_path / "summary"
+    rl.summarize(SimpleNamespace(source=tmp_path / "validation", output=output))
+    saved = rl.read_json(output / "metrics.json")
+    assert saved["all"] == summary["all"]
+    assert saved["object_failures_last_10s"] == []
+
+
+@pytest.mark.parametrize("bad_moving_seed", [False, True])
+def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(tmp_path, monkeypatch, bad_moving_seed):
+    manifest, groups = validation_manifest(tmp_path)
+    args = validation_drive_args(tmp_path, manifest, family=None)
+    args.lean, args.jump_links = True, Path("/accepted-links-cv.txt")
+    monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(rl, "module", lambda name: pytest.fail("Lean drive must not read samples or retain tails"))
+    calls = []
+    def scenario(worker, runner, name, commands, directory):
+        value = groups[directory.parent.parent.name][0]
+        seed = int(directory.name.removeprefix("seed-"))
+        assert "navdemos record off" in commands
+        metadata = validation_runner_metadata(value, seed)
+        moving = value["goal_kind"] in ("approach", "follow")
+        metadata.update(start=value["start"],
+            goal="RESOLVED_CONNECTED_WAYPOINT" if value["goal_kind"] in ("approach", "follow") else value["goal"],
+            seed=value["seed"] + int(bad_moving_seed and moving), record=False, teacher_control_decisions=0)
+        rl.write_json(directory / "episode.json", metadata)
+        (directory / "known-paths.jsonl").write_text("diagnostic")
+        calls.append((value["family"], worker.seed, seed))
+    monkeypatch.setattr(rl, "scenario", scenario)
+    monkeypatch.setattr(rl, "lean_validation_episode_metrics", lambda directory: dict(success=False, recording="text_only"))
+    if bad_moving_seed:
+        with pytest.raises(ValueError, match="identity"):
+            rl.drive_validation(args)
+        return
+    rl.drive_validation(args)
+    assert set(calls) == {(family, 19, seed) for family in rl.VALIDATION_FAMILIES for seed in rl.ACTION_SEEDS}
+    assert len(list(args.output.rglob("drive-metrics.json"))) == 15
+    assert not list(args.output.rglob("known-paths.jsonl"))
+    assert not list(args.output.rglob("samples.bin*"))
+
+
+@pytest.mark.parametrize("corruption", [None, dict(record=True), dict(teacher_control_decisions=1),
+    dict(weights="/other.navbc"), dict(action_seed=19), dict(mixing_seed=19), dict(validation_scenario={}), "samples"])
+def test_lean_resume_validates_identity_and_cleans_diagnostics_without_rerun(tmp_path, monkeypatch, corruption):
+    manifest, groups = validation_manifest(tmp_path)
+    value = groups["point"][0]
+    args = validation_drive_args(tmp_path, manifest, family="point", resume=True)
+    args.lean, args.action_seeds = True, "7"
+    directory = args.output / "validation/point" / value["id"] / "seed-7"
+    metadata = dict(validation_runner_metadata(value, 7), validation_scenario=value, action_seed=7,
+        weights=str(args.weights), record=False, teacher_control_decisions=0, start="A", goal="B")
+    if isinstance(corruption, dict):
+        metadata.update(corruption)
+    rl.write_json(directory / "episode.json", metadata)
+    rl.write_json(directory / "drive-metrics.json", dict(success=False, recording="text_only"))
+    if corruption == "samples":
+        (directory / "samples.bin.gz").write_bytes(b"forbidden")
+    for name in ("known-paths.jsonl", "teacher-paths.jsonl", "transition-frames.jsonl",
+                 "perception-safety-frames.jsonl", "perception-water-observations.jsonl"):
+        (directory / name).write_text("diagnostic")
+    monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(rl, "module", lambda name: pytest.fail("Lean resume must not read samples/tails"))
+    monkeypatch.setattr(rl, "scenario", lambda *args: pytest.fail("Completed episode was rerun"))
+    if corruption:
+        with pytest.raises(ValueError):
+            rl.drive_validation(args)
+    else:
+        rl.drive_validation(args)
+        assert not list(directory.glob("*.jsonl"))
 
 
 def test_validation_setup_refusal_continues_and_is_shared_between_policies(tmp_path, monkeypatch):

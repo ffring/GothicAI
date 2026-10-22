@@ -587,7 +587,7 @@ def validation_commands(args, value, action_seed):
     if type(limit) is not int or limit <= 0:
         raise ValueError("Validation scenario limit must be positive")
     suffix = f"{limit} {args.weights} 0 {action_seed} sample"
-    record = "off" if value.get("family") == "detour" else "on"
+    record = "off" if getattr(args, "lean", False) or value.get("family") == "detour" else "on"
     commands = [f"roads load {args.roads}", f"roads on {npc}", f"navdemos record {record}",
                 "navdemos perception-mode gaze", "navdemos oracle off"]
     if value.get("family") == "safety":
@@ -649,6 +649,7 @@ def drive_validation(args):
         raise ValueError("Frozen manifest validation requires softmax sampling")
     checked_paths(args, policy=True)
     detours = getattr(args, "detour_scenarios", None)
+    lean = getattr(args, "lean", False) or detours is not None
     if detours is not None:
         if (getattr(args, "families", None) is not None or getattr(args, "safety_fixtures", None) is not None
                 or getattr(args, "fence_control", False)):
@@ -691,13 +692,19 @@ def drive_validation(args):
                         continue
                     if (directory / "episode.json").is_file():
                         existing = read_json(directory / "episode.json")
+                        cached = (directory / "drive-metrics.json").is_file()
                         if (not args.resume or existing.get("validation_scenario", value) != value
                                 or existing.get("action_seed", seed) != seed
-                                or existing.get("weights", str(args.weights)) != str(args.weights)):
+                                or existing.get("weights", str(args.weights)) != str(args.weights)
+                                or (lean and cached and (existing.get("validation_scenario") != value
+                                    or existing.get("action_seed") != seed
+                                    or existing.get("weights") != str(args.weights)))):
                             raise ValueError(f"Existing or different validation episode: {directory}")
                         episode = existing
                         started = None
                     else:
+                        if lean and shutil.disk_usage(args.output).free < 20 * 1024**3 + 512 * 1024**2:
+                            raise ValueError("Lean validation requires the 20-GiB disk reserve plus 512 MiB")
                         if directory.exists() and any(directory.iterdir()):
                             if not args.resume:
                                 raise ValueError(f"Incomplete validation episode; use --resume: {directory}")
@@ -738,13 +745,22 @@ def drive_validation(args):
                             or episode.get("mixing_seed") != seed or episode.get("drive") is not True
                             or episode.get("observation_source") != "learner_memory"):
                         raise ValueError(f"Runner validation identity differs: {directory}")
-                    if value["family"] == "detour":
-                        if (any(episode.get(key) != value[key] for key in ("start", "goal", "goal_kind"))
+                    if lean:
+                        start = "intentional" if value.get("fence_control") else value["start"]
+                        moving = value["goal_kind"] in ("follow", "approach")
+                        # Moving routes resolve freepoints to connected waypoints;
+                        # native goal names do not identify the frozen target/route.
+                        if (episode.get("start") != start
+                                or (not moving and episode.get("goal") != value["goal"])
+                                or (moving and episode.get("seed") != value["seed"])
+                                or episode.get("goal_kind") != value["goal_kind"]
                                 or episode.get("record") is not False or episode.get("teacher_control_decisions") != 0
-                                or (directory / "samples.bin.gz").exists()):
-                            raise ValueError(f"Runner detour identity/recording/control differs: {directory}")
+                                or any(directory.glob("samples.bin*"))):
+                            raise ValueError(f"Runner lean identity/recording/control differs: {directory}")
                     if (directory / "drive-metrics.json").is_file():
-                        if value["family"] != "detour":
+                        if lean:
+                            clean_lean_diagnostics(directory)
+                        else:
                             module("nav_ppo_final").retain_tail(directory)
                         continue
                     for key in ("id", "family", "split", "region", "place_id"):
@@ -755,18 +771,19 @@ def drive_validation(args):
                     if started is not None:
                         episode["collector_wall_s"] = time.monotonic() - started
                     write_json(directory / "episode.json", episode)
-                    measured = (detour_episode_metrics(directory) if value["family"] == "detour"
-                                else validation_episode_metrics(directory))
+                    measured = (detour_episode_metrics(directory) if value["family"] == "detour" else
+                                lean_validation_episode_metrics(directory) if lean else validation_episode_metrics(directory))
                     write_json(directory / "drive-metrics.json", measured)
-                    if value["family"] == "detour":
-                        for name in ("known-paths.jsonl", "teacher-paths.jsonl", "transition-frames.jsonl"):
-                            (directory / name).unlink(missing_ok=True)
+                    if lean:
+                        clean_lean_diagnostics(directory)
                     else:
                         module("nav_ppo_final").retain_tail(directory)
                     print(json.dumps(dict(id=value["id"], family=value["family"], action_seed=seed,
                                           success=measured["success"], elapsed_ms=episode["elapsed_ms"])), flush=True)
             finally:
                 runner.close()
+            if lean and worker.output.exists():
+                shutil.rmtree(worker.output)
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(collect, index) for index in range(workers)]
         for future in futures:
@@ -954,7 +971,13 @@ def applied_transition_trace(route, actions, frames):
     return trace
 
 
-def detour_episode_metrics(directory):
+def clean_lean_diagnostics(directory):
+    for name in ("known-paths.jsonl", "teacher-paths.jsonl", "transition-frames.jsonl",
+                 "perception-safety-frames.jsonl", "perception-water-observations.jsonl"):
+        (directory / name).unlink(missing_ok=True)
+
+
+def text_episode_metrics(directory):
     """Physical outcomes and applied actions only; no NAVDEMO/teacher labels."""
     import numpy as np
     directory = Path(directory)
@@ -965,14 +988,14 @@ def detour_episode_metrics(directory):
     if (type(steps) is not int or steps <= 0 or actions.shape != (steps + 1, 9)
             or not np.isfinite(actions).all() or actions[0, 0] != 0 or actions[-1, 0] != elapsed
             or (np.diff(actions[:, 0]) <= 0).any()):
-        raise ValueError(f"Invalid detour applied-action rows: {directory}")
+        raise ValueError(f"Invalid lean applied-action rows: {directory}")
     if (trajectory.shape[1] != 5 or not np.isfinite(trajectory).all() or trajectory[0, 0] != 0
             or trajectory[-1, 0] != elapsed or (np.diff(trajectory[:, 0]) < 0).any()):
-        raise ValueError(f"Invalid detour trajectory rows: {directory}")
+        raise ValueError(f"Invalid lean trajectory rows: {directory}")
     applied = actions[:-1, 1:7]
     if (not np.isin(applied[:, :3], (-1, 0, 1)).all() or not np.isin(applied[:, 3:], (0, 1)).all()
             or (actions[-1, [1, 2, 3, 5, 6]] != 0).any()):
-        raise ValueError(f"Invalid detour applied-action keys: {directory}")
+        raise ValueError(f"Invalid lean applied-action keys: {directory}")
     masks = {head: applied[:, index] != 0 for index, head in enumerate(HEADS)}
     masks.update(turn_only=(applied[:, :2] == 0).all(axis=1) & (applied[:, 2] != 0),
                  idle=~applied[:, [0, 1, 2, 4, 5]].any(axis=1))
@@ -988,30 +1011,38 @@ def detour_episode_metrics(directory):
     result.update(episode=str(directory), elapsed_s=elapsed / 1000, action_counts=counts,
         action_fraction={key: count / steps for key, count in counts.items()}, action_presses=presses,
         travelled_xz_cm=float(np.linalg.norm(np.diff(trajectory[:, [1, 3]], axis=0), axis=1).sum()),
-        detour_geometry=episode["validation_scenario"]["geometry"], recording="text_only")
+        recording="text_only")
     return result
+
+
+def detour_episode_metrics(directory):
+    result = text_episode_metrics(directory)
+    result["detour_geometry"] = read_json(Path(directory) / "episode.json")["validation_scenario"]["geometry"]
+    return result
+
+
+def text_group_metrics(episodes):
+    decisions = sum(value["decisions"] for value in episodes)
+    counts = {key: sum(value["action_counts"][key] for value in episodes) for key in episodes[0]["action_counts"]}
+    return dict(n=len(episodes), arrived=sum(bool(value["success"]) for value in episodes),
+        arrival_fraction=sum(bool(value["success"]) for value in episodes) / len(episodes), decisions=decisions,
+        median_elapsed_s=statistics.median(value["elapsed_s"] for value in episodes),
+        blocked_spans=sum(value["blocked_spans"] for value in episodes),
+        blocked_ms=sum(value["blocked_ms"] for value in episodes), max_blocked_ms=max(value["max_blocked_ms"] for value in episodes),
+        teacher_control_decisions=sum(value["teacher_control_decisions"] for value in episodes),
+        action_counts=counts, action_fraction={key: count / decisions for key, count in counts.items()},
+        turn_in_place_fraction=counts["turn_only"] / decisions, idle_fraction=counts["idle"] / decisions,
+        action_presses={name: dict(presses=sum(value["action_presses"][name]["presses"] for value in episodes),
+            per_1000_decisions=1000 * sum(value["action_presses"][name]["presses"] for value in episodes) / decisions)
+            for name in ("jump", "climb")})
 
 
 def detour_summary(episodes):
     """Pool lean detour outcomes without inventing unavailable teacher agreement."""
-    def aggregate(values):
-        decisions = sum(value["decisions"] for value in values)
-        counts = {key: sum(value["action_counts"][key] for value in values) for key in values[0]["action_counts"]}
-        return dict(n=len(values), arrived=sum(bool(value["success"]) for value in values),
-            arrival_fraction=sum(bool(value["success"]) for value in values) / len(values), decisions=decisions,
-            median_elapsed_s=statistics.median(value["elapsed_s"] for value in values),
-            blocked_spans=sum(value["blocked_spans"] for value in values),
-            blocked_ms=sum(value["blocked_ms"] for value in values), max_blocked_ms=max(value["max_blocked_ms"] for value in values),
-            teacher_control_decisions=sum(value["teacher_control_decisions"] for value in values),
-            action_counts=counts, action_fraction={key: count / decisions for key, count in counts.items()},
-            turn_in_place_fraction=counts["turn_only"] / decisions, idle_fraction=counts["idle"] / decisions,
-            action_presses={name: dict(presses=sum(value["action_presses"][name]["presses"] for value in values),
-                per_1000_decisions=1000 * sum(value["action_presses"][name]["presses"] for value in values) / decisions)
-                for name in ("jump", "climb")})
-    return dict(all=aggregate(episodes),
-        by_seed={str(seed): aggregate([ep for ep in episodes if ep["action_seed"] == seed])
+    return dict(all=text_group_metrics(episodes),
+        by_seed={str(seed): text_group_metrics([ep for ep in episodes if ep["action_seed"] == seed])
                  for seed in sorted({ep["action_seed"] for ep in episodes})},
-        by_goal_kind={kind: aggregate([ep for ep in episodes if ep["goal_kind"] == kind])
+        by_goal_kind={kind: text_group_metrics([ep for ep in episodes if ep["goal_kind"] == kind])
                       for kind in sorted({ep["goal_kind"] for ep in episodes})},
         metric_definitions=dict(action_presses="applied rising edges per type per 1000 decisions; no teacher labels recorded",
             turn_in_place="nonzero turn, zero forward/strafe; fraction of decisions", recording="text_only; no NAVDEMO"),
@@ -1029,6 +1060,20 @@ def validation_episode_metrics(directory):
                              for chunk in demos.iter_chunks(directory)])
     result.update({key: metadata[key] for key in ("id", "family", "goal_kind", "action_seed", "scenario_seed")})
     result["maneuver_presses"] = maneuver_press_metrics(actions[:-1, 0], labels, actions[:-1, 5:7])
+    return validation_outcome_metrics(directory, metadata, actions, result)
+
+
+def lean_validation_episode_metrics(directory):
+    import numpy as np
+    directory = Path(directory)
+    metadata = read_json(directory / "episode.json")
+    result = text_episode_metrics(directory)
+    actions = np.loadtxt(directory / "actions.txt", ndmin=2)
+    return validation_outcome_metrics(directory, metadata, actions, result)
+
+
+def validation_outcome_metrics(directory, metadata, actions, result):
+    """Reuse passive physical witnesses for recorded and lean validation."""
     if metadata["goal_kind"] in ("follow", "approach"):
         moving = module("nav_demos_v4").text_metrics(directory)
         for key in ("first_contact_ms", "follow_observed_ms", "follow_in_band_ms", "follow_fraction",
@@ -1057,6 +1102,21 @@ def validation_episode_metrics(directory):
         fixture = metadata["validation_scenario"].get("safety_fixture")
         if fixture is not None:
             result["safety"] = safety.assess(fixture, metadata, frames)
+        elif metadata["validation_scenario"].get("fence_control"):
+            if len(frames) < 2 or frames[0]["elapsed_ms"] != 0:
+                raise ValueError("Fence control lacks initial physical safety frames")
+            damages = []
+            for previous, frame in zip(frames, frames[1:]):
+                loss = previous["hitpoints"] - frame["hitpoints"]
+                if loss > 0:
+                    associated = any(value["descent_cm"] > safety.CV_STEP_CM and value["descent_witnessed_ms"]
+                        <= frame["elapsed_ms"] <= value["end_ms"] + safety.LANDING_DAMAGE_WINDOW_MS for value in intervals)
+                    damages.append(dict(elapsed_ms=frame["elapsed_ms"], hitpoints_lost=loss,
+                                        associated_with_fall=associated))
+            result["safety"] = dict(harmful_fall=any(value["associated_with_fall"] for value in damages),
+                fall_intervals=intervals, damage_events=damages,
+                unattributed_damage=sum(value["hitpoints_lost"] for value in damages if not value["associated_with_fall"]),
+                initial_hitpoints=frames[0]["hitpoints"], final_hitpoints=frames[-1]["hitpoints"])
     return result
 
 
@@ -1072,6 +1132,10 @@ def validation_group_metrics(episodes):
                       false_presses_per_1000_decisions=1000 * counts["false_presses"] / result["decisions"])
         presses[name] = counts
     result["maneuver_presses"] = presses
+    return validation_outcome_group_metrics(episodes, result)
+
+
+def validation_outcome_group_metrics(episodes, result):
     following = [ep for ep in episodes if ep["goal_kind"] == "follow"]
     if following:
         observed = sum(ep["follow_observed_ms"] for ep in following)
@@ -1085,16 +1149,24 @@ def validation_group_metrics(episodes):
         result.update(falls=sum(ep["falls"] for ep in safety),
                       episodes_with_falls=sum(ep["falls"] > 0 for ep in safety),
                       deep_water_episodes=sum(ep["entered_deep_water"] for ep in safety),
-                      swimming_episodes=sum(ep["swimming"] for ep in safety))
+                      swimming_episodes=sum(ep["swimming"] for ep in safety),
+                      harmful_fall_episodes=sum(ep.get("safety", {}).get("harmful_fall", False) for ep in safety),
+                      unattributed_damage=sum(ep.get("safety", {}).get("unattributed_damage", 0) for ep in safety))
+    jumping = [ep for ep in episodes if ep["family"] == "jump"]
+    if jumping:
+        confirmed = sum(ep["transition_success"] for ep in jumping)
+        result.update(transition_attempts=len(jumping), confirmed_transitions=confirmed,
+                      transition_fraction=confirmed / len(jumping))
     return result
 
 
-def validation_summary(episodes):
+def validation_summary(episodes, lean=False):
+    group = (lambda values: validation_outcome_group_metrics(values, text_group_metrics(values))) if lean else validation_group_metrics
     def families(values):
-        return {family: validation_group_metrics([ep for ep in values if ep["family"] == family])
+        return {family: group([ep for ep in values if ep["family"] == family])
                 for family in sorted({ep["family"] for ep in values})}
-    return dict(all=validation_group_metrics(episodes), by_family=families(episodes),
-        by_seed={str(seed): dict(all=validation_group_metrics([ep for ep in episodes if ep["action_seed"] == seed]),
+    result = dict(all=group(episodes), by_family=families(episodes),
+        by_seed={str(seed): dict(all=group([ep for ep in episodes if ep["action_seed"] == seed]),
                                 by_family=families([ep for ep in episodes if ep["action_seed"] == seed]))
                  for seed in sorted({ep["action_seed"] for ep in episodes})},
         metric_definitions=dict(follow="sum in-band ms / sum post-contact ms; first <=500cm, band 200..500cm",
@@ -1102,7 +1174,12 @@ def validation_summary(episodes):
             turn_in_place="nonzero turn, zero forward/strafe; fraction of decisions",
             idle="zero forward/strafe/turn/jump/climb; fraction of decisions",
             jump_success="goal reached plus scheduled transition, applied button, native dynamics and completed landing-side evidence",
-            falls="physical unsupported descent >60cm; harmful falls reported separately by original safety assessor"), episodes=episodes)
+            falls="physical unsupported descent >60cm; harmful falls require associated hitpoint loss within the original safety assessor window"), episodes=episodes)
+    if lean:
+        result["metric_definitions"].pop("maneuver_presses")
+        result["metric_definitions"].update(recording="text_only; no NAVDEMO",
+            action_presses="applied rising edges per type per 1000 decisions; no teacher labels recorded")
+    return result
 
 
 def object_detour_summary(episodes, probes_path):
@@ -1183,11 +1260,14 @@ def summarize(args):
         excluded = {value["id"] for value in rejections}
         episodes = [episode for episode in episodes if episode["id"] not in excluded]
         detours = bool(episodes) and all(ep.get("family") == "detour" for ep in episodes)
-        result = detour_summary(episodes) if detours else validation_summary(episodes)
+        lean = bool(episodes) and all(ep.get("recording") == "text_only" for ep in episodes)
+        if any(ep.get("recording") == "text_only" for ep in episodes) and not lean:
+            raise ValueError("Cannot combine recorded and lean validation metrics")
+        result = detour_summary(episodes) if detours else validation_summary(episodes, lean=True) if lean else validation_summary(episodes)
         result["setup_rejections"] = rejections
         if getattr(args, "object_probes", None) is not None:
             result["object_detour"] = object_detour_summary(episodes, args.object_probes)
-        result["object_failures_last_10s"] = [] if detours else object_failure_summaries(episodes)
+        result["object_failures_last_10s"] = [] if lean else object_failure_summaries(episodes)
         write_json(args.output / "metrics.json", result)
         print(json.dumps({key: value for key, value in result.items()
                           if key not in ("episodes", "object_failures_last_10s")}, ensure_ascii=False))
@@ -1524,6 +1604,7 @@ def main():
     parser.add_argument("--pairs", type=Path)
     parser.add_argument("--manifest", type=Path, help="Frozen v4 corpus manifest; drive reads splits.validation only")
     parser.add_argument("--detour-scenarios", type=Path, help="Frozen detour-val JSONL; drive only, text recording without NAVDEMO")
+    parser.add_argument("--lean", action="store_true", help="Manifest validation with text-only physical outcomes; no NAVDEMO")
     parser.add_argument("--families", help="Comma-separated validation families; default all five")
     parser.add_argument("--object-probes", type=Path, help="Frozen object Detour probes for validation summary")
     parser.add_argument("--action-seeds", help="Fixed sampling seeds; default 18102027,18102028,18102029")
@@ -1574,6 +1655,8 @@ def main():
         parser.error("--manifest is exclusive with --pairs and only supports validation drive")
     if args.detour_scenarios is not None and (args.command != "drive" or args.pairs is not None or args.manifest is not None):
         parser.error("--detour-scenarios is exclusive with --pairs/--manifest and only supports validation drive")
+    if args.lean and (args.command != "drive" or (args.manifest is None and args.detour_scenarios is None)):
+        parser.error("--lean requires manifest or detour validation drive")
     if (args.command in ("qualify", "drive", "population", "equivalence", "death-smoke")
             and args.pairs is None and args.manifest is None and args.detour_scenarios is None):
         parser.error("--pairs is required")
