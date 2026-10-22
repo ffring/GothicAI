@@ -55,17 +55,20 @@ def test_jump_teacher2_uses_explicit_stranger_without_familiar_memory_attachment
 
 
 @pytest.mark.parametrize("local", [True, False])
-def test_v5_commands_install_familiar_memory_keep_gaze_cv_and_select_native_residency(tmp_path, local):
+@pytest.mark.parametrize("start,goal", [("START", "GOAL"), ("cm:0,0,0", "GOAL"),
+    ("START", "cm:1000,0,0"), ("cm:0,0,0", "cm:1000,0,0")])
+def test_v5_commands_install_familiar_memory_keep_gaze_cv_and_select_native_residency(tmp_path, local, start, goal):
     options = SimpleNamespace(task=tmp_path, limit_ms=240000, corpus_version=5)
     args = collect.runner_args(options, 0)
-    value = dict(collect.resident_scenario(scenario(), memberships()), local=local)
+    value = dict(collect.resident_scenario(scenario(start=start, goal=goal), memberships()), local=local)
     commands = collect.commands(args, value)
     assert f"roads familiar-load {tmp_path}/input/familiar.bin" in commands
-    assert f"roads {'on' if local else 'stranger'} RESIDENT cm:1000,0,0" in commands
+    assert f"roads {'on' if local else 'stranger'} RESIDENT" in commands
+    assert not any("cm:" in command for command in commands if command.startswith("roads "))
     assert "navdemos perception-monitor on" in commands
     assert "navdemos record on" in commands and "navdemos oracle off" in commands
     assert "navdemos perception-mode gaze" in commands
-    assert "start-v3 RESIDENT" in commands[-2]
+    assert commands[-2] == f"navdemos start-v3 RESIDENT {start} {goal} 240000"
     jump = dict(value, dataset_family="jump", index=0)
     assert "start-v2 RESIDENT" in collect.commands(args, jump)[-2]
 

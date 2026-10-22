@@ -562,9 +562,9 @@ def commands(args, value):
              else v3.start_command(value, 3, npc, args.limit_ms))
     initial = [f"roads load {args.roads}"]
     if getattr(args, "corpus_version", 4) == 5:
-        spawn = "cm:" + ",".join(str(part) for part in value["knownroads_selection"]["spawn_cm"])
+        # Use the fresh save's native NPC origin, as in prepare_residency.
         initial += [f"roads familiar-load {args.familiar}",
-            f"roads {'on' if value['local'] else 'stranger'} {npc} {spawn}",
+            f"roads {'on' if value['local'] else 'stranger'} {npc}",
             f"roads snapshot recording {npc}", f"roads familiar-stats {npc} 300",
             "navdemos perception-monitor on"]
     else:
