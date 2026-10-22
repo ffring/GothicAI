@@ -41,6 +41,17 @@ def tool_choice(step: int) -> ToolChoice | None:
     return "none" if step == MAX_STEPS - 1 else None
 
 
+def tool_output(outcome: ToolOutcome, said: str) -> str:
+    """A rejection may correct spoken words, but does not start the hero's reply over."""
+    if outcome.status != "rejected" or not said:
+        return outcome.output
+    return (
+        f"{outcome.output} Ты уже сказал вслух: «{said}». "
+        "Если отказ этого не меняет — ничего не говори. "
+        "Если меняет — поправься одной короткой фразой, не повторяя сказанного."
+    )
+
+
 def go_on(outcomes: Sequence[ToolOutcome], said_anything: bool) -> bool:
     if any(o.needs_reply for o in outcomes):
         return True
