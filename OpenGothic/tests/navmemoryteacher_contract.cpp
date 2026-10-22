@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -230,6 +231,7 @@ void noNativeAction(const NpcKeys::KeyState& keys) {
   }
 
 void selfTest() {
+  unsetenv("OPENGOTHIC_NAV_FAMILIAR_MAP");
   unsigned tests=0;
   NavMemoryTeacher teacher;
   auto input=target(0,1);
@@ -267,8 +269,50 @@ void selfTest() {
     noNativeAction(keys);++tests;
     }
 
-  // Familiar static hazards are a soft prior, while the same live evidence
+  // With no opt-in, static familiar evidence is exactly unknown to the teacher,
+  // while the unmodified learner input retains every familiar channel.
+  for(const char* setting:{static_cast<const char*>(nullptr),"0"}) {
+    if(setting) setenv("OPENGOTHIC_NAV_FAMILIAR_MAP",setting,1);
+    else unsetenv("OPENGOTHIC_NAV_FAMILIAR_MAP");
+    input=target(100,2100,std::hypot(100.f,2100.f));
+    for(int x=24;x<40;++x) hazard(input,x,43);
+    auto journey=input;
+    for(size_t i=0;i<input.far.size();++i) {
+      auto& tile=input.far[i];
+      tile.channels[0]=89;tile.channels[1]=89;tile.familiar=255;
+      if(i%2==0) tile.channels[2+i%4]=89;
+      }
+    const auto baseline=NavMemoryTeacher::probe(journey,NavMemoryTeacher::DiagnosticsOptions{});
+    const auto ignored=NavMemoryTeacher::probe(input,NavMemoryTeacher::DiagnosticsOptions{});
+    const auto samePath=[](const auto& a,const auto& b) {
+      return a.size()==b.size() && std::equal(a.begin(),a.end(),b.begin(),[](const auto& x,const auto& y) {
+        return x.rightCm==y.rightCm && x.forwardCm==y.forwardCm;
+        });
+      };
+    require(ignored.planCost==baseline.planCost && ignored.planLengthCm==baseline.planLengthCm &&
+            ignored.actualTargetReached==baseline.actualTargetReached &&
+            ignored.blockedFraction==baseline.blockedFraction &&
+            ignored.knownFreeFraction==baseline.knownFreeFraction && samePath(ignored.path,baseline.path),
+            "disabled familiar evidence differs from journey unknown ground");
+    teacher.reset();NavMemoryTeacher journeyTeacher;
+    for(unsigned tick=0;tick<3;++tick) {
+      keys=teacher.decide(input);
+      require(equal(keys,journeyTeacher.decide(journey)) && samePath(teacher.plan(),journeyTeacher.plan()),
+              "disabled familiar evidence changed production actions or route");
+      input.previous=keys;journey.previous=keys;
+      }
+    require(std::all_of(input.far.begin(),input.far.end(),[](const auto& tile) {
+      return tile.familiar==255 && tile.channels[0]==89 && tile.channels[1]==89;
+      }),"teacher fallback changed the learner familiar input");
+    input.far[60*100+50].channels[6]=1;
+    require(!NavMemoryTeacher::probe(input,NavMemoryTeacher::DiagnosticsOptions{}).targetClear,
+            "disabled familiar static evidence hid live movable danger");
+    ++tests;
+    }
+
+  // Familiar static hazards are an explicitly enabled soft prior, while live evidence
   // (even at one quantization unit) and live movable evidence retain a veto.
+  setenv("OPENGOTHIC_NAV_FAMILIAR_MAP","1",1);
   for(size_t channel=2;channel<7;++channel) {
     input=target(100,2100,std::hypot(100.f,2100.f));
     auto& tile=input.far[60*100+50];
@@ -292,17 +336,22 @@ void selfTest() {
           familiarFree.planCost<unknown.planCost && familiarHazard.planCost>unknown.planCost,
           "familiar free / unknown / familiar hazard costs are not ordered");
   ++tests;
+  unsetenv("OPENGOTHIC_NAV_FAMILIAR_MAP");
 
   // Sparse visible water at the shore cannot borrow the occupied-start wall
   // exemption or leave a one-cell slit for the next physical walking step.
-  input=target(0,1);hazard(input,32,33,5);
-  teacher.reset();keys=teacher.decide(input);
-  require(keys.forward==0 && keys.strafe==0,"shore water margin must stop movement before entry");
-  noNativeAction(keys);++tests;
-  input=target(0,1);hazard(input,32,32,5);
-  teacher.reset();keys=teacher.decide(input);
-  require(keys.forward==0 && keys.strafe==0,"raw water must not use an occupied-start escape");
-  noNativeAction(keys);++tests;
+  for(const char* setting:{"0","1"}) {
+    setenv("OPENGOTHIC_NAV_FAMILIAR_MAP",setting,1);
+    input=target(0,1);hazard(input,32,33,5);
+    teacher.reset();keys=teacher.decide(input);
+    require(keys.forward==0 && keys.strafe==0,"shore water margin must stop movement before entry");
+    noNativeAction(keys);++tests;
+    input=target(0,1);hazard(input,32,32,5);
+    teacher.reset();keys=teacher.decide(input);
+    require(keys.forward==0 && keys.strafe==0,"raw water must not use an occupied-start escape");
+    noNativeAction(keys);++tests;
+    }
+  unsetenv("OPENGOTHIC_NAV_FAMILIAR_MAP");
 
   // A hazard touching the current footprint must retain raw occupancy but
   // must not inflate back over an otherwise raw-free body origin.

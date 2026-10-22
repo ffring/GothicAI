@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <queue>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -35,15 +37,17 @@ bool dangerous(const Cell& c) {
   return c.channels[6]!=0 || (c.familiar==0 && familiarDanger(c));
   }
 bool liveWater(const Cell& c) { return c.familiar==0 && c.channels[5]!=0; }
-bool knownFree(const Cell& c) {
+bool knownFree(const Cell& c,bool familiarMap) {
+  if(c.familiar!=0 && !familiarMap) return false;
   return c.channels[0]>0 && c.channels[1]>0 && !familiarDanger(c) && !dangerous(c);
   }
-float cost(const Cell& c,float unknownCost) {
+float cost(const Cell& c,float unknownCost,bool familiarMap) {
   // Two-metre familiar tiles mix walls and passages. Their existing familiar
   // channel selects a soft prior; fresh live observations have already won in
   // memory. Second/final candidate: familiar free 2, unknown 4, danger 4.25;
   // the weaker hazard premium avoids overpricing mixed passage tiles.
   if(c.familiar!=0) {
+    if(!familiarMap) return unknownCost;
     if(familiarDanger(c)) return unknownCost*1.0625f;
     if(c.channels[1]!=0) return std::max(1.f,unknownCost*.5f);
     return unknownCost;
@@ -73,6 +77,8 @@ class Grid final {
     explicit Grid(const Input& input):Grid(input,DiagnosticsOptions{}) {}
     Grid(const Input& input,const DiagnosticsOptions& parameters)
       :in(input),options(parameters),blocked(Count),active(Count),costs(Count) {
+      const char* enabled=std::getenv("OPENGOTHIC_NAV_FAMILIAR_MAP");
+      familiarMap=enabled && std::string_view(enabled)=="1";
       waterLayers={std::any_of(in.near.begin(),in.near.end(),liveWater),
                    std::any_of(in.far.begin(),in.far.end(),liveWater)};
       // Only already occupied near cells touching the current body footprint
@@ -95,7 +101,7 @@ class Grid final {
         const Point p=center(i);
         active[size_t(i)]=i<NearCount || (!options.nearOnly && !insideNear(p));
         blocked[size_t(i)]=!clear(p);
-        costs[size_t(i)]=cost(cell(in,i),options.unknownCost);
+        costs[size_t(i)]=cost(cell(in,i),options.unknownCost,familiarMap);
         }
       }
     void statistics(Diagnostics& result) const {
@@ -103,7 +109,7 @@ class Grid final {
       for(int i=0;i<Count;++i) {
         const size_t layer=i<NearCount ? 0 : 1;
         dangerCount[layer]+=dangerous(cell(in,i));
-        freeCount[layer]+=knownFree(cell(in,i));
+        freeCount[layer]+=knownFree(cell(in,i),familiarMap);
         if(active[size_t(i)]) {
           ++activeCount[layer];
           blockedCount[layer]+=blocked[size_t(i)]!=0;
@@ -138,7 +144,7 @@ class Grid final {
           const Point q=center(index);
           if(!near && insideNear(q)) continue;
           const auto& evidence=cell(in,index);
-          if(!dangerous(evidence) && (!options.knownFreeOnly || knownFree(evidence))) continue;
+          if(!dangerous(evidence) && (!options.knownFreeOnly || knownFree(evidence,familiarMap))) continue;
           if(near && bodyOverlap[size_t(index)]) {
             if(leavingBodyOverlap) continue;
             // Half-open raw occupancy, matching the memory cell addressing.
@@ -225,6 +231,7 @@ class Grid final {
   private:
     const Input& in;
     const DiagnosticsOptions options;
+    bool familiarMap = false;
     std::array<bool,2> waterLayers = {};
     std::array<uint8_t,NearCount> bodyOverlap = {};
     uint32_t overlapCount = 0;

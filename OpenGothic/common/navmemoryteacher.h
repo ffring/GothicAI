@@ -74,6 +74,8 @@ class NavMemoryTeacher final {
     void reset();
     // Call exactly once per 100-ms decision, reset at every episode boundary.
     // Airborne observations never request jumps or climbing.
+    // Familiar static evidence costs as unknown unless OPENGOTHIC_NAV_FAMILIAR_MAP=1.
+    // The learner input and hard veto for live danger remain unchanged.
     NpcKeys::KeyState decide(const Input& input);
     // Latest full-resolution memory route for debug/rendering ONLY. Starts at
     // the body origin; its points have no world coordinates or object IDs.
