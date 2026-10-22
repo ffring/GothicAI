@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import sys
 from typing import Any
 
@@ -36,6 +37,9 @@ SITUATIONS = ("wall", "turn", "beginning")
 VECTOR_SIZE = nav_demos.RAY_COUNT * 9 + 10 + 14
 CACHE_VERSION = 3
 BC3_CACHE_VERSION = 4
+HD_CACHE_VERSION = 5
+HD_NEAR_SHAPE = (10, 64, 64)
+HD_FAR_SHAPE = (10, 50, 100)
 INPUT_NAMES = frozenset(("body", "roads", "previous_keys", "eye", "memory_near", "memory_far"))
 
 PREPROCESSING = {
@@ -53,6 +57,17 @@ PREPROCESSING = {
     "map_order": [*nav_demos.CHANNELS, "relative_ground_height", "height_valid_fraction"],
     "cache_quantization": "vector/height float16, map probabilities/validity round(255*x) uint8, labels uint8",
     "road_baseline": "always forward and walk, turn=-sign(atan2(carrot_direction.x,carrot_direction.z)) outside 5deg",
+}
+
+HD_PREPROCESSING = {
+    **PREPROCESSING,
+    "input_variant": "hd",
+    "input_fields": [*PREPROCESSING["input_fields"], "feet_height_cm"],
+    "memory": "7 probability channels unpooled; near 64x64 at 25cm; far forward rows[50:100] and all 100 columns at 200cm; one recorded height per cell",
+    "height": "known ground max and min minus physical feet height, /200cm, clip [-10,10]; unknown=0; unpooled recorded max=min",
+    "height_reference": "own physical feet height only; no absolute world position, x/z, yaw or teacher_hint access",
+    "map_order": [*nav_demos.CHANNELS, "relative_ground_height_max", "relative_ground_height_min", "height_valid_fraction"],
+    "cache_quantization": "vector/height extrema float16, map probabilities/validity round(255*x) uint8, labels uint8",
 }
 
 
@@ -90,7 +105,20 @@ def _pool_memory(memory: np.ndarray, factor: int, reference: np.ndarray) -> np.n
     return np.ascontiguousarray(features.transpose(0, 3, 1, 2), dtype=np.float32)
 
 
-def encode_features(inputs: dict[str, np.ndarray], layout: np.ndarray) -> dict[str, np.ndarray]:
+def _hd_memory(memory: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Keep every stored cell; NAVDEMO has one height, so its max equals min."""
+    probability = memory["channels"].astype(np.float32) / 255
+    valid = memory["height_valid"] != 0
+    relative = (memory["ground_height_cm"].astype(np.float32) - reference[:, None, None]) / 200
+    relative = np.where(valid, np.clip(relative, -10, 10), 0)
+    features = np.concatenate((probability, relative[..., None], relative[..., None],
+                               valid[..., None].astype(np.float32)), axis=-1)
+    return np.ascontiguousarray(features.transpose(0, 3, 1, 2), dtype=np.float32)
+
+
+def encode_features(inputs: dict[str, np.ndarray], layout: np.ndarray,
+                    input_variant: str = "compact",
+                    feet_height_cm: np.ndarray | None = None) -> dict[str, np.ndarray]:
     """Encode only nav_demos.learner_input(), returning float32 NCHW maps/vector.
 
     The exact allowed-key check catches accidental use of full records or privileged
@@ -106,11 +134,22 @@ def encode_features(inputs: dict[str, np.ndarray], layout: np.ndarray) -> dict[s
     if layout.shape != (nav_demos.RAY_COUNT, 3) or not np.isfinite(layout).all() or (layout[:, 2] <= 0).any():
         raise ValueError("invalid eye layout")
     count = len(inputs["eye"])
-    reference, known = _nearest_height(inputs["memory_near"])
-    far_reference, _ = _nearest_height(inputs["memory_far"])
-    reference = np.where(known, reference, far_reference)
-    near = _pool_memory(inputs["memory_near"], 2, reference)
-    far = _pool_memory(inputs["memory_far"], 4, reference)
+    if input_variant == "compact":
+        reference, known = _nearest_height(inputs["memory_near"])
+        far_reference, _ = _nearest_height(inputs["memory_far"])
+        reference = np.where(known, reference, far_reference)
+        near = _pool_memory(inputs["memory_near"], 2, reference)
+        far = _pool_memory(inputs["memory_far"], 4, reference)
+    elif input_variant == "hd":
+        reference = np.asarray(feet_height_cm, dtype=np.float32)
+        if reference.shape != (count,) or not np.isfinite(reference).all():
+            raise ValueError("HD input requires one finite physical feet height per decision")
+        if inputs["memory_near"].shape[1:] != (64, 64) or inputs["memory_far"].shape[1:] != (100, 100):
+            raise ValueError("HD input requires the recorded 64x64 near and 100x100 far maps")
+        near = _hd_memory(inputs["memory_near"], reference)
+        far = _hd_memory(inputs["memory_far"][:, 50:100, :], reference)
+    else:
+        raise ValueError(f"unsupported navigation input variant: {input_variant}")
 
     eye = inputs["eye"]
     kinds = eye["kind"].astype(np.int64)
@@ -282,11 +321,11 @@ def split_pairs(episodes: list[dict[str, Any]], validation_fraction: float = .2,
 
 def _pack(features: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     packed = {"vector": features["vector"].astype(np.float16)}
-    for name in ("near", "far"):
+    for name in ("near", "far", *(["aux_near"] if "aux_near" in features else [])):
         values = features[name]
         packed[f"{name}_channels"] = np.rint(values[:, :7] * 255).astype(np.uint8)
-        packed[f"{name}_height"] = values[:, 7:8].astype(np.float16)
-        packed[f"{name}_valid"] = np.rint(values[:, 8:9] * 255).astype(np.uint8)
+        packed[f"{name}_height"] = values[:, 7:-1].astype(np.float16)
+        packed[f"{name}_valid"] = np.rint(values[:, -1:] * 255).astype(np.uint8)
     return packed
 
 
@@ -308,25 +347,33 @@ def read_pair_split(path: Path) -> dict[tuple[str, str], str]:
     return result
 
 
-def load_cached(path: str | Path) -> dict[str, np.ndarray]:
-    """Read one compressed episode; callers can bound memory with an episode LRU."""
-    with np.load(path, allow_pickle=False) as source:
-        result = {"vector": source["vector"].astype(np.float32),
-                  "labels": source["labels"].astype(np.int64),
-                  "baseline": source["baseline"].astype(np.int64),
-                  "situations": source["situations"].astype(np.uint8),
-                  "action_change": source["action_change"].astype(np.uint8)}
-        for name in ("maneuver_weight", "stuck", "detour"):
-            if name in source:
-                result[name] = source[name].astype(np.float32)
-        for name in ("stuck_valid", "next_near_valid", "detour_valid"):
-            if name in source:
-                result[name] = source[name].astype(np.uint8)
-        for name in ("near", "far"):
-            result[name] = np.concatenate((source[f"{name}_channels"].astype(np.float32) / 255,
-                                           source[f"{name}_height"].astype(np.float32),
-                                           source[f"{name}_valid"].astype(np.float32) / 255), axis=1)
+def unpack_cached(source, start: int | None = None, stop: int | None = None) -> dict[str, np.ndarray]:
+    """Expand only the requested decisions from a packed episode."""
+    selected = slice(start, stop)
+    result = {"vector": source["vector"][selected].astype(np.float32),
+              "labels": source["labels"][selected].astype(np.int64),
+              "baseline": source["baseline"][selected].astype(np.int64),
+              "situations": source["situations"][selected].astype(np.uint8),
+              "action_change": source["action_change"][selected].astype(np.uint8)}
+    for name in ("maneuver_weight", "stuck", "detour"):
+        if name in source:
+            result[name] = source[name][selected].astype(np.float32)
+    for name in ("stuck_valid", "next_near_valid", "detour_valid"):
+        if name in source:
+            result[name] = source[name][selected].astype(np.uint8)
+    for name in ("near", "far", *(["aux_near"] if "aux_near_channels" in source else [])):
+        result[name] = np.concatenate((source[f"{name}_channels"][selected].astype(np.float32) / 255,
+                                       source[f"{name}_height"][selected].astype(np.float32),
+                                       source[f"{name}_valid"][selected].astype(np.float32) / 255), axis=1)
     return result
+
+
+def load_cached(path: str | Path, *, packed: bool = False) -> dict[str, np.ndarray]:
+    """Read one episode, retaining uint8/fp16 maps when requested for HD training."""
+    with np.load(path, allow_pickle=False) as source:
+        if packed:
+            return {name: source[name] for name in source.files}
+        return unpack_cached(source)
 
 
 def load_training_manifest(path: Path, source: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -385,18 +432,28 @@ def load_training_manifest(path: Path, source: Path) -> tuple[dict[str, Any], li
 
 
 def prepare_manifest(source: Path, output: Path, manifest_path: Path,
-                     chunk_records: int = 32) -> dict[str, Any]:
+                     chunk_records: int = 32, input_variant: str = "compact") -> dict[str, Any]:
     """Prepare the frozen BC3 training population, including failed follow trials."""
     if any(not path.is_absolute() for path in (source, output, manifest_path)):
         raise ValueError("source, output and manifest paths must be absolute")
     if output.resolve().is_relative_to(source.resolve()):
         raise ValueError("cache must be outside the source recordings")
+    if input_variant not in ("compact", "hd"):
+        raise ValueError(f"unsupported navigation input variant: {input_variant}")
+    hd = input_variant == "hd"
+    cache_version = HD_CACHE_VERSION if hd else BC3_CACHE_VERSION
+    if (output / "index.json").exists():
+        previous = json.loads((output / "index.json").read_text(encoding="utf-8"))
+        if previous.get("cache_version") != cache_version:
+            raise ValueError("input variants require separate cache directories")
     _, episodes = load_training_manifest(manifest_path, source)
     index: dict[str, Any] = {
-        "cache_version": BC3_CACHE_VERSION, "navdemo_version": 2, "navigation_memory_version": 3,
+        "cache_version": cache_version, "navdemo_version": 2, "navigation_memory_version": 3,
         "manifest": str(manifest_path), "heads": list(BC3_HEADS), "classes": list(BC3_CLASSES),
-        "vector_size": VECTOR_SIZE, "near_shape": [9, 32, 32], "far_shape": [9, 25, 25],
-        "preprocessing": PREPROCESSING, "situations": list(SITUATIONS), "episodes": [],
+        "vector_size": VECTOR_SIZE, "near_shape": list(HD_NEAR_SHAPE) if hd else [9, 32, 32],
+        "far_shape": list(HD_FAR_SHAPE) if hd else [9, 25, 25],
+        "preprocessing": HD_PREPROCESSING if hd else PREPROCESSING,
+        "situations": list(SITUATIONS), "episodes": [],
         "class_counts": {"train": {head: [0] * count for head, count in zip(BC3_HEADS, BC3_CLASSES)}},
         "auxiliary": {"stuck": {"horizon_ms": 2000, "excursion_xz_cm": 25,
                                   "requires_requested_translation": True, "requires_full_horizon": True},
@@ -408,6 +465,14 @@ def prepare_manifest(source: Path, output: Path, manifest_path: Path,
     }
     common_layout, changes, decisions = None, 0, 0
     (output / "episodes").mkdir(parents=True, exist_ok=True)
+    cache_bytes = sum(path.stat().st_size for path in output.rglob("*") if path.is_file()) if hd else 0
+    if hd:
+        index["input_variant"] = "hd"
+        index["auxiliary"]["next_near"]["target"] = "next compact encoded near map (aux_near only; not policy input)"
+        index["storage"] = {"compression": "npz", "reserve_bytes": 20 * 1024**3,
+                            "cache_limit_bytes": 9 * 1024**3}
+        if shutil.disk_usage(output).free < 20 * 1024**3 or cache_bytes > 9 * 1024**3:
+            raise ValueError("HD cache requires 20 GiB free reserve and at most 9 GiB cache")
     for number, entry in enumerate(episodes, start=1):
         directory, scenario = entry["directory"], entry["scenario"]
         samples = directory / "samples.bin.gz"
@@ -431,7 +496,11 @@ def prepare_manifest(source: Path, output: Path, manifest_path: Path,
         for records in nav_demos.iter_chunks(samples, chunk_records):
             inputs = nav_demos.learner_input(records)
             labels = encode_bc3_labels(records["keys"])
-            features = _pack(encode_features(inputs, layout))
+            encoded = encode_features(inputs, layout, input_variant,
+                                      records["position_cm"][:, 1] if hd else None)
+            if hd:
+                encoded["aux_near"] = encode_features(inputs, layout)["near"]
+            features = _pack(encoded)
             detour, detour_valid = detour_targets(records, teacher_version)
             baseline = np.column_stack((road_baseline(inputs)[:, :4], np.zeros(len(records), np.uint8)))
             features.update(labels=labels, baseline=baseline,
@@ -443,7 +512,11 @@ def prepare_manifest(source: Path, output: Path, manifest_path: Path,
             steps += len(records)
         if not steps or steps != entry["decisions"]:
             raise ValueError(f"record count differs from manifest decisions: {directory}")
-        arrays = {name: np.concatenate(values) for name, values in parts.items()}
+        # Release each chunk list as soon as its concatenated array exists;
+        # native-resolution maps otherwise hold two whole episodes at once.
+        arrays = {}
+        for name in list(parts):
+            arrays[name] = np.concatenate(parts.pop(name))
         del parts
         stamps, positions = arrays.pop("time_ms"), arrays.pop("position_cm")
         arrays["action_change"] = label_action_changes(arrays["labels"])
@@ -456,8 +529,23 @@ def prepare_manifest(source: Path, output: Path, manifest_path: Path,
         relative_file = Path("episodes") / f"{identity}.npz"
         destination = output / relative_file
         temporary = destination.with_suffix(".npz.tmp")
+        if hd:
+            episode_bytes = sum(values.nbytes for values in arrays.values())
+            # Compression can expand incompressible data; allow ZIP overhead
+            # before opening a temporary file that coexists with the old cache.
+            write_bound = episode_bytes + episode_bytes // 100 + 1024**2
+            if shutil.disk_usage(output).free - write_bound < 20 * 1024**3:
+                raise ValueError("HD cache episode would consume the 20 GiB disk reserve")
         with temporary.open("wb") as stream:
             np.savez_compressed(stream, **arrays)
+        if hd:
+            new_bytes = temporary.stat().st_size
+            replaced_bytes = destination.stat().st_size if destination.exists() else 0
+            if (cache_bytes + new_bytes - replaced_bytes > 9 * 1024**3
+                    or shutil.disk_usage(output).free < 20 * 1024**3):
+                temporary.unlink()
+                raise ValueError("HD cache exceeded its 9 GiB budget or 20 GiB free reserve")
+            cache_bytes += new_bytes - replaced_bytes
         temporary.replace(destination)
         for head_index, (head, count) in enumerate(zip(BC3_HEADS, BC3_CLASSES)):
             counts = np.bincount(arrays["labels"][:, head_index], minlength=count)
@@ -487,11 +575,14 @@ def prepare_manifest(source: Path, output: Path, manifest_path: Path,
 
 def prepare(source: Path, output: Path, seed: int = 17, validation_fraction: float = .2,
             chunk_records: int = 32, split_index: Path | None = None,
-            dagger_sources: list[Path] | None = None, manifest: Path | None = None) -> dict[str, Any]:
+            dagger_sources: list[Path] | None = None, manifest: Path | None = None,
+            input_variant: str = "compact") -> dict[str, Any]:
     if manifest is not None:
         if split_index is not None or dagger_sources:
             raise ValueError("BC3 manifest preparation does not accept legacy split-index or DAgger sources")
-        return prepare_manifest(source, output, manifest, chunk_records)
+        return prepare_manifest(source, output, manifest, chunk_records, input_variant)
+    if input_variant != "compact":
+        raise ValueError("HD preparation requires the frozen BC3 --manifest")
     dagger_sources = dagger_sources or []
     paths = [source, output, *dagger_sources, *([split_index] if split_index else [])]
     if any(not path.is_absolute() for path in paths):
@@ -644,9 +735,11 @@ def main() -> None:
                                  help="add all labelled learner drives from original training pairs; repeat per round")
     prepare_command.add_argument("--manifest", type=Path,
                                  help="use only the frozen nav-demos-v4 splits.train recordings (BC3)")
+    prepare_command.add_argument("--input-variant", choices=("compact", "hd"), default="compact",
+                                 help="HD keeps native map cells and physical-feet-relative height extrema")
     args = parser.parse_args()
     prepare(args.source, args.output, args.seed, args.validation_fraction, args.chunk_records,
-            args.split_index, args.dagger_source, args.manifest)
+            args.split_index, args.dagger_source, args.manifest, args.input_variant)
 
 
 if __name__ == "__main__":

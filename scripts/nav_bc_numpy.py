@@ -20,6 +20,7 @@ import numpy as np
 HEAD_SIZES = {
     1: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "jump": 2, "climb": 2},
     2: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "maneuver": 3},
+    3: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "maneuver": 3},
 }
 
 
@@ -81,6 +82,14 @@ class NumpyPolicy:
         architecture = self.header["architecture"]
         if architecture["name"] != "map-cnn-vector-gru" or architecture["version"] != 1:
             raise ValueError("unsupported policy architecture")
+        if self.format_version == 3 and self.header.get("preprocessing", {}).get("input_variant") != "hd":
+            raise ValueError("navigation weight format 3 requires hd preprocessing")
+        self.near_shape = tuple(architecture["inputs"]["near"])
+        self.far_shape = tuple(architecture["inputs"]["far"])
+        expected_near = (10, 64, 64) if self.format_version == 3 else (9, 32, 32)
+        expected_far = (10, 50, 100) if self.format_version == 3 else (9, 25, 25)
+        if self.near_shape != expected_near or self.far_shape != expected_far:
+            raise ValueError("unsupported policy map shapes")
         self.vector_size = int(architecture["inputs"]["vector"][0])
         self.hidden_size = int(architecture["gru"]["hidden_size"])
         self.head_sizes = HEAD_SIZES[self.format_version].copy()
@@ -124,8 +133,8 @@ class NumpyPolicy:
         near = np.asarray(near, dtype=np.float32)
         far = np.asarray(far, dtype=np.float32)
         vector = np.asarray(vector, dtype=np.float32)
-        if near.shape != (9, 32, 32) or far.shape != (9, 25, 25) or vector.shape != (self.vector_size,):
-            raise ValueError("expected near[9,32,32], far[9,25,25], vector[vector_size]")
+        if near.shape != self.near_shape or far.shape != self.far_shape or vector.shape != (self.vector_size,):
+            raise ValueError(f"expected near{self.near_shape}, far{self.far_shape}, vector[{self.vector_size}]")
         if hidden is None:
             hidden = np.zeros(self.hidden_size, dtype=np.float32)
         else:
@@ -161,14 +170,14 @@ class NumpyPolicy:
         return probabilities
 
     def sample(self, logits: dict[str, np.ndarray], rng: np.random.Generator) -> dict[str, float | bool]:
-        """Sample the runtime keys; v2 jump and climb are mutually exclusive."""
+        """Sample runtime keys; v2/v3 jump and climb are mutually exclusive."""
         actions = {name: int(rng.choice(len(values), p=values))
                    for name, values in self.probabilities(logits).items()}
         return {
             "forward": float(actions["forward"] - 1), "strafe": float(actions["strafe"] - 1),
             "turn": float(actions["turn"] - 1), "walk": actions["walk"] != 0,
-            "jump": actions["maneuver"] == 1 if self.format_version == 2 else actions["jump"] != 0,
-            "climb": actions["maneuver"] == 2 if self.format_version == 2 else actions["climb"] != 0,
+            "jump": actions["maneuver"] == 1 if self.format_version >= 2 else actions["jump"] != 0,
+            "climb": actions["maneuver"] == 2 if self.format_version >= 2 else actions["climb"] != 0,
         }
 
 

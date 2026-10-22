@@ -1156,8 +1156,8 @@ NpcKeys::KeyState select(Episode& ep,NavPolicy::Result result) {
   NpcKeys::KeyState keys;
   keys.forward=float(int(ep.selectedIndices[0])-1);keys.strafe=float(int(ep.selectedIndices[1])-1);
   keys.turn=float(int(ep.selectedIndices[2])-1);keys.walk=ep.selectedIndices[3]!=0;
-  keys.jump=ep.policy->weightVersion()==2?ep.selectedIndices[4]==1:ep.selectedIndices[4]!=0;
-  keys.climb=ep.policy->weightVersion()==2?ep.selectedIndices[4]==2:ep.selectedIndices[5]!=0;
+  keys.jump=ep.policy->weightVersion()>=2?ep.selectedIndices[4]==1:ep.selectedIndices[4]!=0;
+  keys.climb=ep.policy->weightVersion()>=2?ep.selectedIndices[4]==2:ep.selectedIndices[5]!=0;
   return keys;
 }
 NpcKeys::KeyState executePolicy(Episode& ep,const NavDemoWriter::Snapshot& sample) {
