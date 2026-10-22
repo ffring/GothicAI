@@ -19,8 +19,9 @@ and floor the three boards with gaps (NW_CITY_WOOD_01), each with its look in LO
 The model is laid out in the texture's own proportions, 0.5 × 1.0 "texture metres": the game stretches
 this texture along the beam about 3.4 times (intent.md), the same way it stretches the original, so
 the nails stay round in the texture as they are in the original. Positions come from the original
-measured by Claude on its preview (texture u from the left, v from the top); no original pixel goes
-into the model or a generator.
+measured by Claude on its preview, the carving at the texture's own size and on a 4x view
+(original_view.py; texture u from the left, v from the top); no original pixel goes into the model or
+a generator.
 """
 from __future__ import annotations
 
@@ -347,15 +348,28 @@ WOODS = {
                           dict(path=[(.40, .30), (.46, .31), (.52, .30)], width=.003, depth=.008),
                           dict(path=[(.10, .82), (.18, .83)], width=.003, depth=.008)],
                   knots=[dict(v=.87, u=.14, r=.018)], out=(512, 2048)),
-    # the carved board of Lobart's stable: from the top a lily, two rings, a square, two rings, a lily,
-    # centred at u .44; a ring is .42 of the board wide
+    # the carved board of Lobart's stable, measured on the original at its own size (128 × 512) and on the
+    # 4x view: from the top a lily, a figure-eight, a square in a frame, a figure-eight, a lily (_carving)
     'carved': dict(texture='NW_CITY_WOOD_ORNAMENT_01.TGA', period=(.39, 1.56), step=(.0008, .0012), stretch=2.1,
                    adze=None, cup=.0015, grain=(.0012, (.003, .007)), pits=((.005, .05), .002, .05, .12),
                    arris=(.010, .005),
                    cracks=[dict(path=[(.02, .10), (.10, .11), (.18, .10)], width=.003, depth=.008),
                            dict(path=[(.62, .90), (.70, .91), (.80, .90)], width=.003, depth=.008)],
-                   carving=dict(u=.44, rings=(.284, .40, .59, .69), ring=(.082, .030), square=(.50, .03, .04),
-                                lilies=((.08, .24), (.92, .76)), depth=.006),
+                   carving=dict(
+                       depth=.006, band=.012, groove=.003, wobble=.0015, seed=5,
+                       # the waist's u and v; each loop's length from the waist along the band's middle line,
+                       # the loop next to the square the longer one; which one is outer. The strands cross at
+                       # 27.5° to the horizontal before the eight is narrowed to .9 of its width (~30° after)
+                       eights=[dict(u=.415, v=.343, outer=.147, inner=.161, side='up'),
+                               dict(u=.415, v=.655, outer=.147, inner=.161, side='down')],
+                       cross=27.5, narrow=.9,
+                       # the sunk rectangle (half width, half height) in a standing frame, a slit along its right
+                       square=dict(u=.415, v=.50, half=(.033, .059), frame=.0125, slit=(.455, .545)),
+                       # a lily: a lens across the board touching the outer loop, a neck, a bud along the board
+                       # pointing away from the eights and two leaves curling the same way, the right one longer
+                       lilies=[dict(u=.435, lens=.230, bud=(.45, .130), side='up'),
+                               dict(u=.435, lens=.770, bud=(.45, .8625), side='down')],
+                       lens=(.078, .030), bud_half=(.0155, .045), leaves=(.09, .12)),
                    out=(512, 2048)),
     # three wide spruce boards of the farms, the town gates and the lighthouse, along U, with gaps
     'floor': dict(texture='NW_CITY_WOOD_01.TGA', period=(2.16, .54), step=(.0015, .001), stretch=1.,
@@ -372,7 +386,8 @@ WOOD_SURFACES = [
     dict(name='iron', colour=[.08, .08, .08], metres=.5, bump=.0003),
 ]
 VOID_Z = -.04                    # the dark behind the gaps between boards
-STROKE_BAND = .009               # the carving's strokes: half width of the band left standing, metres
+CROSSING = .02                   # the carving's band dips under itself this far from the figure-eight's waist
+GROOVE = .55                     # the groove outside a band, in parts of the carving's depth: soft, not a black line
 
 
 def _knots(gx, gy, period, knots):
@@ -391,46 +406,226 @@ def _knots(gx, gy, period, knots):
     return dh, mask
 
 
-def _carving(gx, gy, period, carving):
-    """Depth of the carving (positive down) and a 0..1 map of its cut surfaces: rings whose inner disc is
-    cut away with a groove round the outside, a sunk square, and lilies of grooved outlines."""
-    from shapely import distance, points as shapely_points
-    from shapely.geometry import LineString, Polygon
-    px, py = period
-    xc = carving['u'] * px
-    deep = carving['depth']
-    depth, cut = np.zeros_like(gx), np.zeros_like(gx)
+def _arc(centre, r, a0, a1, step=.0015):
+    """Points of a circular arc from angle a0 to a1 (radians, y up), about one per step metres."""
+    n = max(2, int(abs(a1 - a0) * r / step) + 1)
+    a = np.linspace(a0, a1, n)
+    return np.stack([centre[0] + r * np.cos(a), centre[1] + r * np.sin(a)], axis=1)
 
-    def y_of(v):
-        return (1 - v) * py
-    outer, band = carving['ring']
-    for v in carving['rings']:
-        d = np.hypot(gx - xc, gy - y_of(v))
-        inner = outer - band
-        depth = np.maximum(depth, deep * np.clip((inner - d) / .004, 0, 1))                  # the cut-away disc
-        depth = np.maximum(depth, deep * .8 * np.clip(1 - abs(d - outer) / .003, 0, 1))      # the outer groove
-        cut = np.maximum(cut, np.clip((outer + .003 - d) / .003, 0, 1) * np.clip((d - inner + .002) / .003, 0, 1))
-    v, half_w, half_h = carving['square']
-    box = np.maximum(abs(gx - xc) - half_w, abs(gy - y_of(v)) - half_h)
-    depth = np.maximum(depth, deep * np.clip((-box - STROKE_BAND) / .003, 0, 1))             # the sunk middle
-    depth = np.maximum(depth, deep * .8 * np.clip(1 - abs(box) / .0025, 0, 1))              # the groove round it
-    cut = np.maximum(cut, np.clip(1 - abs(box + STROKE_BAND / 2) / (STROKE_BAND / 2), 0, 1))  # the frame between
-    lines = []
-    for tip, base in carving['lilies']:
-        sign = 1 if base > tip else -1                       # the top lily points up, the bottom one down
-        mid = (tip + base) / 2
-        lines.append(Polygon([(xc, y_of(tip)), (xc + .018, y_of(mid)), (xc, y_of(base)), (xc - .018, y_of(mid))]).exterior)
-        for side in (-1, 1):                                  # a leaf curls out and back from the base
-            leaf = [(xc + side * .010, y_of(base - sign * .02)), (xc + side * .045, y_of(base - sign * .045)),
-                    (xc + side * .075, y_of(base - sign * .025)), (xc + side * .070, y_of(base + sign * .005))]
-            lines.append(LineString(leaf))
-    flat = shapely_points(np.stack([gx.ravel(), gy.ravel()], axis=1))
-    for line in lines:
-        # a stroke is a band left standing between two narrow grooves, as the rings are
-        d = distance(line, flat).reshape(gx.shape)
-        depth = np.maximum(depth, deep * .8 * np.clip(1 - abs(d - STROKE_BAND) / .0025, 0, 1))
-        cut = np.maximum(cut, np.clip((STROKE_BAND - d) / .002, 0, 1))
-    return depth, cut
+
+def _vesica(cx, cy, a, b, along=False):
+    """A pointed lens, closed: tips a from the middle, its widest b; across the board, or along it."""
+    radius = (a * a + b * b) / (2 * b)
+    half = math.asin(a / radius)
+    top = _arc((0, b - radius), radius, math.pi / 2 - half, math.pi / 2 + half)      # right tip to left tip
+    lens = np.concatenate([top, -top[1:]])                                          # and back underneath
+    if along:
+        lens = lens[:, ::-1]
+    return lens + (cx, cy), radius, half
+
+
+def _chaikin(points, passes=3):
+    for _ in range(passes):
+        p, q = points[:-1], points[1:]
+        points = np.concatenate([points[:1], np.stack([.75 * p + .25 * q, .25 * p + .75 * q], 1).reshape(-1, 2), points[-1:]])
+    return points
+
+
+def _hand(points, amount, rng, closed):
+    """The line as cut by hand: moved sideways by a smooth wander of about amount metres."""
+    seg = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    s = np.concatenate([[0], np.cumsum(seg)])
+    length = s[-1]
+    tangent = np.gradient(points, axis=0)
+    normal = np.stack([-tangent[:, 1], tangent[:, 0]], 1) / (np.linalg.norm(tangent, axis=1, keepdims=True) + 1e-12)
+    wander = np.zeros(len(points))
+    for wavelength, weight in ((.04, .5), (.09, .8), (.18, 1.)):
+        cycles = max(1, round(length / wavelength)) if closed else length / wavelength
+        wander += weight * np.sin(2 * math.pi * cycles * s / length + rng.uniform(0, 2 * math.pi))
+    if not closed:                                          # a stroke starts and ends where it is drawn to
+        wander *= np.clip(np.minimum(s, length - s) / .01, 0, 1)
+    return points + normal * (amount * wander / 1.3)[:, None]
+
+
+def _longest(geometry):
+    parts = getattr(geometry, 'geoms', [geometry])
+    return np.asarray(max(parts, key=lambda g: g.length).coords)
+
+
+def _ornament(carving, period):
+    """The carving's geometry in texture metres (x from the left, y up from the period's bottom):
+    bands — a middle line and its half width at the start and end; pits — closed outlines sunk inside
+    their bands; crescents — dark chips along a band, between two angles round a centre; slits — narrow
+    dark chips along a line; crossings — where the figure-eight's band passes over itself."""
+    from shapely.geometry import LineString
+    px, py = period
+    rng = np.random.default_rng(carving['seed'])
+    hw, wobble = carving['band'], carving['wobble']
+
+    def at(u, v):
+        return np.array([u * px, (1 - v) * py])
+    out = dict(bands=[], pits=[], crescents=[], slits=[], crossings=[])
+
+    def band(points, w0, w1=None, closed=False, smooth=False):
+        if smooth:
+            points = _chaikin(points)
+        points = _hand(points, wobble, rng, closed)
+        out['bands'].append(dict(line=points, w=(w0, w0 if w1 is None else w1)))
+        return points
+
+    # a figure-eight is one band with no start or end. From the waist it runs up to the right, tangent to
+    # the upper loop, round it anticlockwise, back into the waist from the upper left, across the first
+    # strand down to the right, round the lower loop clockwise and back into the waist from the lower left.
+    # The loops are round, the strands touch both, so they cross at the waist as in ∞; the whole eight is
+    # then narrowed to the original's width.
+    phi = math.radians(carving['cross'])
+    for eight in carving['eights']:
+        waist = at(eight['u'], eight['v'])
+        up = eight['side'] == 'up'
+        ha, hb = (eight['outer'], eight['inner']) if up else (eight['inner'], eight['outer'])
+        ra, rb = ha / (1 + 1 / math.cos(phi)), hb / (1 + 1 / math.cos(phi))     # loop length = d + r
+        da, db = ra / math.cos(phi), rb / math.cos(phi)
+        alpha = math.pi / 2 - phi
+        upper = _arc((0, da), ra, -alpha, math.pi + alpha)
+        lower = _arc((0, -db), rb, alpha, -math.pi - alpha)
+        zero = np.zeros(2)
+        line = np.concatenate([np.linspace(zero, upper[0], 12)[:-1], upper, np.linspace(upper[-1], zero, 12)[1:],
+                               np.linspace(zero, lower[0], 12)[1:-1], lower, np.linspace(lower[-1], zero, 12)[1:]])
+        mid = 11 + len(upper) + 10
+        line = band(waist + line * (carving['narrow'], 1), hw, closed=True)
+        out['pits'] += [line[:mid + 1], line[mid:]]
+        # the strand into the outer loop's right side lies on top
+        over = np.concatenate([line[-12:], line[:12]]) if up else line[mid - 11:mid + 13]
+        out['crossings'].append(dict(over=over, at=waist))
+        for lobe, centre, is_upper in ((line[:mid + 1], waist + (0, da), True), (line[mid:], waist - (0, db), False)):
+            # a narrow black chip outside each loop on the right and a wide dark one inside on the left
+            right = (-55, 75) if is_upper else (-55, 60)
+            left = (110, 235) if is_upper else (125, 250)
+            out['crescents'].append(dict(centre=centre, line=lobe, hw=hw, span=right, width=.012, depth=2.2, outside=True))
+            out['crescents'].append(dict(centre=centre, line=lobe, hw=hw, span=left, width=.016, depth=2.4, outside=False))
+
+    square = carving['square']
+    centre = at(square['u'], square['v'])
+    (hx, hy), frame = square['half'], square['frame']
+    fx, fy = hx + frame, hy + frame
+    rect = centre + np.array([(fx, fy), (-fx, fy), (-fx, -fy), (fx, -fy), (fx, fy)])
+    rect = np.concatenate([np.linspace(p, q, 40)[:-1] for p, q in zip(rect, rect[1:])] + [rect[-1:]])
+    out['pits'].append(band(rect, frame, closed=True))
+    (v0, v1) = square['slit']
+    x = centre[0] + fx + frame + .0025
+    out['slits'].append(dict(line=np.array([(x, (1 - v0) * py), (x, (1 - v1) * py)]), width=.005, depth=1.6))
+
+    a, b = carving['lens']
+    ba, bb = carving['bud_half']
+    for lily in carving['lilies']:
+        s = 1 if lily['side'] == 'up' else -1
+        lens_centre = at(lily['u'], lily['lens'])
+        lens, radius, half = _vesica(*lens_centre, a, b)
+        lens = band(lens, .009, closed=True)
+        out['pits'].append(lens)
+        # the dark chip inside along the lens's top, more of it left of the middle
+        top_centre = lens_centre + (0, b - radius)
+        out['crescents'].append(dict(centre=top_centre, span=(90 - math.degrees(.3 * half), 90 + math.degrees(.85 * half)),
+                                     width=.008, depth=1.8, outside=False, line=lens[:len(lens) // 2], hw=.009))
+        bud_centre = at(*lily['bud'])
+        out['pits'].append(band(_vesica(*bud_centre, bb, ba, along=True)[0], .008, closed=True))
+        base = bud_centre - (0, s * bb)
+        band(np.linspace(lens_centre + (0, s * b), base, 20), .012, .008)
+        for side, length in zip((-1, 1), carving['leaves']):
+            local = np.array([(.008, -.004), (.03, .003), (.055, .012), (.075, .026), (.088, .045), (.090, .060),
+                              (.084, .068)]) * length / .09
+            leaf = band(base + local * (side, s), .009, .005, smooth=True)
+            offsets = [_longest(LineString(leaf).offset_curve(d)) for d in (.013, -.013)]
+            slit = max(offsets, key=lambda o: s * o[:, 1].mean())
+            out['slits'].append(dict(line=slit, width=.005, depth=1.6))
+    return out
+
+
+def _carving(gx, gy, period, carving):
+    """Depth of the carving (positive down), a 0..1 map of the bands left standing and a 0..1 map of
+    the dark cut-away parts.
+
+    The original at its own size and on the 4x view (docs/remaster-defaults.md, row 5c), from the top:
+    - a lily: a bud along the board pointing up, two leaves curling up and out from its base, a neck
+      down to a lens lying across the board, with a dark chip inside along its top;
+    - a figure-eight: one band whose two strands cross at the waist, as in ∞; each loop sunk inside,
+      a dark crescent chip inside it on the left, a narrow black one outside it on the right; the loop
+      next to the square is the bigger one;
+    - a sunk rectangle in a standing frame whose top and bottom run into the loops' bands, a black slit
+      along the frame's right;
+    - the figure-eight and the lily again, mirrored.
+    Every band stands at the board's face between a narrow groove outside and the sunk part inside: the
+    light falls on its flat top (docs/remaster-pipeline.md, 2026-10-22)."""
+    from shapely import contains_xy, distance, line_locate_point, points as shapely_points
+    from shapely.geometry import LineString, Polygon
+    shape = gx.shape
+    deep, groove = carving['depth'], carving['groove']
+    geometry = _ornament(carving, period)
+    xs, ys = gx.ravel(), gy.ravel()
+
+    def near(line, margin):
+        lo, hi = line.min(axis=0) - margin, line.max(axis=0) + margin
+        return np.flatnonzero((xs > lo[0]) & (xs < hi[0]) & (ys > lo[1]) & (ys < hi[1]))
+    # half width wanders by ±12% along the cut, as a knife does
+    wander = (np.sin(xs * 61 + ys * 23 + 1.3) + np.sin(xs * -37 + ys * 89 + 4.1) + np.sin(ys * 151 + 2.2)) / 3
+
+    edge = np.full(xs.shape, np.inf)               # signed distance to the nearest band's edge, < 0 on a band
+    for b in geometry['bands']:
+        idx = near(b['line'], .05)
+        line = LineString(b['line'])
+        pts = shapely_points(xs[idx], ys[idx])
+        d = distance(line, pts)
+        w0, w1 = b['w']
+        w = w0 if w0 == w1 else w0 + (w1 - w0) * line_locate_point(line, pts, normalized=True)
+        edge[idx] = np.minimum(edge[idx], d - w * (1 + .12 * wander[idx]))
+    inside = np.zeros(xs.shape, bool)
+    for pit in geometry['pits']:
+        idx = near(pit, .001)
+        inside[idx] |= contains_xy(Polygon(pit).buffer(0), xs[idx], ys[idx])
+
+    depth = np.where(inside, deep * np.clip(edge / .002, 0, 1),                               # the sunk parts
+                     GROOVE * deep * np.clip(1 - abs(edge - groove) / groove, 0, 1))         # the grooves outside
+    dark = np.where(inside, .5 * np.clip(edge / .003, 0, 1), 0.)
+    for c in geometry['crescents']:
+        r_idx = near(c['line'], .03)
+        dx, dy = xs[r_idx] - c['centre'][0], ys[r_idx] - c['centre'][1]
+        theta = np.degrees(np.arctan2(dy, dx))
+        a0, a1 = c['span']
+        t = ((theta - a0) % 360) / (a1 - a0)
+        s = edge[r_idx]
+        side = ~inside[r_idx] if c['outside'] else inside[r_idx]
+        own = distance(LineString(c['line']), shapely_points(xs[r_idx], ys[r_idx])) - c['hw'] * (1 + .12 * wander[r_idx])
+        side &= own < s + .001                      # next to its own band, not another one
+        width = c['width'] * np.clip(np.sin(math.pi * np.clip(t, 0, 1)), 0, 1) ** .6
+        hit = side & (t > 0) & (t < 1) & (s > 0) & (s < width)
+        floor = 0 if c['outside'] else deep
+        cut = floor + (c['depth'] * deep - floor) * (1 - s / np.maximum(width, 1e-9))
+        r_idx, cut = r_idx[hit], cut[hit]
+        depth[r_idx] = np.maximum(depth[r_idx], cut)
+        dark[r_idx] = 1.
+    for slit in geometry['slits']:
+        idx = near(slit['line'], .01)
+        line = LineString(slit['line'])
+        pts = shapely_points(xs[idx], ys[idx])
+        d = distance(line, pts)
+        t = line_locate_point(line, pts, normalized=True)
+        half = slit['width'] / 2 * np.sin(math.pi * t) ** .6
+        hit = (d < half) & (edge[idx] > 0)
+        idx, cut = idx[hit], slit['depth'] * deep * (1 - d[hit] / half[hit])
+        depth[idx] = np.maximum(depth[idx], cut)
+        dark[idx] = 1.
+    # where the band passes under itself it dips a little and the upper strand's grooves cross it
+    for crossing in geometry['crossings']:
+        idx = near(np.array([crossing['at']]), CROSSING + .01)
+        reach = np.clip((CROSSING - np.hypot(xs[idx] - crossing['at'][0], ys[idx] - crossing['at'][1])) / .005, 0, 1)
+        over = distance(LineString(crossing['over']), shapely_points(xs[idx], ys[idx]))
+        w = carving['band'] * (1 + .12 * wander[idx])
+        under = (edge[idx] < 0) & (over > w)
+        cross_groove = GROOVE * deep * np.clip(1 - abs(over - w - groove) / groove, 0, 1) * reach
+        depth[idx] = np.maximum(depth[idx], np.where(under, .0015 * reach, 0) + cross_groove * (over > w))
+        edge[idx] = np.where(under & (cross_groove > .2 * deep), groove, edge[idx])
+    standing = np.clip(-edge / .0015, 0, 1)
+    return depth.reshape(shape), standing.reshape(shape), dark.reshape(shape)
 
 
 def wood(name: str, seed: int):
@@ -466,7 +661,7 @@ def wood(name: str, seed: int):
         crack, lips = _cracks(gx, gy, rng, (px, py), cfg['cracks'], WIGGLE)
         face += knots - crack - .0012 * lips
         if 'carving' in cfg:
-            carved, _ = _carving(gx, gy, (px, py), cfg['carving'])
+            carved, _, _ = _carving(gx, gy, (px, py), cfg['carving'])
             face -= carved
         pieces.append(pb.grid_piece(0, (0, 0), step, [0, 0, 0], 0, [rng.uniform(0, 1), rng.uniform(0, 1), 0.],
                                     copy_offsets=[[0, -py], [0, 0], [0, py]], kind='face'))
@@ -504,10 +699,12 @@ LOOKS = {
                   mottle=((.08, .03), .08, (1.3, .65), (1., .82, .62)), damp=((.12, .05), .28),
                   bleach=((.06, .38), 1.5, (1., .86, .68)), contrast=1.25),
     # an almost black board with whitened grain and a light carving (13% of it lighter than sRGB 110,
-    # pixel spread 39.7)
+    # pixel spread 39.7). Measured at its own size by region of the carving (sRGB medians): the bands
+    # 1.8 times the board and grey-brown (99/85/66), the cut-away insides 0.77 of it and warmer (49/36/21),
+    # the chips almost black
     'carved': dict(ratio=(1., .68, .33), desaturate=.6, grain=2.2, light=(.9, (1., .83, .62)),
                    mottle=((.06, .02), .12, (1.8, .45), (1., .83, .62)), damp=((.10, .04), .40),
-                   carved=(4.0, (1., .84, .58)), contrast=1.6),
+                   carved=(2.0, (1., .72, .41)), recess=((.55, (1., .50, .16)), .35), contrast=1.6),
     # olive-brown boards (sRGB 62/57/30) under green moss on 37% of them, more to the right; the soft
     # edge of the mask thins it, so 55% of the boards get some moss to make 36% of the pixels green
     'floor': dict(ratio=(1., .80, .20), desaturate=.5, grain=.7, light=(.35, (1., .62, .17)),
@@ -569,12 +766,21 @@ def _compose_wood(passes: dict, spec: dict, seed: int = 0) -> dict:
         _, knots = _knots(x, y, period, spec['knots'])
         wood *= (1 - .5 * knots)[..., None]
     carved = np.zeros((rows, cols))
-    if 'carving' in spec:           # the carving is cut into the dark weathered skin: its faces are light
-        _, carved = _carving(x, y, period, spec['carving'])
+    if 'carving' in spec:           # the carving's bands are worn light, its cut-away parts hold dirt
+        _, carved, recess = _carving(x, y, period, spec['carving'])
         gain, carved_ratio = look['carved']
         carved_ratio = np.array(carved_ratio)
-        light_wood = np.median((wood @ LUM)[face]) * gain * carved_ratio / (carved_ratio @ LUM)
-        light_wood = light_wood * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .01))[..., None]
+        median = np.median((wood @ LUM)[face])
+        light_wood = median * gain * carved_ratio / (carved_ratio @ LUM)
+        light_wood = light_wood * (np.maximum(wood @ LUM, 1e-6) / median)[..., None] ** .2     # the grain runs on
+        # the cut faces are smoother than the weathered skin: half of its whitened grain, darker; dirt
+        # sits deepest in the chips
+        (pit_gain, pit_ratio), chip_gain = look['recess']
+        pit, chip = np.clip(recess / .5, 0, 1)[..., None], np.clip((recess - .5) / .5, 0, 1)[..., None]
+        pit_ratio = np.array(pit_ratio)
+        dirt = median * pit_gain * pit_ratio / (pit_ratio @ LUM)
+        wood = wood * (1 - pit) + (.5 * wood * pit_gain + .5 * dirt) * pit
+        wood *= 1 - (1 - chip_gain) * chip
         wood = wood * (1 - carved[..., None]) + light_wood * carved[..., None]
     moss = np.zeros((rows, cols))
     if 'moss' in look:              # green moss in patches, more of it towards the right of the boards
