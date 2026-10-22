@@ -4,7 +4,9 @@
         [NAME=SURFACE.png ...] [sun=E] [view=street]
 
 Every piece of the layout becomes a solid: its top face is the top plane plus its terms, its side
-walls go down to the bottom plane. Mesh points come from LAYOUT.npz. Copies across the period's edges
+walls go down to the bottom plane. Mesh points come from LAYOUT.npz. A piece with "grid" is a
+surface instead: a regular grid of heights (LAYOUT.npz key h<id>, rows along y) over the top plane,
+for a face shaped too finely for terms (hewn timber with its cracks). Copies across the period's edges
 make the render tile. A surface NAME=PNG gives the colour of the pieces on that surface (UV in metres,
 turned by each piece's grain lean); a surface without an image keeps its plain colour.
 
@@ -17,7 +19,9 @@ over the pitched roof (DiffDir + DiffInd) and the lit model (Combined). No sun u
 
 view=street: the model tiled three by three and tilted to the roof pitch, seen in perspective from
 the street under sky and sun, wide and close (close=X,Y: the point of the square to look at):
-OUTDIR/street-wide.png and street-close.png. For judging the block-out.
+OUTDIR/street-wide.png and street-close.png. For judging the block-out. pitch=DEGREES and eaves=METRES
+override the tilt and the height of the model's lower edge (90: a wall, as for timber); stretch=K
+stretches it along y as the game stretches a texture laid out in its own proportions.
 """
 import json
 import math
@@ -38,6 +42,9 @@ options = dict(a.split('=', 1) for a in argv[4:])
 view = options.pop('view', 'texture')
 sun_energy = float(options.pop('sun', 0))
 close_at = options.pop('close', None)              # street view: x,y of the close shot on the roof
+street_pitch = options.pop('pitch', None)          # street view: tilt of the model, degrees
+street_eaves = float(options.pop('eaves', 4.))     # street view: height of the model's lower edge
+street_stretch = float(options.pop('stretch', 1.))  # street view: the model stretched along y, as in game
 images = options                                   # what is left: surface name -> image
 npz = layout_path.with_suffix('.npz')
 points = np.load(npz) if npz.exists() else {}
@@ -181,7 +188,56 @@ def face_height(piece, xy):
 roof = bpy.data.objects.new('roof', None)          # the street view tilts the model by this
 scene.collection.objects.link(roof)
 
+
+def place(piece, bm):
+    """UV of a piece's mesh by its surface and grain lean, and its objects with the copies."""
+    surface = spec['surfaces'][piece['surface']]
+    metres = surface['metres']
+    ou, ov, lean = piece['uv']
+    c, s = math.cos(lean), math.sin(lean)
+    uv = bm.loops.layers.uv.new('UVMap')
+    for face in bm.faces:
+        for loop in face.loops:
+            x, y = loop.vert.co.x, loop.vert.co.y
+            loop[uv].uv = ((x * c + y * s) / metres + ou, (-x * s + y * c) / metres + ov)
+    mesh = bpy.data.meshes.new(f'piece{piece["id"]}')
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.validate()
+    mesh.materials.append(materials[piece['surface']])
+    # the street view shows the texture tiled three by three, as on a roof
+    offsets = piece['copies'] if view == 'texture' else [(i * px, j * py) for i in (-1, 0, 1) for j in (-1, 0, 1)]
+    for dx, dy in offsets:
+        obj = bpy.data.objects.new(f'piece{piece["id"]}_{dx:+.2f}_{dy:+.2f}', mesh)
+        obj.location = (dx, dy, 0)
+        obj.pass_index = piece.get('index', piece['id'] + 1)
+        obj.parent = roof
+        scene.collection.objects.link(obj)
+
+
+def grid_mesh(piece):
+    """The top face of a grid piece: its heights over the top plane, rows along y."""
+    heights = points[f'h{piece["id"]}'].astype(np.float64)
+    x0, y0, dx, dy = piece['grid']
+    rows, cols = heights.shape
+    gx, gy = np.meshgrid(x0 + dx * np.arange(cols), y0 + dy * np.arange(rows))
+    a, bx, by = piece['top']
+    z = a + bx * gx + by * gy + heights
+    bm = bmesh.new()
+    verts = [bm.verts.new((x, y, h)) for x, y, h in zip(gx.ravel(), gy.ravel(), z.ravel())]
+    for r in range(rows - 1):
+        for c in range(cols - 1):
+            i = r * cols + c
+            f = bm.faces.new((verts[i], verts[i + 1], verts[i + cols + 1], verts[i + cols]))
+            f.smooth = True
+    return bm
+
+
 for piece in spec['pieces']:
+    if 'grid' in piece:
+        bm = grid_mesh(piece)
+        place(piece, bm)
+        continue
     ring = piece['outline']
     n = len(ring)
     inner = points[f'p{piece["id"]}'].astype(np.float64) if f'p{piece["id"]}' in points else np.zeros((0, 2))
@@ -211,28 +267,7 @@ for piece in spec['pieces']:
         bm.faces.new(wall if ring_top[i] is not ring_top[j] else wall[:3])   # merged by the triangulation
     if piece.get('closed'):
         bm.faces.new(bottom[::-1])
-    surface = spec['surfaces'][piece['surface']]
-    metres = surface['metres']
-    ou, ov, lean = piece['uv']
-    c, s = math.cos(lean), math.sin(lean)
-    uv = bm.loops.layers.uv.new('UVMap')
-    for face in bm.faces:
-        for loop in face.loops:
-            x, y = loop.vert.co.x, loop.vert.co.y
-            loop[uv].uv = ((x * c + y * s) / metres + ou, (-x * s + y * c) / metres + ov)
-    mesh = bpy.data.meshes.new(f'piece{piece["id"]}')
-    bm.to_mesh(mesh)
-    bm.free()
-    mesh.validate()
-    mesh.materials.append(materials[piece['surface']])
-    # the street view shows the texture tiled three by three, as on a roof
-    offsets = piece['copies'] if view == 'texture' else [(i * px, j * py) for i in (-1, 0, 1) for j in (-1, 0, 1)]
-    for dx, dy in offsets:
-        obj = bpy.data.objects.new(f'piece{piece["id"]}_{dx:+.2f}_{dy:+.2f}', mesh)
-        obj.location = (dx, dy, 0)
-        obj.pass_index = piece.get('index', piece['id'] + 1)
-        obj.parent = roof
-        scene.collection.objects.link(obj)
+    place(piece, bm)
 
 void = spec.get('void')
 if void:
@@ -294,14 +329,17 @@ if view == 'texture':
     print('piece_scene: wrote', out_dir / 'passes.exr')
 else:
     # the eaves along X at 4 m, the slope rising away from the viewer
-    eaves = 4.
+    eaves = street_eaves
+    pitch = math.radians(float(street_pitch)) if street_pitch is not None else PITCH
     roof.location = (0, 0, eaves)
-    roof.rotation_euler = (PITCH, 0, 0)
+    roof.rotation_euler = (pitch, 0, 0)
+    roof.scale = (1, street_stretch, 1)
     scene.render.resolution_x, scene.render.resolution_y = resolution, round(resolution * 9 / 16)
     scene.render.image_settings.file_format = 'PNG'
-    up = (0, math.cos(PITCH), math.sin(PITCH))
+    up = (0, math.cos(pitch), math.sin(pitch))
 
     def on_roof(x, y):
+        y *= street_stretch
         return (x, y * up[1], eaves + y * up[2])
     close = [float(v) for v in (close_at or f'{px / 3},{py / 2}').split(',')]
     shoot('street-wide', (px / 2, -6., 2.2), on_roof(px / 2, py * .5), 26)

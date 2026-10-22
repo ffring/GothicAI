@@ -7,6 +7,7 @@ texture period in metres, the camera tilt, the surfaces and every piece:
 - an outline;
 - a bottom plane and a top plane;
 - terms that shape its face: bow, ripples, twist, a rounded edge.
+A grid piece is a face given by a grid of heights instead (grid_piece), for hewn timber.
 
 Mesh points inside the pieces go to a .npz next to the layout. The scene
 scripts/content/mesh3d/blender/piece_scene.py builds the pieces and their copies across the period's
@@ -116,10 +117,23 @@ def plane_through(z0: float, x0: float, y0: float, gx: float, gy: float) -> list
     return [z0 - gx * x0 - gy * y0, gx, gy]
 
 
-def write_layout(path: Path, layout: dict, points: dict[int, np.ndarray]) -> None:
-    """The layout as JSON and its mesh points as PATH.npz (key p<piece id>)."""
+def grid_piece(index: int, origin, step, top, surface: int, uv, copy_offsets=(), kind: str = '', **extra) -> dict:
+    """A piece whose top face is a grid of heights over the top plane, for a face too fine for terms
+    (hewn timber and its cracks). The heights go to write_layout(grids=...) under the same id; rows run
+    along y from origin y, columns along x, step [dx, dy] metres apart. It has no side walls."""
+    return dict(id=index, kind=kind, grid=[float(origin[0]), float(origin[1]), float(step[0]), float(step[1])],
+                top=[float(v) for v in top], surface=surface, uv=[round(float(v), 5) for v in uv],
+                copies=[list(c) for c in copy_offsets], **extra)
+
+
+def write_layout(path: Path, layout: dict, points: dict[int, np.ndarray],
+                 grids: dict[int, np.ndarray] | None = None) -> None:
+    """The layout as JSON, its mesh points (key p<piece id>) and the heights of its grid pieces
+    (key h<piece id>) as PATH.npz."""
     path.write_text(json.dumps(layout) + '\n')
-    np.savez_compressed(path.with_suffix('.npz'), **{f'p{k}': v.astype(np.float32) for k, v in points.items()})
+    arrays = {f'p{k}': v.astype(np.float32) for k, v in points.items()}
+    arrays.update({f'h{k}': v.astype(np.float32) for k, v in (grids or {}).items()})
+    np.savez_compressed(path.with_suffix('.npz'), **arrays)
 
 
 # ---------------------------------------------------------------- render

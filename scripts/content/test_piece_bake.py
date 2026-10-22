@@ -57,3 +57,13 @@ def test_overhang_shade_falls_below_a_step():
     column = shade[:, 0]
     assert column[20:24].min() == 1 and column[:20].max() == 0       # under the step, not on it
     assert np.all(np.diff(column[20:]) <= 1e-9) and column[-1] < .1   # fading as the step gets far
+
+
+def test_grid_piece_heights_go_to_the_npz(tmp_path):
+    heights = np.linspace(0, -.01, 12).reshape(3, 4)
+    grid = pb.grid_piece(5, (0, .2), (.01, .02), [0, 0, 0], 1, [0, 0, 0], [[0, 0]], kind='face')
+    assert grid['grid'] == [0., .2, .01, .02] and 'outline' not in grid
+    layout = tmp_path / 'layout.json'
+    pb.write_layout(layout, dict(pieces=[grid]), {}, {5: heights})
+    stored = np.load(layout.with_suffix('.npz'))
+    assert np.allclose(stored['h5'], heights)
