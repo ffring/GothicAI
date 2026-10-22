@@ -46,29 +46,75 @@ def test_residency_is_independent_of_memory_mode(monkeypatch, local, stranger, j
         assert measurement.os.environ["OPENGOTHIC_NAV_FAMILIAR_MAP"] == familiar
 
 
-@pytest.mark.parametrize("mode", measurement.MODES)
-def test_representation_validation_uses_memory_mode_for_both_residencies(tmp_path, mode):
+@pytest.mark.parametrize("mode,memory_version,demo_version,journey", [
+    ("baseline", 3, 2, False),
+    ("baseline-stranger", 3, 2, False),
+    ("journey", 4, 3, True),
+    ("journey-stranger", 4, 3, True),
+    ("familiar-local", 4, 3, True),
+    ("familiar-stranger", 4, 3, True),
+])
+def test_representation_validation_uses_memory_mode_for_both_residencies(tmp_path, mode, memory_version, demo_version, journey):
     case = dict(start="START", goal="GOAL", goal_kind="point")
-    journey = not mode.startswith("baseline")
-    metadata = dict(case, teacher_version=3, demo_version=2, navigation_memory_version=4 if journey else 3,
+    metadata = dict(case, teacher_version=3, demo_version=demo_version, navigation_memory_version=memory_version,
         journey_memory=journey, limit_ms=240000, perception_mode="gaze", oracle=False,
         observation_source="learner_memory", record=False, demonstration_recorded=False)
     measurement.validate_raw(tmp_path, metadata, case, mode)
 
 
-def test_training_recordings_and_wrong_representation_are_rejected(tmp_path):
+@pytest.mark.parametrize("mode", measurement.MODES)
+def test_training_recordings_and_wrong_representation_are_rejected(tmp_path, mode):
     case = dict(start="START", goal="GOAL", goal_kind="point")
-    metadata = dict(case, teacher_version=3, demo_version=2, navigation_memory_version=4,
-        journey_memory=True, limit_ms=240000, perception_mode="gaze", oracle=False,
+    journey = not mode.startswith("baseline")
+    metadata = dict(case, teacher_version=3, demo_version=3 if journey else 2, navigation_memory_version=4 if journey else 3,
+        journey_memory=journey, limit_ms=240000, perception_mode="gaze", oracle=False,
         observation_source="learner_memory", record=False, demonstration_recorded=False)
-    measurement.validate_raw(tmp_path, metadata, case, "journey")
-    for changes in (dict(record=True), dict(demonstration_recorded=True), dict(oracle=True),
-                    dict(navigation_memory_version=3), dict(journey_memory=False)):
+    measurement.validate_raw(tmp_path, metadata, case, mode)
+    for changes in (dict(record=True), dict(demonstration_recorded=True), dict(oracle=True), dict(drive=True),
+                    dict(demo_version=2 if journey else 3), dict(navigation_memory_version=3 if journey else 4),
+                    dict(journey_memory=not journey)):
         with pytest.raises(ValueError, match="identity or no-recording"):
-            measurement.validate_raw(tmp_path, dict(metadata, **changes), case, "journey")
+            measurement.validate_raw(tmp_path, dict(metadata, **changes), case, mode)
     (tmp_path / "samples.bin.gz").write_bytes(b"forbidden")
     with pytest.raises(ValueError, match="identity or no-recording"):
-        measurement.validate_raw(tmp_path, metadata, case, "journey")
+        measurement.validate_raw(tmp_path, metadata, case, mode)
+
+
+@pytest.mark.parametrize("mode", measurement.MODES[2:])
+def test_completed_v4_native_episode_resumes_without_running_or_recreating_payload(tmp_path, monkeypatch, mode):
+    case = dict(id="completed-native", cohort="beyond-roads", start="START", goal="GOAL", goal_kind="point", seed=42)
+    directory = tmp_path / "evaluation" / mode / case["cohort"] / case["id"]
+    directory.mkdir(parents=True)
+    raw = dict(start=case["start"], goal=case["goal"], goal_kind=case["goal_kind"], teacher_version=3,
+        demo_version=3, navigation_memory_version=4, journey_memory=True, limit_ms=240000,
+        perception_mode="gaze", oracle=False, observation_source="learner_memory", record=False,
+        demonstration_recorded=False, decisions=1, elapsed_ms=100, success=True, detour_length_cm=100)
+    measurement.v3.write_json(directory / "episode.json", raw)
+    payload = {"actions.txt": b"0 1 0 0 0 0 0 0 0\n100 0 0 0 1 0 0 0 0\n",
+               "trajectory.txt": b"0 0 0 0 0\n100 100 0 0 0\n", "teacher-paths.jsonl": b""}
+    for name, content in payload.items():
+        (directory / name).write_bytes(content)
+    stats = dict(kind="familiar_stats", actor="LOCAL", stranger=mode.endswith("-stranger"))
+    (directory / "roads-events.jsonl").write_text(json.dumps(stats) + "\n" if mode.startswith("familiar-") else "")
+    worker = measurement.Worker(measurement.args_for(tmp_path, tmp_path / "worker"), 3, None)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("A completed native evaluation must not start a runner or replay its scenario")
+
+    monkeypatch.setattr(worker, "ready", forbidden)
+    monkeypatch.setattr(worker, "scenario", forbidden)
+    selection = dict(npc="LOCAL", nearest_routine_to_start_cm=0, selection="frozen selection")
+    current = dict(mode=mode, runner_sha256="frozen-binary")
+    first = worker.trial(tmp_path, case, mode, selection, current)
+    enriched = (directory / "episode.json").read_bytes()
+    assert worker.trial(tmp_path, case, mode, selection, current) == first
+    assert (directory / "episode.json").read_bytes() == enriched
+    assert first["success"] is True and first["length_over_detour"] == 1
+    saved = json.loads(enriched)
+    assert all(saved[key] == value for key, value in raw.items())
+    assert saved["memory_v4_comparison"] == current and saved["resident_selection"] == selection
+    assert {name: (directory / name).read_bytes() for name in payload} == payload
+    assert not (directory / "samples.bin.gz").exists()
 
 
 @pytest.fixture

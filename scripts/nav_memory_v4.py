@@ -194,7 +194,7 @@ def identity(task, mode):
 
 
 def validate_raw(directory, metadata, value, mode, limit_ms=LIMIT_MS):
-    if (metadata.get("teacher_version") != 3 or metadata.get("demo_version") != 2
+    if (metadata.get("teacher_version") != 3 or metadata.get("demo_version") != (2 if mode.startswith("baseline") else 3)
             or metadata.get("navigation_memory_version") != (3 if mode.startswith("baseline") else 4)
             or metadata.get("journey_memory") is not (not mode.startswith("baseline"))
             or any(metadata.get(k) != value[k] for k in ("start", "goal", "goal_kind"))
