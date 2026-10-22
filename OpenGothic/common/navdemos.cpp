@@ -2,6 +2,7 @@
 #include "navbench.h"
 #include "navkeyteacher.h"
 #include "navmemoryteacher.h"
+#include "navmemorycosttrace.h"
 #include "navdemowriter.h"
 #include "navpolicy.h"
 #include "navtransitions.h"
@@ -120,6 +121,7 @@ struct Episode {
   NavigationMemory memory;
   NavigationMemory::View view;
   std::unique_ptr<NavDemoWriter> writer;
+  std::unique_ptr<NavMemoryCostTrace> memoryCostTrace;
   std::ofstream actions,trajectory,knownPaths,teacherPaths,transitionFrames,samples,targetTrajectory;
   std::ofstream perceptionSafetyFrames;
   std::ofstream perceptionWaterObservations;
@@ -447,6 +449,7 @@ void finish(Episode& ep,World& world) {
   if(ep.population)out<<",\"directory\":"<<std::quoted(ep.output);
   out<<"}\n";
   NpcKeys::enable(*ep.npc,false);ep.npc->stopWalking();ep.active=false;
+  ep.memoryCostTrace.reset();
   if(ep.target) {
     ep.target->clearAiQueue();ep.target->clearGoTo();ep.target->stopWalking();
     world.removeNpc(*ep.target);ep.target=nullptr;
@@ -928,6 +931,7 @@ void observe(Episode& ep,World& w) {
   const auto memoryUs=micros(memoryStart);
   ep.memoryUpdateUs+=memoryUs;++ep.memoryUpdates;
   if(ep.population)ep.phaseUs[1]+=memoryUs;
+  if(ep.memoryCostTrace)ep.memoryCostTrace->update(pose,ep.eye.memorySamples());
 }
 void tracePerceptionWater(Episode& ep,const NavDemoWriter::Snapshot& sample) {
   if(!ep.perceptionMonitor)return;
@@ -989,6 +993,7 @@ NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance
   const auto viewUs=micros(viewStart);
   ep.memoryViewUs+=viewUs;++ep.memoryViews;
   if(ep.population)ep.phaseUs[1]+=viewUs;
+  if(ep.memoryCostTrace)ep.memoryCostTrace->view();
   NavDemoWriter::Snapshot sample;
   sample.gameMs=w.tickCount();sample.position=array(NpcKeys::physicalPosition(n));sample.bodyYawDeg=n.rotation();
   sample.body.velocityCmS=local(ep.velocity,n.rotationRad());
@@ -2116,6 +2121,8 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     }
   }
   if(ep.target)ep.targetTrajectory=file(ep,"target-trajectory.txt");
+  if(NavMemoryCostTrace::enabled(ep.output))
+    ep.memoryCostTrace=std::make_unique<NavMemoryCostTrace>(std::filesystem::path(ep.output)/"memory-cost.bin",ep.memory);
   ep.initialState=initialState(ep);
   tracePerceptionSafety(ep,w,0);
   observe(ep,w);decide(ep,w);ep.next=ep.began+100;

@@ -99,6 +99,7 @@ class NavigationMemory final {
     double traveledCm() const { return pathCm; }
 
   private:
+    friend class NavMemoryCostTrace;
     enum Channel : uint8_t { Free, Clearance, Ground, Wall, Water, Movable, Surface, ChannelCount };
     struct Evidence final {
       uint64_t gameMs = 0;
@@ -133,7 +134,8 @@ class NavigationMemory final {
     void reconstructWater(Grid& grid, const std::vector<const NavigationEye::Ray*>& observations);
     ClassificationLimits classificationLimits() const;
     Cell classify(const Grid& grid, int x, int z, const ClassificationLimits& limits) const;
-    Cell familiarCell(int x, int z, const Cell& live) const;
+    void refreshFamiliarWindow();
+    Cell familiarCell(const FamiliarTile& tile, const Cell& live) const;
     void read(const Grid& grid, Layer& result) const;
     float confidence(const Evidence& evidence, bool movable) const;
     float pathAt(uint64_t gameMs) const;
@@ -145,6 +147,9 @@ class NavigationMemory final {
     bool journeyMemory = true;
     const FamiliarMap* familiarMap = nullptr;
     FamiliarMask familiarMask;
+    // Ring slots match farGrid. Only window/map changes search the shared atlas.
+    std::vector<const FamiliarTile*> familiarWindow;
+    int familiarMinX = 0, familiarMinZ = 0;
     std::vector<RayStamp> rayStamps;
     // Only the interval since the oldest not-yet-consumed eye timestamp is
     // needed to assign cached observations their original travelled distance.

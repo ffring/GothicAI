@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -357,6 +358,171 @@ Memory::FamiliarMask allTiles(const Memory::FamiliarMap& map) {
   return Memory::FamiliarMask((map.tiles.size()+63)/64,~uint64_t(0));
   }
 
+Memory::View uncachedFamiliarView(const Memory& memory, const Memory::FamiliarMap* map,
+                                 const Memory::FamiliarMask& mask) {
+  // Read live evidence in world-axis order, then apply the former per-cell
+  // atlas lookup before rotating/splatting. No window cache supplies this oracle.
+  Memory live=memory;
+  live.setFamiliarMap(nullptr,{});
+  Memory::View output, axis;
+  live.view(output);
+  auto pose=memory.pose();
+  pose.forward={1,0,0};
+  live.update({},pose);
+  live.view(axis);
+  const auto& body=memory.pose();
+  const size_t size=Memory::Constants::farSize;
+  const float cellCm=Memory::Constants::farCellCm;
+  const auto coordinate=[&](float value) { return int(std::floor(value/cellCm)); };
+  const int minX=coordinate(body.position.x)-int(size/2);
+  const int minZ=coordinate(body.position.z)-int(size/2);
+  const Vec3 right(-body.forward.z,0,body.forward.x);
+  output.far.cells.assign(size*size,Memory::Cell{});
+  for(int z=minZ; z<minZ+int(size); ++z)
+    for(int x=minX; x<minX+int(size); ++x) {
+      const float dx=(float(x)+.5f)*cellCm-body.position.x;
+      const float dz=(float(z)+.5f)*cellCm-body.position.z;
+      const int ax=coordinate(dz+float(size/2)*cellCm);
+      const int az=coordinate(dx+float(size/2)*cellCm);
+      require(ax>=0 && az>=0 && ax<int(size) && az<int(size),
+              "uncached oracle poses preserve every axis-aligned world cell");
+      auto cell=axis.far.cells[size_t(az)*size+size_t(ax)];
+      if(map && !mask.empty() && cell.confidence<Memory::Constants::familiarConfidence) {
+        const auto next=std::lower_bound(map->tiles.begin(),map->tiles.end(),std::pair(x,z),
+                                        [](const auto& tile,const auto& key) {
+          return std::pair(tile.x,tile.z)<key;
+          });
+        const float bodyHeight=std::isfinite(body.bodyHeightCm) && body.bodyHeightCm>0.f ?
+                               body.bodyHeightCm : Memory::Constants::bodyHeightCm;
+        if(next!=map->tiles.end() && next->x==x && next->z==z &&
+           (mask[size_t(next-map->tiles.begin())/64]&(uint64_t(1)<<(size_t(next-map->tiles.begin())%64)))!=0 &&
+           !(std::isfinite(cell.groundHeightCm) && std::isfinite(next->groundHeightCm) &&
+             std::abs(cell.groundHeightCm-next->groundHeightCm)>bodyHeight)) {
+          const float movable=cell.movable;
+          cell=Memory::Cell{};
+          cell.confidence=Memory::Constants::familiarConfidence;
+          cell.familiar=1;
+          cell.groundHeightCm=next->groundHeightCm;
+          const auto value=[&](uint8_t channel) {
+            return (next->channels&channel)!=0 ? Memory::Constants::familiarConfidence : 0.f;
+            };
+          cell.free=value(Memory::FamiliarTile::Free);
+          cell.wall=value(Memory::FamiliarTile::Wall);
+          cell.ledge=value(Memory::FamiliarTile::Ledge);
+          cell.drop=value(Memory::FamiliarTile::Drop);
+          cell.water=value(Memory::FamiliarTile::Water);
+          cell.movable=movable;
+          }
+        }
+      const int vx=coordinate(dx*right.x+dz*right.z+float(size/2)*cellCm);
+      const int vz=coordinate(dx*body.forward.x+dz*body.forward.z+float(size/2)*cellCm);
+      if(vx<0 || vz<0 || vx>=int(size) || vz>=int(size) || cell.confidence<=0.f)
+        continue;
+      auto& target=output.far.cells[size_t(vz)*size+size_t(vx)];
+      if(target.confidence>0.f && target.familiar!=cell.familiar) {
+        if(target.familiar==0.f && target.confidence>=Memory::Constants::familiarConfidence)
+          continue;
+        if(cell.familiar==0.f && cell.confidence>=Memory::Constants::familiarConfidence)
+          target=Memory::Cell{};
+        }
+      for(Field field:{&Memory::Cell::confidence,&Memory::Cell::free,&Memory::Cell::wall,
+                       &Memory::Cell::ledge,&Memory::Cell::drop,&Memory::Cell::water,
+                       &Memory::Cell::movable,&Memory::Cell::familiar})
+        target.*field=std::max(target.*field,cell.*field);
+      if(std::isfinite(cell.groundHeightCm))
+        target.groundHeightCm=cell.groundHeightCm;
+      }
+  return output;
+  }
+
+void familiarWindowCacheMatchesUncached() {
+  Memory::FamiliarMap first;
+  for(int x=-70; x<=70; ++x)
+    for(int z=-70; z<=70; ++z)
+      if((x*3+z*5)%7==0) {
+        Memory::FamiliarTile tile;
+        tile.x=x; tile.z=z;
+        tile.channels=uint8_t(1+((x*x+z*z)%31));
+        if((tile.channels&Memory::FamiliarTile::Free)!=0)
+          tile.groundHeightCm=float((x+z)%3)*200.f;
+        first.tiles.push_back(tile);
+        }
+  Memory::FamiliarTile rock;
+  rock.x=25; rock.z=0;
+  rock.channels=Memory::FamiliarTile::Free|Memory::FamiliarTile::Wall|Memory::FamiliarTile::Water;
+  rock.groundHeightCm=0;
+  first.tiles.push_back(rock);
+  first.finish();
+  Memory::FamiliarMap second;
+  second.tiles=first.tiles;
+  for(auto& tile:second.tiles)
+    tile.channels=uint8_t(tile.channels^Memory::FamiliarTile::Wall);
+  second.finish();
+  auto mask=allTiles(first);
+  const Memory::FamiliarMap* map=&first;
+  Memory memory;
+  memory.setFamiliarMap(map,mask);
+  size_t checks=0;
+  const auto check=[&] {
+    Memory::View cached;
+    memory.view(cached);
+    const auto expected=uncachedFamiliarView(memory,map,mask);
+    for(const auto& layers:{std::pair(&cached.near,&expected.near),std::pair(&cached.far,&expected.far)}) {
+      require(layers.first->size==layers.second->size && layers.first->cellCm==layers.second->cellCm,
+              "cache preserves layer dimensions");
+      for(size_t i=0; i<layers.first->cells.size(); ++i) {
+        const auto& actual=layers.first->cells[i];
+        const auto& reference=layers.second->cells[i];
+        for(Field field:{&Memory::Cell::confidence,&Memory::Cell::free,&Memory::Cell::wall,
+                         &Memory::Cell::ledge,&Memory::Cell::drop,&Memory::Cell::water,
+                         &Memory::Cell::movable,&Memory::Cell::familiar,&Memory::Cell::groundHeightCm})
+          require(actual.*field==reference.*field ||
+                  (std::isnan(actual.*field) && std::isnan(reference.*field)),
+                  "cached familiar window equals uncached lookup for every memory channel");
+        }
+      }
+    ++checks;
+    };
+  uint64_t time=0;
+  for(const auto& position:std::vector<Vec3>{{0,0,0},{50,0,50},{250,0,-150},{600,0,600},
+                                          {-400,0,200},{16000,0,-16000},{0,0,0}})
+    for(const auto& forward:std::vector<Vec3>{{1,0,0},{1,0,1},{-.8f,0,.6f},{0,0,-1}}) {
+      memory.update({}, {position,forward,time++});
+      check();
+      }
+  memory.update({ray({5500,150,25},Kind::None,0,100)},{{0,0,0},{1,0,1},100});
+  check();
+  memory.update({},{{0,0,0},{1,0,1},400000});
+  check();
+  memory.update({ray({5100,600,25},Kind::World,1.f,400100)},{{0,0,0},{1,0,1},400100});
+  memory.update({},{{0,0,0},{1,0,1},800000});
+  check();
+  // The same window must refresh for a changed map or personal tile mask.
+  map=&second;
+  memory.setFamiliarMap(map,mask);
+  check();
+  for(size_t i=0; i<mask.size(); ++i)
+    mask[i]=i%2 ? 0x5555555555555555ull : 0xaaaaaaaaaaaaaaaaull;
+  memory.setFamiliarMap(map,mask);
+  check();
+  memory.update({},{{600,0,200},{1,0,1},800100});
+  check();
+  memory.reset();
+  memory.update({},{{0,0,0},{1,0,1},0});
+  check();
+  mask.clear();
+  memory.setFamiliarMap(map,mask);
+  check();
+  mask=allTiles(second);
+  memory.setFamiliarMap(map,mask);
+  check();
+  map=nullptr;
+  mask.clear();
+  memory.setFamiliarMap(map,mask);
+  check();
+  std::printf("familiar cache: %zu exact cached/uncached near+far comparisons across motion, rotation, masks, maps and live precedence\n",checks);
+  }
+
 void journeyMemoryLastsMinutes() {
   Memory memory;
   Memory baseline;
@@ -490,6 +656,7 @@ int main() {
   farCellClearingNeedsActualIntersection();
   waterSurfaceIsNotEmptyAirOrSubmergedGround();
   boundedWaterPatches();
+  familiarWindowCacheMatchesUncached();
   journeyMemoryLastsMinutes();
   familiarMapHonestyAndLivePriority();
   movableIsNeverLongTermKnowledge();
