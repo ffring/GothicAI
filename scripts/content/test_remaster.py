@@ -80,6 +80,30 @@ def test_import_numbers_attempts_keeps_files_read_only(env, tmp_path):
     assert manifest['sources'][1]['model'] == 'ChatGPT gpt-image'
 
 
+def test_import_keeps_model_maps_next_to_the_albedo(env, tmp_path, capsys):
+    run('new', 'roofs', '--title', 'Roofs')
+    prompt = tmp_path / 'prompt.txt'
+    prompt.write_text('slate assembled in Blender')
+    normal, rough = tmp_path / 'n.png', tmp_path / 'r.png'
+    normal.write_bytes(b'normal-bytes')
+    rough.write_bytes(b'rough-bytes')
+    common = ['--role', 'texture', '--texture', 'NW_CITY_ROOF_04.TGA', '--prompt-file', prompt,
+              '--start', '2026-10-21T07:00:00Z', '--end', '2026-10-21T07:00:01Z', '--thread', 'blender']
+    assert run('import', 'roofs', png_with_c2pa(tmp_path / 'a.png'), *common, '--map', f'normal={normal}') != 0
+    assert 'needs --tool' in capsys.readouterr().err
+    assert run('import', 'roofs', png_with_c2pa(tmp_path / 'a.png'), *common, '--tool', 'slate_bake.py',
+               '--map', f'height={normal}') != 0
+    assert 'unknown map' in capsys.readouterr().err
+    assert run('import', 'roofs', png_with_c2pa(tmp_path / 'a.png'), *common, '--tool', 'slate_bake.py',
+               '--map', f'normal={normal}', '--map', f'roughness={rough}') == 0
+    folder = env / 'data/content-sources/roofs'
+    copy = folder / 'NW_CITY_ROOF_04-attempt-1.normal.png'
+    assert copy.read_bytes() == b'normal-bytes' and not copy.stat().st_mode & stat.S_IWUSR
+    entry = remaster.load_manifest('roofs')['sources'][0]
+    assert entry['maps']['roughness'] == dict(file='roofs/NW_CITY_ROOF_04-attempt-1.roughness.png',
+                                              sha256=remaster.sha256(folder / 'NW_CITY_ROOF_04-attempt-1.roughness.png'))
+
+
 def test_import_warns_when_image_models_mix(env, tmp_path, capsys):
     run('new', 'hut', '--title', 'Hut')
     prompt = tmp_path / 'p.txt'
@@ -299,3 +323,38 @@ def test_bench_lines_put_eye_and_target_back():
     assert hero[1] > max(eye[1], target[1]) and 'shot roof-01-close' in lines
     with pytest.raises(ValueError, match='unique'):
         remaster.bench_lines('a', [{'name': 'x', 'eye': eye, 'target': target}] * 2)
+
+
+def test_private_reference_stays_out_of_pair_preview(env, tmp_path):
+    run('new', 'hut', '--title', 'Hut')
+    fill_intent('hut')
+    reference = tmp_path / 'textures.png'
+    Image.new('RGB', (300, 200), (255, 0, 0)).save(reference)
+    concept = tmp_path / 'concept.png'
+    Image.new('RGB', (300, 200), (0, 0, 255)).save(concept)
+    run('pair', 'hut', '--id', 'r1', '--stage', 'concept', '--mode', 'reference', '--a', reference, '--b', concept,
+        '--subject', 's', '--a-label', 'превью оригинальных текстур', '--private-a')
+    review = env / 'data/remaster/hut/reviews/r1'
+    assert 'эталон, превью оригинальных текстур' in (review / 'order-1/packet.md').read_text()
+    remaster._pair_preview(json.loads((review.parent / 'r1.key.json').read_text()), tmp_path / 'pair.jpg')
+    preview = Image.open(tmp_path / 'pair.jpg').convert('RGB')
+    assert preview.size[0] < 2 * preview.size[1]
+    red, green, blue = preview.getpixel((preview.width // 2, preview.height // 2))
+    assert blue > 200 and red < 50
+
+
+def test_material_concepts_are_named_per_texture(env, tmp_path):
+    run('new', 'roofs', '--title', 'Roofs', '--kind', 'material')
+    prompt = tmp_path / 'p.txt'
+    prompt.write_text('slate')
+    common = ['--prompt-file', prompt, '--start', '2026-10-21T10:00:00Z', '--end', '2026-10-21T10:01:00Z',
+              '--thread', 't']
+    run('import', 'roofs', png_with_c2pa(tmp_path / 'a.png'), '--role', 'concept',
+        '--texture', 'NW_CITY_ROOF_04.TGA', *common)
+    source = remaster.load_manifest('roofs')['sources'][0]
+    assert source['file'] == 'roofs/concept-NW_CITY_ROOF_04-attempt-1.png'
+    assert source['role'] == 'concept' and source['texture'] == 'NW_CITY_ROOF_04.TGA'
+    fill_intent('roofs')
+    (remaster.asset_dir('roofs') / 'concept.md').write_text('x')
+    run('select', 'roofs', '--key', 'concept:NW_CITY_ROOF_04.TGA', '--file', source['file'], '--reason', 'r')
+    assert not any('selected concept' in m for m in remaster.missing_for('roofs', 'textures'))

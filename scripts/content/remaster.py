@@ -22,6 +22,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+MODEL_MAPS = {'normal', 'roughness', 'ao'}   # maps a model bake may bring with its albedo
 TEMPLATES = ROOT / '.claude/skills/remaster/templates'
 DEFAULTS = ROOT / 'docs/remaster-defaults.md'
 MAX_EDGE = 2576
@@ -195,7 +196,9 @@ def cmd_import(args) -> int:
     raw = source.read_bytes()
     if raw[:8] != b'\x89PNG\r\n\x1a\n':
         raise ValueError(f'{source}: expected a PNG from image_gen')
-    stem = Path(args.texture).stem if args.role == 'texture' else args.role
+    # A shared material keeps one concept image per texture: concept-<TEXTURE>-attempt-<n>.png.
+    stem = (Path(args.texture).stem if args.role == 'texture'
+            else f'concept-{Path(args.texture).stem}' if args.texture else args.role)
     if args.role == 'texture' and not args.texture:
         raise ValueError('--texture is required for --role texture')
     numbers = [int(m['n']) for p in folder.glob(f'{stem}-attempt-*.png') if (m := ATTEMPT.fullmatch(p.stem))]
@@ -204,20 +207,39 @@ def cmd_import(args) -> int:
     prompt = Path(args.prompt_file).read_text().strip()
     start = datetime.fromisoformat(args.start.replace('Z', '+00:00'))
     end = datetime.fromisoformat(args.end.replace('Z', '+00:00'))
+    maps = dict(item.split('=', 1) for item in args.map or [])
+    if maps and not args.tool:
+        raise ValueError('--map needs --tool: only our own model bakes carry their own maps')
+    unknown = set(maps) - MODEL_MAPS
+    if unknown:
+        raise ValueError(f'--map: unknown map {sorted(unknown)}, expected {sorted(MODEL_MAPS)}')
     target.write_bytes(raw)
     c2pa = c2pa_agent(target)
-    meta = dict(texture=args.texture if args.role == 'texture' else None, role=args.role, attempt=attempt,
+    copies = []
+    for name, path in sorted(maps.items()):
+        copy = target.with_name(f'{target.stem}.{name}.png')
+        copy.write_bytes(Path(path).read_bytes())
+        copies.append(copy)
+    meta = dict(texture=args.texture, role=args.role, attempt=attempt,
         prompt=prompt, utc=args.start, utc_end=args.end, seconds=max(0, round((end - start).total_seconds())),
         generator='image_gen in a fresh Codex thread (ChatGPT plan); judged by Claude', thread=args.thread,
-        parent=args.parent, reason=args.reason, c2pa=c2pa, source_sha256=sha256(target))
+        parent=args.parent, reason=args.reason, c2pa=c2pa, source_sha256=sha256(target), tool=args.tool)
+    if copies:
+        meta['maps'] = {name: dict(file=f'{namespace}/{copy.name}', sha256=sha256(copy))
+                        for name, copy in zip(sorted(maps), copies)}
     target.with_suffix('.json').write_text(json.dumps(meta, ensure_ascii=False, indent=2) + '\n')
-    for path in (target, target.with_suffix('.json')):
+    for path in (target, target.with_suffix('.json'), *copies):
         path.chmod(0o444)
     entry = _source_entry(target, meta, namespace)
+    if args.tool:
+        # Assembled by our code from image_gen sources (the parents); it has no C2PA of its own.
+        entry.update(tool=args.tool, model=f'derived: {args.tool}')
+    if copies:
+        entry['maps'] = meta['maps']
     manifest['sources'].append(entry)
     if namespace not in manifest['namespaces']:
         manifest['namespaces'].append(namespace)
-    models = {s['model'] for s in manifest['sources']}
+    models = {s['model'] for s in manifest['sources'] if not s.get('tool')}
     save_manifest(args.asset, manifest)
     print(f'{target} ({entry["model"]})')
     if len(models) > 1:
@@ -324,7 +346,7 @@ def cmd_pair(args) -> int:
     images = [Path(args.a), Path(args.b)]
     orders = [(0, 1), (1, 0)] if blind else [(0, 1)]
     key = {'stage': args.stage, 'mode': args.mode, 'a': str(images[0]), 'b': str(images[1]),
-           'ours': args.ours, 'orders': {}}
+           'ours': args.ours, 'orders': {}, 'private_a': bool(args.private_a)}
     defaults = DEFAULTS.read_text().split('\n## ', 1)[-1]
     defaults = '## ' + defaults if not defaults.startswith('## ') else defaults
     defaults = re.sub(r'^## ', '### ', defaults, flags=re.M)
@@ -339,7 +361,7 @@ def cmd_pair(args) -> int:
             described = '\n'.join(f'- `image-{i}.png`: кадр из игры, {w}×{h}' for i, (w, h) in enumerate(sizes, 1))
         else:
             mode_text = 'с эталоном: изображение 1 — оригинал (эталон), изображение 2 — кандидат'
-            described = (f'- `image-1.png`: эталон, оригинал в игре, {sizes[0][0]}×{sizes[0][1]}\n'
+            described = (f'- `image-1.png`: эталон, {args.a_label}, {sizes[0][0]}×{sizes[0][1]}\n'
                          f'- `image-2.png`: кандидат, {sizes[1][0]}×{sizes[1][1]}')
         text = fill((TEMPLATES / 'packet.md').read_text(), packet=f'{args.asset}/{args.id}/order-{number}',
             stage=args.stage, mode_text=mode_text, images=described, subject=args.subject,
@@ -457,13 +479,14 @@ def cmd_merge(args) -> int:
 
 
 def _pair_preview(key: dict, target: Path, height: int = 432) -> None:
-    """Small side-by-side for the user and git: original/reference left, ours/candidate right."""
+    """Small side-by-side for the user and git: original/reference left, ours/candidate right.
+    A private reference (original texture pixels) stays out of git: only the candidate is shown."""
     from PIL import Image
     first, second = Path(key['a']), Path(key['b'])
     if key.get('ours') == 'a':
         first, second = second, first
     tiles = []
-    for path in (first, second):
+    for path in (second,) if key.get('private_a') else (first, second):
         with Image.open(path) as image:
             image = image.convert('RGB')
             tiles.append(image.resize((round(image.width * height / image.height), height), Image.Resampling.LANCZOS))
@@ -519,8 +542,9 @@ def missing_for(asset: str, stage: str) -> list[str]:
         missing.append('concept.md')
     if stage == 'concept':
         return missing
-    if 'concept' not in manifest['selected']:
-        missing.append('selected concept (remaster.py select --key concept)')
+    concepts = [key for key in manifest['selected'] if key == 'concept' or key.startswith('concept:')]
+    if not concepts:
+        missing.append('selected concept (remaster.py select --key concept, or concept:<TEXTURE> per texture)')
     if not _review_ok(manifest, 'concept'):
         missing.append('reviewer Р1 on the concept (PASS or DISPUTED)')
     if not _gate_ok(manifest, 'concept'):
@@ -653,6 +677,9 @@ def main(argv=None) -> int:
     p.add_argument('--start', required=True); p.add_argument('--end', required=True)
     p.add_argument('--thread', required=True); p.add_argument('--parent'); p.add_argument('--reason')
     p.add_argument('--namespace')
+    p.add_argument('--tool', help='our script that assembled this PNG from the --parent image_gen sources')
+    p.add_argument('--map', action='append', metavar='NAME=PNG',
+                   help='a map baked from our model with this albedo: normal, roughness, ao (with --tool)')
     p.set_defaults(func=cmd_import)
     p = sub.add_parser('select'); p.add_argument('asset'); p.add_argument('--key', required=True)
     p.add_argument('--file', required=True); p.add_argument('--reason', required=True)
@@ -666,6 +693,9 @@ def main(argv=None) -> int:
     p.add_argument('--b', required=True, help='ours / candidate image')
     p.add_argument('--ours', choices=('a', 'b'), default='b')
     p.add_argument('--subject', required=True); p.add_argument('--measurements')
+    p.add_argument('--a-label', default='оригинал в игре', help='what the reference image shows (reference mode)')
+    p.add_argument('--private-a', action='store_true',
+                   help='the reference holds original texture pixels: keep it out of pair.jpg in git')
     p.set_defaults(func=cmd_pair)
     p = sub.add_parser('merge'); p.add_argument('asset'); p.add_argument('--id', required=True)
     p.set_defaults(func=cmd_merge)

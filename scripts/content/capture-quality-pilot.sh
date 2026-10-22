@@ -9,6 +9,7 @@
 # QUALITY_PILOT_TASK=gothic-ai/harbour-house selects harbour-house.bench (twelve original facade views).
 # QUALITY_PILOT_TASK=gothic-ai/harbour-hut selects harbour-hut.bench (six views, normal game FOV; original or a staging set such as hut-1).
 # QUALITY_PILOT_TASK=gothic-ai/remaster-ASSET selects ASSET.bench; a set must replace every entry of its own index.
+# QUALITY_PILOT_SCENARIO=FILE.bench overrides the scenario, e.g. the same cameras at another time of day.
 # --compose-house CAPTURES OUTPUT writes original / pilot-3b / house-1 boards.
 # --compose-house-2 CAPTURES OUTPUT writes original / house-1 / house-2 boards.
 set -euo pipefail
@@ -20,6 +21,8 @@ SCENARIO=quality-pilot.bench
 [[ "$TASK" != gothic-ai/harbour-house ]] || SCENARIO=harbour-house.bench
 [[ "$TASK" != gothic-ai/harbour-hut ]] || SCENARIO=harbour-hut.bench
 [[ "$TASK" != gothic-ai/remaster-* ]] || SCENARIO="${TASK#gothic-ai/remaster-}.bench"
+SCENARIO="${QUALITY_PILOT_SCENARIO:-$SCENARIO}"
+[[ "$SCENARIO" =~ ^[a-z0-9-]+\.bench$ ]] || { echo "bad scenario name: $SCENARIO" >&2; exit 2; }
 # Remaster assets share one engine build; each keeps its own scripts, content and runs.
 BUILD_TASK="$TASK"
 [[ "$TASK" != gothic-ai/remaster-* ]] || BUILD_TASK=gothic-ai/remaster-engine
@@ -167,7 +170,8 @@ if [[ "${1:-}" == --capture ]]; then
   GQ_OWNER="${TASK##*/}" "$ROOT/scripts/gq" --host "$HOST" run --class quick \
     --threads 4 --mem 5G --gpu-mem 4G --display --display-exclusive \
     --max 6m --wait-max 900 --name "pilot $variant captures" -- \
-    env QUALITY_PILOT_TASK="$TASK" bash "$TASK/scripts/capture-quality-pilot.sh" --remote-capture "$variant" || rc=$?
+    env QUALITY_PILOT_TASK="$TASK" QUALITY_PILOT_SCENARIO="$SCENARIO" \
+    bash "$TASK/scripts/capture-quality-pilot.sh" --remote-capture "$variant" || rc=$?
   rsync -a "$HOST:$TASK/runs/$variant/" "$out/$variant/"
   exit "$rc"
 fi
