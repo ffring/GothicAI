@@ -2,6 +2,8 @@
 # End-to-end check: starts the AI server with a scenario, then a new game in OpenGothic.
 #   check_walk: new game, no SAVE, LLM=fake; Cavalorn walks from Xardas's stairs to Brago's
 #       unseen body in the bandit cave using the native waynet, sees it and returns to the hero
+#   follow_back: new game, no SAVE, LLM=fake; repeated set_intent follow_hero recalls Cavalorn
+#       from go_to_npc towards Brago's body; one follow, cancelled trip and measured return to the hero
 #   load_rewind: load a save at least 20 game seconds earlier; npc_views, story_world and npc_died
 #       must resume within 2 s. New game, no SAVE, LLM=fake.
 #   memprobe: engine RSS after each step (Linux /proc status, macOS RSS and phys_footprint), and after

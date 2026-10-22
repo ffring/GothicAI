@@ -11,7 +11,7 @@ from websockets.asyncio.server import serve
 from gothic_ai import dialogue as dialogue_module
 from gothic_ai.dialogue import QUIET_STYLE, SCENE_GAP_S, TTS_PAUSE, DialogueManager, FirstReaction
 from gothic_ai.journal import Journal
-from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall
+from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
 from gothic_ai.scenarios import basics as scenarios
@@ -1305,6 +1305,65 @@ async def test_out_of_a_fight_the_quick_model_only_says_the_first_words():
     assert [m.content for m in dialogue.conversations[XARDAS].history][:2] == ["Ты старый дурак", "Не спеши."]
 
 
+@pytest.mark.parametrize("reply", ["Держи свиток.", "Ишь ты! Держи свиток."])
+async def test_a_rejection_remembers_the_first_words_and_the_main_reply(reply):
+    fake = FakeGame()
+    quick = FakeBackend("[angry] Ишь ты!", delay=0)
+    llm = FakeBackend(
+        script=[
+            FakeStep(
+                reply,
+                [ToolCall("give_item", {"item": "ITSC_FIREBALL", "count": 1})],
+            ),
+            FakeStep(""),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дай мне свиток.")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert fake.said == ["Ишь ты!", "Держи свиток."]
+    assert len(llm.calls) == 2
+    result = next(i for i in llm.calls[1][1] if isinstance(i, ToolResult))
+    assert result.output.startswith("Отклонено: У тебя нет предмета ITSC_FIREBALL")
+    assert result.output.endswith(
+        " Ты уже сказал вслух: «Ишь ты! Держи свиток.». "
+        "Если отказ этого не меняет — ничего не говори. "
+        "Если меняет — поправься одной короткой фразой, не повторяя сказанного."
+    )
+    assert result.output.count("Ишь ты!") == 1
+
+
+async def test_first_words_do_not_end_a_turn_after_a_silent_accepted_call():
+    fake = FakeGame()
+    llm = FakeBackend(
+        script=[
+            FakeStep("", [ToolCall("give_item", {"item": "ITPO_HEALTH_01", "count": 1})]),
+            FakeStep("Держи, это поможет."),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, llm, PersonaProvider(None), quick=FakeBackend("Хм...", delay=0)
+        )
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дай мне зелье.")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+        await _until(
+            lambda: any(m["type"] == "action" and m["action"] == "give_item" for m in fake.received)
+        )
+
+    assert len(llm.calls) == 2
+    assert fake.said == ["Хм...", "Держи, это поможет."]
+    assert any(m["type"] == "action" and m["action"] == "give_item" for m in fake.received)
+
+
 async def test_no_first_words_to_a_greeting_or_without_the_quick_model_in_time(monkeypatch):
     monkeypatch.setattr(dialogue_module, "REACTION_S", 0.2)
     fake = FakeGame()
@@ -1437,7 +1496,7 @@ async def test_first_words_accept_eight_words_but_not_nine_and_trace_rejections(
 
     eight = "Твоё невежество явно граничит с самым настоящим безумием."
     nine = "Твоё невежество явно граничит с самым настоящим полным безумием."
-    replies = [eight, nine, eight, "[neutral] —"]
+    replies = [f"[angry] {eight}", nine, eight, "[neutral] —"]
     quick = FakeBackend(script=[FakeStep(text) for text in replies], delay=0)
     writer = TraceWriter(tmp_path)
     fake = FakeGame()
@@ -1455,6 +1514,7 @@ async def test_first_words_accept_eight_words_but_not_nine_and_trace_rejections(
     events = [e for t in turns for e in t["events"] if e["kind"] == "first_words"]
     assert [e["outcome"] for e in events] == ["said", "too_long", "same", "nothing"]
     assert [e["text"] for e in events] == replies
+    assert [e["words"] for e in events] == [eight, nine, eight, ""]
     for event, (_, messages, _) in zip(events, quick.calls, strict=True):
         assert event["hint"] == dialogue_module.REACT_HINT
         assert event["situation"] + "\n" + event["hint"] == _situation_of(messages)
@@ -1508,6 +1568,7 @@ async def test_failed_first_words_attempts_are_traced(tmp_path, monkeypatch, fai
     turn, _ = find_turn(writer.path(), None)
     (event,) = [e for e in turn["events"] if e["kind"] == "first_words"]
     assert event["outcome"] == failure and event["text"] == ""
+    assert event["words"] == ""
     assert event["elapsed_ms"] >= 0 and event["hint"] == dialogue_module.REACT_HINT
     assert fake.said == ["Слушаю."]
 
@@ -1545,6 +1606,7 @@ async def test_interrupted_first_words_are_traced_as_late_until_sent(
     (event,) = [e for e in turn["events"] if e["kind"] == "first_words"]
     assert event["outcome"] == "late"
     assert event["text"] == ("Ого!" if waiting_for_delivery else "")
+    assert event["words"] == event["text"]
     assert fake.said == []
 
 
@@ -1612,3 +1674,33 @@ async def test_words_with_a_hostile_heart_do_not_end_the_fight():
         await _until(lambda: dialogue.conversations[XARDAS].intent.attitude == "hostile")
         await asyncio.sleep(0.1)
     assert not [m for m in fake.story if m["type"] == "story_effect"]
+
+
+async def test_a_rejection_after_the_quick_fight_line_keeps_the_next_step_silent():
+    fake = FakeGame()
+    quick = FakeBackend("[hostile] Держись!", delay=0)
+    llm = FakeBackend(
+        script=[
+            FakeStep(
+                "Этого никто не услышит.",
+                [ToolCall("give_item", {"item": "ITSC_FIREBALL", "count": 1})],
+            ),
+            FakeStep("И эту поправку никто не услышит."),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        dialogue.in_fight = lambda npc: True
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.event_turn(XARDAS, "[Событие: Волк нападает на тебя]")
+        await _until(lambda: fake.said == ["Держись!"])
+
+    assert len(llm.calls) == 2
+    result = next(i for i in llm.calls[1][1] if isinstance(i, ToolResult))
+    assert result.output.startswith("Отклонено: У тебя нет предмета ITSC_FIREBALL")
+    assert "Ты уже сказал вслух" not in result.output
+    assert "ничего не говори" not in result.output
+    history = dialogue.conversations[XARDAS].history
+    assert history[-1].content == "Держись!"

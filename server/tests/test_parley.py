@@ -677,7 +677,7 @@ async def test_quick_summaries_include_the_same_balance_without_waiting_for_exte
             raise AssertionError("the quick summary must not prepare extensions")
 
         parley.prepare = no_preparation
-        brief, _ = await dialogue._situation(conv, None, brief=True)
+        brief, _, _ = await dialogue._situation(conv, None, brief=True)
         balance = parley.balance(BRAGO)
         assert balance and balance in brief and balance in parley.situation(BRAGO)
         assert conv.intent.describe() in brief

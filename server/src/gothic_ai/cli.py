@@ -1612,6 +1612,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario check_walk: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "follow_back":
+                assert state.dialogue is not None
+                results = await scenarios.follow_back(link, state.dialogue)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario follow_back: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "companion":
                 assert state.dialogue is not None and state.talk is not None and state.parley is not None
                 results = await scenarios.companion_scenario(
@@ -2551,7 +2557,10 @@ async def replay(args: argparse.Namespace) -> int:
         instructions = personas.get(record["npc"], args.name).instructions
     llm = _backend(args)
     try:
-        result = await replay_turn(llm, record, instructions)
+        result = await replay_turn(llm, record, instructions, after_step=args.after_step)
+    except ValueError as err:
+        print(err, file=sys.stderr)
+        return 2
     finally:
         await llm.aclose()
     if args.json:
@@ -2560,6 +2569,10 @@ async def replay(args: argparse.Namespace) -> int:
     print(
         f"turn {result['turn']} ({result['npc']}), {result['trigger']['kind']}: {result['trigger']['text']}"
     )
+    if args.after_step:
+        print(f"continuing after recorded step {args.after_step}; already said: {result['said_before']}")
+        for output in result["initial_tool_results"]:
+            print(f"  tool result: {output}")
     for title, steps in (("recorded", result["original"]), (f"{llm.name}", result["replay"])):
         print(f"\n[{title}]")
         for n, st in enumerate(steps, 1):
@@ -2568,6 +2581,9 @@ async def replay(args: argparse.Namespace) -> int:
             )
             timing = f" ({st['first_token_s']:.2f}s / {st['total_s']:.2f}s)" if "total_s" in st else ""
             print(f"  {n}. {st['text'] or '-'}{f'  -> {calls}' if calls else ''}{timing}")
+            for call in st["calls"]:
+                if isinstance(call, dict):
+                    print(f"     {call['output']}")
     if result["diverged"]:
         print("\n(the replay made calls the recorded turn did not: their results are not known)")
     return 0
@@ -2950,6 +2966,7 @@ def main() -> None:
             "crime_meet",
             "crime_ally",
             "check_walk",
+            "follow_back",
             "crime_talk",
             "trace_crime",
             "cover",
@@ -3169,6 +3186,12 @@ def main() -> None:
     p.add_argument("--trace-dir", default=str(DEFAULT_TRACE_DIR))
     p.add_argument("--name", default="Ксардас", help="npc display name for --persona-now")
     p.add_argument("--persona-now", action="store_true", help="today's persona instead of the recorded one")
+    p.add_argument(
+        "--after-step",
+        type=int,
+        default=0,
+        help="continue after this many recorded steps, keeping their results",
+    )
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     _add_llm_args(p)
 

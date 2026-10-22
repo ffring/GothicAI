@@ -396,6 +396,48 @@ async def test_the_npc_goes_to_see_and_catches_the_lie(graph):
         await link_cm.__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("action", ["follow", "stop"])
+async def test_a_check_replaced_by_a_new_action_does_not_resume_the_walk(graph, monkeypatch, action):
+    fake = FakeGame(branch="A")
+    fake.slow_actions = {"go_to_npc"}
+    store = MemoryStore(":memory:")
+    link_cm, dialogue, chronicle, vanilla = await _setup(fake, FakeBackend(delay=0), graph, store)
+    fake.vars[KILL] = 1
+    fake.npc_states[BANDIT] = {"state": "dead", "name": "Бандит", "distance": 4000, "seen": False}
+    returned = []
+    dialogue.free_body = lambda npc, why: returned.append((npc, why))
+    try:
+        await vanilla.link.attach(LOBART)
+        conv = dialogue.open(LOBART, "Лобарт")
+        await vanilla.prepare(LOBART)
+        offer = vanilla.offers[LOBART][KILL]
+        target = offer.reachable()
+
+        async def evidence(*args):
+            pytest.fail("A cancelled check must not inspect evidence")
+
+        monkeypatch.setattr(vanilla, "_evidence", evidence)
+        check = asyncio.create_task(vanilla._check(offer, target, conv))
+        await _until(lambda: LOBART in fake.long_running)
+        # Even if the body became visible, a new order has taken over the walk.
+        fake.npc_states[BANDIT].update(distance=1000, seen=True)
+        args = {"npc": "PLAYER"} if action == "follow" else {}
+        await vanilla.link.act(LOBART, action, **args)
+        note, ok = await check
+
+        assert (note, ok) == ("Ты не дошёл проверить: герой позвал тебя назад.", False)
+        actions = [m for m in fake.received if m["type"] == "action"]
+        assert [(m["action"], m["args"].get("npc")) for m in actions] == [
+            ("go_to_npc", BANDIT), (action, args.get("npc")),
+        ]
+        assert fake.vars[KILL] == 1 and _effects(fake, LOBART) == []
+        assert all(chronicle.facts(fact) == [] for fact in ("claim", "caught", "lie"))
+        assert returned == [(LOBART, "check")]
+        assert LOBART not in vanilla.checking
+    finally:
+        await link_cm.__aexit__(None, None, None)
+
+
 async def test_a_check_in_progress_cannot_start_another_walk(graph):
     fake = FakeGame(branch="A")
     fake.slow_actions = {"go_to_npc"}
