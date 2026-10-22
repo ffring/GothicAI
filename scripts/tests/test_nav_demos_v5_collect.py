@@ -96,6 +96,21 @@ def test_v5_native_identity_requires_memory4_and_recording3_but_allows_point_see
     collect.validate_native(completed, value, identity)
 
 
+def test_stranger_keeps_major_roads_but_cannot_have_familiar_terrain(tmp_path):
+    value = dict(npc="STRANGER", local=False)
+    known = dict(kind="roads_snapshot", tag="recording", actor="STRANGER", stranger=True,
+                 known_node_ids=[2, 9, 10], known_edge_ids=[14, 15])
+    familiar = dict(kind="familiar_stats", actor="STRANGER", stranger=True,
+                    known_tiles=0, known_2m_tiles_xz=0, eligible_2m_tiles=0, familiar_source_poses=0)
+    (tmp_path / "roads-snapshots.jsonl").write_text(json.dumps(known) + "\n")
+    events = tmp_path / "roads-events.jsonl"
+    events.write_text(json.dumps(familiar) + "\n")
+    assert collect.native_residency(tmp_path, value) == dict(knownroads=known, familiar=familiar)
+    events.write_text(json.dumps(dict(familiar, known_tiles=1)) + "\n")
+    with pytest.raises(ValueError, match="Stranger unexpectedly knows terrain"):
+        collect.native_residency(tmp_path, value)
+
+
 def monitor(directory, depths=(0, 20, 99, 0)):
     frames = [dict(elapsed_ms=index * 100, cv_active=True, swimming=False,
         water_depth_cm=depth, deep_water_threshold_cm=100) for index, depth in enumerate(depths)]

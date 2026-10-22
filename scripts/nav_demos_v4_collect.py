@@ -657,7 +657,8 @@ def native_residency(directory, value):
         if (value["knownroads_selection"]["nearest_start_node"] not in known.get("known_node_ids", [])
                 or familiar.get("known_tiles", 0) <= 0):
             raise ValueError(f"Local actor lacks native start knowledge or familiar tiles: {directory}")
-    elif known.get("known_node_ids") or known.get("known_edge_ids") or any(familiar.get(key) != 0
+    # Strangers know major roads, but have no familiar terrain tiles.
+    elif any(familiar.get(key) != 0
             for key in ("known_tiles", "known_2m_tiles_xz", "eligible_2m_tiles", "familiar_source_poses")):
         raise ValueError(f"Stranger unexpectedly knows terrain: {directory}")
     return dict(knownroads=known, familiar=familiar)
@@ -841,8 +842,8 @@ class Worker(campaign.Worker):
                 return rejected
         if not v3.complete(directory):
             raise ValueError(f"Incomplete recording retained: {directory}")
-        witnesses = sorted((self.options.task / "recording-workers").glob(f"*/*/scenarios/{scenario_name}.bench"))
-        if not witnesses or any(path.read_text(encoding="utf-8").splitlines() != expected for path in witnesses):
+        witness = self.args.output / "scenarios" / f"{scenario_name}.bench"
+        if not witness.is_file() or witness.read_text(encoding="utf-8").splitlines() != expected:
             raise ValueError(f"Missing or changed seeded command witness: {value['id']}")
         metadata = v3.read_json(directory / "episode.json")
         validate_native(metadata, value, identity)
