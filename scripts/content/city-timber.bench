@@ -138,3 +138,36 @@ wait 6000
 set time 12 0
 shot wood-01
 wait 300
+
+# ornament-post: WOOD_ORNAMENT_01: резьба переднего левого углового столба конюшни B064 целиком, прямо в лицо с 3 м; столб по треугольникам мира
+cam look -500.000
+goto pos 15675.000 2479.000 -15676.000
+cam world 299.803 -500.000 30.242681
+wait 34
+cam hold
+wait 6000
+set time 12 0
+shot ornament-post
+wait 300
+
+# ornament-eight: WOOD_ORNAMENT_01: верхняя восьмёрка того же столба с 1,4 м
+cam look -500.000
+goto pos 15675.000 2538.000 -15676.000
+cam world 139.789 -500.000 30.049914
+wait 34
+cam hold
+wait 6000
+set time 12 0
+shot ornament-eight
+wait 300
+
+# ornament-back: WOOD_ORNAMENT_01: задний угловой столб конюшни на солнце, с 3 м
+cam look -500.000
+goto pos 14669.000 2479.000 -17024.000
+cam world 299.955 -500.000 -149.331073
+wait 34
+cam hold
+wait 6000
+set time 12 0
+shot ornament-back
+wait 300
