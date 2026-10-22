@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Submit one teacher-v3b build phase and return its queue ID without waiting.
+# Submit bounded teacher-v3b phases and return queue IDs without waiting.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-stage="${1:?Usage: nav-teacher-v3b-remote.sh build}"
-[[ "$stage" == build && $# == 1 ]] || { echo "Expected one build phase" >&2; exit 2; }
+stage="${1:?Usage: nav-teacher-v3b-remote.sh build|measure}"
+[[ ( "$stage" == build || "$stage" == measure ) && $# == 1 ]] || { echo "Expected build or measure" >&2; exit 2; }
 export GQ_OWNER=nav-teacher-v3b
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-teacher-v3b" "$HOME"')"
 results=/mnt/shared/gothic-ai/nav-teacher-v3b
@@ -11,7 +11,8 @@ ssh ryzen "TASK='$task' RESULTS='$results' bash -s" <<'PREPARE'
 set -euo pipefail
 df -h "$HOME" /mnt/shared
 python3 -c 'import pathlib,shutil; assert shutil.disk_usage(pathlib.Path.home()).free >= 20*1024**3, "Less than 20 GiB free"'
-mkdir -p "$TASK/source" "$RESULTS/input"
+mkdir -p "$TASK/source" "$TASK/pre-cache/game" "$RESULTS/input"
+rm -f "$RESULTS/build-passed"
 # Existing experiment inputs are read-only; freeze ordinary copies on storage.
 for name in expanded-scenarios.jsonl detour-val.jsonl fixtures.json save.sav accepted-links.txt places.json familiar.bin; do
   if [[ ! -f "$RESULTS/input/$name" ]]; then
@@ -38,14 +39,39 @@ for name in ("detour-val.jsonl", "detour-test.jsonl"):
     print(f"Frozen {name}: {len(rows)} cases")
 PY
 PREPARE
+if [[ "$stage" == measure ]]; then
+  ssh ryzen "RESULTS='$results' bash -s" <<'INPUT'
+set -euo pipefail
+# Keep existing discovery and physics caches identical, in ordinary owned copies.
+for name in cache discovery bake-npcs; do
+  mkdir -p "$RESULTS/$name"
+  rsync -rlt --ignore-existing "$HOME/gothic-ai/nav-memory-v4/$name/" "$RESULTS/$name/"
+done
+# Preserve the pre-change water evidence for the final before/after analysis.
+mkdir -p "$RESULTS/before-water"
+rsync -rlt --ignore-existing --include='*/' --include='episode.json' \
+  --include='actions.txt' --include='teacher-paths.jsonl' \
+  --include='perception-safety-frames.jsonl' --include='perception-water-observations.jsonl' \
+  --include='body-control-events.jsonl' --exclude='*' \
+  "$HOME/gothic-ai/nav-memory-v4/safety/" "$RESULTS/before-water/"
+INPUT
+fi
 rsync -a --exclude=build --exclude='build-*' --exclude=__pycache__ \
   "$ROOT/OpenGothic" "$ROOT/scripts" "ryzen:$task/source/"
+# Compile the same offline benchmark against the memory immediately before the
+# cache change. These hot files stay outside the repository and are never edited.
+for name in navigationmemory.h navigationmemory.cpp; do
+  git -C "$ROOT" show "6bd8656c^:OpenGothic/common/game/$name" | \
+    ssh ryzen "cat > '$task/pre-cache/game/$name'"
+done
 ssh ryzen "cat > '$task/phase.sh'" <<'PHASE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
 results=/mnt/shared/gothic-ai/nav-teacher-v3b
-exec > >(tee "$results/build-$(date -u +%Y%m%dT%H%M%SZ).log") 2>&1
+phase="${1:?phase}"
+shift
+exec > >(tee "$results/$phase-${1:-prepare}-$(date -u +%Y%m%dT%H%M%SZ).log") 2>&1
 df -h "$HOME" /mnt/shared
 python3 -c 'import pathlib,shutil; assert shutil.disk_usage(pathlib.Path.home()).free >= 20*1024**3, "Less than 20 GiB free"'
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
@@ -53,6 +79,26 @@ export PATH="$HOME/.local/bin:$VULKAN_SDK/bin:$PATH"
 export UV_CACHE_DIR="$HOME/.cache/uv"
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 OPENGOTHIC_BODY_TRACE=0
 cd "$task/source"
+if [[ "$phase" == mode ]]; then
+  test -f "$results/build-passed"
+  mode="${1:?memory mode}"
+  timeout 108m "$task/.venv/bin/python" -I scripts/nav_teacher_v3b.py evaluate \
+    --task "$results" --runtime "$task" --assets "$HOME/gothic-ai/game" \
+    --mode "$mode" --parallel 3 --budget-seconds 6300
+  timeout 10m "$task/.venv/bin/python" -I scripts/nav_teacher_v3b.py safety \
+    --task "$results" --runtime "$task" --assets "$HOME/gothic-ai/game" \
+    --mode "$mode" --budget-seconds 540
+  exit 0
+fi
+if [[ "$phase" == cost ]]; then
+  test -f "$results/build-passed"
+  # The offline replay below uses only actual eye/pose streams recorded by the
+  # predeclared cases; neither teacher nor game is run again for this phase.
+  "$task/.venv/bin/python" -I scripts/nav_teacher_v3b.py cost \
+    --task "$results" --runtime "$task" --assets "$HOME/gothic-ai/game"
+  exit 0
+fi
+[[ "$phase" == build ]] || { echo "Unknown phase: $phase" >&2; exit 2; }
 if [[ ! -x "$task/.venv/bin/python" ]]; then uv venv "$task/.venv"; fi
 uv pip install --python "$task/.venv/bin/python" numpy pytest
 cmake -S "$task/source/OpenGothic" -B "$task/build" -G Ninja \
@@ -61,8 +107,30 @@ cmake -S "$task/source/OpenGothic" -B "$task/build" -G Ninja \
   -DCMAKE_CXX_FLAGS="-I$VULKAN_SDK/include" -DCMAKE_EXE_LINKER_FLAGS="-L$VULKAN_SDK/lib"
 cmake --build "$task/build" --target gothic-body-runner \
   check-navigation-memory check-navmemoryteacher --parallel 3
+cxx_args=(-std=c++20 -O3 -DNDEBUG -Wall -Wconversion -Werror
+  -I"$task/source/OpenGothic/common" -I"$task/source/OpenGothic/common/game"
+  -I"$task/source/OpenGothic/lib/Tempest/Engine/include"
+  -I"$task/source/OpenGothic/lib/Tempest/Engine")
+c++ "${cxx_args[@]}" OpenGothic/tests/navmemory_cost.cpp \
+  OpenGothic/common/game/navigationmemory.cpp -o "$task/build/navmemory-cost"
+c++ -I"$task/pre-cache" "${cxx_args[@]}" OpenGothic/tests/navmemory_cost.cpp \
+  "$task/pre-cache/game/navigationmemory.cpp" -o "$task/build/navmemory-cost-before"
 "$task/.venv/bin/python" -m pytest -q -o cache_dir="$results/pytest-cache" \
-  --basetemp="$results/pytest-tmp" scripts/tests/test_nav_memory_v4.py scripts/tests/test_nav_teacher_v3.py
+  --basetemp="$results/pytest-tmp" scripts/tests/test_nav_teacher_v3b.py
+touch "$results/build-passed"
 PHASE
-"$ROOT/scripts/gq" submit --class batch --threads 12 --mem 8G --max 2h --cpu-quota 1200% \
-  --name "nav teacher v3b build" -- bash "$task/phase.sh"
+identifier=$("$ROOT/scripts/gq" submit --class batch --threads 16 --mem 8G --max 2h --cpu-quota 1200% \
+  --name "nav teacher v3b build" -- bash "$task/phase.sh" build)
+printf 'build %s\n' "$identifier"
+if [[ "$stage" == measure ]]; then
+  # Sixteen declared threads serialize these phases on the 28-thread host. Each
+  # mode includes both route cohorts and the nine frozen physical safety cases.
+  for mode in journey journey-stranger familiar-local familiar-stranger; do
+    identifier=$("$ROOT/scripts/gq" submit --class batch --threads 16 --mem 8G --max 2h --cpu-quota 1200% \
+      --name "nav teacher v3b $mode" -- bash "$task/phase.sh" mode "$mode")
+    printf '%s %s\n' "$mode" "$identifier"
+  done
+  identifier=$("$ROOT/scripts/gq" submit --class batch --threads 28 --mem 8G --max 2h --cpu-quota 1200% \
+    --name "nav teacher v3b paired cost" -- bash "$task/phase.sh" cost)
+  printf 'paired-cost %s\n' "$identifier"
+fi

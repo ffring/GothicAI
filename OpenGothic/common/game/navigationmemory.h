@@ -99,6 +99,7 @@ class NavigationMemory final {
     double traveledCm() const { return pathCm; }
 
   private:
+    friend class NavMemoryCostTrace;
     enum Channel : uint8_t { Free, Clearance, Ground, Wall, Water, Movable, Surface, ChannelCount };
     struct Evidence final {
       uint64_t gameMs = 0;
