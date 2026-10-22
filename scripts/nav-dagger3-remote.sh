@@ -55,6 +55,13 @@ import subprocess
 import sys
 task, bc3 = map(Path, sys.argv[1:])
 policies = dict(bc3=bc3 / "run/it35/policy.navbc", hd=task / "hd-run/policy.navbc")
+timing_path = task / "hd-policy-timing.json"
+if timing_path.is_file():
+    saved = json.loads(timing_path.read_text())
+    if saved["weights_sha256"] != {name:hashlib.sha256(path.read_bytes()).hexdigest() for name,path in policies.items()}:
+        raise ValueError("Saved C++ timing belongs to different policy weights")
+    print(json.dumps(dict(event="reusing_cpp_timing", **saved)))
+    sys.exit(0)
 fixtures = {name: task / f"hd-parity/v{version}/parity.bin.gz" for name, version in (("bc3", 2), ("hd", 3))}
 headers = {}
 for name, fixture in fixtures.items():
@@ -99,7 +106,7 @@ for policy in bc3 hd; do
     --assets "$HOME/gothic-ai/game" --save "$corpus/input/save.sav" \
     --cache "$task/hd-measure-cache" --links "$corpus/input/accepted-links.txt" \
     --jump-links "$corpus/input/jump-links.txt" --roads "$corpus/input/places.json" \
-    --weights "$weights" --output "$output" --physics cv --parallel 8 \
+    --weights "$weights" --output "$output" --physics cv --parallel 20 \
     --action-mode sample --action-seeds 18102027,18102028,18102029 \
     --safety-fixtures "$HOME/gothic-ai/nav-perception/safety-check-1/fixtures.json" \
     --fence-control --limit-ms 30000 --watchdog-seconds 900 --resume
@@ -111,7 +118,7 @@ done
   --runner "$task/build/opengothic/gothic-body-runner" \
   --assets "$HOME/gothic-ai/game" --save "$corpus/input/save.sav" \
   --cache "$task/hd-measure-cache" --links "$corpus/input/accepted-links.txt" --roads "$corpus/input/places.json" \
-  --weights "$task/hd-run/policy.navbc" --output "$task/hd-detour" --physics cv --parallel 8 \
+  --weights "$task/hd-run/policy.navbc" --output "$task/hd-detour" --physics cv --parallel 20 \
   --action-mode sample --action-seeds 18102027,18102028,18102029 \
   --limit-ms 240000 --watchdog-seconds 900 --resume
 "$python" -B -I scripts/nav_rl.py summarize --source "$task/hd-detour" --output "$task/hd-detour"
@@ -147,7 +154,7 @@ print(json.dumps(dict(event="hd_detour_complete", episodes=363, bc3_arrived=orig
 CHECK
 df -h "$HOME"
 MEASURE
-  "$ROOT/scripts/gq" submit --class batch --threads 24 --cpu-quota 2400% --mem 12G --max 2h \
+  "$ROOT/scripts/gq" submit --class batch --threads 28 --cpu-quota 2800% --mem 22G --max 2h \
     --name "nav dagger3 HD vs BC3 lean validation" -- bash "$task/measure-hd.sh"
   exit
 fi
