@@ -1075,6 +1075,7 @@ def test_voice_correction_uses_the_mix_limiter_and_matches_a_published_voice_win
     audio, report = levels.calibrate(joined, None, [(voice, 0)], [(0, 6)], 6, 6)
     assert report["ok"] is True  # Effects are quiet enough in LUFS, despite their high peaks.
     measured_voice_windows = {}
+    measured_full_lufs = {}
     real_meter = levels.meter_file
 
     def meter(path):
@@ -1083,13 +1084,17 @@ def test_voice_correction_uses_the_mix_limiter_and_matches_a_published_voice_win
             measured_voice_windows[path.name] = levels.measure(
                 ["-i", str(path)], "[0:a]anull[v]", "v", [(3.2, 5.8)],
             )
+            measured_full_lufs[path.name] = _reference_lufs(["-i", str(path)], "anull")
         return real_meter(path)
 
     monkeypatch.setattr(levels, "meter_file", meter)
     comparison_cut.master(audio.inputs, audio.mix(), out, 6, voiced=True, audio=audio, report=report)
     rows = _rows(report)
+    # The limiter lowers only the first half; the late window is louder than the full voice.
+    assert measured_full_lufs[out.name] == pytest.approx(-14.0, abs=0.2)
+    assert measured_full_lufs["voice.m4a"] == pytest.approx(-14.0, abs=0.2)
     assert measured_voice_windows[out.name] == pytest.approx(measured_voice_windows["voice.m4a"], abs=0.1)
-    assert rows["voice_mastered"]["measured_lufs"] == pytest.approx(-14.0, abs=0.5)
+    assert rows["voice_mastered"]["measured_lufs"] == pytest.approx(measured_full_lufs["voice.m4a"], abs=0.1)
     assert rows["voice_mastered"]["ok"] is True
     assert rows["true_peak"]["ok"] is True
     assert rows["clicks"]["count"] == 0
