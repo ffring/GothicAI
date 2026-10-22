@@ -8,11 +8,11 @@ same call (name and arguments) is given back; a call the original turn did not m
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any
 
 from . import npc_tools
-from .dialogue import MoodTags, strip_said, to_game_text
+from .dialogue import SentenceSplitter, TurnState, to_game_text
 from .llm import Done, Item, LLMBackend, TextDelta, ToolCall, ToolResult
 from .trace import CallTrace, item_from_json
 from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice, tool_output
@@ -43,13 +43,16 @@ async def replay(
         for e in record.get("events", [])
         if e.get("kind") == "first_words" and e.get("outcome", "said") == "said"
     )
-    text = ""
-    said = first_words
+    state = TurnState(reply="replay", splitter=SentenceSplitter(), started=0.0, filler=first_words)
+    names = {t.name for t in [*npc_tools.TOOLS, *VanillaQuests.all_tools]} | set(record.get("tools", []))
+    said = to_game_text(first_words)
     for n in range(after_step):
         previous, following = steps[n], steps[n + 1]
         if not previous.get("silent"):
-            text = _said(text, previous.get("text", ""))
-            said = _said(first_words, strip_said(text, first_words) if first_words else text)
+            if state.text and not state.text.endswith((" ", "\n")):
+                state.text += " "
+            said = _said(said, previous.get("text", ""), state, names, record["npc"])
+            said = _said(said, "", state, names, record["npc"], flush=True)
         added = [i for d in following["added"] if (i := item_from_json(d)) is not None]
         calls = {c["call_id"]: CallTrace(**c) for c in previous.get("calls", [])}
         for i, item in enumerate(added):
@@ -68,17 +71,21 @@ async def replay(
         started = time.monotonic()
         first: float | None = None
         done: Done | None = None
+        if not silent and state.text and not state.text.endswith((" ", "\n")):
+            state.text += " "
         async for event in llm.stream(
             instructions=instructions, messages=request, tools=tools, tool_choice=tool_choice(step)
         ):
-            if isinstance(event, TextDelta) and first is None:
-                first = time.monotonic() - started
+            if isinstance(event, TextDelta):
+                if first is None:
+                    first = time.monotonic() - started
+                if not silent:
+                    said = _said(said, event.text, state, names, record["npc"])
             elif isinstance(event, Done):
                 done = event
         assert done is not None
         if not silent:
-            text = _said(text, done.text)
-            said = _said(first_words, strip_said(text, first_words) if first_words else text)
+            said = _said(said, "", state, names, record["npc"], flush=True)
         calls = [i for i in done.items if isinstance(i, ToolCall)]
         outcomes: list[ToolOutcome] = []
         for call in calls:
@@ -103,7 +110,7 @@ async def replay(
                 "total_s": round(time.monotonic() - started, 2),
             }
         )
-        if not go_on(outcomes, bool(text.strip())):
+        if not go_on(outcomes, bool(state.text.strip())):
             break
         request += [
             *done.items,
@@ -125,7 +132,17 @@ async def replay(
     }
 
 
-def _said(previous: str, text: str) -> str:
-    tags = MoodTags()
-    words = "".join(p for p in [*tags.feed(text), *tags.flush()] if isinstance(p, str))
-    return " ".join(p for p in (previous, to_game_text(words)) if p)
+def _said(
+    previous: str,
+    text: str,
+    state: TurnState,
+    names: Collection[str],
+    npc: str,
+    *,
+    flush: bool = False,
+) -> str:
+    pieces = state.spoken(
+        state.moods.flush() if flush else state.moods.feed(text), names, npc, flush=flush
+    )
+    lines = (to_game_text(state.strip_line(line)) for line in state.lines(pieces, flush=flush))
+    return " ".join(p for p in (previous, *lines) if p)

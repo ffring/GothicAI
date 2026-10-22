@@ -1,8 +1,12 @@
 import pytest
 
+from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import FakeBackend, FakeStep, Message, ToolCall, ToolResult
+from gothic_ai.persona import PersonaProvider
 from gothic_ai.replay import replay
-from gothic_ai.trace import item_json
+from gothic_ai.trace import TraceWriter, find_turn, item_json
+from tests.fake_game import FakeGame, connected
+from tests.test_dialogue import XARDAS, _until
 
 CALL = ToolCall("take_item", {"item": "ITPL_HEALTH_HERB_01"}, "recorded-call")
 REJECTION = "Отклонено: на земле нет ITPL_HEALTH_HERB_01; ты видишь там: ничего."
@@ -107,6 +111,68 @@ async def test_replay_quotes_only_first_words_that_were_said_once(events, after_
         "Если меняет — поправься одной короткой фразой, не повторяя сказанного."
     )
     assert result["said_before"] == ("Ишь ты! Держи свиток." if after_step else "Ишь ты!")
+
+
+@pytest.mark.parametrize("after_step", [0, 2])
+@pytest.mark.parametrize(
+    "first_reply",
+    ["Ишь ты!", "functions.give_quest({...})"],
+    ids=["repeated-first-words", "discarded-tool-text"],
+)
+async def test_replay_quotes_the_dialogue_lines_instead_of_raw_step_text(
+    tmp_path, first_reply, after_step
+):
+    recall = ToolCall("recall", {"query": "scroll"}, "recall-call")
+    give = ToolCall("give_item", {"item": "ITSC_FIREBALL", "count": 1}, "give-call")
+    script = [
+        FakeStep(first_reply, [recall]),
+        FakeStep("Ишь ты! Держи свиток.", [give]),
+        FakeStep(""),
+    ]
+    fake = FakeGame()
+    llm = FakeBackend(script=script, chunk=3, delay=0)
+    writer = TraceWriter(tmp_path)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link,
+            llm,
+            PersonaProvider(None),
+            quick=FakeBackend("Ишь ты!", delay=0),
+            trace=writer,
+        )
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дай мне свиток.")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+
+    assert fake.said == ["Ишь ты!", "Держи свиток."]
+    assert len(llm.calls) == 3
+    original = next(
+        i for i in llm.calls[2][1] if isinstance(i, ToolResult) and i.call_id == give.call_id
+    )
+    assert original.output.startswith("Отклонено: У тебя нет предмета ITSC_FIREBALL")
+    assert original.output.endswith(
+        " Ты уже сказал вслух: «Ишь ты! Держи свиток.». "
+        "Если отказ этого не меняет — ничего не говори. "
+        "Если меняет — поправься одной короткой фразой, не повторяя сказанного."
+    )
+    assert original.output.count("Ишь ты!") == 1
+    record, instructions = find_turn(writer.path(), None)
+    assert instructions
+    assert record["steps"][0]["text"] == first_reply
+    assert record["steps"][1]["text"] == "Ишь ты! Держи свиток."
+    assert record["steps"][1]["calls"][0]["outcome"] == "rejected"
+    other = FakeBackend(script=script[after_step:], chunk=3, delay=0)
+
+    result = await replay(other, record, instructions, after_step=after_step)
+
+    assert len(other.calls) == 3 - after_step
+    replayed = next(
+        i for i in other.calls[-1][1] if isinstance(i, ToolResult) and i.call_id == give.call_id
+    )
+    assert replayed.output == original.output
+    assert result["said_before"] == (" ".join(fake.said) if after_step else "Ишь ты!")
+    assert not result["diverged"]
 
 
 async def test_replay_can_continue_the_recorded_rejection_without_saying_the_first_step_again():

@@ -23,7 +23,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Collection, Coroutine
+from collections.abc import Awaitable, Callable, Collection, Coroutine, Iterator
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Protocol
@@ -2065,7 +2065,11 @@ class DialogueManager:
                     first = first if first is not None else now - started
                     if state.first_delta is None:
                         state.first_delta = now - state.started
-                    pieces = self._spoken(conv, state, state.moods.feed(text))
+                    pieces = state.spoken(
+                        state.moods.feed(text),
+                        {t.name for t in self._request_tools([*npc_tools.TOOLS, *state.tools])},
+                        conv.npc,
+                    )
                     # The chat shows checked words as they arrive, before their subtitle lines.
                     if (
                         now - state.shown_at >= CHAT_TEXT_EVERY
@@ -2092,109 +2096,26 @@ class DialogueManager:
 
     async def _say_rest(self, conv: Conversation, state: TurnState) -> None:
         """What is left of the step's text once its stream is over: the last sentence."""
-        await self._feed_lines(conv, state, self._spoken(conv, state, state.moods.flush(), flush=True))
-        for line in state.splitter.flush():
+        pieces = state.spoken(
+            state.moods.flush(),
+            {t.name for t in self._request_tools([*npc_tools.TOOLS, *state.tools])},
+            conv.npc,
+            flush=True,
+        )
+        await self._feed_lines(conv, state, pieces, flush=True)
+
+    async def _feed_lines(
+        self, conv: Conversation, state: TurnState, pieces: list[str | MoodTag], *, flush: bool = False
+    ) -> None:
+        for line in state.lines(pieces, flush=flush):
             await self._line(conv, state, line)
-
-    def _spoken(
-        self,
-        conv: Conversation,
-        state: TurnState,
-        pieces: list[str | MoodTag],
-        *,
-        flush: bool = False,
-    ) -> list[str | MoodTag]:
-        """Hold only unfinished words; a tool marker discards the unsaid rest of its sentence."""
-        names = {t.name for t in self._request_tools([*npc_tools.TOOLS, *state.tools])}
-        out: list[str | MoodTag] = []
-
-        def accept(word: str) -> None:
-            if not state.discarded_text:
-                # Include this chunk's words, which have not reached the splitter yet.
-                pending = state.splitter._buf + "".join(p for p in out if isinstance(p, str))
-                start = 0
-                for end in _SENTENCE_END.finditer(pending):
-                    start = end.end()
-                prefix = pending[max(start, pending.rfind("\n") + 1) :]
-                if tool_leak(prefix + word, names):
-                    # Keep completed sentences waiting in the splitter, and any clause already said.
-                    remove = len(prefix)
-                    if remove:
-                        state.text = state.text[:-remove]
-                    for i in range(len(out) - 1, -1, -1):
-                        if isinstance(p := out[i], str):
-                            cut = min(remove, len(p))
-                            out[i] = p[: len(p) - cut]
-                            remove -= cut
-                    if remove:
-                        state.splitter._buf = state.splitter._buf[:-remove]
-                    state.discarded_text = prefix + word
-                else:
-                    if not state.text or state.text[-1].isspace():
-                        word = word.lstrip()  # no double space after a tag or discarded text
-                    if word:
-                        state.text += word
-                        if out and isinstance(out[-1], str):
-                            out[-1] += word
-                        else:
-                            out.append(word)
-                    return
-            else:
-                state.discarded_text += word
-            balanced = state.discarded_text.count('"') % 2 == 0 and all(
-                state.discarded_text.count(opening) <= state.discarded_text.count(closing)
-                for opening, closing in ("()", "{}", "[]")
-            )
-            if balanced and (
-                "\n" in state.discarded_text or _SENTENCE_END.search(state.discarded_text)
-            ):
-                log.warning("%s: discarded tool text: %s", conv.npc, state.discarded_text.strip())
-                state.discarded_text = ""
-
-        def finish_word() -> None:
-            if state.pending_text:
-                accept(state.pending_text)
-                state.pending_text = ""
-
-        for p in pieces:
-            if isinstance(p, MoodTag):
-                finish_word()
-                out.append(p)
-                continue
-            state.pending_text += p
-            end = 0
-            for word in re.finditer(r"\S*\s+", state.pending_text):
-                accept(word.group())
-                end = word.end()
-            state.pending_text = state.pending_text[end:]
-        if flush:
-            finish_word()
-            if state.discarded_text:
-                log.warning("%s: discarded tool text: %s", conv.npc, state.discarded_text.strip())
-                state.discarded_text = ""
-        return [p for p in out if p != ""]
-
-    async def _feed_lines(self, conv: Conversation, state: TurnState, pieces: list[str | MoodTag]) -> None:
-        """Lines as they complete. A new mood starts a new line: what was said before the tag goes out
-        with the old mood (short sentences are not merged across it)."""
-        for p in pieces:
-            if isinstance(p, MoodTag):
-                if p.mood != state.mood:
-                    for line in state.splitter.flush():
-                        await self._line(conv, state, line)
-                    state.mood = p.mood
-                continue
-            for line in state.splitter.feed(p):
-                await self._line(conv, state, line)
 
     async def _line(self, conv: Conversation, state: TurnState, line: str) -> None:
         if state.first_line is None:
             state.first_line = time.monotonic() - state.started
-        if state.filler:  # said at once already: not "Хм... Хм, ты прав." nor "Что?! Что?! Орки?"
-            line = strip_said(line, state.filler)
-            if not line:
-                return
-            state.filler = ""
+        line = state.strip_line(line)
+        if not line:
+            return
         # «Браго, …»: from this line on it speaks to him (the two look at each other), and he may answer
         if self.floor is not None and (who := self.floor.called(conv.npc, line)) is not None:
             state.to = who
@@ -2538,3 +2459,100 @@ class TurnState:
     tools: list[Tool] = field(default_factory=list)  # offered to the model in this turn
     dynamic_tools: bool = False  # no explicit tools: amendments refresh the offered list
     to: str | None = None  # the npc its lines are said to now, None: the hero
+
+    def spoken(
+        self,
+        pieces: list[str | MoodTag],
+        names: Collection[str],
+        npc: str,
+        *,
+        flush: bool = False,
+    ) -> list[str | MoodTag]:
+        """Hold only unfinished words; a tool marker discards the unsaid rest of its sentence."""
+        out: list[str | MoodTag] = []
+
+        def accept(word: str) -> None:
+            if not self.discarded_text:
+                # Include this chunk's words, which have not reached the splitter yet.
+                pending = self.splitter._buf + "".join(p for p in out if isinstance(p, str))
+                start = 0
+                for end in _SENTENCE_END.finditer(pending):
+                    start = end.end()
+                prefix = pending[max(start, pending.rfind("\n") + 1) :]
+                if tool_leak(prefix + word, names):
+                    # Keep completed sentences waiting in the splitter, and any clause already said.
+                    remove = len(prefix)
+                    if remove:
+                        self.text = self.text[:-remove]
+                    for i in range(len(out) - 1, -1, -1):
+                        if isinstance(p := out[i], str):
+                            cut = min(remove, len(p))
+                            out[i] = p[: len(p) - cut]
+                            remove -= cut
+                    if remove:
+                        self.splitter._buf = self.splitter._buf[:-remove]
+                    self.discarded_text = prefix + word
+                else:
+                    if not self.text or self.text[-1].isspace():
+                        word = word.lstrip()  # no double space after a tag or discarded text
+                    if word:
+                        self.text += word
+                        if out and isinstance(out[-1], str):
+                            out[-1] += word
+                        else:
+                            out.append(word)
+                    return
+            else:
+                self.discarded_text += word
+            balanced = self.discarded_text.count('"') % 2 == 0 and all(
+                self.discarded_text.count(opening) <= self.discarded_text.count(closing)
+                for opening, closing in ("()", "{}", "[]")
+            )
+            if balanced and (
+                "\n" in self.discarded_text or _SENTENCE_END.search(self.discarded_text)
+            ):
+                log.warning("%s: discarded tool text: %s", npc, self.discarded_text.strip())
+                self.discarded_text = ""
+
+        def finish_word() -> None:
+            if self.pending_text:
+                accept(self.pending_text)
+                self.pending_text = ""
+
+        for p in pieces:
+            if isinstance(p, MoodTag):
+                finish_word()
+                out.append(p)
+                continue
+            self.pending_text += p
+            end = 0
+            for word in re.finditer(r"\S*\s+", self.pending_text):
+                accept(word.group())
+                end = word.end()
+            self.pending_text = self.pending_text[end:]
+        if flush:
+            finish_word()
+            if self.discarded_text:
+                log.warning("%s: discarded tool text: %s", npc, self.discarded_text.strip())
+                self.discarded_text = ""
+        return [p for p in out if p != ""]
+
+    def lines(self, pieces: list[str | MoodTag], *, flush: bool = False) -> Iterator[str]:
+        """Split speech into lines, flushing the previous mood before changing it."""
+        for p in pieces:
+            if isinstance(p, MoodTag):
+                if p.mood != self.mood:
+                    yield from self.splitter.flush()
+                    self.mood = p.mood
+                continue
+            yield from self.splitter.feed(p)
+        if flush:
+            yield from self.splitter.flush()
+
+    def strip_line(self, line: str) -> str:
+        """Remove the first words until a nonempty answer line is ready to be said."""
+        if self.filler:
+            line = strip_said(line, self.filler)
+            if line:
+                self.filler = ""
+        return line
