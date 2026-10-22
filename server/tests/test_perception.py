@@ -421,6 +421,44 @@ async def test_it_picks_up_what_the_hero_threw_down_and_follows_him_again():
     assert "[Ты поднял с земли: Запечатанное послание]" in [m.content for m in conv.history]
 
 
+@pytest.mark.parametrize("mode", ["first_reaction", "quick_line", "quick_fallback"])
+async def test_the_full_view_refreshes_the_turns_dynamic_tools(mode):
+    npc, herb = "NONE_100_XARDAS", "ITPL_HEALTH_HERB_01"
+    brief = {**lobarts_view(), "npc": npc, "name": "Ксардас", "items": []}
+    full = {
+        **brief,
+        "items": [{"item": herb, "name": "Лечебная трава", "distance": 700}],
+    }
+    fake = FakeGame()
+    fake.views[npc] = full
+    quick = FakeBackend("" if mode == "quick_fallback" else "Подниму траву.", delay=0)
+    llm = FakeBackend(
+        "Сейчас подниму.", delay=0, tool_calls=[ToolCall("take_item", {"item": herb})]
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        dialogue.in_fight = lambda who: mode != "first_reaction"
+        perception = PerceptionDesk(link)
+        perception._store(NpcView.model_validate(brief))
+        dialogue.extensions.append(perception)
+        dialogue.sight = perception.sight
+        await link.attach(npc)
+        conv = dialogue.open(npc, "Ксардас")
+        await dialogue.say_as_player(npc, "Подними траву.")
+        await _until(
+            lambda: any("поднял" in m.content for m in conv.history if m.role == "developer")
+        )
+
+    assert herb not in quick.calls[0][1][-2].content
+    assert "На земле: Лечебная трава (ITPL_HEALTH_HERB_01; 7 м)." in llm.calls[0][1][-2].content
+    assert "take_item" in {t.name for t in llm.calls[0][2]}  # allowed, not just the tool registry
+    assert len(llm.calls) == 1
+    assert [(m["action"], m["args"]) for m in fake.received if m["type"] == "action"] == [
+        ("take_item", {"item": herb})
+    ]
+    assert "[Ты поднял с земли: Лечебная трава]" in [m.content for m in conv.history]
+
+
 @pytest.mark.parametrize("view_change", ["expired", "replaced"])
 @pytest.mark.parametrize("requested", ["ITPL_HEALTH_HERB_01", "ITPL_MUSHROOM_01"])
 async def test_ground_and_take_item_use_the_same_turn_view(view_change, requested, monkeypatch):

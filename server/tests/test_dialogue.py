@@ -1303,13 +1303,14 @@ async def test_out_of_a_fight_the_quick_model_only_says_the_first_words():
     assert [m.content for m in dialogue.conversations[XARDAS].history][:2] == ["Ты старый дурак", "Не спеши."]
 
 
-async def test_a_rejection_remembers_the_first_words_and_the_main_reply():
+@pytest.mark.parametrize("reply", ["Держи свиток.", "Ишь ты! Держи свиток."])
+async def test_a_rejection_remembers_the_first_words_and_the_main_reply(reply):
     fake = FakeGame()
     quick = FakeBackend("[angry] Ишь ты!", delay=0)
     llm = FakeBackend(
         script=[
             FakeStep(
-                "Держи свиток.",
+                reply,
                 [ToolCall("give_item", {"item": "ITSC_FIREBALL", "count": 1})],
             ),
             FakeStep(""),
@@ -1332,6 +1333,33 @@ async def test_a_rejection_remembers_the_first_words_and_the_main_reply():
         "Если отказ этого не меняет — ничего не говори. "
         "Если меняет — поправься одной короткой фразой, не повторяя сказанного."
     )
+    assert result.output.count("Ишь ты!") == 1
+
+
+async def test_first_words_do_not_end_a_turn_after_a_silent_accepted_call():
+    fake = FakeGame()
+    llm = FakeBackend(
+        script=[
+            FakeStep("", [ToolCall("give_item", {"item": "ITPO_HEALTH_01", "count": 1})]),
+            FakeStep("Держи, это поможет."),
+        ],
+        delay=0,
+    )
+    async with connected(fake) as link:
+        dialogue = DialogueManager(
+            link, llm, PersonaProvider(None), quick=FakeBackend("Хм...", delay=0)
+        )
+        await link.attach(XARDAS)
+        dialogue.open(XARDAS, "Ксардас")
+        await dialogue.say_as_player(XARDAS, "Дай мне зелье.")
+        await _until(lambda: fake.statuses[-1:] == ["idle"])
+        await _until(
+            lambda: any(m["type"] == "action" and m["action"] == "give_item" for m in fake.received)
+        )
+
+    assert len(llm.calls) == 2
+    assert fake.said == ["Хм...", "Держи, это поможет."]
+    assert any(m["type"] == "action" and m["action"] == "give_item" for m in fake.received)
 
 
 async def test_no_first_words_to_a_greeting_or_without_the_quick_model_in_time(monkeypatch):

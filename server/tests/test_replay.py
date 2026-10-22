@@ -58,6 +58,57 @@ async def test_replay_adds_spoken_words_to_a_recorded_rejection(text):
     assert result["replay"][0]["calls"][0]["output"] == expected
 
 
+@pytest.mark.parametrize("after_step", [0, 1])
+async def test_first_words_do_not_finish_a_wordless_accepted_action(after_step):
+    call = ToolCall("give_item", {"item": "ITSC_FIREBALL", "count": 1}, "give-call")
+    record = _record("", call=call, output="Принято: передашь свиток.", status="accepted")
+    record["events"] = [{"kind": "first_words", "text": "Хм..."}]
+    script = [FakeStep("", [call]), FakeStep("Держи, это поможет.")]
+    llm = FakeBackend(script=script[after_step:], delay=0)
+
+    result = await replay(llm, record, "NPC instructions", after_step=after_step)
+
+    assert len(llm.calls) == 2 - after_step
+    assert result["replay"][-1]["text"] == "Держи, это поможет."
+    assert result["said_before"] == "Хм..."
+
+
+@pytest.mark.parametrize("after_step", [0, 1])
+@pytest.mark.parametrize(
+    "events",
+    [
+        [{"kind": "first_words", "text": "Ишь ты!"}],
+        [
+            *[
+                {"kind": "first_words", "outcome": outcome, "text": f"Unsaid {outcome}."}
+                for outcome in ("too_long", "same", "sound", "nothing", "late", "error")
+            ],
+            {
+                "kind": "first_words",
+                "outcome": "said",
+                "text": "[angry] Ишь ты! И это всё?",
+                "words": "Ишь ты!",
+            },
+        ],
+    ],
+)
+async def test_replay_quotes_only_first_words_that_were_said_once(events, after_step):
+    record = _record("Ишь ты! Держи свиток.")
+    record["events"] = events
+    script = [FakeStep("Ишь ты! Держи свиток.", [CALL]), FakeStep("")]
+    llm = FakeBackend(script=script[after_step:], delay=0)
+
+    result = await replay(llm, record, "NPC instructions", after_step=after_step)
+
+    (output,) = [i.output for i in llm.calls[-1][1] if isinstance(i, ToolResult)]
+    assert output == (
+        REJECTION + " Ты уже сказал вслух: «Ишь ты! Держи свиток.». "
+        "Если отказ этого не меняет — ничего не говори. "
+        "Если меняет — поправься одной короткой фразой, не повторяя сказанного."
+    )
+    assert result["said_before"] == ("Ишь ты! Держи свиток." if after_step else "Ишь ты!")
+
+
 async def test_replay_can_continue_the_recorded_rejection_without_saying_the_first_step_again():
     record = _record()
     # New traces already contain the suffix in added; the call's result remains the raw rejection.

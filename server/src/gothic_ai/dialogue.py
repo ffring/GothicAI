@@ -1801,6 +1801,8 @@ class DialogueManager:
             else:
                 if quick and full is not None:  # the quick model said nothing: the whole situation, as usual
                     situation_text, _, state.sight = await full
+                    if state.dynamic_tools:
+                        state.tools = self._offered(conv.npc, state.sight)
                     if sound:
                         situation_text += SOUND_SAID.format(sound)
                     request = [*conv.history, Message("developer", situation_text), trigger]
@@ -1884,7 +1886,7 @@ class DialogueManager:
         The turn's status: "completed", or "step_cap" when the model wanted to go on still."""
         added: list[Item] = list(request)
         retries = STEP_RETRIES
-        first_said = state.filler
+        first_said = to_game_text(state.filler)
         for step in range(MAX_STEPS):
             st = trace.step(added, tool_choice(step), silent=not speak)
             while True:
@@ -1917,7 +1919,8 @@ class DialogueManager:
                 return "completed"
             if step == MAX_STEPS - 1:
                 return "step_cap"
-            said = " ".join(s for s in (first_said, to_game_text(state.text)) if s) if speak else ""
+            spoken = [self._lines[line][0] for line in conv.last_lines]
+            said = " ".join(s for s in [first_said, *spoken] if s) if speak else ""
             results = [
                 ToolResult(c.call_id, tool_output(o, said))
                 for c, o in zip(calls, outcomes, strict=True)
@@ -1955,6 +1958,8 @@ class DialogueManager:
         conv.acting = True  # the hero may speak again: a new turn, not an interruption
         await self._status(conv, "idle")
         situation_text, _, state.sight = await full
+        if state.dynamic_tools:
+            state.tools = self._offered(conv.npc, state.sight)
         said = " ".join(s for s in (sound, state.text.strip()) if s)
         situation_text += (
             f"\nТы уже сказал вслух: «{said}». Новых слов не нужно: реши, что ты делаешь, и сделай это "

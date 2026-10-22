@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from . import npc_tools
-from .dialogue import MoodTags, to_game_text
+from .dialogue import MoodTags, strip_said, to_game_text
 from .llm import Done, Item, LLMBackend, TextDelta, ToolCall, ToolResult
 from .trace import CallTrace, item_from_json
 from .turn import MAX_STEPS, ToolOutcome, go_on, tool_choice, tool_output
@@ -38,11 +38,18 @@ async def replay(
     request: list[Item] = [i for d in steps[0]["added"] if (i := item_from_json(d)) is not None]
     recorded = [CallTrace(**c) for s in steps for c in s.get("calls", [])]
     out: list[dict[str, Any]] = []
-    said = " ".join(e["text"] for e in record.get("events", []) if e.get("kind") == "first_words")
+    first_words = " ".join(
+        e.get("words", e["text"])
+        for e in record.get("events", [])
+        if e.get("kind") == "first_words" and e.get("outcome", "said") == "said"
+    )
+    text = ""
+    said = first_words
     for n in range(after_step):
         previous, following = steps[n], steps[n + 1]
         if not previous.get("silent"):
-            said = _said(said, previous.get("text", ""))
+            text = _said(text, previous.get("text", ""))
+            said = _said(first_words, strip_said(text, first_words) if first_words else text)
         added = [i for d in following["added"] if (i := item_from_json(d)) is not None]
         calls = {c["call_id"]: CallTrace(**c) for c in previous.get("calls", [])}
         for i, item in enumerate(added):
@@ -70,7 +77,8 @@ async def replay(
                 done = event
         assert done is not None
         if not silent:
-            said = _said(said, done.text)
+            text = _said(text, done.text)
+            said = _said(first_words, strip_said(text, first_words) if first_words else text)
         calls = [i for i in done.items if isinstance(i, ToolCall)]
         outcomes: list[ToolOutcome] = []
         for call in calls:
@@ -95,7 +103,7 @@ async def replay(
                 "total_s": round(time.monotonic() - started, 2),
             }
         )
-        if not go_on(outcomes, bool(said.strip())):
+        if not go_on(outcomes, bool(text.strip())):
             break
         request += [
             *done.items,
