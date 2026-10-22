@@ -19,6 +19,7 @@ from test_dub import (
     _streams,
     _tts_sound,
 )
+from test_dub_publication import _assert_dual_mono
 
 from gothic_shorts import cli, compare, dub, levels
 
@@ -137,6 +138,25 @@ def _small_comparison(monkeypatch, brand):
 
     monkeypatch.setattr(compare, "text_image", lambda path, items: overlay(path, items[0][0]))
     monkeypatch.setattr(compare, "caption_image", lambda path, words, current: overlay(path, words[current]))
+
+
+def test_unvoiced_master_folds_stereo_before_loudnorm(tmp_path, comparison_assets):
+    source = tmp_path / "panned.wav"
+    _ffmpeg(
+        "-f", "lavfi", "-i",
+        "aevalsrc=0.1*sin(2*PI*440*t)|0.07*sin(2*PI*660*t):s=48000:d=3:c=stereo",
+        "-af", "afade=t=in:d=0.06,afade=t=out:st=2.94:d=0.06", "-c:a", "pcm_f32le", source,
+    )
+    out = tmp_path / "unvoiced.mp4"
+
+    compare.master(
+        ["-i", str(comparison_assets.placeholder), "-i", str(source)],
+        "[1:a]atrim=duration=3", out, 3,
+    )
+
+    audio, = _streams(out)
+    assert audio["codec_name"] == "aac" and audio["channels"] == 2
+    _assert_dual_mono(out)
 
 
 @pytest.mark.parametrize("brand,music", [(True, True), (False, False)], ids=["brand-and-music", "plain"])

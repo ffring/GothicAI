@@ -177,7 +177,8 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
         levels._master_voiced(audio, report, out, length, inputs=inputs, run=run, detect=clicks.detect)
         return
     loud = "loudnorm=I=-14:TP=-1.5:LRA=11"
-    pre = f"{mix},alimiter=limit=0.75:level=false"
+    pre = (f"{mix},aformat=sample_rates=48000:channel_layouts=stereo,{levels.DUAL_MONO},"
+           "alimiter=limit=0.75:level=false")
     probe = subprocess.run(["ffmpeg", "-hide_banner", *inputs, "-filter_complex", f"{pre},{loud}:print_format=json",
                             "-f", "null", "-"], check=True, capture_output=True, text=True).stderr
     key = probe.rindex('"input_i"')  # the json loudnorm prints, among ffmpeg's other lines
@@ -187,7 +188,7 @@ def master(inputs: list[str], mix: str, out: Path, length: float, *, voiced: boo
     fade = f"afade=t=out:st={length - 0.08:.3f}:d=0.08"
     run(["ffmpeg", "-y", *inputs, "-filter_complex", f"{pre},{loud},{fade}[a]", "-map", "0:v", "-map", "[a]",
          "-c:v", "copy",
-         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", str(out)])
+         *levels.aac_encoder(), "-ar", "48000", str(out)])
 
 
 @dataclass(frozen=True)
@@ -204,7 +205,9 @@ def build_ending(tmp: Path) -> tuple[Path, float]:
     """Encode the ending like a beat and report its exact container duration."""
     sting = tmp / "sting.mp4"
     run(["ffmpeg", "-y", "-i", str(BRAND / "sting.mp4"), "-r", str(FPS), "-c:v", "libx264", "-preset", "slow",
-         "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", str(sting)])
+         "-crf", "18", "-pix_fmt", "yuv420p",
+         "-af", f"aformat=sample_rates=48000:channel_layouts=stereo,{levels.DUAL_MONO}",
+         "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", str(sting)])
     duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of",
                                     "csv=p=0", str(sting)], check=True, capture_output=True, text=True).stdout)
     return sting, duration
@@ -263,7 +266,8 @@ def build(plan: dict, takes: Path, lang: str, tmp: Path) -> Built:
         ])
         fade = 0.06
         dur = end - start
-        audio = (f"[{len(inputs) // 2}]atrim={start}:{end},asetpts=PTS-STARTPTS,"
+        audio = (f"[{len(inputs) // 2}]aformat=sample_rates=48000:channel_layouts=stereo,{levels.DUAL_MONO},"
+                 f"atrim={start}:{end},asetpts=PTS-STARTPTS,"
                  f"afade=t=in:d={fade},afade=t=out:st={dur - fade}:d={fade}[aud]")
         inputs += ["-i", str(takes / "on" / f"{seg}.wav")]
         part = tmp / f"p{i}.mp4"
