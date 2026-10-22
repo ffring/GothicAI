@@ -16,6 +16,13 @@ SPEC.loader.exec_module(rl)
 demos = rl.module("nav_demos")
 
 
+@pytest.fixture
+def validation_disk_space(monkeypatch):
+    usage = SimpleNamespace(free=32 * 1024**3)
+    monkeypatch.setattr(rl.shutil, "disk_usage", lambda path: usage)
+    return usage
+
+
 def test_historical_sources_exclude_all_attempts_and_both_directions(tmp_path):
     (tmp_path / "old.jsonl").write_text(json.dumps(dict(start="A", goal="B", success=False)) + "\n")
     (tmp_path / "index.json").write_text(json.dumps(dict(episodes=[dict(pair=["C", "D"], split="train")])))
@@ -892,7 +899,8 @@ def test_detour_drive_cli_requires_no_pairs_and_rejects_other_commands(tmp_path,
         rl.main()
 
 
-def test_detour_drive_is_sampled_record_off_and_keeps_policy_outputs_separate(tmp_path, monkeypatch):
+def test_detour_drive_is_sampled_record_off_and_keeps_policy_outputs_separate(tmp_path, monkeypatch,
+                                                                           validation_disk_space):
     path, value = frozen_detour(tmp_path)
     calls = []
     monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
@@ -1110,7 +1118,8 @@ def test_lean_summary_pools_families_seeds_and_physical_evidence_without_samples
 
 
 @pytest.mark.parametrize("bad_moving_seed", [False, True])
-def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(tmp_path, monkeypatch, bad_moving_seed):
+def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(tmp_path, monkeypatch,
+                                                                            bad_moving_seed, validation_disk_space):
     manifest, groups = validation_manifest(tmp_path)
     args = validation_drive_args(tmp_path, manifest, family=None)
     args.lean, args.jump_links = True, Path("/accepted-links-cv.txt")
@@ -1141,6 +1150,22 @@ def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(
     assert len(list(args.output.rglob("drive-metrics.json"))) == 15
     assert not list(args.output.rglob("known-paths.jsonl"))
     assert not list(args.output.rglob("samples.bin*"))
+
+
+def test_lean_manifest_drive_rejects_disk_below_reserve_before_scenario(tmp_path, monkeypatch,
+                                                                     validation_disk_space):
+    manifest, _ = validation_manifest(tmp_path)
+    args = validation_drive_args(tmp_path, manifest, family="point")
+    args.lean, args.action_seeds = True, "7"
+    validation_disk_space.free = 20 * 1024**3 + 512 * 1024**2 - 1
+    closed = []
+    monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: closed.append(True)))
+    monkeypatch.setattr(rl, "scenario", lambda *args: pytest.fail("Low disk must prevent scenario execution"))
+    with pytest.raises(ValueError, match="20-GiB disk reserve plus 512 MiB"):
+        rl.drive_validation(args)
+    assert closed == [True]
+    assert not list(args.output.rglob("episode.json"))
 
 
 @pytest.mark.parametrize("corruption", [None, dict(record=True), dict(teacher_control_decisions=1),
