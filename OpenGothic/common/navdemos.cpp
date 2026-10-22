@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -101,6 +102,8 @@ struct Episode {
   size_t replayIndex=0;
   uint64_t replans=0,fallbacks=0;
   double writeUs=0,maxWriteUs=0;
+  double memoryUpdateUs=0,memoryViewUs=0;
+  uint64_t memoryUpdates=0,memoryViews=0;
   std::shared_ptr<const NavPolicy> policy;
   std::vector<NavPolicy::State> policyStates;
   std::vector<double> policyUs,encodeUs,populationUs;
@@ -121,8 +124,18 @@ struct Episode {
   std::ofstream perceptionSafetyFrames;
   std::ofstream perceptionWaterObservations;
   std::vector<RecordedKeys> replayActions;
+  Episode() { memory.setJourneyMemory(false); }
 };
 Episode legacy;
+
+uint32_t demoVersion(const Episode& ep) {
+  if(ep.drive) {
+    const auto input=ep.policy->navDemoVersion();
+    return input==2 && ep.memory.representationVersion()==4 ? 3 : input;
+  }
+  return ep.teacherVersion==3 ? (ep.memory.representationVersion()==4 ? 3 : 2) : ep.teacherVersion;
+}
+
 struct Pair {std::string from,to;};
 struct Population {
   bool active=false,record=true,sampled=false,near=false;
@@ -318,8 +331,14 @@ void finish(Episode& ep,World& world) {
      <<",\"goal\":"<<std::quoted(ep.to)<<",\"elapsed_ms\":"<<elapsed<<",\"limit_ms\":"<<ep.limit
      <<",\"distance_cm\":";jsonNumber(out,(ep.npc->position()-ep.goal).length());
   out<<",\"failure\":"<<std::quoted(ep.failure)
-     <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"<<(ep.teacherVersion==3?2:ep.teacherVersion)
-     <<",\"navigation_memory_version\":"<<NavigationMemory::RepresentationVersion
+     <<",\"teacher_version\":"<<ep.teacherVersion<<",\"demo_version\":"
+     <<demoVersion(ep)
+     <<",\"navigation_memory_version\":"<<ep.memory.representationVersion()
+     <<",\"journey_memory\":"<<ep.memory.journeyMemoryEnabled()
+     <<",\"familiar_map\":"<<ep.memory.familiarMapEnabled()
+     <<",\"memory_update_us\":"<<(ep.memoryUpdates?ep.memoryUpdateUs/double(ep.memoryUpdates):0.)
+     <<",\"memory_view_us\":"<<(ep.memoryViews?ep.memoryViewUs/double(ep.memoryViews):0.)
+     <<",\"memory_updates\":"<<ep.memoryUpdates<<",\"memory_views\":"<<ep.memoryViews
      <<",\"perception_mode\":"<<std::quoted(perceptionMode(ep.eye.config().floorSampling))
      <<",\"perception_monitor\":"<<ep.perceptionMonitor
      <<",\"oracle\":"<<ep.oracle<<",\"record\":"<<bool(ep.writer)
@@ -906,7 +925,9 @@ void observe(Episode& ep,World& w) {
   pose.stepHeightCm=step>0.f?step:50.f;
   pose.maxSlopeDegrees=std::acos(std::clamp(std::cos(float(guild.slide_angle[n.guild()])*Pi/180.f),0.f,1.f))*180.f/Pi;
   ep.memory.update(ep.eye.memorySamples(),pose);
-  if(ep.population)ep.phaseUs[1]+=micros(memoryStart);
+  const auto memoryUs=micros(memoryStart);
+  ep.memoryUpdateUs+=memoryUs;++ep.memoryUpdates;
+  if(ep.population)ep.phaseUs[1]+=memoryUs;
 }
 void tracePerceptionWater(Episode& ep,const NavDemoWriter::Snapshot& sample) {
   if(!ep.perceptionMonitor)return;
@@ -965,7 +986,9 @@ NavDemoWriter::Snapshot snapshot(Episode& ep,World& w,const KnownRoads::Guidance
   const auto position=ep.teacherVersion>=2 ? NpcKeys::physicalPosition(n) : n.position();
   const auto viewStart=Clock::now();
   ep.memory.view(ep.view);
-  if(ep.population)ep.phaseUs[1]+=micros(viewStart);
+  const auto viewUs=micros(viewStart);
+  ep.memoryViewUs+=viewUs;++ep.memoryViews;
+  if(ep.population)ep.phaseUs[1]+=viewUs;
   NavDemoWriter::Snapshot sample;
   sample.gameMs=w.tickCount();sample.position=array(NpcKeys::physicalPosition(n));sample.bodyYawDeg=n.rotation();
   sample.body.velocityCmS=local(ep.velocity,n.rotationRad());
@@ -1105,7 +1128,7 @@ void bootstrap(Episode& ep,World& w) {
   };
   map("encoded_near",features.near);map("encoded_far",features.far);
   if(!fields.empty())throw observationError(ep,sample,"nav policy: non-finite bootstrap map feature",std::move(fields));
-  NavDemoWriter writer((std::filesystem::path(ep.output)/"bootstrap.bin.gz").string(),2);
+  NavDemoWriter writer((std::filesystem::path(ep.output)/"bootstrap.bin.gz").string(),demoVersion(ep));
   writer.append(sample);writer.finish();
 }
 NpcKeys::KeyState select(Episode& ep,NavPolicy::Result result) {
@@ -1450,6 +1473,8 @@ void startPopulationEpisode(World& w,Npc& player,size_t slot,Npc* original=nullp
   // Every slot uses that same home and its native routines; no route is granted here.
   npc.setPosition(pop.home);npc.updateTransform();
   KnownRoadsBench::command({"roads","on","id:"+std::to_string(w.npcId(&npc))},w,pop.output);
+  ep.policy->configureMemory(ep.memory,std::getenv("OPENGOTHIC_NAV_JOURNEY_MEMORY"));
+  if(ep.memory.journeyMemoryEnabled())KnownRoadsBench::attachFamiliar(w,npc,ep.memory);
   npc.setPosition(from->groundPos);npc.updateTransform();npc.setDirection(ep.goal-npc.position());
   npc.setWalkMode(WalkBit::WM_Walk);
   if(pop.near) {player.setPosition(npc.position()+Vec3(0,0,500));player.updateTransform();}
@@ -1462,7 +1487,7 @@ void startPopulationEpisode(World& w,Npc& player,size_t slot,Npc* original=nullp
   if(ep.record) {
     ep.trajectory=file(ep,"trajectory.txt");ep.actions=file(ep,"actions.txt");
     ep.knownPaths=file(ep,"known-paths.jsonl");ep.samples=file(ep,"samples.jsonl");
-    ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(ep.output)/"samples.bin.gz").string(),2);
+    ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(ep.output)/"samples.bin.gz").string(),demoVersion(ep));
   }
   ep.initialState=initialState(ep);
   observe(ep,w);
@@ -1955,6 +1980,11 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     throw std::runtime_error("navdemos rows is evaluation-only; use record off");
   ep.cvMode=settings.cv;ep.heroNear=!current && settings.heroNear;
   ep.teacherVersion=(memory || object || moving)?scenarioTeacher:(carrot?2:1);
+  if(ep.teacherVersion==3 && !learner && !replay) {
+    const auto* journey=std::getenv("OPENGOTHIC_NAV_JOURNEY_MEMORY");
+    ep.memory.setJourneyMemory(journey==nullptr || std::string_view(journey)!="0");
+    KnownRoadsBench::attachFamiliar(w,*npc,ep.memory);
+  }
   ep.oracle=settings.oracle;
   if(ep.oracle && ep.teacherVersion!=3) {
     throw std::runtime_error("navdemos oracle evaluation requires teacher v3");
@@ -1972,6 +2002,9 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     if(population==0 || population>1000)throw std::runtime_error("navdemos invalid policy population");
     ep.policy=std::make_unique<NavPolicy>(a[current?5:6]);
     ep.teacherVersion=ep.policy->navDemoVersion()==2?3:1;
+    ep.policy->configureMemory(ep.memory,std::getenv("OPENGOTHIC_NAV_JOURNEY_MEMORY"));
+    if(ep.memory.journeyMemoryEnabled() && ep.policy->navDemoVersion()==2)
+      KnownRoadsBench::attachFamiliar(w,*npc,ep.memory);
     const size_t betaIndex=current?6:7;
     if(!speed && a.size()>betaIndex)ep.teacherBeta=std::stod(a[betaIndex]);
     if(!std::isfinite(ep.teacherBeta) || ep.teacherBeta<0 || ep.teacherBeta>1)
@@ -2072,7 +2105,7 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
   } else {
     ep.actions=file(ep,"actions.txt");
     if(settings.recordDemos && !ep.oracle) {
-      ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),ep.teacherVersion==3?2:ep.teacherVersion);
+      ep.writer=std::make_unique<NavDemoWriter>((std::filesystem::path(output)/"samples.bin.gz").string(),demoVersion(ep));
     }
     if(ep.teacherVersion>=2) {
       ep.knownPaths=file(ep,"known-paths.jsonl");

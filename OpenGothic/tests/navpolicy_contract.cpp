@@ -1,6 +1,8 @@
 #include "navpolicy.h"
 
 #include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 #include <zlib.h>
 
 #include <algorithm>
@@ -9,8 +11,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -21,6 +26,108 @@ namespace {
 void require(bool condition,const std::string& message) {
   if(!condition) throw std::runtime_error(message);
   }
+
+void memoryContract(const std::string& weights) {
+  const NavPolicy original(weights);
+  require(original.navDemoVersion()==1 || original.navDemoVersion()==2,"memory contract requires a supported policy");
+  std::ifstream input(weights,std::ios::binary);
+  std::string headerText;
+  require(bool(std::getline(input,headerText)),"cannot read memory contract weight header");
+  const std::string payload{std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
+  struct Temporary final {
+    std::filesystem::path directory;
+    bool created=false;
+    ~Temporary() {if(created) {std::error_code error;std::filesystem::remove_all(directory,error);}}
+  } temporary{std::filesystem::temp_directory_path()/
+      ("gothic-navpolicy-memory-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))};
+  require(std::filesystem::create_directory(temporary.directory),"cannot create memory contract temporary directory");
+  temporary.created=true;
+  const auto path=temporary.directory/"fixture.navbc";
+  const auto variant=[&](const char* memoryVersion,bool navdemo3=false) {
+    rapidjson::Document header;header.Parse(headerText.c_str());
+    auto& preprocessing=header["preprocessing"];
+    preprocessing.RemoveMember("navigation_memory_version");
+    if(memoryVersion) {
+      rapidjson::Document value;value.Parse(memoryVersion);
+      require(!value.HasParseError(),"invalid memory contract metadata literal");
+      rapidjson::Value copied;copied.CopyFrom(value,header.GetAllocator());
+      preprocessing.AddMember("navigation_memory_version",copied,header.GetAllocator());
+    }
+    if(navdemo3) {
+      preprocessing.RemoveMember("navdemo_version");
+      preprocessing.AddMember("navdemo_version",3,header.GetAllocator());
+    }
+    rapidjson::StringBuffer buffer;rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);header.Accept(writer);
+    std::ofstream out(path,std::ios::binary|std::ios::trunc);
+    out.write(buffer.GetString(),std::streamsize(buffer.GetSize()));out.put('\n');
+    out.write(payload.data(),std::streamsize(payload.size()));out.close();
+    require(bool(out),"cannot write memory contract weight variant");
+  };
+
+  using Memory=NavigationMemory;
+  Memory::FamiliarMap familiar;
+  Memory::FamiliarTile tile;tile.x=25;tile.z=0;tile.channels=Memory::FamiliarTile::Wall;
+  familiar.tiles.push_back(tile);familiar.finish();
+  NavigationEye::Ray rock;
+  rock.origin={0,150,0};rock.point={5000,150,0};rock.direction={1,0,0};
+  rock.distanceCm=rock.maxRangeCm=5000;rock.kind=NavigationEye::HitKind::World;rock.hit=rock.complete=true;
+  const auto strongest=[](const Memory::View& view,float Memory::Cell::* field) {
+    float result=0;for(const auto& cell:view.far.cells) result=std::max(result,cell.*field);return result;
+  };
+  const char* versions[]={nullptr,"3","4"};
+  const char* overrides[]={nullptr,"0","1"};
+  size_t cases=0;float legacyConfidence=0,journeyConfidence=0;
+  for(const char* version:versions) {
+    variant(version);
+    const NavPolicy policy(path.string());
+    const uint32_t expectedVersion=version && std::string(version)=="4" ? 4u : 3u;
+    require(policy.navigationMemoryVersion()==expectedVersion,"policy memory metadata selection differs");
+    for(const char* overrideValue:overrides) {
+      const bool journey=overrideValue ? std::string(overrideValue)=="1" : expectedVersion==4;
+      Memory memory;Memory::View view;
+      memory.setFamiliarMap(&familiar,{1});
+      memory.update({},{{0,0,0},{1,0,0},0});memory.view(view);
+      require(strongest(view,&Memory::Cell::familiar)==1,"memory contract familiar fixture is not active");
+      policy.configureMemory(memory,overrideValue);
+      require(memory.journeyMemoryEnabled()==journey && memory.representationVersion()==(journey?4u:3u),
+              "policy memory configuration differs from metadata or override");
+      require(!memory.familiarMapEnabled(),"policy configuration inherited familiar knowledge");
+      memory.view(view);
+      require(strongest(view,&Memory::Cell::familiar)==0 && strongest(view,&Memory::Cell::wall)==0,
+              "configured policy sees an unseen familiar rock");
+      memory.update({rock},{{0,0,0},{1,0,0},0});
+      memory.update({},{{7500,0,0},{1,0,0},60000});
+      memory.update({},{{0,0,0},{1,0,0},120000});memory.view(view);
+      const float confidence=strongest(view,&Memory::Cell::wall);
+      const float expected=float(std::exp(journey?-.9:-9.));
+      require(std::abs(confidence-expected)<1.e-6f,
+              "policy-configured rock decay differs after 120 seconds and 150 metres");
+      (journey?journeyConfidence:legacyConfidence)=confidence;
+      ++cases;
+    }
+  }
+  for(const char* invalid:{"2","5","null","true","\"4\"","4.0"}) {
+    variant(invalid);bool rejected=false;
+    try {const NavPolicy policy(path.string());}
+    catch(const std::runtime_error& error) {rejected=std::string(error.what())=="nav policy: unsupported navigation memory version";}
+    require(rejected,"invalid navigation memory metadata was not rejected");
+  }
+  variant("4",true);bool rejectedDemo=false;
+  try {const NavPolicy policy(path.string());}
+  catch(const std::runtime_error& error) {rejectedDemo=std::string(error.what())=="nav policy: unsupported NAVDEMO input version";}
+  require(rejectedDemo,"unsupported NAVDEMO v3 policy was not rejected");
+  variant("4");const NavPolicy policy(path.string());
+  for(const char* invalid:{"","2","-1","true"}) {
+    Memory memory;bool rejected=false;
+    try {policy.configureMemory(memory,invalid);}
+    catch(const std::runtime_error& error) {rejected=std::string(error.what())=="nav policy: OPENGOTHIC_NAV_JOURNEY_MEMORY must be 0 or 1";}
+    require(rejected,"invalid journey override was not rejected");
+  }
+  std::cout<<"{\"contract\":\"navpolicy_memory\",\"navdemo_version\":"<<original.navDemoVersion()
+           <<",\"weight_version\":"<<original.weightVersion()
+           <<",\"configuration_cases\":"<<cases<<",\"invalid_metadata_cases\":6,\"invalid_override_cases\":4"
+           <<",\"legacy_confidence\":"<<legacyConfidence<<",\"journey_confidence\":"<<journeyConfidence<<"}\n";
+}
 
 // The fixture carries the actual packed NAVDEMO bytes, rather than a second
 // hand-written preprocessing path. This reader only restores the live structs.
@@ -414,6 +521,10 @@ void benchmark(const std::string& weights,const std::string& path,size_t npcs,si
 
 int main(int argc,char** argv) {
   try {
+    if(argc==3 && std::string(argv[1])=="--memory") {
+      memoryContract(argv[2]);
+      return 0;
+      }
     if(argc==3) {
       parity(argv[1],argv[2]);
       return 0;
@@ -431,6 +542,7 @@ int main(int argc,char** argv) {
       return 0;
       }
     std::cerr<<"usage: gothic-navpolicy-contract WEIGHTS FIXTURE\n"
+             <<"       gothic-navpolicy-contract --memory WEIGHTS\n"
              <<"       gothic-navpolicy-contract --benchmark WEIGHTS FIXTURE [--npcs 20] [--decisions 2000]\n";
     return 2;
     }
