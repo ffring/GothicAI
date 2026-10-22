@@ -22,7 +22,7 @@ def top(spec, grids):
 
 def test_pieces_by_band_and_by_detail(layouts):
     kinds = {v: [p['kind'] for p in spec['pieces']] for v, (spec, _, _, _) in layouts.items()}
-    assert kinds['empty'] == ['block', 'rubble', 'beam', 'top']
+    assert kinds['empty'] == ['block', 'rubble', 'beam', 'top', 'opening']      # the joist socket
     assert kinds['window'] == ['block', 'rubble', 'beam', 'top', 'frame', 'opening']
     assert kinds['chain'] == ['block', 'rubble', 'beam', 'top', 'frame', 'opening', 'iron']
 

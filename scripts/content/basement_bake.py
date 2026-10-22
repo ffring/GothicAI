@@ -51,11 +51,11 @@ BLOCK_ROWS = (.849, .903, .962, 1.)   # the dressed blocks: two courses and the 
 
 COURSE = (.035, .12)         # rubble course heights, metres
 STONE = (.26, .45, (.13, .50))        # rubble stone lengths: median, log spread, limits
-JOINT = (.012, .005)         # joint width between stones: mean, spread
+JOINT = (.014, .005)         # joint width between stones: mean, spread
 COURSE_WAVE = (.014, (1.2, .5))       # the courses wander and break: amplitude, wavelengths
 BLOCK = (.30, .08, (.22, .40))        # block lengths: mean, spread, limits
 BLOCK_JOINT = .024
-MORTAR = (-.022, .004)       # the joints' bottom: depth behind the stone faces, roughness
+MORTAR = (-.030, .004)       # the joints' bottom: depth behind the stone faces, roughness
 BEAM_PROUD = .035            # the beam stands out of the rubble face
 
 # the window of _WINDOW_01: a dressed frame (u0, u1, v0, v1) round the opening; the frame's stones
@@ -403,6 +403,7 @@ LAYOUTS = ('empty', 'window', 'chain')
 # joints. The rubble darkens and greens towards the foot: its colour at v (from the top), the light lime
 # bed under the beam first.
 PART_COLOUR = dict(top=(115, 98, 79), beam=(46, 40, 42), block=(78, 70, 47))
+BLOCK_DARKER = .82    # the blocks read in game 12% darker than the rubble, the original's 22-29%: look over number
 RUBBLE_COLOUR = [(.105, (134, 130, 120)), (.215, (128, 118, 101)), (.40, (121, 111, 90)), (.59, (112, 104, 78)),
                  (.765, (93, 86, 61)), (.849, (93, 86, 61))]
 FRAME_COLOUR = dict(window=(159, 148, 117), chain=(143, 131, 106))
@@ -410,10 +411,10 @@ OPENING_COLOUR = dict(window=(24, 21, 16), chain=(15, 12, 11), empty=(18, 16, 13
 IRON = (35, 31, 23)
 STONE_TINTS = [((1., .92, .78), .62), ((1., .86, .76), .12), ((1., .93, .70), .14), ((.97, .95, .82), .12)]
                                        # olive-grey, pinkish, ochre, grey: linear ratios to R, and their share
-STONE_SPREAD = .32                     # log spread of the stones' own tone
+STONE_SPREAD = .30                     # log spread of the stones' own tone
 MOSS = ((40, 50, 24), (.55, .85), .45)  # moss colour, the v where it starts and where it is full, its share there
 LIME = ((150, 146, 132), .035)         # the light lime bed under the beam and how far below it reaches (v)
-OCCLUSION = (1.4, 1.2)
+OCCLUSION = (1.8, 1.4)
 ROUGH = dict(stone=(.88, .95), damp=.80, moss=.95, wood=(.86, .95), iron=.72)
 
 
@@ -471,23 +472,23 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     out = np.zeros((rows, cols, 3))
     # every stone its own tone and tint, the surface picture's light over it
     count = len(spec['stones'])
-    tone = np.exp(rng.normal(0, STONE_SPREAD, count))
+    tone = np.clip(np.exp(rng.normal(0, STONE_SPREAD, count)), .6, 1.3)   # no single pale stone flares in the shade
     tints = np.array([t for t, _ in STONE_TINTS])
     tint = tints[rng.choice(len(STONE_TINTS), count, p=[w for _, w in STONE_TINTS])]
-    for mask in (rock, frame, beam, iron, mortar):
+    for mask in (rock, frame, beam, iron, mortar, opening):
         if mask.any():
             out[mask] = (lum[mask] / np.median(lum[mask]))[:, None]
     idx = np.maximum(stone, 0)
     blocks = np.array(spec['stones']) == 'block'          # the blocks keep their red-brown, some redder
-    tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .6, np.array([1., .76, .64]), np.array([1., .9, .8]))[blocks]
+    tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .6, np.array([1., .72, .58]), np.array([1., .84, .72]))[blocks]
     out[rock] *= (tone[idx[rock]][:, None] * tint[idx[rock]])
     out[frame] *= np.exp(.08 * rng.normal(0, 1, count))[idx[frame]][:, None] * np.array([1., .93, .74])
     out[mortar] *= np.array([1., .97, .86])
     # the blocks' joints are pointed with light lime, the rubble's lie deep
-    out[mortar & (v > RUBBLE[1])] *= 2.2
     out[beam] *= np.array([1., .87, .88])
     out[iron] *= np.array([1., .88, .62])
-    out *= np.exp(.10 * (pb.noise_metres(rng, (rows, cols), period, .25) + .5 * pb.noise_metres(rng, (rows, cols), period, .06)))[..., None]
+    # grime: broad damp and dirt over everything, the stones less clean than they were cut
+    out *= np.exp(.20 * (pb.noise_metres(rng, (rows, cols), period, .25) + .6 * pb.noise_metres(rng, (rows, cols), period, .06)))[..., None]
 
     # moss towards the foot: in the joints first, then over the stones' lower faces
     moss_srgb, (start, full), share = MOSS
@@ -513,7 +514,11 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     # the sky from above is cut off under every stone's lower edge: a dark line under each, as on the
     # original
     shade = pb.overhang_shade(passes['height'], py / rows, (25., 35., 50.), .05, softness=.004)
-    out *= (1 - .5 * shade * (rock | mortar))[..., None]
+    out *= (1 - .65 * shade * (rock | mortar))[..., None]
+    # the blocks' joints are pointed with lime, flush and light, mossy in places
+    pointing = mortar & (v > RUBBLE[1] + .004)
+    lime = _linear(LIME[0]) * .7 * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .03))[..., None]
+    out[pointing] = lime[pointing] * (1 - .35 * moss[pointing, None]) + (green * .06)[None] * .35 * moss[pointing, None]
 
     # the original's colour part by part, the joints and their shadow included; the rubble darkens and
     # greens towards the foot. Frames, openings and iron keep their own colour.
@@ -523,6 +528,8 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
         if mask.sum() > 50:
             target = _rubble_target if part == 'rubble' else (lambda _v, c=_linear(PART_COLOUR[part]): c)
             _match(out, mask, v, target, 14 if part == 'rubble' else 3)
+            if part == 'block':
+                out[mask & ~mortar] *= BLOCK_DARKER
     for mask, srgb in ((frame, FRAME_COLOUR.get(spec['wall'])), (opening, OPENING_COLOUR.get(spec['wall'])),
                        (iron, IRON)):
         if mask.any() and srgb:
@@ -577,7 +584,7 @@ def main(argv=None) -> int:
         spec = json.loads(args.layout.read_text())
         surfaces = {}
         if args.stone:
-            surfaces.update({name: args.stone for name in ('stone', 'block', 'frame', 'mortar')})
+            surfaces.update({name: args.stone for name in ('stone', 'block', 'frame', 'mortar', 'opening')})
         if args.block:
             surfaces['block'] = args.block
         if args.wood:
