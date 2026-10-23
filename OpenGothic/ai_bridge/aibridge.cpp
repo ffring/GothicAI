@@ -807,7 +807,7 @@ void AiBridge::Impl::onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise) {
 
 bool AiBridge::Impl::onSvmLine(Npc& npc, std::string_view svm, std::string_view line, Npc* target, bool overlay) {
   auto* world = Gothic::inst().world();
-  if(world==nullptr || npc.guild()>=GIL_SEPERATOR_HUM)
+  if(world==nullptr || npc.isPlayer() || npc.guild()>=GIL_SEPERATOR_HUM)
     return false;
   const auto symbol = npcSymbol(*world,npc);
   const auto duration = world->script().messageTime(line);

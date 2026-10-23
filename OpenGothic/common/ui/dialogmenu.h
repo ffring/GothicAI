@@ -109,7 +109,7 @@ class DialogMenu : public Tempest::Widget {
     void onEntry(const GameScript::DlgChoice& e);
     void onDoneText();
     void close();
-    bool aiOutput  (Npc& npc, std::string_view msg, std::string_view svm = {}, Npc* target = nullptr, bool overlay = false);
+    bool aiOutput  (Npc& npc, std::string_view msg);
     bool aiPrintScr(Npc& npc, int time, std::string_view msg, int x, int y, std::string_view font);
     bool aiClose();
 

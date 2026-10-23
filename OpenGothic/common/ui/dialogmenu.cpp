@@ -18,12 +18,12 @@ bool DialogMenu::Pipe::output(Npc &npc, std::string_view text) {
   return owner.aiOutput(npc,text);
   }
 
-bool DialogMenu::Pipe::outputSvm(Npc &npc, std::string_view text, std::string_view svm, Npc* target) {
-  return owner.aiOutput(npc,text,svm,target,false);
+bool DialogMenu::Pipe::outputSvm(Npc &npc, std::string_view text, std::string_view, Npc*) {
+  return owner.aiOutput(npc,text);
   }
 
-bool DialogMenu::Pipe::outputOv(Npc &npc, std::string_view text, std::string_view svm, Npc* target) {
-  return owner.aiOutput(npc,text,svm,target,true);
+bool DialogMenu::Pipe::outputOv(Npc &npc, std::string_view text, std::string_view, Npc*) {
+  return owner.aiOutput(npc,text);
   }
 
 bool DialogMenu::Pipe::printScr(Npc& npc, int time, std::string_view msg, int x, int y, std::string_view font) {
@@ -210,7 +210,7 @@ bool DialogMenu::isNpcInDialog(const Npc* npc) const {
   return npc==pl || npc==other || npc==nullptr;
   }
 
-bool DialogMenu::aiOutput(Npc &npc, std::string_view msg, std::string_view svm, Npc* target, bool overlay) {
+bool DialogMenu::aiOutput(Npc &npc, std::string_view msg) {
   if(&npc!=pl && &npc!=other){
     Log::e("unexpected aiOutput call: ",msg.data());
     return true;
@@ -230,20 +230,15 @@ bool DialogMenu::aiOutput(Npc &npc, std::string_view msg, std::string_view svm, 
       pl->stopDlgAnim();
     }
 
-  auto& fn = Gothic::inst().interceptSvm;
-  const bool replaced = !svm.empty() && !msg.empty() && fn && fn(npc,svm,msg,target,overlay);
-  current.txt     = replaced ? std::string_view{} : Gothic::inst().messageByName(msg);
+  current.txt     = Gothic::inst().messageByName(msg);
   current.msgTime = Gothic::inst().messageTime(msg);
   current.time    = current.msgTime + (dlgAnimation ? ANIM_TIME*2 : 0);
+  auto voice      = Resources::loadSoundBuffer(string_frm(msg,".wav"));
+  currentSnd      = soundDevice.load(voice);
   curentIsPl      = (pl==&npc);
-  if(replaced) {
-    currentSnd = SoundEffect();
-    } else {
-    auto voice = Resources::loadSoundBuffer(string_frm(msg,".wav"));
-    currentSnd = soundDevice.load(voice);
-    npc.startSpeech(voice);
-    currentSnd.play();
-    }
+  npc.startSpeech(voice);
+
+  currentSnd.play();
   npc.setAiOutputBarrier(current.msgTime,false);
   update();
   return true;
@@ -441,7 +436,7 @@ void DialogMenu::paintEvent(Tempest::PaintEvent &e) {
   const int      dw = std::min(w(),int(600*scale));
   const int      dh = int(100*scale);
 
-  if(current.time>0 && !current.txt.empty() && trade.isOpen()==InventoryMenu::State::Closed && haveToShowSubtitles(curentIsPl)) {
+  if(current.time>0 && trade.isOpen()==InventoryMenu::State::Closed && haveToShowSubtitles(curentIsPl)) {
     if(ambient!=nullptr) {
       int dlgW = dw;
       int dlgH = dh;
