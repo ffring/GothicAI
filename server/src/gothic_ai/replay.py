@@ -31,6 +31,7 @@ from .dialogue import (
     is_pure_sound,
     paragraph_end,
     svm_hint,
+    svm_text,
     to_game_text,
 )
 from .llm import Done, Item, LLMBackend, LLMError, Message, TextDelta, ToolCall, ToolResult
@@ -123,11 +124,11 @@ async def replay_svm_lines(
     *,
     names: Mapping[str, str],
     hint: str = SVM_HINT,
-    no_history: bool = False,
+    history: bool = False,
     runs: int = 1,
 ) -> list[dict[str, Any]]:
     """Compare SVM replacements against one NPC's last recorded situation."""
-    history, situation = _quick_context(record)
+    recorded_history, situation = _quick_context(record)
     results = []
     for line in lines:
         target = (line.get("target") or "").upper()
@@ -136,7 +137,7 @@ async def replay_svm_lines(
             line["svm"], line["text"], target_name=target_name,
             self_target=target == record["npc"].upper(), hint=hint,
         )
-        request = [*([] if no_history else history), Message("developer", situation + "\n" + prompt)]
+        request = [*(recorded_history if history else []), Message("developer", situation + "\n" + prompt)]
         attempts = []
         for _ in range(runs):
             started = time.monotonic()
@@ -159,7 +160,7 @@ async def replay_svm_lines(
                 outcome = "late"
             except LLMError as err:
                 outcome, error = "error", str(err)
-            words, _ = first_words(text)
+            words, _ = first_words(svm_text(text))
             words = to_game_text(words)
             elapsed = time.monotonic() - started
             if outcome == "said":
@@ -168,7 +169,7 @@ async def replay_svm_lines(
                 elif len(_LETTERS.findall(words)) > SVM_WORDS_MAX:
                     outcome = "too_long"
                 elif not _LETTERS.findall(words):
-                    outcome = "error"
+                    outcome = "nothing"
             attempt = {
                 "text": text, "words": words, "outcome": outcome,
                 "first_phrase_ms": round(elapsed * 1000),
@@ -179,7 +180,7 @@ async def replay_svm_lines(
         results.append({
             "turn": record.get("id"), "npc": record["npc"], "svm": line["svm"],
             "text": line["text"], "target": target, "situation": situation, "hint": prompt,
-            "no_history": no_history, "temperature": 0.7, "runs": attempts,
+            "history": history, "temperature": 0.7, "runs": attempts,
         })
     return results
 

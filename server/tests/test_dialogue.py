@@ -58,24 +58,30 @@ async def test_svm_mode_waits_for_hello_and_requires_an_available_quick_model(
     assert llm.calls == []
 
 
-@pytest.mark.parametrize(("svm", "target", "event", "to"), [
-    ("$ENEMYKILLED", LOBART, "ты только что убил противника — Лобарт", "обращаясь к Лобарт"),
-    ("$HELP", None, "на тебя напали, ты зовёшь на помощь", "вслух"),
-    ("$HELP", XARDAS, "на тебя напали, ты зовёшь на помощь", "вслух"),
-    ("$HELP", "PC_HERO", "на тебя напали, ты зовёшь на помощь", "обращаясь к герой"),
-    ("$UNKNOWN", LOBART, "", "обращаясь к Лобарт"),
+@pytest.mark.parametrize(("svm", "target", "event", "to", "native", "prompt_text"), [
+    (
+        "$ENEMYKILLED", LOBART, "ты только что убил противника — Лобарт", "обращаясь к Лобарт",
+        "(дьявольский смех) Ты показал себя!", "Ты показал себя!",
+    ),
+    ("$HELP", None, "на тебя напали, ты зовёшь на помощь", "вслух", "Помогите!", "Помогите!"),
+    ("$HELP", XARDAS, "на тебя напали, ты зовёшь на помощь", "вслух", "Помогите!", "Помогите!"),
+    (
+        "$HELP", "PC_HERO", "на тебя напали, ты зовёшь на помощь", "обращаясь к герой",
+        "Помогите!", "Помогите!",
+    ),
+    ("$UNKNOWN", LOBART, "", "обращаясь к Лобарт", "(зевает)", "зевает"),
 ])
-async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(
-    tmp_path, svm, target, event, to,
+async def test_svm_uses_persona_and_situation_without_history_and_voices_twelve_words(
+    tmp_path, svm, target, event, to, native, prompt_text,
 ):
     phrase = "Я ещё покажу тебе как надо встречать незваных гостей у моих ворот."
-    quick = FakeBackend(f"[angry] {phrase} Это уже вторая фраза.", delay=0, chunk=200)
+    quick = FakeBackend(f"[angry] (потягиваюсь) {phrase} Это уже вторая фраза.", delay=0, chunk=200)
     llm = FakeBackend()
     fake = FakeGame()
     writer = TraceWriter(tmp_path)
     line = SvmLine(
         type="svm_line", id="svm-1", npc=XARDAS, svm=svm,
-        text="Ещё одним монстром меньше.", target=target, overlay=False,
+        text=native, target=target, overlay=False,
     )
     async with scene_tts(per_char=0.0001) as (url, requests), connected(fake) as link:
         dialogue = DialogueManager(
@@ -86,7 +92,7 @@ async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(
         dialogue._nearby[LOBART] = ("Лобарт", 100)
         dialogue.remember(XARDAS, "Ксардас", "Ты защищаешь свою башню от зверей")
         conv = dialogue.conversations[XARDAS]
-        history = list(conv.history)
+        assert conv.history
         brief = dialogue._brief(conv)
         started = time.monotonic()
         dialogue._on_message(line)
@@ -99,13 +105,15 @@ async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(
     assert [request["text"] for request in requests] == [phrase]
     assert llm.calls == [] and quick.temperatures == [0.7]
     (instructions, messages, tools), = quick.calls
-    assert instructions == conv.persona.instructions and messages[:len(history)] == history
-    context = "\n".join(m.content for m in messages[len(history):] if m.role == "developer")
+    assert instructions == conv.persona.instructions and len(messages) == 1
+    assert messages[0].role == "developer"
+    context = messages[0].content
     assert brief in context
+    assert "Ты защищаешь свою башню от зверей" not in context
     moment = f"Сейчас: {event}. " if event else ""
     assert (
-        f"[{moment}Ты бы сказал: «{line.text}». Скажи то же по смыслу своими словами, не дословно, "
-        f"одной короткой фразой — как сказал бы ты, {to}.]"
+        f"[{moment}В этот момент обычно говорят: «{prompt_text}» — эти слова не повторяй. "
+        f"Скажи то же по смыслу по-своему, одной короткой фразой — как сказал бы ты, {to}.]"
     ) in context
     assert tools == [] and conv.reply is None and conv.talked_at == float("-inf")
     assert conv.history[-1] == Message("developer", f"[Ты сказал вслух: «{phrase}»]")
@@ -117,8 +125,16 @@ async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(
     assert 0 <= record["first_phrase_ms"] <= record["voice_ms"] <= record["elapsed_ms"]
 
 
-async def test_svm_thirteen_words_are_silent_and_traced(tmp_path):
-    phrase = "Я ещё покажу тебе как надо встречать незваных гостей у моих старых ворот."
+@pytest.mark.parametrize(("phrase", "answer", "outcome"), [
+    (
+        "Я ещё покажу тебе как надо встречать незваных гостей у моих старых ворот.",
+        "Я ещё покажу тебе как надо встречать незваных гостей у моих старых ворот.", "too_long",
+    ),
+    ("(дьявольский смех)", "", "nothing"),
+])
+async def test_svm_thirteen_words_or_only_stage_directions_are_silent_and_traced(
+    tmp_path, phrase, answer, outcome,
+):
     quick = FakeBackend(phrase, delay=0, chunk=200)
     conn = SimpleNamespace(send=AsyncMock())
     writer = TraceWriter(tmp_path)
@@ -133,7 +149,7 @@ async def test_svm_thirteen_words_are_silent_and_traced(tmp_path):
     conn.send.assert_not_awaited()
     assert dialogue.conversations[XARDAS].history == []
     (record,) = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
-    assert record["outcome"] == "too_long" and record["answer"] == phrase
+    assert record["outcome"] == outcome and record["answer"] == answer
     assert record["elapsed_ms"] >= 0
 
 

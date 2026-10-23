@@ -2737,7 +2737,7 @@ async def replay_svm_lines(args: argparse.Namespace) -> int:
                 for line in lines:
                     [result] = await replay_svm_lines_turn(
                         llm, turn, instructions[turn["instructions"]], [line],
-                        names=names, hint=hint, no_history=args.no_history, runs=args.runs,
+                        names=names, hint=hint, history=args.history, runs=args.runs,
                     )
                     rendered = [
                         f"{n + 1}: {run['words'] or '—'} [{run['outcome']}, {run['first_phrase_ms']} ms]"
@@ -3298,7 +3298,7 @@ def main() -> None:
     p.add_argument("file", help="recorded traces.jsonl")
     p.add_argument("--svm-file", required=True, help="JSONL native SVM lines: svm, text, target id")
     p.add_argument("--hint-file", help="replacement SVM hint template with {event}, {text} and {to}")
-    p.add_argument("--no-history", action="store_true", help="keep only persona, situation and SVM hint")
+    p.add_argument("--history", action="store_true", help="include the recorded NPC history for comparison")
     p.add_argument("--runs", type=int, default=1, help="independent runs per native line (default: 1)")
     p.add_argument("--quick-url", default=os.environ.get("GOTHIC_QUICK_LLM_URL"))
     p.add_argument("--npc", help="only this npc id")

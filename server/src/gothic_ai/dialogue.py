@@ -138,8 +138,8 @@ SVM_WORDS_MAX = 12
 SVM_QUIET_S = 3.0
 SVM_RECOVER_S = 30.0
 SVM_HINT = (
-    "[Сейчас: {event}. Ты бы сказал: «{text}». Скажи то же по смыслу своими словами, не дословно, "
-    "одной короткой фразой — как сказал бы ты, {to}.]"
+    "[Сейчас: {event}. В этот момент обычно говорят: «{text}» — эти слова не повторяй. "
+    "Скажи то же по смыслу по-своему, одной короткой фразой — как сказал бы ты, {to}.]"
 )
 SVM_EVENTS = json.loads((Path(__file__).parent / "gamedata" / "svm_events.json").read_text(encoding="utf-8"))
 SUMMARY_FIRST_S = 60.0  # the summary is not waited for by anyone: more patience
@@ -257,6 +257,11 @@ def first_words(text: str) -> tuple[str, Mood | None]:
     return words.lstrip("—–- "), mood  # "— Пошли тогда.": the dash of a written reply is not said
 
 
+def svm_text(text: str) -> str:
+    """An SVM line without parenthesized stage directions."""
+    return re.sub(r"\([^)]*\)", "", text).strip()
+
+
 def svm_hint(
     svm: str, text: str, *, target_name: str | None = None, self_target: bool = False,
     hint: str = SVM_HINT,
@@ -267,7 +272,7 @@ def svm_hint(
     if not event:
         hint = hint.replace("Сейчас: {event}. ", "")
     return hint.format(
-        event=event, text=text,
+        event=event, text=svm_text(text) or text.replace("(", "").replace(")", "").strip(),
         to=f"обращаясь к {target_name}" if target_name and not self_target else "вслух",
     )
 
@@ -909,8 +914,7 @@ class DialogueManager:
                 asyncio.timeout_at(received + SVM_REPLY_S),
                 aclosing(self.quick.stream(
                     instructions=conv.persona.instructions,
-                    messages=[*conv.history, Message("developer", f"{self._brief(conv)}\n"
-                                                      f"{hint}")],
+                    messages=[Message("developer", f"{self._brief(conv)}\n{hint}")],
                     tools=[], temperature=0.7,
                 )) as events,
             ):
@@ -920,7 +924,7 @@ class DialogueManager:
                         if _FIRST_SENTENCE.search(text) or paragraph_end(text) is not None:
                             break
             self._svm_errors = 0
-            words, mood = first_words(text)
+            words, mood = first_words(svm_text(text))
             words = to_game_text(words)
             attempt["answer"] = words
             attempt["first_phrase_ms"] = round((time.monotonic() - received) * 1000, 1)
@@ -937,7 +941,7 @@ class DialogueManager:
             ):
                 attempt["outcome"] = "repeat"
             elif not phrase:
-                attempt["outcome"] = "error"
+                attempt["outcome"] = "nothing"
             else:
                 line = await self._say(conv, words, None, overlay=True, mood=mood, to=msg.target)
                 if line is not None:
@@ -946,7 +950,7 @@ class DialogueManager:
                         self._svm_started(conv, line)
                     return line  # its first sound or cancellation finishes the trace
         except TimeoutError:
-            attempt["answer"] = first_words(text)[0]
+            attempt["answer"] = first_words(svm_text(text))[0]
             attempt["outcome"] = "late"
         except LLMError as err:
             attempt["outcome"] = "error"
