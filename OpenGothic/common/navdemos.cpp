@@ -1178,7 +1178,7 @@ NpcKeys::KeyState executePolicy(Episode& ep,const NavDemoWriter::Snapshot& sampl
   const auto encodeCost=micros(populationStart);
   if(ep.policy->weightVersion()==4) {
     const auto nonzero=[](const std::vector<float>& values,size_t area) {
-      return std::any_of(values.begin()+10*area,values.end(),[](float value) {return value>0;});
+      return std::any_of(values.begin()+std::ptrdiff_t(10*area),values.end(),[](float value) {return value>0;});
     };
     const bool near=nonzero(features.near,64*64),far=nonzero(features.far,50*100);
     ++ep.familiarInputDecisions;
