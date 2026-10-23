@@ -599,7 +599,7 @@ async def svm_lines(link: GameLink, dialogue: DialogueManager) -> dict[str, str]
                 received = events[before:]
                 valid = (
                     len(received) == 1 and received[0].svm == svm and bool(received[0].text)
-                    and received[0].target == "PLAYER" and received[0].overlay == overlay
+                    and received[0].target == "PC_HERO" and received[0].overlay == overlay
                 ) if replace else not received
                 ok = said.status == following.status == "done" and valid
                 detail = (

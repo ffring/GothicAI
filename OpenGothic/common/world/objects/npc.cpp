@@ -4070,7 +4070,7 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
       break;
       }
     case AI_Wait:
-      if(CommandLine::inst().isDevMode()) {
+      if(isExternalControl() && CommandLine::inst().isDevMode()) {
         const auto* symbol = owner.script().findSymbol(instanceSymbol());
         Log::i("[ai] queue_wait ",symbol!=nullptr ? symbol->name() : ""," game_ms=",owner.tickCount(),
                " duration_ms=",act.i0);
