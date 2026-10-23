@@ -1532,6 +1532,448 @@
           "sha256": "b629b8a8ceced9a9fb730caddb2d32f3a98a3ca6804b6f203a1a1d0469c975f4"
         }
       }
+    },
+    {
+      "file": "market-house-stone/reference-attempt-7.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 7,
+      "sha256": "c6d3f01a967b027490d712c28b62923c6ac2abb5ae063b7c2fbda2e97ca2669b",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T09:30:00Z",
+      "thread": "codex-scout-mh-bay-wall-1",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-8.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 8,
+      "sha256": "699695ce9c6cdcc7f1b7fd489a4270e2f688d6884fb676702acd5d3d814ffa7e",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T09:30:00Z",
+      "thread": "codex-scout-mh-bay-window-1",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-9.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 9,
+      "sha256": "764afd341414ba33508cbc4804fa4729a8c7173458da9d3e3a04b7ff89e1e885",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T09:30:00Z",
+      "thread": "codex-scout-mh-bay-post-2",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-10.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 10,
+      "sha256": "bb1d890534f76e593ebf936e95bf0cb101c495714af3f3197446a2a36b0a9421",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T09:30:00Z",
+      "thread": "codex-scout-mh-bay-gable-3",
+      "parent": null
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_03-attempt-9.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_03.TGA",
+      "attempt": 9,
+      "sha256": "1f4c2489c56a9973c82e8ff3623352dcc3902e5b22671b533c28cfb1058b09eb",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T12:30:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-7.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-9.normal.png",
+          "sha256": "ee69b6c1e76fb86177de30f3b4524afb71cb50271ad761d82c628773a40d817c"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-9.roughness.png",
+          "sha256": "a4f0c7d6a3ffc92cae9c66c53691c99dd7a4c2285862c8de25d124818185a4d6"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-10.png",
+      "role": "texture",
+      "texture": "NW_CITY_WINDOW_03.TGA",
+      "attempt": 10,
+      "sha256": "a8d9d70b3ebc6cd86d77d9d320736420e50a51ffeed8ac1c2bc7383c735afeaf",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T12:30:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-8.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-10.normal.png",
+          "sha256": "4e0a6b9f0ac3ba7740b5ae756ee36df4c76710a5075d64b779c60c31e5a2707f"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-10.roughness.png",
+          "sha256": "14994b0ab32ddc028b71ae12492cb228f077696fd3fbb4deef723a41367f98b0"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_04-attempt-7.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_04.TGA",
+      "attempt": 7,
+      "sha256": "e3c1da7d74fdac74c144f7d5274cb895c98072770c9d9d8e572a1908796b77ba",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T12:30:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-9.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-7.normal.png",
+          "sha256": "743a96d8e09bf341e539df2d49ad8d4e1d6e099c066811be5554796affe1c516"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-7.roughness.png",
+          "sha256": "cf71965257e302fb20575b1fa4cb839edfc9230284ea9046fa375eac23d51808"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_05-attempt-7.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_05.TGA",
+      "attempt": 7,
+      "sha256": "2162b804e2214a203f516a674838741f739091c50a2e96dcc5921dba82f1340d",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T12:30:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-10.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-7.normal.png",
+          "sha256": "3f0e5d63c973838ae8daeaa0986a779e21b3a41430602b515b366bbd55b40148"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-7.roughness.png",
+          "sha256": "7e59f36f80bc276518c3c69f6882872f58a45e3c3c84128ed39b45a633d3b7e1"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-12.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA",
+      "attempt": 12,
+      "sha256": "4240f7f4ab06c3cd8281e4315f6301cee0a2349f711b5cd9b3eed27588ef5030",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T12:30:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-12.normal.png",
+          "sha256": "92c4bb8d404b4a784b0c01095d31398b15b8a6787a6884fdb857839a9af938b5"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-12.roughness.png",
+          "sha256": "f8a83fe680b56b35f275d95e1e6fea2d8492803348a4feafd8febf57b21d96c1"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-13.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA",
+      "attempt": 13,
+      "sha256": "c8c59e1fc857d62286d2f035346d3b32c56bb1009903372e0a9ec30c9def3d77",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T12:30:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-13.normal.png",
+          "sha256": "c38c76f1c6d3551dca16ddcd06a1f62b00399e6de55ced0256f51a3f2984a9c7"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-13.roughness.png",
+          "sha256": "46f1a04d03b08b952033cb37eda777ec07b5524ee3812486e29b49d2eb6f581a"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-12.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA",
+      "attempt": 12,
+      "sha256": "b6121b1596f5164188a028d82ac071a3dc1de733e9bd1d687a8e666929aa123b",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T12:30:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-12.normal.png",
+          "sha256": "2fac30de0224d8e976b070e4352a4efc4afe7cd7f4dc00d1dfce770929cd1777"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-12.roughness.png",
+          "sha256": "b629b8a8ceced9a9fb730caddb2d32f3a98a3ca6804b6f203a1a1d0469c975f4"
+        }
+      }
+    },
+    {
+      "file": "market-house-stone/reference-attempt-11.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 11,
+      "sha256": "4b68dd290d34eb4e81dfa10d20ba3f90cad4efc402659435888a5c6ad5e3dac4",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T10:10:00Z",
+      "thread": "codex-scout-mh-bayb-wall-1",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-12.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 12,
+      "sha256": "a84b9c401e94baa9fb00b93eae796b1a4d1191cf2b31f00970fc949b3c845be3",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T10:10:00Z",
+      "thread": "codex-scout-mh-bayb-window-1",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-13.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 13,
+      "sha256": "0b074faad78ca4033ffaa65ff8f504b76602c65481ec29bae8afc4960cfdd6e5",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T10:10:00Z",
+      "thread": "codex-scout-mh-bayb-post-1",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-14.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 14,
+      "sha256": "73112d8a6d6748152b3d321a6963befe04c523383b368e58172ea19f02ea05ac",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T10:10:00Z",
+      "thread": "codex-scout-mh-bayb-gable-2",
+      "parent": null
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_03-attempt-10.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_03.TGA",
+      "attempt": 10,
+      "sha256": "491c1de8e2fe4e0fd2a369c8a58ea4584822820d7dc3fcc79095ed80165e1b27",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T12:35:29Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-11.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-10.normal.png",
+          "sha256": "31bf6741c4b4828935f6c475b3d6480266383446c0af8e147c45ac2718895d6c"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-10.roughness.png",
+          "sha256": "a4f0c7d6a3ffc92cae9c66c53691c99dd7a4c2285862c8de25d124818185a4d6"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-11.png",
+      "role": "texture",
+      "texture": "NW_CITY_WINDOW_03.TGA",
+      "attempt": 11,
+      "sha256": "b24074067e2818343b9d9efac62082958e01cb09cd7a3bd0a7cec07f6d65baee",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T12:35:29Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-12.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-11.normal.png",
+          "sha256": "631f27c3b552fada0092a6f22a0403f99bf016e64d67aa26afe4fda96e05af6d"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-11.roughness.png",
+          "sha256": "14994b0ab32ddc028b71ae12492cb228f077696fd3fbb4deef723a41367f98b0"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_04-attempt-8.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_04.TGA",
+      "attempt": 8,
+      "sha256": "3e9540b705782351cc95fbf8fb3006ee3ebb41cf536ba784a1431db58df772ff",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T12:35:29Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-13.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-8.normal.png",
+          "sha256": "40f0d7bc9fae121be92e2f90c8e4ef6d64ae78fdf7745d3335a4590e5b821be8"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-8.roughness.png",
+          "sha256": "cf71965257e302fb20575b1fa4cb839edfc9230284ea9046fa375eac23d51808"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_05-attempt-8.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_05.TGA",
+      "attempt": 8,
+      "sha256": "f28e282778725acec6d28190b9fb61c482a94c10a19af91419e3a0241fb0b50b",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T12:35:29Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-14.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-8.normal.png",
+          "sha256": "0d337453598f3f32364421daac056474a1570a1c5106722064181cd9499689bc"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-8.roughness.png",
+          "sha256": "7e59f36f80bc276518c3c69f6882872f58a45e3c3c84128ed39b45a633d3b7e1"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-13.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA",
+      "attempt": 13,
+      "sha256": "4240f7f4ab06c3cd8281e4315f6301cee0a2349f711b5cd9b3eed27588ef5030",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T12:35:29Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-13.normal.png",
+          "sha256": "92c4bb8d404b4a784b0c01095d31398b15b8a6787a6884fdb857839a9af938b5"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-13.roughness.png",
+          "sha256": "f8a83fe680b56b35f275d95e1e6fea2d8492803348a4feafd8febf57b21d96c1"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-14.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA",
+      "attempt": 14,
+      "sha256": "c8c59e1fc857d62286d2f035346d3b32c56bb1009903372e0a9ec30c9def3d77",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T12:35:29Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-14.normal.png",
+          "sha256": "c38c76f1c6d3551dca16ddcd06a1f62b00399e6de55ced0256f51a3f2984a9c7"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-14.roughness.png",
+          "sha256": "46f1a04d03b08b952033cb37eda777ec07b5524ee3812486e29b49d2eb6f581a"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-13.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA",
+      "attempt": 13,
+      "sha256": "b6121b1596f5164188a028d82ac071a3dc1de733e9bd1d687a8e666929aa123b",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T12:35:29Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-13.normal.png",
+          "sha256": "2fac30de0224d8e976b070e4352a4efc4afe7cd7f4dc00d1dfce770929cd1777"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-13.roughness.png",
+          "sha256": "b629b8a8ceced9a9fb730caddb2d32f3a98a3ca6804b6f203a1a1d0469c975f4"
+        }
+      }
     }
   ],
   "selected": {
@@ -1541,28 +1983,28 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_03.TGA": {
-      "file": "market-house/NW_CITY_WALL_03-attempt-8.png",
-      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_03-attempt-10.png",
+      "reason": "market-12: plaster dirty all over (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WINDOW_03.TGA": {
-      "file": "market-house/NW_CITY_WINDOW_03-attempt-9.png",
-      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-11.png",
+      "reason": "market-12: plaster dirty all over (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-12.png",
-      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-14.png",
+      "reason": "market-12: plaster dirty all over (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-11.png",
-      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-13.png",
+      "reason": "market-12: plaster dirty all over (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-11.png",
-      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-13.png",
+      "reason": "market-12: plaster dirty all over (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WOODBEAM_02.TGA": {
@@ -1571,13 +2013,13 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_04.TGA": {
-      "file": "market-house/NW_CITY_WALL_04-attempt-6.png",
-      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_04-attempt-8.png",
+      "reason": "market-12: plaster dirty all over (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WALL_05.TGA": {
-      "file": "market-house/NW_CITY_WALL_05-attempt-6.png",
-      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_05-attempt-8.png",
+      "reason": "market-12: plaster dirty all over (user, 2026-10-23)",
       "date": "2026-10-23"
     }
   },
@@ -1866,17 +2308,17 @@
     }
   ],
   "build": {
-    "set": "market-10",
+    "set": "market-12",
     "base": "original",
     "date": "2026-10-23",
     "albedo_sha256": {
-      "NW_CITY_WALL_03.TGA": "b666c1316f543e5c9658c298fed5a61f0a75b6a80b93c04f6ac32d9d6fac711b",
-      "NW_CITY_WINDOW_03.TGA": "5f0d5f3cbe6a6322b93d42036faf25e9237bc4a3a9172f2ffbadc47315e1ba08",
+      "NW_CITY_WALL_03.TGA": "632ce54026a2df324a2b772360e2e355610fc126e6fc7670b528eae7d9d02ee8",
+      "NW_CITY_WINDOW_03.TGA": "3e9d03243d5c3366e2d4375a66b99d249bf8c907cf539bc9bfb7932419418303",
       "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": "32307052873bb5971682660bd1623f7f3a857554e81cceed30b493fe0c7b347e",
       "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": "5504692943d2b1d37023811075f49290a3715de93a8ca9ac7770597fc8cbd888",
       "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": "537dab389454692a32d0534adbe2c2915f000c20b79f52560842518808c38e75",
-      "NW_CITY_WALL_04.TGA": "23848bf19ea7cdb3e71e0759dd97480c19c52924d84e12c71bd1d5dab99a95e4",
-      "NW_CITY_WALL_05.TGA": "a8098165e37bede2107e22a132ae787eb0291a0a6c8976909896a82aad05c0f6"
+      "NW_CITY_WALL_04.TGA": "6a04f8fd6a46a66446ef795bcfdae6e8c7301864387bce5a811788781cc2b0c6",
+      "NW_CITY_WALL_05.TGA": "513e602e05fa6739d157df3305d0e23e5e7e7f78bae09d8843b8e1d9ec92d553"
     },
     "entries": 7,
     "replaced": [

@@ -228,7 +228,7 @@ def _shutter(rng, gx, gy, period, height, labels, kinds):
 # belong to the upper quarter), the oak as accepted on house-2, the shutter as the original's boards.
 PLASTER = (159, 158, 134)
 PLASTER_HUE = ((52, 50, 24), (107, 106, 69), (138, 137, 107), (163, 163, 139), (186, 186, 168), (212, 213, 200))
-SPREAD_FIT = .5                        # how far the picture's light goes to the original's quantiles
+SPREAD_FIT = .75                       # how far the picture's light goes to the original's quantiles
 OWN_HUE = .5                           # how much of the plaster picture's own hue stays over the original's by light
 PLASTER_SPREAD = ((0, 55), (5, 83), (10, 108), (25, 137), (50, 160), (75, 178), (90, 193), (95, 202),
                   (99, 220), (100, 232))       # the original's plaster luminance (sRGB) by percentile
@@ -239,9 +239,8 @@ GRAIN = 2.8                            # power on the oak picture's light: strip
 EDGE = (.03, .004, 2.8, .3)          # worn arris: reach, the dark rim's width (metres), lightening; the rim's factor
 SHUTTER_TONE = (63, 58, 47)
 IRON = (35, 31, 23)
-PLASTER_METRES = 1.2                   # the plaster picture covers this much of the wall
 PLASTER_RELIEF_PX = (.0008, .012)      # the picture's flakes and grain as relief: metres per unit of its light, blur in metres
-MOULD = (.10, .6)                     # black-green mould hanging from each rail: reach in metres, strength
+MOULD = (.06, .35)                    # black-green mould hanging from each rail: reach in metres, strength
 MOULD_TONE = (48, 52, 28)
 RIM = (.025, .3)                       # grime at the timber: reach in metres, darkening
 GREEN = ((92, 100, 70), .12, .06)      # a faint green film above the sole rail: colour, reach, share
@@ -253,29 +252,26 @@ def _linear(srgb) -> np.ndarray:
     return (np.asarray(srgb, dtype=np.float64) / 255) ** 2.2
 
 
-def _bays(plaster: np.ndarray) -> np.ndarray:
-    """Number of the plaster bay of every pixel (0 off the plaster); a bay cut by the square's edge keeps
-    one number on both sides, so the picture runs on across the seam."""
-    from scipy.ndimage import label
-    bays, n = label(plaster)
-    parent = list(range(n + 1))
-
-    def find(i):
-        while parent[i] != i:
-            i = parent[i]
-        return i
-    for a, b in ((bays[:, 0], bays[:, -1]), (bays[0], bays[-1])):
-        for i, j in zip(a, b):
-            if i and j:
-                parent[find(i)] = find(j)
-    return np.array([find(i) for i in range(n + 1)])[bays]
+def _plaster_frame(spec, labels):
+    """The rectangle (x0, x1, y0, y1, metres) the plaster picture spans: from the faces of the timbers
+    round the plaster, the whole width where the plaster runs on over the square's side edges."""
+    px, py = spec['period']
+    plaster = np.isin(np.array(spec['parts'])[labels], ['plaster', 'spall'])
+    rows = np.where(plaster.any(axis=1))[0]
+    cols = np.where(plaster.any(axis=0))[0]
+    n, m = labels.shape[1] - 1, labels.shape[0] - 1
+    y0, y1 = rows[0] / m * py, rows[-1] / m * py
+    if plaster[:, 0].any() and plaster[:, -1].any():
+        return 0., px, y0, y1
+    return cols[0] / n * px, cols[-1] / n * px, y0, y1
 
 
-def _sample(image: np.ndarray, a, b, metres: float) -> np.ndarray:
-    """An image tiled every METRES, read at the coordinates a (across) and b (along), bilinear."""
+def _sample(image: np.ndarray, a, b, metres) -> np.ndarray:
+    """An image tiled every METRES (one length, or across and down), read at a (across) and b (along), bilinear."""
     h, w = image.shape[:2]
-    fx = (a / metres % 1) * w
-    fy = (b / metres % 1) * h
+    mx, my = (metres, metres) if np.isscalar(metres) else metres
+    fx = (a / mx % 1) * w
+    fy = (b / my % 1) * h
     x0, y0 = np.floor(fx).astype(int) % w, np.floor(fy).astype(int) % h
     x1, y1 = (x0 + 1) % w, (y0 + 1) % h
     tx, ty = (fx - np.floor(fx))[..., None], (fy - np.floor(fy))[..., None]
@@ -301,12 +297,10 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
     iron = kinds == 'iron'
     wood = np.isin(kinds, ['post', 'rail', 'head', 'sill', 'jamb', 'brace', 'peg'])
     out = np.zeros((rows, cols, 3))
-    # the plaster: the picture of old dirty whitewash, every bay of it read from its own place and
-    # mirrored or not, so that no two bays repeat each other
-    bays = _bays(plaster)
-    shift = rng.uniform(0, PLASTER_METRES, (bays.max() + 1, 2))
-    flip = np.where(rng.uniform(0, 1, bays.max() + 1) < .5, -1., 1.)
-    pl = _sample(plaster_img, flip[bays] * x + shift[bays, 0], y + shift[bays, 1], PLASTER_METRES)
+    # the plaster: one picture of old dirty whitewash over the whole square, drawn for this square's
+    # timbers (mould under the rails, grime along the posts), so nothing repeats inside it
+    x0, x1, y0, y1 = _plaster_frame(spec, labels)
+    pl = _sample(plaster_img, x - x0, y1 - y, (x1 - x0, y1 - y0)) ** 2.2   # its edges at the timbers' faces; linear
     out[plaster] = pl[plaster]
     # the oak: its picture read along each member's grain; every member a little its own tone
     members = spec['members']
