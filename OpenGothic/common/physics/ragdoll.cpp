@@ -1161,7 +1161,6 @@ Ragdoll::BenchStats Ragdoll::benchStats() const {
   if(!valid() || !impl->kinematic) return result;
   auto& system=impl->world->physicsSystem();
   double squaredError=0;
-  float footBottom=std::numeric_limits<float>::max();
   std::vector<JPH::AABox> feet;
   feet.reserve(4);
   for(size_t i=0;i<partCount();++i) {
@@ -1186,7 +1185,6 @@ Ragdoll::BenchStats Ragdoll::benchStats() const {
       const auto* shape=body.GetShape();
       const auto targetCom=impl->targets[i]*JPH::Mat44::sTranslation(shape->GetCenterOfMass());
       const float targetBottom=shape->GetWorldSpaceBounds(targetCom,JPH::Vec3::sOne()).mMin.GetY()*100.f;
-      footBottom=std::min(footBottom,bottom);
       result.maxFootDropCm=std::max(result.maxFootDropCm,targetBottom-bottom);
       const bool validBounds=finite(CollisionWorld::toCentimeters(bounds.mMin)) && finite(CollisionWorld::toCentimeters(bounds.mMax));
       result.finite=result.finite && validBounds && std::isfinite(targetBottom);
@@ -1207,7 +1205,6 @@ Ragdoll::BenchStats Ragdoll::benchStats() const {
     result.maxFootPenetrationCm=std::max(result.maxFootPenetrationCm,floor.point.y-bottom);
     }
   if(result.dynamicParts!=0) result.poseRmsCm=float(std::sqrt(squaredError/double(result.dynamicParts)));
-  if(footBottom!=std::numeric_limits<float>::max()) result.minFootBottomCm=footBottom;
   return result;
   }
 

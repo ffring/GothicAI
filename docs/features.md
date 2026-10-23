@@ -149,6 +149,7 @@ PR, который добавляет фичу или выключатель, д
 | Рэгдоллы при смерти и оглушении | `[GAME] ragdoll=0` | `common/physics/ragdoll.cpp` | бенчи `ragdoll`, `ragdoll-disabled`, `ragdoll20-*` | [physics.md](physics.md) |
 | Возврат живых NPC после падения со скалы или в воду | `[GAME] ragdoll_quest_guard=0` | `common/world/objects/npc.cpp` | бенчи `immortal-return`, `spell-quest-return` | [physics.md](physics.md) |
 | Кинематические тела живых NPC в 20 м от героя | `[GAME] living_bodies=0` | `common/world/objects/npc.cpp` | бенчи `living-bodies`, `living-radius`, `living-seat` | [physics.md](physics.md) |
+| Замер моторов полного тела/цепочки и кинематического клинка (этап 0) | По умолчанию выключен; только `OPENGOTHIC_MELEE_BENCH=fixture\|blade\|blade-motors` | `common/physics/ragdoll.*`, `collisionworld.*`, bench hooks в `npc`/`testbench`; `scripts/melee_physics_bench.py`, `body_sim_bench.py` | сборка, `check-physics`, Mac 30 с, детерминированная дуэль Ryzen | [Отчёт этапа 0](../reports/melee-physics/2026-10-23-stage0/validation-notes.md) |
 | Удар стрелы в кость | `[GAME] arrow_physics=0` | `common/physics/arrowtrace.h` | бенч `arrow-reaction` | [physics.md](physics.md) |
 | Стрелы застревают в теле и в мире | `[GAME] arrow_sticking=0` | `common/physics/arrowtrace.h` | бенч `arrow-sticking` | [physics.md](physics.md) |
 | Физика заклинаний: кулак ветра, смерч, огненный шар | `[GAME] spell_physics=0` | `common/world/bullet.cpp`, `common/world/world.cpp` | бенчи `spell-physics`, `spell-targets` | [physics.md](physics.md) |

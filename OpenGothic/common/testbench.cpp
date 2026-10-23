@@ -679,7 +679,6 @@ struct Bench {
   bool livingOverflow=false;
   bool meleeFixture=false,meleeMeasuring=false;
   std::string meleeMode,meleePelvis;
-  int meleeSubsteps=2;
   uint64_t meleeMotionFrom=0;
   // Test-only props use the body API directly; the map allowlist contains only
   // visuals actually authored in the stock worlds, not these Item mesh copies.
@@ -11683,7 +11682,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     exec("clear 2500",w,pl,ctrl);
     Gothic::settingsSetI("GAME","living_bodies",0);
     w.physic()->configureMeleeBench(substeps);
-    bench.meleeMode=mode;bench.meleePelvis=pelvis;bench.meleeSubsteps=substeps;
+    bench.meleeMode=mode;bench.meleePelvis=pelvis;
     const auto symbol=w.script().findSymbolIndex("BDT_1013_BANDIT_L");
     const auto sword=w.script().findSymbolIndex("ItMw_1h_Common_01");
     if(symbol==size_t(-1) || sword==size_t(-1)) {arenaAbort("melee fixture symbols missing");return;}

@@ -81,7 +81,7 @@ class Ragdoll final {
       float maxLinearCmS = 0, maxAngularRadS = 0;
       float poseRmsCm = 0, poseMaxCm = 0;
       // Feet/toes' world AABB bottom and downward deviation from animation.
-      float minFootBottomCm = 0, maxFootDropCm = 0;
+      float maxFootDropCm = 0;
       float maxFootPenetrationCm = 0;
       size_t footFloorSamples = 0, footFloorMisses = 0;
       bool finite = true;

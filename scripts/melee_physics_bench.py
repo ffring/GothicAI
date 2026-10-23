@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import statistics
 import subprocess
+import time
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -73,10 +74,13 @@ def main() -> None:
     template = (ROOT/"scripts/bench/melee-physics.bench").read_text()
     for case in cases:
         # Match executable names, since pgrep also finds build command lines.
-        processes = subprocess.check_output(["ps", "-axo", "pid=,comm="], text=True)
-        games = [row for row in processes.splitlines() if row.split()[-1].endswith("/Gothic2Notr")]
-        if games:
-            raise RuntimeError("another Mac game is running: "+"; ".join(games))
+        while True:
+            processes = subprocess.check_output(["ps", "-axo", "pid=,comm="], text=True)
+            games = [row for row in processes.splitlines() if row.split()[-1].endswith("/Gothic2Notr")]
+            if not games:
+                break
+            print("Waiting for the other Mac game: "+"; ".join(games), flush=True)
+            time.sleep(5)
         count, mode, pelvis, steps = case.split(":")
         take = output/case.replace(":", "-")
         take.mkdir()
