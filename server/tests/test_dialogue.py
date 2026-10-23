@@ -4,18 +4,22 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from websockets.asyncio.server import serve
 
 from gothic_ai import dialogue as dialogue_module
 from gothic_ai.dialogue import QUIET_STYLE, SCENE_GAP_S, TTS_PAUSE, DialogueManager, FirstReaction
+from gothic_ai.game import GameLink
 from gothic_ai.journal import Journal
 from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
-from gothic_ai.protocol import NpcRoster
+from gothic_ai.protocol import Hello, NpcRoster, SvmLine
 from gothic_ai.scenarios import basics as scenarios
+from gothic_ai.trace import TraceWriter
 from gothic_ai.tts import Speech, TtsClient, TtsError
 from tests.fake_game import FakeGame, connected
 
@@ -28,6 +32,39 @@ async def _until(predicate, timeout: float = 3.0) -> None:
     async with asyncio.timeout(timeout):
         while not predicate():  # noqa: ASYNC110 - polling a fake is fine in tests
             await asyncio.sleep(0.01)
+
+
+@pytest.mark.parametrize(("quick", "enabled", "replace"), [
+    (True, True, True), (False, True, False), (True, False, False),
+])
+async def test_svm_mode_waits_for_hello_and_svm_lines_only_log_and_trace(
+    tmp_path, caplog, quick, enabled, replace,
+):
+    conn = SimpleNamespace(send=AsyncMock())
+    link = GameLink(conn)
+    llm = FakeBackend()
+    writer = TraceWriter(tmp_path)
+    dialogue = DialogueManager(
+        link, llm, PersonaProvider(None), quick=llm if quick else None,
+        svm_lines=enabled, trace=writer,
+    )
+    conn.send.assert_not_awaited()
+    link._dispatch(Hello(type="hello", protocol=50, client="fake", codepage="cp1251"))
+    await asyncio.gather(*dialogue._background)
+    assert [json.loads(call.args[0]) for call in conn.send.await_args_list] == [
+        {"type": "svm_mode", "replace": replace},
+    ]
+    line = SvmLine(
+        type="svm_line", id="svm-1", npc=XARDAS, svm="$KILLENEMY",
+        text="Ещё одним монстром меньше.", target="WOLF", overlay=True,
+    )
+    caplog.set_level("INFO", logger="gothic_ai.dialogue")
+    link._dispatch(line)
+    assert f"svm_line {XARDAS} $KILLENEMY «{line.text}»" in caplog.messages
+    records = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
+    assert records == [{**line.model_dump(mode="json"), "t": records[0]["t"]}]
+    assert conn.send.await_count == 1
+    assert llm.calls == []
 
 
 async def test_player_phrases_get_replies_line_by_line():

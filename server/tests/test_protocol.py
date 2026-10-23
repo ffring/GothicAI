@@ -48,6 +48,8 @@ from gothic_ai.protocol import (
     StoryNpcCmd,
     StoryProgramCmd,
     StoryStateCmd,
+    SvmLine,
+    SvmModeCmd,
     ThreatControlCmd,
     TriggerFired,
     parse_game_message,
@@ -80,6 +82,19 @@ def test_action_result_ok_only_when_done():
 def test_unknown_message_type_is_rejected():
     with pytest.raises(ValidationError):
         parse_game_message('{"type":"nope"}')
+
+
+def test_v50_svm_lines_keep_the_native_meaning_and_addressee():
+    assert PROTOCOL_VERSION == 50
+    msg = parse_game_message(_json({
+        "type": "svm_line", "id": "svm-1", "npc": "X", "svm": "$KILLENEMY",
+        "text": "Ещё одним монстром меньше.", "target": "WOLF", "overlay": True,
+    }))
+    assert isinstance(msg, SvmLine)
+    assert (msg.id, msg.npc, msg.svm, msg.text, msg.target, msg.overlay) == (
+        "svm-1", "X", "$KILLENEMY", "Ещё одним монстром меньше.", "WOLF", True,
+    )
+    assert json.loads(SvmModeCmd(replace=True).to_json()) == {"type": "svm_mode", "replace": True}
 
 
 def test_hero_deed_retains_ownership_ids_and_engine_witnesses():

@@ -38,6 +38,8 @@ from ..protocol import (
     SayCmd,
     Session,
     Snapshot,
+    SvmLine,
+    SvmModeCmd,
     ThreatControlCmd,
 )
 from ..talk import TalkDesk
@@ -561,6 +563,71 @@ async def m4_planner_bridge(
     for name, outcome in results.items():
         log.info("%-20s %s", name, outcome)
     return results
+
+
+async def svm_lines(link: GameLink, dialogue: DialogueManager) -> dict[str, str]:
+    """Compare a human's native and intercepted SVM, including overlay, without a live model."""
+    npc, svm = "NONE_100_XARDAS", "$NOTNOW"
+    await link.wait_world()
+    await link.debug("skip_important", near=npc)
+    await attach_when_free(link, npc)
+    events: list[SvmLine] = []
+
+    def record(message: GameMessage) -> None:
+        if isinstance(message, SvmLine) and message.npc == npc:
+            events.append(message)
+
+    results: dict[str, str] = {}
+    native: dict[bool, float] = {}
+    quick = dialogue.quick
+    # Presence enables replacement; this scenario never requests model generation.
+    dialogue.quick = FakeBackend("", delay=0)
+    link.listeners.append(record)
+    try:
+        await link.act(npc, "turn_to", npc="PLAYER")
+        for replace in (False, True) if dialogue.svm_lines else (False,):
+            mode = "replace" if replace else "native"
+            await link.send(SvmModeCmd(replace=replace))
+            for overlay in (False, True):
+                name = f"{mode}_{'overlay' if overlay else 'queued'}"
+                before = len(events)
+                started = time.monotonic()
+                said = await link.act(npc, "say_svm", svm=svm, overlay=overlay, npc="PLAYER")
+                elapsed = time.monotonic() - started
+                # A real following queue action supplies a game-clock timing marker in game.log.
+                following = await link.act(npc, "wait", ms=1)
+                received = events[before:]
+                valid = (
+                    len(received) == 1 and received[0].svm == svm and bool(received[0].text)
+                    and received[0].target == "PLAYER" and received[0].overlay == overlay
+                ) if replace else not received
+                ok = said.status == following.status == "done" and valid
+                detail = (
+                    f"action={said.status}, next={following.status}, events={len(received)}, "
+                    f"queue_s={elapsed:.3f}"
+                )
+                if replace:
+                    delta = abs(elapsed - native[overlay])
+                    ok = ok and delta <= 0.3
+                    detail += f", native_s={native[overlay]:.3f}, delta_s={delta:.3f}"
+                else:
+                    native[overlay] = elapsed
+                if received:
+                    detail += f", {received[0].svm} {received[0].text!r}"
+                results[name] = f"{'done' if ok else 'failed'} ({detail})"
+                if not ok:
+                    return _logged(results)
+        if dialogue.svm_lines:
+            ids = [event.id for event in events]
+            results["unique_ids"] = "done" if len(ids) == len(set(ids)) else f"failed ({ids})"
+        else:
+            results["disabled"] = "done (--no-svm-lines, native sound and no svm_line)"
+        return _logged(results)
+    finally:
+        link.listeners.remove(record)
+        dialogue.quick = quick
+        await link.send(SvmModeCmd(replace=dialogue.svm_lines and quick is not None))
+        await link.act(npc, "return_to_routine")
 
 
 async def m5_turn_loop(

@@ -66,7 +66,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 49;
+constexpr int         ProtocolVersion = 50;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -223,6 +223,7 @@ struct AiBridge::Impl final {
   void onObservedPerception(Npc& self, Npc& other, Npc* victim, PercType perc);
   void onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise);
   void onHeroDeed(const HeroDeed& deed);
+  bool onSvmLine(Npc& npc, std::string_view svm, std::string_view line, Npc* target, bool overlay);
   // who drives the npc instead of its scripts: "attached" or nobody
   std::string_view npcOwner(std::string_view symbol) const;
   bool onConsoleCommand(std::string_view cmd, std::string& reply);
@@ -288,6 +289,8 @@ struct AiBridge::Impl final {
   std::vector<Inbound> inbound;
 
   bool                 connected = false;
+  bool                 replaceSvm = false;
+  uint64_t             svmLines = 0;
   uint64_t             bodyGeneration = 0;
   bool                 bodyResetPending = false;
   std::string          lastError;
@@ -372,6 +375,9 @@ AiBridge::Impl::Impl() {
            (beasts.intercept(*world,self,other,victim,perc) ||
             (connected && observer.intercept(*world,self,other,victim,perc,deed,
                                             deed!=nullptr ? session.branch+"/deed-"+std::to_string(deed->id) : "")));
+    };
+  gothic.interceptSvm = [this](Npc& npc, std::string_view svm, std::string_view line, Npc* target, bool overlay) {
+    return onSvmLine(npc,svm,line,target,overlay);
     };
   gothic.consoleCommandFn = [this](std::string_view cmd, std::string& reply) {
     return onConsoleCommand(cmd,reply);
@@ -476,6 +482,7 @@ AiBridge::Impl::~Impl() {
   gothic.onPhysicsNoiseHeard .ubind(this,&Impl::onPhysicsNoiseHeard);
   gothic.onHeroDeed          .ubind(this,&Impl::onHeroDeed);
   gothic.interceptPerception = nullptr;
+  gothic.interceptSvm       = nullptr;
   gothic.consoleCommandFn  = nullptr;
   gothic.externalMessageFn = nullptr;
   gothic.externalSoundFn   = nullptr;
@@ -543,6 +550,7 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
 void AiBridge::Impl::processInbound(World* world, Inbound& in) {
   switch(in.kind) {
     case Inbound::Open:
+      replaceSvm = false;
       // Reconnection invalidates old requests immediately, while an old owner's current locked
       // animation reaches its safe boundary before observation IDs are reset.
       BodyController::disconnect("");
@@ -564,6 +572,7 @@ void AiBridge::Impl::processInbound(World* world, Inbound& in) {
       break;
     case Inbound::Close:
     case Inbound::Error:
+      replaceSvm = false;
       BodyController::disconnect("");
       if(connected) {
         Log::i("[ai] disconnected: ",in.text);
@@ -796,6 +805,29 @@ void AiBridge::Impl::onPhysicsNoiseHeard(Npc& self, const PhysicsNoise& noise) {
     observer.physicsNoise(*world,self,noise);
   }
 
+bool AiBridge::Impl::onSvmLine(Npc& npc, std::string_view svm, std::string_view line, Npc* target, bool overlay) {
+  auto* world = Gothic::inst().world();
+  if(world==nullptr || npc.guild()>=GIL_SEPERATOR_HUM)
+    return false;
+  const auto symbol = npcSymbol(*world,npc);
+  const auto duration = world->script().messageTime(line);
+  if(!connected || !replaceSvm) {
+    Log::i("[ai] native svm ",symbol," ",svm," line=",line," game_ms=",world->tickCount(),
+           " duration_ms=",duration);
+    return false;
+    }
+  send(JsonWriter("svm_line")
+         .str("id","svm-"+std::to_string(++svmLines))
+         .str("npc",symbol)
+         .str("svm",svm)
+         .str("text",TextCodec::toUtf8(world->script().messageByName(line)))
+         .str("target",target!=nullptr ? npcSymbol(*world,*target) : "")
+         .boolean("overlay",overlay)
+         .finish());
+  Log::i("[ai] svm_line ",symbol," ",svm," game_ms=",world->tickCount()," duration_ms=",duration);
+  return true;
+  }
+
 std::string_view AiBridge::Impl::npcOwner(std::string_view symbol) const {
   if(ctrl.isAttached(symbol))
     return "attached";
@@ -819,6 +851,10 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
 
   if(type=="ping") {
     send(JsonWriter("pong").str("req",req).finish());
+    return;
+    }
+  if(type=="svm_mode") {
+    replaceSvm = JsonRead::boolean(doc,"replace",false);
     return;
     }
   if(type=="memory") {

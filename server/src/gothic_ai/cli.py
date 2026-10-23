@@ -852,6 +852,7 @@ async def serve(args: argparse.Namespace) -> int:
             trace=trace,
             budget=budget,
             quick=quick,
+            svm_lines=not args.no_svm_lines,
         )
         # the bandits below Xardas's tower are freed of their scripted ambush: our models decide (story.py)
         static = freed(graph.nodes.__contains__) if graph is not None else freed()
@@ -1574,6 +1575,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.m5e_talk(link, state.dialogue, state.talk, state.voice, args.npc)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario m5e: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "svm_lines":
+                assert state.dialogue is not None
+                results = await scenarios.svm_lines(link, state.dialogue)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "orders":
                 assert state.dialogue is not None and state.talk is not None
@@ -2915,6 +2922,7 @@ def main() -> None:
             "load_rewind",
             "m5c",
             "m5e",
+            "svm_lines",
             "orders",
             "fight_reactions_wolf",
             "fight_reactions_sight",
@@ -3063,6 +3071,9 @@ def main() -> None:
     )
     p.add_argument(
         "--no-quick", action="store_true", help="npc lines in a fight from the conversational model"
+    )
+    p.add_argument(
+        "--no-svm-lines", action="store_true", help="keep the humans' native SVM voices and subtitles"
     )
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")

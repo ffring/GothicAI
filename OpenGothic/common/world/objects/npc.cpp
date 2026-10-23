@@ -26,6 +26,7 @@
 #include "utils/fileext.h"
 #include "utils/dbgpainter.h"
 #include "camera.h"
+#include "commandline.h"
 #include "testbench.h"
 #include "gothic.h"
 #include "resources.h"
@@ -631,9 +632,9 @@ bool Npc::performOutput(const AiQueue::AiAction &act) {
   if(act.act==AI_Output           && outputPipe->output   (*this,act.s0))
     return true;
   auto svm = owner.script().messageFromSvm(act.s0,hnpc->voice);
-  if(act.act==AI_OutputSvm        && outputPipe->outputSvm(*this,svm))
+  if(act.act==AI_OutputSvm        && outputPipe->outputSvm(*this,svm,act.s0,act.target))
     return true;
-  if(act.act==AI_OutputSvmOverlay && outputPipe->outputOv(*this,svm))
+  if(act.act==AI_OutputSvmOverlay && outputPipe->outputOv(*this,svm,act.s0,act.target))
     return true;
   return false;
   }
@@ -4069,6 +4070,11 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
       break;
       }
     case AI_Wait:
+      if(CommandLine::inst().isDevMode()) {
+        const auto* symbol = owner.script().findSymbol(instanceSymbol());
+        Log::i("[ai] queue_wait ",symbol!=nullptr ? symbol->name() : ""," game_ms=",owner.tickCount(),
+               " duration_ms=",act.i0);
+        }
       implAiWait(uint64_t(act.i0));
       break;
     case AI_StandUp:
