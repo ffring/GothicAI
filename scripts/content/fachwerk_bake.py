@@ -228,6 +228,8 @@ def _shutter(rng, gx, gy, period, height, labels, kinds):
 # belong to the upper quarter), the oak as accepted on house-2, the shutter as the original's boards.
 PLASTER = (159, 158, 134)
 PLASTER_HUE = ((52, 50, 24), (107, 106, 69), (138, 137, 107), (163, 163, 139), (186, 186, 168), (212, 213, 200))
+DETAIL = (.02, .5, 1., .004)          # the scan's grain: split at this size (metres), the picture's own fine
+                                       # light kept to this power, the scan's to this, its relief metres per unit
 SPREAD_FIT = .75                       # how far the picture's light goes to the original's quantiles
 OWN_HUE = .5                           # how much of the plaster picture's own hue stays over the original's by light
 PLASTER_SPREAD = ((0, 55), (5, 83), (10, 108), (25, 137), (50, 160), (75, 178), (90, 193), (95, 202),
@@ -280,7 +282,7 @@ def _sample(image: np.ndarray, a, b, metres) -> np.ndarray:
 
 
 def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarray, wood_img: np.ndarray,
-            seed: int = 0) -> dict:
+            seed: int = 0, detail: dict | None = None) -> dict:
     """Albedo (linear RGB) and masks of one of the upper storey's textures."""
     rng = np.random.default_rng([seed, 37])
     rows, cols = passes['piece'].shape
@@ -302,6 +304,18 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
     x0, x1, y0, y1 = _plaster_frame(spec, labels)
     pl = _sample(plaster_img, x - x0, y1 - y, (x1 - x0, y1 - y0)) ** 2.2   # its edges at the timbers' faces; linear
     out[plaster] = pl[plaster]
+    if detail is not None:
+        # frequency split: the picture keeps the broad stains, a photographed plaster scan gives the
+        # grain at its true scale (its millimetres per pixel), multiplied in linear light
+        from scipy.ndimage import gaussian_filter
+        sigma = DETAIL[0] / (py / rows)
+        weight = gaussian_filter(plaster.astype(float), sigma, mode='wrap') + 1e-6
+        low = np.stack([gaussian_filter(out[..., k] * plaster, sigma, mode='wrap') for k in range(3)], -1) / weight[..., None]
+        own = (out @ tb.LUM) / np.maximum(low @ tb.LUM, 1e-6)
+        scan = _sample(detail['albedo'], x, py - y, detail['metres']) ** 2.2 @ tb.LUM
+        grain = scan / np.maximum(gaussian_filter(scan, sigma, mode='wrap'), 1e-6)
+        mix = low * (own ** DETAIL[1] * grain ** DETAIL[2])[..., None]
+        out[plaster] = mix[plaster]
     # the oak: its picture read along each member's grain; every member a little its own tone
     members = spec['members']
     member_ids = [i for i, k in enumerate(spec['parts']) if k in ('post', 'rail', 'head', 'sill', 'jamb', 'brace')]
@@ -401,6 +415,9 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
     metres = py / rows
     light = pl @ tb.LUM
     relief = (light - gaussian_filter(light, PLASTER_RELIEF_PX[1] / metres, mode='wrap')) * PLASTER_RELIEF_PX[0]
+    if detail is not None and detail.get('height') is not None:   # the scan's own relief, high-passed
+        h = _sample(detail['height'], x, py - y, detail['metres']) @ tb.LUM
+        relief = relief * (1 - DETAIL[2]) + (h - gaussian_filter(h, DETAIL[0] / metres, mode='wrap')) * DETAIL[3] * DETAIL[2]
     relief = gaussian_filter(relief, 1., mode='wrap')
     dy_, dx_ = np.gradient(relief, metres)
     tilt = np.stack([-dx_, dy_, np.zeros_like(dx_)], axis=-1) * plaster[..., None]
@@ -441,6 +458,9 @@ def main(argv=None) -> int:
     p.add_argument('out', type=Path)
     p.add_argument('--plaster', type=Path, required=True)
     p.add_argument('--wood', type=Path, required=True)
+    p.add_argument('--detail', type=Path, help='a photographed plaster scan (CC0) for the fine grain')
+    p.add_argument('--detail-height', type=Path, help="the scan's height map")
+    p.add_argument('--detail-metres', type=float, default=2., help='how much wall the scan covers')
     p.add_argument('--seed', type=int, default=0)
     p = sub.add_parser('blockout')
     p.add_argument('layout', type=Path)
@@ -462,7 +482,10 @@ def main(argv=None) -> int:
         spec = json.loads(args.layout.read_text())
         passes = pb.read_passes(args.passes, spec['period'])
         labels = np.load(args.layout.with_name(args.layout.stem + '-labels.npz'))['labels']
-        result = compose(passes, spec, labels, _image(args.plaster), _image(args.wood), args.seed)
+        detail = None if not args.detail else dict(
+            albedo=_image(args.detail), metres=args.detail_metres,
+            height=_image(args.detail_height) if args.detail_height else None)
+        result = compose(passes, spec, labels, _image(args.plaster), _image(args.wood), args.seed, detail)
         px, py = spec['period']
         size = (1024, 1024) if args.out else None
         pb.write_maps(args.out, size, result['albedo'], result['normal'], {'roughness': result['roughness']})
