@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -361,7 +362,7 @@ def test_bc3_manifest_uses_exact_train_refs_including_failed_follow(tmp_path):
 
 
 @pytest.mark.parametrize("relative", ["point/train/point-0", "../outside", "/outside"])
-def test_compact_v5_manifest_uses_supplied_root_and_only_eligible_train(tmp_path, relative):
+def test_compact_v5_manifest_uses_supplied_root_and_only_eligible_train(tmp_path, monkeypatch, relative):
     source = tmp_path / "relocated-corpus"
     directory = source / "point/train/point-0"
     directory.mkdir(parents=True)
@@ -408,7 +409,17 @@ def test_compact_v5_manifest_uses_supplied_root_and_only_eligible_train(tmp_path
         stream.write(records.tobytes())
     entry["samples_sha256"] = hashlib.sha256((directory / "samples.bin.gz").read_bytes()).hexdigest()
     path.write_text(json.dumps(manifest))
-    index = data.prepare(source, tmp_path / "cache", manifest=path, input_variant="hd-familiar", chunk_records=1)
+    output = tmp_path / "cache"
+    original_stat = Path.stat
+    def cache_stat(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if path.is_relative_to(output):
+            return type(result)((*result[:6], 1024, *result[7:]))
+        return result
+    with monkeypatch.context() as storage:
+        storage.setattr(data.shutil, "disk_usage", lambda path: SimpleNamespace(free=32 * 1024**3))
+        storage.setattr(Path, "stat", cache_stat)
+        index = data.prepare(source, output, manifest=path, input_variant="hd-familiar", chunk_records=1)
     assert index["cache_version"] == data.BC4_CACHE_VERSION
     assert index["navigation_memory_version"] == 4 and index["navdemo_version"] == 3
     assert index["preprocessing"] == data.BC4_PREPROCESSING
