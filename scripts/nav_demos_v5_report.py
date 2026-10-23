@@ -21,6 +21,9 @@ import numpy as np
 _SPEC = importlib.util.spec_from_file_location("nav_demos", Path(__file__).with_name("nav_demos.py"))
 demos = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(demos)
+_RL_SPEC = importlib.util.spec_from_file_location("nav_rl", Path(__file__).with_name("nav_rl.py"))
+rl = importlib.util.module_from_spec(_RL_SPEC)
+_RL_SPEC.loader.exec_module(rl)
 
 REPORT = Path("reports/navigation/2026-10-22-demos-v5")
 QUOTAS = {"point": 400, "object": 100, "approach": 60, "follow_below_gate": 60,
@@ -107,15 +110,28 @@ def heldout_boundaries(v4, detours):
     """Keep original references; these scenarios are never opened as episodes."""
     heldout = {split: deepcopy(v4["splits"][split]) for split in ("validation", "test")}
     forbidden_ids, forbidden_pairs = set(), set()
+    forbidden_groups = {("object", "place_id"): set(), ("moving", "region"): set(),
+                        ("jump", "site_id"): set(), ("jump", "transition_id"): set()}
     for split, families in heldout.items():
-        for values in families.values():
+        for family, values in families.items():
             for value in values:
                 require(value.get("episode") is None and value.get("recorded") is False,
                         f"v4 {split} contains a recording reference")
                 scenario = value.get("scenario", value)
                 forbidden_ids.add(scenario.get("id", value.get("id")))
-                if scenario.get("start") and scenario.get("goal"):
+                # v4 splits are family-specific: moving test endpoints can
+                # also belong to the frozen point training selection.
+                if family == "point" and scenario.get("start") and scenario.get("goal"):
                     forbidden_pairs.add((scenario["start"], scenario["goal"]))
+                group = "moving" if family in ("follow", "approach", "follow_below_gate") else family
+                for (group_family, key), forbidden in forbidden_groups.items():
+                    if group == group_family and scenario.get(key) is not None:
+                        forbidden.add(scenario[key])
+        for (family, key), forbidden in forbidden_groups.items():
+            policy = v4.get("split_policy", {}).get(family, {})
+            field = "site_id" if family == "jump" else policy.get("group")
+            if field == key:
+                forbidden.update(policy.get("groups", {}).get(split, []))
         heldout[split]["detour"] = []
         for scenario in detours[split]:
             require(scenario.get("split", split) in (split, "val" if split == "validation" else split),
@@ -126,10 +142,10 @@ def heldout_boundaries(v4, detours):
             heldout[split]["detour"].append(dict(id=scenario["id"], family="detour", split=split,
                 scenario=deepcopy(scenario), episode=None, recorded=False, decisions=0))
     forbidden_ids.discard(None)
-    return heldout, forbidden_ids, forbidden_pairs
+    return heldout, forbidden_ids, forbidden_pairs, forbidden_groups
 
 
-def verified_episodes(task, archive_root, summary, forbidden_ids, forbidden_pairs):
+def verified_episodes(task, archive_root, summary, forbidden_ids, forbidden_pairs, forbidden_groups):
     root = archive_root / "recordings"
     require(summary.get("complete") is True and summary.get("navigation_memory_version") == 4
             and summary.get("demo_version") == 3 and summary.get("student_training_run") is False,
@@ -162,7 +178,11 @@ def verified_episodes(task, archive_root, summary, forbidden_ids, forbidden_pair
                 and (scenario.get("start"), scenario.get("goal")) not in forbidden_pairs
                 and (scenario.get("goal"), scenario.get("start")) not in forbidden_pairs,
                 f"Held-out scenario was recorded: {identifier}")
-        require(all(scenario.get(key) == metadata.get(key) for key in ("start", "goal", "goal_kind")),
+        group = "moving" if family in ("follow_below_gate", "approach") else family
+        require(all(scenario.get(key) not in forbidden for (group_family, key), forbidden in forbidden_groups.items()
+                    if group == group_family), f"Held-out group was recorded: {identifier}")
+        require(all(scenario.get(key) == metadata.get(key) for key in
+                    ("start", "goal", "goal_kind", "place_id", "region", "site_id", "transition_id")),
                 f"Episode endpoints differ from the collection summary: {identifier}")
         require(metadata.get("physics_mode") == "cv" and metadata.get("perception_mode") == "gaze"
                 and metadata.get("teacher_version") == (2 if family == "jump" else 3)
@@ -264,12 +284,14 @@ def report_text(manifest, groups, comparisons):
         lines.append(f"| {family} | {group['episodes']} | {group['training_eligible']} | {group['decisions']} | "
             f"{group['backward_fraction']:.2%} | {group['strafe_fraction']:.2%} | {group['jump']} | {group['climb']} |")
     water = [entry for entry in episodes if entry["family"] == "water"]
+    safety = manifest["safety"]
     lines.extend(["", f"Местные: {local}/{len(episodes)} ({local / len(episodes):.2%}); "
         f"чужаки: {len(episodes) - local}. Признак получен из knownroads и записан в каждый эпизод. "
         f"Объём корпуса: {manifest['totals']['dataset_bytes']} байт "
         f"({manifest['totals']['dataset_bytes'] / 1e9:.3f} ГБ), бюджет 30 ГБ.", "",
         "## Водные сценарии", "",
         f"Train-сценариев {len(water)}, годных {sum(entry['training_eligible'] for entry in water)}. "
+        f"Входов в воду {safety['water']['water_entries']}, глубоких входов {safety['water']['deep_water_entries']}; "
         "Вход — переход из сухого состояния: вода глубже 10 см; глубокая вода — порог груди соответствующей гильдии "
         "с допуском 1 см. Счётчики рассчитаны по нативным физическим кадрам, включая начало и конец эпизода.", "",
         "| Сценарий | Начало → цель | Годен | Входы в воду | Глубокие входы | Кадры глубокой воды | Плавание, кадры |",
@@ -278,9 +300,13 @@ def report_text(manifest, groups, comparisons):
         scenario = entry["scenario"]
         lines.append(f"| {entry['id']} | {scenario['start']} → {scenario['goal']} | {int(entry['training_eligible'])} | "
             f"{entry['water_entries']} | {entry['deep_water_entries']} | {entry['deep_water_frames']} | {entry['swimming_frames']} |")
-    lines.extend(["", f"Все семейства: входов в воду {sum(entry['water_entries'] for entry in episodes)}, "
-        f"глубоких входов {sum(entry['deep_water_entries'] for entry in episodes)}, "
-        f"эпизодов с глубокой водой {sum(entry['deep_water_frames'] > 0 for entry in episodes)}; цель — 0 глубоких.", "",
+    lines.extend(["", f"Все попытки: входов в воду {safety['all']['water_entries']}, "
+        f"глубоких входов {safety['all']['deep_water_entries']}, "
+        f"эпизодов с глубокой водой или плаванием {safety['all']['unsafe_episodes']}; "
+        f"цель 0 глубоких {'выполнена' if safety['all']['target_met'] else 'не выполнена'}. "
+        f"В годном train: глубоких входов {safety['train']['deep_water_entries']}, "
+        f"кадров глубокой воды {safety['train']['deep_water_frames']}, плавания {safety['train']['swimming_frames']}. "
+        "Негодные попытки сохранены для диагностики и не входят в train.", "",
         "## Сравнение с v4", "",
         "Парные общие train-сценарии совпадают по семейству, id, началу и цели и успешны у обоих учителей. "
         "Длина — сумма отрезков физической траектории в XZ; Detour — нативная длина исходного пути. "
@@ -299,7 +325,7 @@ def report_text(manifest, groups, comparisons):
     lines.extend(["", "## Проверка и манифест", "",
         f"Все {len(episodes)} эпизодов прошли `nav_demos.py check` (`summarize(validate=True)`). "
         "SHA-256 каждого samples.bin.gz совпал с итоговой сводкой и метаданными; набор файлов на хранилище "
-        "точно совпал со сводкой. Глубоких водных входов — 0.", "",
+        "точно совпал со сводкой. Годный train не содержит глубокой воды или плавания.", "",
         "[manifest.json](manifest.json) содержит пути train-эпизодов на хранилище, контрольные суммы и вход ученика `hd`. "
         "Train включает только годные эпизоды. Validation/test сохранены ссылками на сценарии v4 и detour-наборы: "
         "они не записывались, не проверялись игрой и не включены в train. "
@@ -316,18 +342,25 @@ def finalize(task, archive_root):
     require(v4.get("dataset") == "nav-demos-v4", "Expected the frozen v4 manifest")
     detours = {split: rows(task / "input" / name) for split, name in
                (("validation", "detour-val.jsonl"), ("test", "detour-test.jsonl"))}
-    for name in ("v4-manifest.json", "detour-val.jsonl", "detour-test.jsonl"):
+    for name in ("v4-manifest.json", "detour-val.jsonl", "detour-test.jsonl", "holdout-cv.jsonl", "ppo-validation.jsonl"):
         require(digest(task / "input" / name) == digest(archive_root / "input" / name),
                 f"Archived frozen input differs: {name}")
-    heldout, forbidden_ids, forbidden_pairs = heldout_boundaries(v4, detours)
+    heldout, forbidden_ids, forbidden_pairs, forbidden_groups = heldout_boundaries(v4, detours)
+    forbidden_pairs.update(rl.historical_pairs([task / "input/holdout-cv.jsonl", task / "input/ppo-validation.jsonl"]))
     summary_path = archive_root / "recordings/collection-metrics.json"
     if not summary_path.is_file():
         summary_path = task / "recordings/collection-metrics.json"
     summary = read_json(summary_path)
-    episodes = verified_episodes(task, archive_root, summary, forbidden_ids, forbidden_pairs)
+    episodes = verified_episodes(task, archive_root, summary, forbidden_ids, forbidden_pairs, forbidden_groups)
     groups = family_totals(episodes)
-    require(all(entry["deep_water_frames"] == entry["swimming_frames"] == 0 for entry in episodes),
-            "Teacher entered deep water or swam; corpus safety target failed")
+    safety = {}
+    for name, selected in (("all", episodes), ("train", [entry for entry in episodes if entry["training_eligible"]]),
+                           ("water", [entry for entry in episodes if entry["family"] == "water"])):
+        unsafe = sum(entry["deep_water_frames"] > 0 or entry["swimming_frames"] > 0 for entry in selected)
+        safety[name] = dict(episodes=len(selected), unsafe_episodes=unsafe, target_met=unsafe == 0,
+            **{key: sum(entry[key] for entry in selected) for key in
+               ("water_entries", "deep_water_entries", "deep_water_frames", "swimming_frames")})
+    require(safety["train"]["target_met"], "Teacher entered deep water or swam in eligible training data")
     require(any(entry["local"] for entry in episodes) and any(not entry["local"] for entry in episodes),
             "Corpus must contain both local NPCs and strangers")
     dataset_bytes = tree_bytes(archive_root / "recordings")
@@ -349,8 +382,12 @@ def finalize(task, archive_root):
                     sha256=digest(task / "input/detour-val.jsonl")),
                  "detour_test": dict(path=str(archive_root / "input/detour-test.jsonl"),
                     sha256=digest(task / "input/detour-test.jsonl")),
+                 "holdout_cv": dict(path=str(archive_root / "input/holdout-cv.jsonl"),
+                    sha256=digest(task / "input/holdout-cv.jsonl")),
+                 "ppo_validation": dict(path=str(archive_root / "input/ppo-validation.jsonl"),
+                    sha256=digest(task / "input/ppo-validation.jsonl")),
                  "recordings/collection-metrics.json": dict(path=str(summary_path), sha256=digest(summary_path))},
-        by_family=groups, paired_v4=comparisons, student_training_run=False)
+        by_family=groups, paired_v4=comparisons, safety=safety, student_training_run=False)
     if "split_policy" in v4:
         manifest["split_policy"] = deepcopy(v4["split_policy"])
     readme = report_text(manifest, groups, comparisons)

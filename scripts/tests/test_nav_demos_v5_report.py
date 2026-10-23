@@ -56,6 +56,12 @@ def write_recording(directory, family, index):
         local=index % 2 == 0, residency="local" if index % 2 == 0 else "stranger",
         knownroads={"known_nodes": 10 if index % 2 == 0 else 0},
         knownroads_selection={"source": "knownroads"}, training_eligible=True, detour_length_cm=100)
+    if family == "object":
+        metadata["place_id"] = "train-place"
+    elif family in ("approach", "follow_below_gate"):
+        metadata["region"] = "train-region"
+    elif family == "jump":
+        metadata.update(site_id="train-site", transition_id="train-transition")
     write_json(directory / "episode.json", metadata)
     frames = [dict(elapsed_ms=elapsed, water_depth_cm=0, deep_water_threshold_cm=120, swimming=False)
               for elapsed in (0, 100, 200, 250)]
@@ -64,7 +70,8 @@ def write_recording(directory, family, index):
     checked = report.demos.summarize(directory, validate=True)
     checksum = report.digest(directory / "samples.bin.gz")
     metrics = dict(id=directory.name, family=family, split="train", episode=str(directory),
-        scenario={key: metadata[key] for key in ("id", "start", "goal", "split", "goal_kind")},
+        scenario={key: metadata[key] for key in ("id", "start", "goal", "split", "goal_kind",
+                  "place_id", "region", "site_id", "transition_id") if key in metadata},
         decisions=3, teacher_goal_success=True, training_eligible=True, samples_sha256=checksum,
         validated=True, key_counts=checked["key_counts"], local=metadata["local"],
         residency=metadata["residency"], **report.physical_water(directory, 250))
@@ -90,11 +97,19 @@ def corpus(tmp_path, monkeypatch):
         episodes=[dict(deepcopy(entries[0]), episode=str(previous)),
                   dict(deepcopy(entries[2]), episode="/never-open-moving-heldout")],
         splits=dict(train={"point": ["point-0"]},
-                    validation={"point": [holdout("validation")]}, test={"point": [holdout("test")]}))
+                    validation={"point": [holdout("validation")]}, test={"point": [holdout("test")]}),
+        split_policy=dict(scope="family_specific", globally_disjoint_spatial_regions=False,
+            object=dict(group="place_id", groups=dict(train=["train-place"], validation=["heldout-place"], test=[])),
+            moving=dict(group="region", groups=dict(train=["train-region"], validation=["heldout-region"], test=[])),
+            jump=dict(group=["site_id", "transition_id"], groups=dict(train=["train-site"],
+                validation=["heldout-site"], test=[]))))
     write_json(task / "input/v4-manifest.json", v4)
     for split in ("val", "test"):
         (task / "input" / f"detour-{split}.jsonl").write_text(json.dumps(
             dict(id=f"detour-{split}", start=f"detour-{split}-S", goal=f"detour-{split}-G")) + "\n")
+    for name in ("holdout-cv", "ppo-validation"):
+        (task / "input" / f"{name}.jsonl").write_text(json.dumps(
+            dict(start=f"{name}-S", goal=f"{name}-G")) + "\n")
     shutil.copytree(task / "input", archive / "input")
     summary = dict(complete=True, navigation_memory_version=4, demo_version=3,
                    student_training_run=False, episodes=entries)
@@ -136,6 +151,9 @@ def test_finalization_checks_all_samples_and_keeps_heldout_unrecorded(corpus, mo
     assert manifest["by_family"]["point"]["backward_fraction"] == pytest.approx(1 / 3)
     assert manifest["by_family"]["point"]["jump"] == 1
     assert manifest["totals"]["local_episodes"] == 3
+    for name in ("holdout_cv", "ppo_validation"):
+        source = manifest["sources"][name]
+        assert source["sha256"] == report.digest(source["path"])
     assert manifest["paired_v4"] == [dict(id="point-0", family="point", v4_travelled_cm=100,
         v5_travelled_cm=120, v4_length_over_detour=1, v5_length_over_detour=1.2)]
     assert {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in before} == before
@@ -182,21 +200,34 @@ def test_water_requires_native_physical_trace(corpus):
     no_outputs(task, archive)
 
 
-def test_deep_water_in_ineligible_attempt_still_blocks_completion(corpus):
+@pytest.mark.parametrize("eligible", [True, False])
+def test_deep_water_blocks_training_but_retains_ineligible_diagnostics(corpus, eligible):
     task, archive, summary, _ = corpus
     entry = summary["episodes"][0]
     directory = Path(entry["episode"])
     frames = report.rows(directory / "perception-safety-frames.jsonl")
     frames[1]["water_depth_cm"] = 119
     (directory / "perception-safety-frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in frames))
-    entry.update(report.physical_water(directory, 250), training_eligible=False)
+    entry.update(report.physical_water(directory, 250), training_eligible=eligible)
     metadata = report.read_json(directory / "episode.json")
-    metadata["training_eligible"] = False
+    metadata["training_eligible"] = eligible
     write_json(directory / "episode.json", metadata)
     write_json(archive / "recordings/collection-metrics.json", summary)
-    with pytest.raises(ValueError, match="deep water or swam"):
+    if eligible:
+        with pytest.raises(ValueError, match="deep water or swam"):
+            report.finalize(task, archive)
+        no_outputs(task, archive)
+    else:
         report.finalize(task, archive)
-    no_outputs(task, archive)
+        manifest = report.read_json(archive / "report/manifest.json")
+        assert manifest["safety"]["all"]["unsafe_episodes"] == 1
+        assert manifest["safety"]["all"]["deep_water_entries"] == 1
+        assert manifest["safety"]["all"]["target_met"] is False
+        assert manifest["safety"]["train"]["target_met"] is True
+        assert manifest["safety"]["water"]["target_met"] is True
+        assert entry["id"] not in manifest["splits"]["train"]["point"]
+        assert len(manifest["episodes"]) == 6 and directory.is_dir()
+        assert "цель 0 глубоких не выполнена" in (archive / "report/README.md").read_text()
 
 
 def test_unmet_eligible_quota_does_not_publish(corpus):
@@ -213,9 +244,11 @@ def test_unmet_eligible_quota_does_not_publish(corpus):
     no_outputs(task, archive)
 
 
-def test_recorded_heldout_pair_rejected_before_opening_samples(corpus):
+@pytest.mark.parametrize("source", ["v4", "holdout-cv", "ppo-validation", "detour-val", "detour-test"])
+def test_recorded_heldout_pair_rejected_before_opening_samples(corpus, source):
     task, archive, summary, v4 = corpus
-    forbidden = v4["splits"]["validation"]["point"][0]
+    forbidden = (v4["splits"]["validation"]["point"][0] if source == "v4"
+                 else report.rows(task / "input" / f"{source}.jsonl")[0])
     entry = summary["episodes"][0]
     entry["scenario"].update(start=forbidden["goal"], goal=forbidden["start"])
     source = Path(entry["episode"]) / "episode.json"
@@ -224,6 +257,49 @@ def test_recorded_heldout_pair_rejected_before_opening_samples(corpus):
     write_json(source, metadata)
     write_json(archive / "recordings/collection-metrics.json", summary)
     with pytest.raises(ValueError, match="Held-out scenario was recorded"):
+        report.finalize(task, archive)
+    no_outputs(task, archive)
+
+
+@pytest.mark.parametrize("overlap", ["moving", "object_alias"])
+def test_v4_family_specific_membership_allows_cross_group_endpoint_reuse(corpus, overlap):
+    task, archive, summary, v4 = corpus
+    entry = next(entry for entry in summary["episodes"] if entry["family"] ==
+                 ("point" if overlap == "moving" else "object"))
+    scenario = entry["scenario"]
+    family = "approach" if overlap == "moving" else "object"
+    forbidden = dict(id="different-heldout-task", split="validation", episode=None, recorded=False,
+        start=scenario["start"], goal=scenario["goal"], goal_kind=family,
+        **(dict(region="heldout-region", route=[scenario["goal"], scenario["start"]], target="SCAVENGER")
+           if overlap == "moving" else dict(place_id="heldout-place")))
+    v4["splits"]["validation"][family] = [forbidden]
+    for root in (task, archive):
+        write_json(root / "input/v4-manifest.json", v4)
+    report.finalize(task, archive)
+    manifest = report.read_json(archive / "report/manifest.json")
+    assert entry["id"] in manifest["splits"]["train"][entry["family"]]
+    assert manifest["splits"]["validation"][family] == [forbidden]
+
+
+@pytest.mark.parametrize("family,key,group", [("object", "place_id", "heldout-place"),
+    ("approach", "region", "heldout-region"), ("jump", "site_id", "heldout-site"),
+    ("jump", "transition_id", "heldout-transition")])
+def test_same_family_heldout_groups_block_other_endpoints(corpus, family, key, group):
+    task, archive, summary, v4 = corpus
+    entry = next(entry for entry in summary["episodes"] if entry["family"] == family)
+    entry["scenario"][key] = group
+    metadata_path = Path(entry["episode"]) / "episode.json"
+    metadata = report.read_json(metadata_path)
+    metadata[key] = group
+    write_json(metadata_path, metadata)
+    write_json(archive / "recordings/collection-metrics.json", summary)
+    if key == "transition_id":
+        v4["splits"]["test"]["jump"] = [dict(id="different-jump", split="test", episode=None,
+            recorded=False, start="different-S", goal="different-G", site_id="another-heldout-site",
+            transition_id=group)]
+        for root in (task, archive):
+            write_json(root / "input/v4-manifest.json", v4)
+    with pytest.raises(ValueError, match="Held-out group was recorded"):
         report.finalize(task, archive)
     no_outputs(task, archive)
 
