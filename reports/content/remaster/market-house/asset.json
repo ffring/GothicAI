@@ -1443,15 +1443,17 @@
       "id": "r3-m8-front",
       "stage": "ingame",
       "mode": "blind",
-      "verdict": "pending",
-      "date": "2026-10-23"
+      "verdict": "PASS",
+      "date": "2026-10-23",
+      "path": "reviews/r3-m8-front/merged.json"
     },
     {
       "id": "r3-m8-basement-window",
       "stage": "ingame",
       "mode": "blind",
-      "verdict": "pending",
-      "date": "2026-10-23"
+      "verdict": "REJECT",
+      "date": "2026-10-23",
+      "path": "reviews/r3-m8-basement-window/merged.json"
     }
   ],
   "gates": [
