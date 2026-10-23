@@ -405,7 +405,7 @@ LAYOUTS = ('empty', 'window', 'chain')
 PART_COLOUR = dict(top=(115, 98, 79), beam=(46, 40, 42), block=(78, 70, 47))
 BLOCK_DARKER = .82    # the blocks read in game 12% darker than the rubble, the original's 22-29%: look over number
 RUBBLE_COLOUR = [(.105, (134, 130, 120)), (.215, (128, 118, 101)), (.40, (121, 111, 90)), (.59, (112, 104, 78)),
-                 (.765, (93, 86, 61)), (.849, (93, 86, 61))]
+                 (.765, (86, 79, 56)), (.849, (82, 76, 53))]   # the foot darker: the original's median falls 92 -> 71
 FRAME_COLOUR = dict(window=(159, 148, 117), chain=(143, 131, 106))
 OPENING_COLOUR = dict(window=(24, 21, 16), chain=(15, 12, 11), empty=(18, 16, 13))
 IRON = (35, 31, 23)
@@ -482,7 +482,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     idx = np.maximum(stone, 0)
     blocks = np.array(spec['stones']) == 'block'          # the blocks keep their red-brown, some redder
     tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .6, np.array([1., .70, .55]), np.array([1., .82, .68]))[blocks]
-    tone[blocks] = np.clip(np.exp(rng.normal(0, .3, blocks.sum())), .6, 1.5)
+    tone[blocks] = np.clip(np.exp(rng.normal(0, .4, blocks.sum())), .5, 1.7)
     out[rock] *= (tone[idx[rock]][:, None] * tint[idx[rock]])
     out[frame] *= np.exp(.08 * rng.normal(0, 1, count))[idx[frame]][:, None] * np.array([1., .93, .74])
     out[mortar] *= np.array([1., .97, .86])
@@ -524,7 +524,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     out *= (1 - .65 * shade * (rock | mortar))[..., None]
     # the blocks' joints are pointed with lime, flush and light, mossy in places
     pointing = mortar & (v > RUBBLE[1] + .004)
-    lime = _linear(LIME[0]) * .7 * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .03))[..., None]
+    lime = _linear(LIME[0]) * .9 * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .03))[..., None]
     out[pointing] = lime[pointing] * (1 - .35 * moss[pointing, None]) + (green * .06)[None] * .35 * moss[pointing, None]
 
     # the original's colour part by part, the joints and their shadow included; the rubble darkens and

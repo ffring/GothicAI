@@ -115,6 +115,12 @@ def fachwerk(seed: int, variant: str):
     for index, member in enumerate(members):
         kind, _, _, width = member
         along, across, length = _local(gx, gy, period, member)
+        # hand-built: rails and heads sag a little between their posts, posts and jambs lean
+        t = np.clip(along / max(length, .01), 0, 1)
+        if kind in ('rail', 'head', 'sill') and length < px * 1.5:
+            across = across + rng.uniform(.004, .016) * np.sin(math.pi * t) * (1 if kind != 'rail' or member[1][1] > .5 else .6)
+        elif kind in ('post', 'jamb'):
+            across = across + rng.normal(0, .006) * (t - .5) * 2
         ends = .0 if kind == 'brace' else width       # posts and rails run on past the square's edge
         inside = (np.abs(across) < width / 2) & (along > -ends) & (along < length + ends)
         if kind == 'brace':                           # housed into the post and rail: cut to them
@@ -179,11 +185,13 @@ def _shutter(rng, gx, gy, period, height, labels, kinds):
     kinds.append('dark')
     middle = (x0 + x1) / 2
     for leaf, (a, b) in enumerate(((x0, middle), (middle, x1))):
-        width = (b - a) / SHUTTER['boards']
+        widths = rng.uniform(.82, 1.18, SHUTTER['boards'])     # boards of the widths a plank gave
+        edges = a + np.concatenate([[0], np.cumsum(widths)]) / widths.sum() * (b - a)
         for k in range(SHUTTER['boards']):
-            bx0 = a + k * width + SHUTTER['gap'] / 2
-            bx1 = a + (k + 1) * width - SHUTTER['gap'] / 2
-            board = inside & (gx > bx0) & (gx < bx1)
+            bx0 = edges[k] + SHUTTER['gap'] / 2
+            bx1 = edges[k + 1] - SHUTTER['gap'] / 2
+            top, foot = y1 - rng.uniform(0, .012), y0 + rng.uniform(0, .012)   # uneven ends
+            board = inside & (gx > bx0) & (gx < bx1) & (gy < top) & (gy > foot)
             local = np.clip(gx - bx0, 0, bx1 - bx0)
             style = dict(adze=None, grain=(.0010, (.002, .007)), pits=((.005, .05), .002, .08, .12),
                          arris=(.006, .004), cup=.003)
@@ -212,6 +220,8 @@ def _shutter(rng, gx, gy, period, height, labels, kinds):
 # cleaner than the original's, the accepted deviation), the shutter as the original's weathered boards.
 PLASTER = (156, 156, 134)
 OAK = (41, 34, 20)
+GRAIN = 2.8                            # power on the oak picture's light: stripier grain
+EDGE = (.03, .004, 2.8, .3)          # worn arris: reach, the dark rim's width (metres), lightening; the rim's factor
 SHUTTER_TONE = (63, 58, 47)
 IRON = (35, 31, 23)
 SPALL_TONE = (142, 136, 112)           # the older grey-ochre coat where the whitewash flaked
@@ -268,7 +278,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
         if not mask.any():
             continue
         along, across, _ = _local(x, y, period, (member[0], tuple(member[1]), tuple(member[2]), member[3]))
-        out[mask] = _sample(wood_img, across[mask] + index * .37, along[mask], 1.) * math.exp(rng.normal(0, .12))
+        out[mask] = _sample(wood_img, across[mask] + index * .37, along[mask], 1.) * math.exp(rng.normal(0, .2))
     pegs = kinds == 'peg'
     out[pegs] = _sample(wood_img, x[pegs] * 3, y[pegs] * 3, 1.) * .8          # end grain, darker
     if shutter.any():
@@ -282,7 +292,15 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
     for mask in (plaster, wood, shutter):            # each part's own light around 1
         if mask.any():
             out[mask] /= np.median(lum[mask])
-    out[wood | shutter] = (out[wood | shutter] @ tb.LUM)[:, None] ** 1.3 * np.array([1., .86, .62])   # grain, olive brown
+    out[wood | shutter] = (out[wood | shutter] @ tb.LUM)[:, None] ** GRAIN * np.array([1., .86, .62])   # grain, olive brown
+    # the oak's tone spreads like the original's (luminance cv .66 against .28 without this): worn light
+    # arrises along every member and a dark line where it goes into the plaster, on both sides alike
+    from scipy.ndimage import distance_transform_edt
+    inner = distance_transform_edt(wood) * (py / rows)
+    worn = np.clip(1 - inner / EDGE[0], 0, 1) * (inner > EDGE[1]) * wood
+    worn *= np.clip(.6 + .6 * pb.noise_metres(rng, (rows, cols), period, .08), 0, 1)
+    out *= (1 + EDGE[2] * worn)[..., None]
+    out[wood & (inner <= EDGE[1])] *= EDGE[3]
 
     # plaster weathering: by form only, nothing that marks one place of the square
     out = out * (1 - spall[..., None]) + _linear(SPALL_TONE) / _linear(PLASTER) * spall[..., None]
