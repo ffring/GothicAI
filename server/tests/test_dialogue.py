@@ -19,6 +19,7 @@ from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
 from gothic_ai.protocol import Hello, LineStarted, NpcRoster, Snapshot, SvmLine
 from gothic_ai.scenarios import basics as scenarios
+from gothic_ai.talk import TalkDesk
 from gothic_ai.trace import TraceWriter
 from gothic_ai.tts import Speech, TtsClient, TtsError
 from tests.fake_game import FakeGame, connected
@@ -64,7 +65,7 @@ async def test_svm_mode_waits_for_hello_and_requires_an_available_quick_model(
         "(дьявольский смех) Ты показал себя!", "Ты показал себя!",
     ),
     ("$HELP", None, "на тебя напали, ты зовёшь на помощь", "вслух", "Помогите!", "Помогите!"),
-    ("$HELP", XARDAS, "на тебя напали, ты зовёшь на помощь", "вслух", "Помогите!", "Помогите!"),
+    ("$AWAKE", XARDAS.lower(), "ты проснулся и зеваешь", "вслух", "(зевает)", "зевает"),
     (
         "$HELP", "PC_HERO", "на тебя напали, ты зовёшь на помощь", "обращаясь к герой",
         "Помогите!", "Помогите!",
@@ -100,7 +101,8 @@ async def test_svm_uses_persona_and_situation_without_history_and_voices_twelve_
 
     assert fake.said == [phrase] and fake.voiced == [True]
     (say,) = [message for message, _ in fake.says]
-    assert say["overlay"] is True and say.get("to") == target and say["mood"] == "angry"
+    recipient = target if (target or "").upper() != XARDAS else None
+    assert say["overlay"] is True and say.get("to") == recipient and say["mood"] == "angry"
     assert not say.get("reply") and not say.get("filler")
     assert [request["text"] for request in requests] == [phrase]
     assert llm.calls == [] and quick.temperatures == [0.7]
@@ -277,6 +279,8 @@ async def test_svm_repeats_are_normalized_and_only_the_last_five_said_phrases_co
     for index in range(len(replies)):
         conv.said_at = float("-inf")
         conv.overlay_free_at = 0
+        for sent in dialogue._sent:
+            dialogue._sent[sent] = float("-inf")  # earlier sends expired during the skipped cooldown
         dialogue._on_message(line.model_copy(update={"id": str(index)}))
         await _until(lambda: not dialogue._svm_tasks)
     records = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
@@ -1204,6 +1208,29 @@ async def test_queued_svm_counts_for_cooldown_and_repeats_and_finishes_its_dropp
         assert [(r["id"], r["outcome"]) for r in records] == [
             ("recent", "busy"), ("repeat", "repeat"), ("queued", "dropped"),
         ]
+
+
+async def test_a_started_svm_is_audible_and_can_be_interrupted():
+    words = "Вон отсюда!"
+    async with one_voice_dialogue(True, FakeBackend(), audio_s=2.0) as (fake, dialogue, conv):
+        talk = TalkDesk(dialogue.link, dialogue)
+        assert talk.begin(XARDAS, "Ксардас")
+        conv.reply_id = "R-previous"
+        dialogue.quick = FakeBackend(words, delay=0)
+        dialogue._nearby[XARDAS] = ("Ксардас", 100)
+        dialogue._on_message(SvmLine(
+            type="svm_line", id="speaking", npc=XARDAS, svm="$GETOUTOFHERE",
+            text="Убирайся отсюда!", overlay=True,
+        ))
+        await _until(
+            lambda: bool(fake.say_ends) and dialogue.started_at(fake.says[0][0]["line"]) is not None
+        )
+        assert not conv.svm_pending
+        assert dialogue.audible(XARDAS) and dialogue.speaking(XARDAS)
+        await fake.send(type="ptt_start", focus=XARDAS)
+        await _until(lambda: bool(fake.hushed))
+        assert fake.hushed == [{"type": "hush", "npc": XARDAS, "reply": "R-previous"}]
+        assert not dialogue.audible(XARDAS) and not dialogue.speaking(XARDAS)
 
 
 @pytest.mark.parametrize("with_tts", [True, False])

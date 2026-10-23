@@ -943,7 +943,10 @@ class DialogueManager:
             elif not phrase:
                 attempt["outcome"] = "nothing"
             else:
-                line = await self._say(conv, words, None, overlay=True, mood=mood, to=msg.target)
+                line = await self._say(
+                    conv, words, None, overlay=True, mood=mood,
+                    to=msg.target if target != conv.npc else None,
+                )
                 if line is not None:
                     conv.svm_pending[line] = record
                     if self.tts is None:
@@ -969,6 +972,8 @@ class DialogueManager:
 
     def _svm_started(self, conv: Conversation, line: str) -> None:
         if record := conv.svm_pending.pop(line, None):
+            conv.earlier_lines.append(line)
+            self._line_replies[line] = line
             words = self._lines[line][0]
             conv.svm_phrases.append(" ".join(_LETTERS.findall(words.casefold())))
             self._note(conv, f"Ты сказал вслух: «{words}»")
