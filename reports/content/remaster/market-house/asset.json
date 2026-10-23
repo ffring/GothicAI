@@ -1165,6 +1165,167 @@
           "sha256": "b6e2d3a6f14b6a1b544c2d4720b48b5d0f974d8c3e8150abfb0378ba467533f7"
         }
       }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_03-attempt-7.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_03.TGA",
+      "attempt": 7,
+      "sha256": "c19ee84ceb4a626d413d6f9f216e62fb8fc60cae3007bce701fbec2d070df042",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T04:36:04Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-3.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-7.normal.png",
+          "sha256": "a8f65371c0c5e49d9711174366568453e49371079265c69c6036cd0e29bfbaec"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-7.roughness.png",
+          "sha256": "c926156692d1611ca1c075ae48e9ed758b784cf25c69142f9d0e44035a7e512c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-8.png",
+      "role": "texture",
+      "texture": "NW_CITY_WINDOW_03.TGA",
+      "attempt": 8,
+      "sha256": "acc9e70ba32177ada2ff4928896db1039dff3c0c9c0fef713eafb386c3017299",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T04:36:04Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-3.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-8.normal.png",
+          "sha256": "fb8436369b74340f135dba8dc4fa9045845eb53775f18f6006a00b1abb09c03b"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-8.roughness.png",
+          "sha256": "37fcbdc7ac25bb048a2bd1bba0e2134b1418dd751163467c75d700581da7cb98"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_04-attempt-5.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_04.TGA",
+      "attempt": 5,
+      "sha256": "061a99e0a753fb96bc612cee17d022975ff173dc451bbc5b16195e2691f28085",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T04:36:04Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-3.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-5.normal.png",
+          "sha256": "d96703f5577c421b48f1f6caadadd6177cb4bbd126512ada0b1a180419762db4"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-5.roughness.png",
+          "sha256": "d109849bb0aeda65719fbffa8d47e914269d828e59c6b31cfb28610f2d9b8af8"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_05-attempt-5.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_05.TGA",
+      "attempt": 5,
+      "sha256": "8e8c5f953d3f1caefe7529fdabe406401a55249c7a7cc2eb5294ed78a8054a42",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T04:36:04Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-3.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-5.normal.png",
+          "sha256": "4839438a61f8b51eb909b267202c17e5918879fae1df96a253b4fabfa2eceedf"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-5.roughness.png",
+          "sha256": "ea9e7587ba8d418bb1555356b80a47bccec42c30b5ec826351bf5ef6f9d6161a"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-10.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA",
+      "attempt": 10,
+      "sha256": "4240f7f4ab06c3cd8281e4315f6301cee0a2349f711b5cd9b3eed27588ef5030",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T04:36:04Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-10.normal.png",
+          "sha256": "92c4bb8d404b4a784b0c01095d31398b15b8a6787a6884fdb857839a9af938b5"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-10.roughness.png",
+          "sha256": "f8a83fe680b56b35f275d95e1e6fea2d8492803348a4feafd8febf57b21d96c1"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-11.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA",
+      "attempt": 11,
+      "sha256": "c8c59e1fc857d62286d2f035346d3b32c56bb1009903372e0a9ec30c9def3d77",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T04:36:04Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-11.normal.png",
+          "sha256": "c38c76f1c6d3551dca16ddcd06a1f62b00399e6de55ced0256f51a3f2984a9c7"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-11.roughness.png",
+          "sha256": "46f1a04d03b08b952033cb37eda777ec07b5524ee3812486e29b49d2eb6f581a"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-10.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA",
+      "attempt": 10,
+      "sha256": "b6121b1596f5164188a028d82ac071a3dc1de733e9bd1d687a8e666929aa123b",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T04:36:04Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-10.normal.png",
+          "sha256": "2fac30de0224d8e976b070e4352a4efc4afe7cd7f4dc00d1dfce770929cd1777"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-10.roughness.png",
+          "sha256": "b629b8a8ceced9a9fb730caddb2d32f3a98a3ca6804b6f203a1a1d0469c975f4"
+        }
+      }
     }
   ],
   "selected": {
@@ -1174,28 +1335,28 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_03.TGA": {
-      "file": "market-house/NW_CITY_WALL_03-attempt-6.png",
-      "reason": "market-8: R3 on market-7: the foot as the original's parts - red-brown blocks, light grey-ochre pointing, a plain ledge under them",
+      "file": "market-house/NW_CITY_WALL_03-attempt-7.png",
+      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WINDOW_03.TGA": {
-      "file": "market-house/NW_CITY_WINDOW_03-attempt-7.png",
-      "reason": "market-8: R3 on market-7: the foot as the original's parts - red-brown blocks, light grey-ochre pointing, a plain ledge under them",
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-8.png",
+      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-10.png",
-      "reason": "market-8: R3 on market-7: the foot as the original's parts - red-brown blocks, light grey-ochre pointing, a plain ledge under them",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-11.png",
+      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-9.png",
-      "reason": "market-8: R3 on market-7: the foot as the original's parts - red-brown blocks, light grey-ochre pointing, a plain ledge under them",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-10.png",
+      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-9.png",
-      "reason": "market-8: R3 on market-7: the foot as the original's parts - red-brown blocks, light grey-ochre pointing, a plain ledge under them",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-10.png",
+      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WOODBEAM_02.TGA": {
@@ -1204,13 +1365,13 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_04.TGA": {
-      "file": "market-house/NW_CITY_WALL_04-attempt-4.png",
-      "reason": "market-8: R3 on market-7: the foot as the original's parts - red-brown blocks, light grey-ochre pointing, a plain ledge under them",
+      "file": "market-house/NW_CITY_WALL_04-attempt-5.png",
+      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WALL_05.TGA": {
-      "file": "market-house/NW_CITY_WALL_05-attempt-4.png",
-      "reason": "market-8: R3 on market-7: the foot as the original's parts - red-brown blocks, light grey-ochre pointing, a plain ledge under them",
+      "file": "market-house/NW_CITY_WALL_05-attempt-5.png",
+      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
       "date": "2026-10-23"
     }
   },
@@ -1488,20 +1649,28 @@
       "date": "2026-10-22",
       "quote": "да, погнали",
       "note": null
+    },
+    {
+      "gate": "ingame",
+      "verdict": "changes",
+      "by": "user",
+      "date": "2026-10-23",
+      "quote": "бут у нас чуть ровнее и прямоугольнее, чем у оригинала; блоки у земли слишком правильные — согласен с ним. А еще у нас стена не такая грязная как в оригинале. Белые стены у домов в верхнем квартале, это как бы отличает часть города",
+      "note": null
     }
   ],
   "build": {
-    "set": "market-8",
+    "set": "market-9",
     "base": "original",
     "date": "2026-10-23",
     "albedo_sha256": {
-      "NW_CITY_WALL_03.TGA": "c21386b79812a89ea091dedd7185c04748764c4a1c420ce3af7eb9881fb76eeb",
-      "NW_CITY_WINDOW_03.TGA": "828fa785a9ac77de5555db04f6a43629e2f9f3f1eaa56cba0c4f92d8f7ba00c8",
-      "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": "785109cd0d803b5522d8459fbe09772712f37ffc00246d73a692010d8d9b7c7c",
-      "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": "4ddea2b1b0b4c18fc5614f641ab3e0dba58def71657f22fc5546276ac43718e3",
-      "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": "792a9aa5c31f8ce3688dbc09c7ae9e9b89474bbda8241e7ca7b9194173e1da4d",
-      "NW_CITY_WALL_04.TGA": "15f5f3228af4fc8da16fb8e931f178a930f680c6541441f4421becd521cc84c8",
-      "NW_CITY_WALL_05.TGA": "8f34cbea2d6e1a0ce696b2d59f966a73a1a38c9665dbf477ad6b859ed4632f84"
+      "NW_CITY_WALL_03.TGA": "b73ea97cf812962ad605f4b6f4a6b26d513748df8df6b813a17c40cdf5cbbef4",
+      "NW_CITY_WINDOW_03.TGA": "e54bec578aea490d3ddbc964f2961bcf67067f17ec38dd309bf5a2eaacb082cb",
+      "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": "32307052873bb5971682660bd1623f7f3a857554e81cceed30b493fe0c7b347e",
+      "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": "5504692943d2b1d37023811075f49290a3715de93a8ca9ac7770597fc8cbd888",
+      "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": "537dab389454692a32d0534adbe2c2915f000c20b79f52560842518808c38e75",
+      "NW_CITY_WALL_04.TGA": "3097eb5c311b8a7cb1930248bc024972ac9f7e22988a2f43bbeb48bb9dd25e2c",
+      "NW_CITY_WALL_05.TGA": "e4a9ce44a73dcbb6499965bf753d1b4efc5e972c5fd84b3a90fc4636e7bcefb3"
     },
     "entries": 7,
     "replaced": [

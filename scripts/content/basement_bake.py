@@ -51,11 +51,11 @@ BLOCK_ROWS = (.849, .903, .962, 1.)   # the dressed blocks: two courses, then a 
 
 COURSE = (.03, .14)         # rubble course heights, metres
 STONE = (.22, .55, (.08, .50))        # rubble stone lengths: median, log spread, limits
-JOINT = (.014, .008)         # joint width between stones: mean, spread
-COURSE_WAVE = (.014, (1.2, .5))       # the courses wander and break: amplitude, wavelengths
-BLOCK = (.30, .08, (.22, .40))        # block lengths: mean, spread, limits
+JOINT = (.009, .006)         # joint width between stones: mean, spread; tight, as a waller packs them
+COURSE_WAVE = (.022, (1.2, .5))       # the courses wander and break: amplitude, wavelengths
+BLOCK = (.32, .12, (.18, .52))        # block lengths: mean, spread, limits
 PLINTH = (1.2, .2, (.9, 1.5))         # the ledge at the foot: long slabs
-BLOCK_JOINT = .020   # wide light pointing: the course reads from across the square
+BLOCK_JOINT = (.011, .005, .006)   # the blocks' joints: mean, spread, least; the course reads from across the square
 MORTAR = (-.030, .004)       # the joints' bottom: depth behind the stone faces, roughness
 BEAM_PROUD = .035            # the beam stands out of the rubble face
 
@@ -137,18 +137,24 @@ def _stone(rng, gx, gy, x0, x1, ybot, ytop, joint, kind):
     a = (x1 - x0) / 2 - joint / 2
     full = np.maximum((ytop - ybot) - joint, .016)
     if kind == 'block':
-        b, corner = full / 2, rng.uniform(.006, .015)
-        dome, proud, rim = rng.uniform(.002, .004), rng.uniform(.004, .012), rng.uniform(.008, .014)
+        b, corner = full / 2 * rng.uniform(.9, 1.), rng.uniform(.012, .03)      # rock-faced, worn round
+        dome, proud, rim = rng.uniform(.004, .010), rng.uniform(.002, .016), rng.uniform(.015, .03)
     else:
         b = full / 2 * rng.uniform(.8, 1.)              # thinner than its course: chinks above it
         corner = np.minimum(a, b) * rng.uniform(.2, .6)  # split, not water-worn: sharp-ish ends
-        dome, proud, rim = rng.uniform(.002, .006), rng.uniform(-.006, .016), rng.uniform(.006, .014)
+        dome, proud, rim = rng.uniform(.002, .006), rng.uniform(-.010, .022), rng.uniform(.006, .014)
     cx, cy = (x0 + x1) / 2 + rng.normal(0, .004), ybot + joint / 2 + b + (rng.normal(0, .008) if kind != 'block' else 0)
     dx, dy = np.abs(gx - cx), np.abs(gy - cy)
+    if kind != 'block':                                   # a split slab is a wedge or a lens, not a box: it
+        xn = np.clip((gx - cx) / max(a, .01), -1.3, 1.3)  # tapers, thins to its ends and lies a little askew
+        half = (1 + rng.uniform(-.35, .35) * xn) * (1 - rng.uniform(.1, .55) * xn ** 4)
+        dy = np.abs(gy - cy - rng.normal(0, .3) * xn * np.mean(b)) / np.maximum(half, .25)
+    else:                                                 # a block sits a little out of true
+        dy = np.abs(gy - cy - rng.normal(0, .004) * (gx - cx) / max(a, .01))
     qx, qy = dx - (a - corner), dy - (b - corner)
     sdf = np.hypot(np.maximum(qx, 0), np.maximum(qy, 0)) + np.minimum(np.maximum(qx, qy), 0) - corner
     # a broken outline: smooth waves in metres, a few centimetres long
-    amount = .004 if kind == 'block' else .009
+    amount = .008 if kind == 'block' else .009
     for length, share in ((.24, 1.), (.11, .6), (.05, .25)):
         t = rng.uniform(0, math.pi)
         sdf += amount * share * rng.uniform(.6, 1) * np.sin(2 * math.pi * (math.cos(t) * gx + math.sin(t) * gy) / length
@@ -163,15 +169,15 @@ def _stone(rng, gx, gy, x0, x1, ybot, ytop, joint, kind):
     inside = sdf < 0
     depth = np.clip(-sdf, 0, None)                         # metres in from the rim
     face = proud + dome * (1 - np.exp(-depth / rim))
-    if kind != 'block':                                   # a cleft face: two or three flat facets
-        planes = [rng.normal(0, .10, 2) for _ in range(rng.integers(2, 4))]
+    if True:                                              # a cleft face: two or three flat facets, the blocks' fainter
+        planes = [rng.normal(0, .10 if kind != 'block' else .05, 2) for _ in range(rng.integers(2, 4))]
         offs = [rng.uniform(0, .004) for _ in planes]
         facets = np.min([o + px_ * (gx - cx) + py_ * (gy - cy) for (px_, py_), o in zip(planes, offs)], axis=0)
         face += np.clip(facets - np.median(facets[inside]) if inside.any() else facets, -.006, .006)
     face += rng.normal(0, .012) * (gx - cx) + rng.normal(0, .03) * (gy - cy)
     for k in range(3):                                    # an uneven face: a few broad bumps
         fx, fy = rng.uniform(2, 6) / max(a, .05), rng.uniform(2, 5) / max(float(np.mean(b)), .02)
-        face += .0012 * np.sin(fx * (gx - cx) + rng.uniform(0, 6.3)) * np.sin(fy * (gy - cy) + rng.uniform(0, 6.3))
+        face += (.0012 if kind != 'block' else .003) * np.sin(fx * (gx - cx) + rng.uniform(0, 6.3)) * np.sin(fy * (gy - cy) + rng.uniform(0, 6.3))
     if kind != 'block':                                   # faint bedding along the slab, broken
         wave = 2 * math.pi * (gy - cy + .006 * np.sin(gx * rng.uniform(5, 12))) / rng.uniform(.014, .03)
         face += .0004 * np.sin(wave) * (np.sin(gx * rng.uniform(8, 20) + rng.uniform(0, 6.3)) > -.2)
@@ -204,7 +210,7 @@ def _lay(rng, gx, gy, height, labels, kinds, kind, lines, size, joint_spread=Tru
         cuts = np.sort(_cuts(rng, px, size))
         for i, x0 in enumerate(cuts):
             x1 = cuts[i + 1] if i + 1 < len(cuts) else cuts[0] + px
-            joint = max(.005, rng.normal(*JOINT)) if joint_spread else BLOCK_JOINT
+            joint = max(.005, rng.normal(*JOINT)) if joint_spread else max(BLOCK_JOINT[2], rng.normal(*BLOCK_JOINT[:2]))
             # the window of the grid that can hold this stone, wrapping in x
             lo, hi = lines[k].min(), lines[k + 1].max()
             r0, r1 = max(0, int(lo / STEP) - 1), min(height.shape[0], int(hi / STEP) + 2)
@@ -212,8 +218,9 @@ def _lay(rng, gx, gy, height, labels, kinds, kind, lines, size, joint_spread=Tru
             cols = np.arange(c0, c1) % (height.shape[1] - 1)
             sx = (np.arange(c0, c1) * STEP)[None, :]
             sy = gy[r0:r1, :1]
-            ybot = np.interp(sx % px, xs, lines[k]) + rng.normal(0, .004)
-            ytop = np.interp(sx % px, xs, lines[k + 1]) + rng.normal(0, .004)
+            jitter = .008 if kind == 'rubble' else .004   # the rubble's beds step from stone to stone
+            ybot = np.interp(sx % px, xs, lines[k]) + rng.normal(0, jitter)
+            ytop = np.interp(sx % px, xs, lines[k + 1]) + rng.normal(0, jitter)
             # a third of the rubble cells hold two thin slabs one on the other
             split = kind == 'rubble' and rng.uniform() < .4 and (ytop - ybot).min() > .06
             beds = [(ybot, ybot + (ytop - ybot) * (f := rng.uniform(.4, .6))), (ybot + (ytop - ybot) * f, ytop)] if split \
@@ -418,6 +425,9 @@ STONE_TINTS = [((1., .92, .78), .50), ((1., .86, .76), .12), ((1., .93, .70), .1
                                        # olive-grey, pinkish, ochre, grey: linear ratios to R, and their share
 STONE_SPREAD = .34                     # log spread of the stones' own tone
 MOSS = ((40, 50, 24), (.55, .85), .45)  # moss colour, the v where it starts and where it is full, its share there
+POINTING_LOST = -.3                    # where the blocks' pointing is gone: below this of a unit noise (a third)
+BED_JOINT = .016                       # metres either side of a course line that is its bed joint
+LOST_JOINT = (52, 46, 32)              # there the joint is earth and grime, dark but not black
 LIME = ((150, 146, 132), .035)         # the light lime bed under the beam and how far below it reaches (v)
 OCCLUSION = (1.8, 1.4)
 ROUGH = dict(stone=(.88, .95), damp=.80, moss=.95, wood=(.86, .95), iron=.72)
@@ -506,7 +516,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     field += 3.2 * shade + 1.6 * rise - 2.
     moss = np.clip((field - np.quantile(field[rock | mortar], 1 - share * rise.mean() * 2)) * .8, 0, 1) * (rock | mortar)
     moss *= rise ** .7
-    moss = np.where(what == 'block', 0., moss)          # on the blocks only in their joints
+    moss = np.where(what == 'block', moss * .5, moss)   # on the blocks thinner, in patches
     moss = np.where(mortar & (v > RUBBLE[1]), np.clip(.5 + .5 * field, 0, 1), moss)
     green = _linear(moss_srgb) / (_linear(moss_srgb) @ tb.LUM)
     out = out * (1 - .8 * moss[..., None]) + (out @ tb.LUM)[..., None] * green * .8 * moss[..., None]
@@ -527,9 +537,18 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     shade = pb.overhang_shade(passes['height'], py / rows, (25., 35., 50.), .05, softness=.004)
     out *= (1 - .65 * shade * (rock | mortar))[..., None]
     # the blocks' joints are pointed with lime, flush and light, mossy in places
-    pointing = mortar & (v > RUBBLE[1] + .004)
+    # in patches: elsewhere the lime is gone and the joint lies deep and dark, as on the original
+    held = pb.noise_metres(rng, (rows, cols), period, .10) + .5 * pb.noise_metres(rng, (rows, cols), period, .03)
+    joints = mortar & (v > RUBBLE[1] + .004)
+    keep = np.clip((held - POINTING_LOST) * 2.5, 0, 1) * joints       # soft: the lime crumbles out at its edge
+    # the bed joints lie tight under the blocks' weight and show as dark lines; the lime is in the
+    # upright joints
+    bed = np.min([np.abs(v - b_) for b_ in BLOCK_ROWS[:3]], axis=0) * py < BED_JOINT
+    keep *= np.where(bed, .15, 1.)
+    pointing = keep > .5
     lime = _linear(LIME[0]) * 1.1 * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .03))[..., None]
-    out[pointing] = lime[pointing] * (1 - .12 * moss[pointing, None]) + (green * .06)[None] * .12 * moss[pointing, None]   # grey lime, not green
+    pointed = lime * (1 - .12 * moss[..., None]) + (green * .06)[None, None] * .12 * moss[..., None]   # grey lime, not green
+    out = np.where(joints[..., None], pointed * keep[..., None] + _linear(LOST_JOINT) * (1 - keep[..., None]), out)
 
     # the original's colour part by part, the joints and their shadow included; the rubble darkens and
     # greens towards the foot. Frames, openings and iron keep their own colour.
@@ -543,7 +562,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
                 # the foot measured part by part on the original: red-brown blocks, light grey-ochre
                 # pointing, a plain olive ledge under them
                 plinth = v > BLOCK_ROWS[2]
-                for m, srgb in ((mask & ~mortar & ~plinth, FOOT['blocks']), (mask & mortar, FOOT['joints']),
+                for m, srgb in ((mask & ~mortar & ~plinth, FOOT['blocks']), (mask & pointing, FOOT['joints']),
                                 (mask & plinth & ~mortar, FOOT['plinth'])):
                     if m.sum() > 50:
                         out[m] *= _linear(srgb) / np.maximum(out[m].mean(axis=0), 1e-6)
