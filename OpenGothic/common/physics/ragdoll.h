@@ -74,6 +74,23 @@ class Ragdoll final {
     void setNoiseCulprit(Npc* culprit);
     float reactionWeight() const;
     const std::vector<size_t>& reactionBones() const;
+    enum class BenchMode : uint8_t { Full, Chain };
+    enum class BenchPelvis : uint8_t { Kinematic, Dynamic };
+    struct BenchStats final {
+      size_t dynamicParts = 0;
+      float maxLinearCmS = 0, maxAngularRadS = 0;
+      float poseRmsCm = 0, poseMaxCm = 0;
+      // Feet/toes' world AABB bottom and downward deviation from animation.
+      float minFootBottomCm = 0, maxFootDropCm = 0;
+      float maxFootPenetrationCm = 0;
+      size_t footFloorSamples = 0, footFloorMisses = 0;
+      bool finite = true;
+      };
+    // Isolated physics experiment; requires OPENGOTHIC_MELEE_BENCH != 0.
+    // Keeps animation/render reaction state unchanged and never applies damage.
+    bool configureBench(BenchMode mode, BenchPelvis pelvis);
+    void clearBench();
+    BenchStats benchStats() const;
     size_t partCount() const;
     size_t boneCount() const;
     // Actual native mass in kilograms: speciesMass * absdet(object scale).
@@ -121,7 +138,7 @@ class Ragdoll final {
             const Tempest::Matrix4x4* worldPose, size_t numBones,
             const Tempest::Matrix4x4& objectMatrix, const Tempest::Vec3& initialVelocity,
             bool kinematic = false);
-    void prepareKinematicStep(float deltaSeconds);
+    void prepareKinematicStep(float deltaSeconds, float targetFraction = 1.f);
     void finishKinematicStep();
     size_t boneForBodyId(uint32_t id) const;
     std::vector<uint32_t> diagnosticBodyIds() const;

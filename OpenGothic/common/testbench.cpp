@@ -669,7 +669,7 @@ struct Bench {
   std::vector<Npc*>            wanderers;
   std::vector<const WayPoint*> wanderPoints;
   size_t                       wanderLegs = 0;
-  struct LivingWalker { Npc* npc=nullptr; WayPoint ends[2]; bool next=false,queued=false; };
+  struct LivingWalker { Npc* npc=nullptr; WayPoint ends[2]; bool next=false,queued=false; int meleePhase=-1;uint64_t meleeAttackAt=0; };
   std::deque<LivingWalker> livingWalkers;
   bool livingFixture=false,livingDebug=false,livingMotion=false,livingMeasuring=false,livingMode=false;
   std::string livingPhase;
@@ -677,6 +677,10 @@ struct Bench {
   struct LivingPhysics { uint64_t time=0;uint64_t dt=0;float milliseconds=0;size_t bodies=0; };
   std::vector<LivingPhysics> livingPhysics;
   bool livingOverflow=false;
+  bool meleeFixture=false,meleeMeasuring=false;
+  std::string meleeMode,meleePelvis;
+  int meleeSubsteps=2;
+  uint64_t meleeMotionFrom=0;
   // Test-only props use the body API directly; the map allowlist contains only
   // visuals actually authored in the stock worlds, not these Item mesh copies.
   struct MovableFixture { ObjVisual visual; DynamicWorld::Item body; };
@@ -11664,6 +11668,54 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.seatPhase="shift";
     event("living_seat_shift","\"distance_cm\":80");
     }
+  else if(c=="melee-physics" && a.size()==6 && a[1]=="setup") {
+    const auto* enabled=std::getenv("OPENGOTHIC_MELEE_BENCH");
+    const int count=int(num(a,2,-1)),substeps=int(num(a,5,0));
+    const auto& mode=a[3];const auto& pelvis=a[4];
+    if(enabled==nullptr || std::string_view(enabled)!="fixture" ||
+       (count!=0 && count!=1 && count!=2 && count!=4 && count!=10) ||
+       (mode!="base" && mode!="full" && mode!="chain" && mode!="blade") ||
+       (pelvis!="kinematic" && pelvis!="dynamic") || (substeps!=1 && substeps!=2) ||
+       (count==0 && mode!="base")) {
+      arenaAbort("melee setup requires fixture flag, count 0/1/2/4/10, mode base/full/chain/blade, pelvis kinematic/dynamic, substeps 1/2");return;
+      }
+    if(!chooseRagdollArena(w,pl)) {arenaAbort("melee fixture needs an empty supported arena");return;}
+    exec("clear 2500",w,pl,ctrl);
+    Gothic::settingsSetI("GAME","living_bodies",0);
+    w.physic()->configureMeleeBench(substeps);
+    bench.meleeMode=mode;bench.meleePelvis=pelvis;bench.meleeSubsteps=substeps;
+    const auto symbol=w.script().findSymbolIndex("BDT_1013_BANDIT_L");
+    const auto sword=w.script().findSymbolIndex("ItMw_1h_Common_01");
+    if(symbol==size_t(-1) || sword==size_t(-1)) {arenaAbort("melee fixture symbols missing");return;}
+    const auto bodyMode=mode=="full" ? Npc::MeleeBenchMode::Full : mode=="chain" ? Npc::MeleeBenchMode::Chain :
+                        mode=="blade" ? Npc::MeleeBenchMode::Blade : Npc::MeleeBenchMode::Base;
+    for(int i=0;i<count;++i) {
+      auto* npc=w.addNpc(symbol,bench.ragdollArenaPlaces[size_t(i)+5]);
+      if(!npc) {arenaAbort("melee NPC insertion failed");return;}
+      npc->clearAiQueue();npc->clearState(false);npc->setTarget(nullptr);npc->setExternalControl(true);
+      npc->setDirection(pl.position()-npc->position());npc->updateTransform();
+      if(npc->currentMeleeWeapon()==nullptr) {npc->addItem(sword,1);npc->useItem(sword,Item::NSLOT,true);}
+      if(npc->currentMeleeWeapon()==nullptr) {arenaAbort("melee fixture actor has no equipped sword");return;}
+      npc->configureMeleeBench(bodyMode,pelvis=="dynamic");
+      bench.crew.push_back(npc);bench.livingWalkers.emplace_back();
+      auto& walker=bench.livingWalkers.back();walker.npc=npc;
+      walker.ends[0]=WayPoint(npc->position()-Vec3(0,0,200),"FP_MELEE_BENCH_A");
+      walker.ends[1]=WayPoint(npc->position(),"FP_MELEE_BENCH_B");
+      for(auto& point:walker.ends) {
+        const auto floor=w.physic()->landRay(point.pos+Vec3(0,200,0),500);
+        if(!floor.hasCol || floor.n.y<.98f) {arenaAbort("melee walking path has no level floor");return;}
+        point.pos.y=floor.v.y;point.groundPos=point.pos;
+        }
+      npc->setWalkMode(WalkBit::WM_Walk);
+      }
+    // The same camera and world geometry are used for zero, one and ten actors.
+    bench.camPos=bench.ragdollArenaTarget+Vec3(0,2600,1100);
+    bench.cam=C_RagdollArena;bench.ragdollArenaCamera=true;bench.camAuto=false;bench.smValid=false;
+    lookFrom(bench.camPos,bench.ragdollArenaTarget);
+    bench.meleeFixture=true;bench.meleeMotionFrom=w.tickCount();
+    event("melee_physics_setup","\"actors\":"+std::to_string(count)+",\"mode\":"+jsonStr(mode)+
+      ",\"pelvis\":"+jsonStr(pelvis)+",\"substeps\":"+std::to_string(substeps)+",\"animation_cycle_ms\":12000");
+    }
   else if(c=="living" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","living_bodies",a[1]=="on");bench.livingPhase=a[1];
     }
@@ -11738,6 +11790,36 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     if(!pass) arenaAbort("living body/count/hit checkpoint failed");
     }
 #ifdef OPENGOTHIC_ENABLE_APP_CADENCE
+  else if(c=="melee-physics" && a.size()==2 && a[1]=="measure") {
+    const auto counts=livingCounts();
+    const size_t expected=bench.meleeMode=="base" ? 0 : bench.crew.size()*24;
+    size_t rigs=0,dynamicParts=0;bool motorsReady=true;
+    for(const auto* npc:bench.crew) if(const auto* body=npc->livingBody()) {
+      ++rigs;const auto stats=body->benchStats();dynamicParts+=stats.dynamicParts;
+      if(bench.meleeMode=="full")
+        motorsReady&=stats.dynamicParts==(bench.meleePelvis=="dynamic" ? 24u : 23u);
+      else if(bench.meleeMode=="chain") motorsReady&=stats.dynamicParts>0 && stats.dynamicParts<24;
+      }
+    event("melee_physics_precondition",livingCountFields(counts,w)+",\"expected_parts\":"+std::to_string(expected)+
+      ",\"rigs\":"+std::to_string(rigs)+",\"motor_dynamic_parts\":"+std::to_string(dynamicParts));
+    if(!bench.meleeFixture || counts.models!=bench.crew.size() || counts.alive!=bench.crew.size() ||
+       counts.parts!=expected || counts.duplicates!=0 || !motorsReady ||
+       rigs!=(bench.meleeMode=="base" ? 0 : bench.crew.size()) ||
+       !AppCadence::normalClock() || !AppCadence::arm(bench.meleeMode!="base")) {
+      arenaAbort("melee measurement precondition failed");return;
+      }
+    AppCadence::counts(true,uint32_t(counts.models),0,uint32_t(counts.parts),0,0);
+    w.physic()->measureMeleeBench(outDir+"/melee-physics.csv");bench.meleeMeasuring=true;
+    event("melee_physics_measure_before",livingCountFields(counts,w));
+    }
+  else if(c=="melee-physics" && a.size()==2 && a[1]=="report") {
+    if(!bench.meleeMeasuring || !AppCadence::done()) {arenaAbort("melee measurement window is incomplete");return;}
+    bench.meleeMeasuring=false;w.physic()->reportMeleeBench();const auto counts=livingCounts();
+    AppCadence::counts(false,uint32_t(counts.models),0,uint32_t(counts.parts),0,0);
+    event("melee_physics_measure_after",livingCountFields(counts,w));
+    if(counts.alive!=bench.crew.size() || counts.duplicates!=0)
+      arenaAbort("melee actors changed during measurement");
+    }
   else if(c=="living" && a.size()==3 && a[1]=="measure") {
     const auto counts=livingCounts();bench.livingMode=a[2]=="on";
     if(!bench.livingFixture || counts.models!=10 || counts.alive!=10 ||
@@ -14879,6 +14961,28 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       n->aiPush(AiQueue::aiGoToPoint(*bench.wanderPoints[(bench.lcg>>8) % bench.wanderPoints.size()]));
       ++bench.wanderLegs;
       }
+  if(bench.meleeFixture) {
+    size_t actor=0;
+    for(auto& walker:bench.livingWalkers) {
+      auto& npc=*walker.npc;
+      const int phase=int(((w.tickCount()-bench.meleeMotionFrom)/4000+actor++)%3);
+      if(!npc.drawWeaponMelee()) continue;
+      if(phase!=walker.meleePhase) {
+        npc.clearAiQueue();npc.clearGoTo();npc.stopWalking();npc.setAnim(Npc::Anim::Idle);
+        walker.queued=false;walker.meleePhase=phase;walker.meleeAttackAt=0;
+        }
+      if(phase==0) {
+        const auto& target=walker.ends[walker.next?1:0];
+        if(!walker.queued || ((npc.position()-target.pos).length()<35 && npc.isAiQueueEmpty())) {
+          if(walker.queued) walker.next=!walker.next;
+          npc.aiPush(AiQueue::aiGoToPoint(walker.ends[walker.next?1:0]));walker.queued=true;
+          }
+        }
+      else if(phase==2 && w.tickCount()>=walker.meleeAttackAt) {
+        npc.setAnim(Npc::Anim::Attack);walker.meleeAttackAt=w.tickCount()+1500;
+        }
+      }
+    }
   if(bench.livingMotion)
     for(auto& walker:bench.livingWalkers) {
       if(walker.npc->isDown()) continue;

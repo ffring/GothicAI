@@ -2310,6 +2310,12 @@ DynamicWorld::PhysicsStats DynamicWorld::physicsStats() const {
   return {world->stepMilliseconds(),world->bodyCount(),world->rayCount()};
   }
 
+void DynamicWorld::configureMeleeBench(int substeps) { world->configureMeleeBench(substeps); }
+void DynamicWorld::updateMeleeBlade(const Npc* owner,const Tempest::Matrix4x4& hand,float lengthCm) { world->updateMeleeBlade(owner,hand,lengthCm); }
+void DynamicWorld::removeMeleeBlade(const Npc* owner) { world->removeMeleeBlade(owner); }
+void DynamicWorld::measureMeleeBench(std::string path) { world->measureMeleeBench(std::move(path)); }
+void DynamicWorld::reportMeleeBench() { world->reportMeleeBench(); }
+
 NavMesh::Geometry DynamicWorld::navigationGeometry() const {
   NavMesh::Geometry result;
   world->staticTriangles([&](const CollisionWorld::StaticTriangle& triangle) {

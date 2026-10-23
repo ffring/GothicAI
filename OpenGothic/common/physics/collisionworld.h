@@ -165,6 +165,12 @@ class CollisionWorld final {
     std::unique_ptr<VirtualCharacter> createVirtualCharacter(float radius, float height, const Tempest::Vec3& feet);
 
     void tick(uint64_t dt);
+    // Stage-0 cost probe. All entry points require OPENGOTHIC_MELEE_BENCH.
+    void configureMeleeBench(int substeps);
+    void updateMeleeBlade(const Npc* owner, const Tempest::Matrix4x4& hand, float lengthCm);
+    void removeMeleeBlade(const Npc* owner);
+    void measureMeleeBench(std::string path);
+    void reportMeleeBench();
     void setWaterSurfaceCallback(std::function<bool(const Tempest::Vec3&,float,float&)> callback);
     void setBuoyancyEnabled(bool enabled);
     bool buoyancyEnabled() const;
@@ -269,6 +275,8 @@ class CollisionWorld final {
     void prepareBuoyancy(std::vector<PhysicsNoise>& splashes);
     void applyBuoyancyStep(float seconds);
     void finishBuoyancy(float seconds);
+    void stepMeleeBlades(float seconds, float fraction);
+    void sampleMeleeBench();
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
     void fillRagdoll(QueryResult& result, JPH::BodyID body) const;
     JPH::PhysicsSystem& physicsSystem();
