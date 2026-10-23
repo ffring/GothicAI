@@ -377,8 +377,45 @@ def load_cached(path: str | Path, *, packed: bool = False) -> dict[str, np.ndarr
 
 
 def load_training_manifest(path: Path, source: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Resolve only explicit splits.train IDs; held-out scenarios are never opened."""
+    """Resolve explicit training entries; held-out scenarios are never opened."""
     manifest = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("schema_version") == 2:
+        expected = {"name": "NAVDEMO", "version": 3, "navigation_memory_version": 4,
+                    "perception_mode": "gaze", "physics": "cv"}
+        if (manifest.get("dataset") != "nav-demos-v5" or manifest.get("consumer") != "nav-bc"
+                or manifest.get("input_variant") != "hd" or manifest.get("complete") is not True
+                or manifest.get("format") != expected):
+            raise ValueError("compact manifest requires complete nav-demos-v5 memory-v4 HD data")
+        selected, seen = [], set()
+        root = source.resolve()
+        for entry in manifest["episodes"]:
+            identity = entry["id"]
+            if identity in seen:
+                raise ValueError(f"duplicate episode ID in manifest: {identity}")
+            seen.add(identity)
+            if entry.get("split") != "train" or entry.get("training_eligible") is not True:
+                continue
+            relative = Path(entry["episode"])
+            directory = (root / relative).resolve()
+            if relative.is_absolute() or not directory.is_relative_to(root):
+                raise ValueError(f"training episode is outside the corpus: {identity}")
+            scenario = json.loads((directory / "episode.json").read_text(encoding="utf-8"))
+            if (scenario.get("id") != identity or scenario.get("split") != "train"
+                    or scenario.get("dataset_family", scenario.get("goal_kind")) != entry["family"]
+                    or scenario.get("training_eligible") is not True
+                    or scenario.get("navigation_memory_version") != 4
+                    or scenario.get("journey_memory") is not True or scenario.get("demo_version") != 3
+                    or scenario.get("perception_mode") != "gaze" or scenario.get("physics_mode") != "cv"
+                    or scenario.get("decisions") != entry["decisions"]):
+                raise ValueError(f"ineligible compact training episode: {identity}")
+            selected.append({**entry, "scenario": scenario, "directory": directory})
+        if not selected:
+            raise ValueError("manifest has no training episodes")
+        totals = manifest["totals"]
+        if (len(selected) != totals["training_episodes"]
+                or sum(entry["decisions"] for entry in selected) != totals["training_decisions"]):
+            raise ValueError("manifest training totals differ from eligible train entries")
+        return manifest, selected
     expected = {"name": "NAVDEMO", "version": 2, "navigation_memory_version": 3,
                 "perception_mode": "gaze", "physics": "cv"}
     if (manifest.get("schema_version") != 1 or manifest.get("dataset") != "nav-demos-v4"

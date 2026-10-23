@@ -360,6 +360,40 @@ def test_bc3_manifest_uses_exact_train_refs_including_failed_follow(tmp_path):
             np.testing.assert_allclose(cached[name], expected[name], atol=1 / 255)
 
 
+@pytest.mark.parametrize("relative", ["point/train/point-0", "../outside", "/outside"])
+def test_compact_v5_manifest_uses_supplied_root_and_only_eligible_train(tmp_path, relative):
+    source = tmp_path / "relocated-corpus"
+    directory = source / "point/train/point-0"
+    directory.mkdir(parents=True)
+    metadata = {"id": "point-0", "goal_kind": "point", "split": "train", "training_eligible": True,
+                "decisions": 2, "navigation_memory_version": 4, "journey_memory": True,
+                "demo_version": 3, "perception_mode": "gaze", "physics_mode": "cv",
+                "start": "start", "goal": "goal", "region": "forest"}
+    (directory / "episode.json").write_text(json.dumps(metadata))
+    entry = {"id": "point-0", "family": "point", "split": "train", "training_eligible": True,
+             "decisions": 2, "samples_sha256": "a" * 64, "episode": relative}
+    manifest = {"schema_version": 2, "dataset": "nav-demos-v5", "consumer": "nav-bc",
+                "input_variant": "hd", "complete": True, "root": "/original/corpus",
+                "format": {"name": "NAVDEMO", "version": 3, "navigation_memory_version": 4,
+                           "perception_mode": "gaze", "physics": "cv"},
+                "full_manifest": {"path": "/unavailable/full/manifest.json", "sha256": "b" * 64},
+                "episodes": [entry, {**entry, "id": "failed", "training_eligible": False,
+                                     "episode": "missing/failed"},
+                             {**entry, "id": "heldout", "split": "validation",
+                              "episode": "missing/heldout"}],
+                "totals": {"training_episodes": 1, "training_decisions": 2}}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest, separators=(",", ":")))
+    if relative != "point/train/point-0":
+        with pytest.raises(ValueError, match="outside the corpus"):
+            data.load_training_manifest(path, source)
+        return
+    loaded, selected = data.load_training_manifest(path, source)
+    assert loaded == manifest
+    assert selected == [{**entry, "scenario": metadata, "directory": directory}]
+    assert not (source / "missing").exists()
+
+
 @pytest.mark.parametrize("input_variant", ["compact", "hd"])
 def test_packed_cache_slices_match_expanded_episode(tmp_path, input_variant):
     records, layout = fixture_records(4)

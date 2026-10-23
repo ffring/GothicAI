@@ -272,7 +272,20 @@ def compare_v4(episodes, v4):
     return comparisons
 
 
-def report_text(manifest, groups, comparisons):
+def compact_manifest(manifest, full_path, full_sha256):
+    root = Path(manifest["root"])
+    fields = ("id", "family", "split", "training_eligible", "decisions", "samples_sha256")
+    return dict(schema_version=2, dataset=manifest["dataset"], consumer=manifest["consumer"],
+        input_variant=manifest["input_variant"], complete=manifest["complete"], root=str(root),
+        format=deepcopy(manifest["format"]), totals=deepcopy(manifest["totals"]),
+        episodes=[dict({key: entry[key] for key in fields},
+                       episode=str(Path(entry["episode"]).relative_to(root))) for entry in manifest["episodes"]],
+        full_manifest=dict(path=str(full_path), sha256=full_sha256),
+        splits={split: dict(manifest="full_manifest", pointer=f"/splits/{split}")
+                for split in ("validation", "test")}, student_training_run=False)
+
+
+def report_text(manifest, groups, comparisons, full_manifest):
     episodes = manifest["episodes"]
     local = sum(entry["local"] for entry in episodes)
     lines = ["# Демонстрации навигации v5", "",
@@ -328,10 +341,13 @@ def report_text(manifest, groups, comparisons):
         f"Все {len(episodes)} эпизодов прошли `nav_demos.py check` (`summarize(validate=True)`). "
         "SHA-256 каждого samples.bin.gz совпал с итоговой сводкой и метаданными; набор файлов на хранилище "
         "точно совпал со сводкой. Годный train не содержит глубокой воды или плавания.", "",
-        "[manifest.json](manifest.json) содержит пути train-эпизодов на хранилище, контрольные суммы и вход ученика `hd`. "
-        "Train включает только годные эпизоды. Validation/test сохранены ссылками на сценарии v4 и detour-наборы: "
+        "[manifest.json](manifest.json) содержит компактные записи с путями относительно корня корпуса, "
+        "контрольными суммами и входом ученика `hd`. Загрузчик `nav_bc_data.load_training_manifest` "
+        "принимает этот файл и явный корень корпуса, читает метаданные только годного train. "
+        "Validation/test сохранены ссылками на сценарии v4 и detour-наборы в полном манифесте: "
         "они не записывались, не проверялись игрой и не включены в train. "
-        "Это манифест для следующего HD-обучения; существующий строгий загрузчик nav_bc для v4 не изменялся.", ""])
+        "Подготовка признаков NAVDEMO v3 и обучение в эту задачу не входят.", "",
+        f"Полный манифест: `{full_manifest['path']}`. SHA-256: `{full_manifest['sha256']}`.", ""])
     return "\n".join(lines)
 
 
@@ -392,23 +408,29 @@ def finalize(task, archive_root):
         by_family=groups, paired_v4=comparisons, safety=safety, student_training_run=False)
     if "split_policy" in v4:
         manifest["split_policy"] = deepcopy(v4["split_policy"])
-    readme = report_text(manifest, groups, comparisons)
-    require(len(readme.encode("utf-8")) <= MAX_REPORT_BYTES, "Final report exceeds 1.5 MB")
+    full_path = archive_root / "manifest.json"
     encoded = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
-    artifacts = {"manifest.json": encoded, "README.md": readme}
+    compact = compact_manifest(manifest, full_path, hashlib.sha256(encoded.encode("utf-8")).hexdigest())
+    readme = report_text(manifest, groups, comparisons, compact["full_manifest"])
+    artifacts = {"manifest.json": json.dumps(compact, ensure_ascii=False, separators=(",", ":")) + "\n",
+                 "README.md": readme}
+    require(sum(len(content.encode("utf-8")) for content in artifacts.values()) <= MAX_REPORT_BYTES,
+            "Final report and compact manifest exceed 1.5 MB")
     added_bytes = sum(len(content.encode("utf-8")) -
                       ((archive_root / "report" / name).stat().st_size
                        if (archive_root / "report" / name).is_file() else 0)
                       for name, content in artifacts.items())
+    added_bytes += len(encoded.encode("utf-8")) - (full_path.stat().st_size if full_path.is_file() else 0)
     require(tree_bytes(archive_root) + added_bytes <= MAX_BYTES,
             "Final artifacts exceed the 30 GB storage budget")
+    full_path.write_text(encoded, encoding="utf-8")
     for destination in (archive_root / "report", task / "source" / REPORT):
         destination.mkdir(parents=True, exist_ok=True)
         for name, content in artifacts.items():
             (destination / name).write_text(content, encoding="utf-8")
     return dict(complete=True, episodes=len(episodes), training_episodes=manifest["totals"]["training_episodes"],
                 dataset_bytes=dataset_bytes, report=str(archive_root / "report/README.md"),
-                manifest=str(archive_root / "report/manifest.json"))
+                manifest=str(archive_root / "report/manifest.json"), full_manifest=str(full_path))
 
 
 def main():

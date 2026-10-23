@@ -119,6 +119,7 @@ def corpus(tmp_path, monkeypatch):
 
 def no_outputs(task, archive):
     assert not (archive / "report").exists()
+    assert not (archive / "manifest.json").exists()
     assert not (task / "source" / report.REPORT).exists()
 
 
@@ -138,7 +139,7 @@ def test_finalization_checks_all_samples_and_keeps_heldout_unrecorded(corpus, mo
     result = report.finalize(task, archive)
     assert result["episodes"] == result["training_episodes"] == 6
     assert set(checked) == {entry["episode"] for entry in summary["episodes"]}
-    manifest = report.read_json(archive / "report/manifest.json")
+    manifest = report.read_json(archive / "manifest.json")
     assert manifest["format"] == dict(name="NAVDEMO", version=3,
         navigation_memory_version=4, perception_mode="gaze", physics="cv")
     assert manifest["consumer"] == "nav-bc" and manifest["input_variant"] == "hd"
@@ -161,7 +162,25 @@ def test_finalization_checks_all_samples_and_keeps_heldout_unrecorded(corpus, mo
         assert (archive / "report" / filename).read_bytes() == (task / "source" / report.REPORT / filename).read_bytes()
     readme = (archive / "report/README.md").read_text()
     assert "6 train-эпизодов" in readme and "3/6 (50.00%)" in readme
-    assert (archive / "report/README.md").stat().st_size <= 1_500_000
+    compact_path = archive / "report/manifest.json"
+    compact = report.read_json(compact_path)
+    assert compact["schema_version"] == 2
+    assert compact["full_manifest"] == dict(path=str(archive / "manifest.json"),
+        sha256=report.digest(archive / "manifest.json"))
+    assert compact["full_manifest"]["sha256"] in readme
+    assert compact_path.read_text().count("\n") == 1
+    for entry in compact["episodes"]:
+        assert set(entry) == {"id", "family", "split", "training_eligible", "decisions", "samples_sha256", "episode"}
+        assert not Path(entry["episode"]).is_absolute()
+        assert (Path(compact["root"]) / entry["episode"]).is_dir()
+    assert compact["splits"]["validation"] == dict(manifest="full_manifest", pointer="/splits/validation")
+    total_bytes = sum((archive / "report" / name).stat().st_size for name in ("README.md", "manifest.json"))
+    assert total_bytes <= report.MAX_REPORT_BYTES
+    before_artifacts = {path: path.read_bytes() for path in (compact_path, archive / "manifest.json", archive / "report/README.md")}
+    monkeypatch.setattr(report, "MAX_REPORT_BYTES", total_bytes - 1)
+    with pytest.raises(ValueError, match="report and compact manifest exceed 1.5 MB"):
+        report.finalize(task, archive)
+    assert {path: path.read_bytes() for path in before_artifacts} == before_artifacts
 
 
 @pytest.mark.parametrize("location", ["summary", "metadata", "metadata_metrics"])
@@ -219,7 +238,7 @@ def test_deep_water_blocks_training_but_retains_ineligible_diagnostics(corpus, e
         no_outputs(task, archive)
     else:
         report.finalize(task, archive)
-        manifest = report.read_json(archive / "report/manifest.json")
+        manifest = report.read_json(archive / "manifest.json")
         assert manifest["safety"]["all"]["unsafe_episodes"] == 1
         assert manifest["safety"]["all"]["deep_water_entries"] == 1
         assert manifest["safety"]["all"]["target_met"] is False
@@ -276,7 +295,7 @@ def test_v4_family_specific_membership_allows_cross_group_endpoint_reuse(corpus,
     for root in (task, archive):
         write_json(root / "input/v4-manifest.json", v4)
     report.finalize(task, archive)
-    manifest = report.read_json(archive / "report/manifest.json")
+    manifest = report.read_json(archive / "manifest.json")
     assert entry["id"] in manifest["splits"]["train"][entry["family"]]
     assert manifest["splits"]["validation"][family] == [forbidden]
 
