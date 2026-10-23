@@ -17,7 +17,7 @@ from gothic_ai.journal import Journal
 from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
-from gothic_ai.protocol import Hello, NpcRoster, SvmLine
+from gothic_ai.protocol import Hello, LineStarted, NpcRoster, Snapshot, SvmLine
 from gothic_ai.scenarios import basics as scenarios
 from gothic_ai.trace import TraceWriter
 from gothic_ai.tts import Speech, TtsClient, TtsError
@@ -34,37 +34,264 @@ async def _until(predicate, timeout: float = 3.0) -> None:
             await asyncio.sleep(0.01)
 
 
-@pytest.mark.parametrize(("quick", "enabled", "replace"), [
-    (True, True, True), (False, True, False), (True, False, False),
+@pytest.mark.parametrize(("quick", "enabled", "available", "replace"), [
+    (True, True, True, True), (False, True, True, False),
+    (True, False, True, False), (True, True, False, False),
 ])
-async def test_svm_mode_waits_for_hello_and_svm_lines_only_log_and_trace(
-    tmp_path, caplog, quick, enabled, replace,
+async def test_svm_mode_waits_for_hello_and_requires_an_available_quick_model(
+    quick, enabled, available, replace,
 ):
     conn = SimpleNamespace(send=AsyncMock())
     link = GameLink(conn)
     llm = FakeBackend()
-    writer = TraceWriter(tmp_path)
     dialogue = DialogueManager(
         link, llm, PersonaProvider(None), quick=llm if quick else None,
-        svm_lines=enabled, trace=writer,
+        svm_lines=enabled,
     )
+    dialogue._svm_available = available
     conn.send.assert_not_awaited()
     link._dispatch(Hello(type="hello", protocol=50, client="fake", codepage="cp1251"))
     await asyncio.gather(*dialogue._background)
     assert [json.loads(call.args[0]) for call in conn.send.await_args_list] == [
         {"type": "svm_mode", "replace": replace},
     ]
+    assert llm.calls == []
+
+
+async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(tmp_path):
+    phrase = "Я ещё покажу тебе как надо встречать незваных гостей у моих ворот."
+    quick = FakeBackend(f"[angry] {phrase} Это уже вторая фраза.", delay=0, chunk=200)
+    llm = FakeBackend()
+    fake = FakeGame()
+    writer = TraceWriter(tmp_path)
     line = SvmLine(
         type="svm_line", id="svm-1", npc=XARDAS, svm="$KILLENEMY",
-        text="Ещё одним монстром меньше.", target="WOLF", overlay=True,
+        text="Ещё одним монстром меньше.", target="WOLF", overlay=False,
     )
-    caplog.set_level("INFO", logger="gothic_ai.dialogue")
-    link._dispatch(line)
-    assert f"svm_line {XARDAS} $KILLENEMY «{line.text}»" in caplog.messages
+    async with scene_tts(per_char=0.0001) as (url, requests), connected(fake) as link:
+        dialogue = DialogueManager(
+            link, llm, PersonaProvider(None), quick=quick, tts=TtsClient(url), trace=writer,
+        )
+        link.snapshots[XARDAS] = Snapshot.model_validate(fake.snapshot(XARDAS))
+        dialogue._nearby[XARDAS] = ("Ксардас", 3000)
+        dialogue.remember(XARDAS, "Ксардас", "Ты защищаешь свою башню от зверей")
+        conv = dialogue.conversations[XARDAS]
+        history = list(conv.history)
+        brief = dialogue._brief(conv)
+        started = time.monotonic()
+        dialogue._on_message(line)
+        await _until(lambda: not dialogue._svm_tasks and bool(fake.say_ends))
+
+    assert fake.said == [phrase] and fake.voiced == [True]
+    (say,) = [message for message, _ in fake.says]
+    assert say["overlay"] is True and say["to"] == "WOLF" and say["mood"] == "angry"
+    assert not say.get("reply") and not say.get("filler")
+    assert [request["text"] for request in requests] == [phrase]
+    assert llm.calls == [] and quick.temperatures == [0.7]
+    (instructions, messages, tools), = quick.calls
+    assert instructions == conv.persona.instructions and messages[:len(history)] == history
+    context = "\n".join(m.content for m in messages[len(history):] if m.role == "developer")
+    assert brief in context
+    assert (
+        f"[Сейчас ты сказал бы вслух: «{line.text}». Скажи это своими словами, одной короткой фразой, "
+        "как сказал бы ты сейчас, по тому, что происходит. Не повторяй этих слов.]"
+    ) in context
+    assert tools == [] and conv.reply is None and conv.talked_at == float("-inf")
+    assert conv.history[-1] == Message("developer", f"[Ты сказал вслух: «{phrase}»]")
+    assert conv.said_at >= started and len(conv.svm_phrases) == 1
+    (record,) = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
+    assert record.items() >= line.model_dump(mode="json").items()
+    assert record["outcome"] == "said" and record["answer"] == phrase
+    assert 0 <= record["elapsed_ms"] < 2000 and "t" in record
+
+
+async def test_svm_thirteen_words_are_silent_and_traced(tmp_path):
+    phrase = "Я ещё покажу тебе как надо встречать незваных гостей у моих старых ворот."
+    quick = FakeBackend(phrase, delay=0, chunk=200)
+    conn = SimpleNamespace(send=AsyncMock())
+    writer = TraceWriter(tmp_path)
+    dialogue = DialogueManager(
+        GameLink(conn), FakeBackend(), PersonaProvider(None), quick=quick, trace=writer,
+    )
+    dialogue._nearby[XARDAS] = ("Ксардас", 100)
+    dialogue._on_message(SvmLine(
+        type="svm_line", id="long", npc=XARDAS, svm="$THREATEN", text="Берегись!", overlay=True,
+    ))
+    await _until(lambda: not dialogue._svm_tasks)
+    conn.send.assert_not_awaited()
+    assert dialogue.conversations[XARDAS].history == []
+    (record,) = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
+    assert record["outcome"] == "too_long" and record["answer"] == phrase
+    assert record["elapsed_ms"] >= 0
+
+
+async def test_svm_deadline_is_two_seconds_and_lateness_does_not_count_as_an_error(tmp_path):
+    assert dialogue_module.SVM_REPLY_S == 2.0
+    quick = FakeBackend("Убирайся!", delay=0, first=2.2)
+    conn = SimpleNamespace(send=AsyncMock())
+    writer = TraceWriter(tmp_path)
+    dialogue = DialogueManager(
+        GameLink(conn), FakeBackend(), PersonaProvider(None), quick=quick, trace=writer,
+    )
+    dialogue._nearby[XARDAS] = ("Ксардас", 100)
+    dialogue._svm_errors = 2
+    dialogue._on_message(SvmLine(
+        type="svm_line", id="late", npc=XARDAS, svm="$THREATEN", text="Берегись!", overlay=True,
+    ))
+    await _until(lambda: not dialogue._svm_tasks)
+    conn.send.assert_not_awaited()
+    assert dialogue._svm_errors == 2 and dialogue._svm_available
+    assert dialogue.conversations[XARDAS].history == []
+    (record,) = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
+    assert record["outcome"] == "late" and record["answer"] == ""
+    assert 1950 <= record["elapsed_ms"] < 2800
+
+
+@pytest.mark.parametrize("busy", ["turn", "recent", "scene"])
+async def test_svm_does_not_interrupt_a_turn_or_a_line_said_in_the_last_three_seconds(tmp_path, busy):
+    assert dialogue_module.SVM_QUIET_S == 3.0
+    quick = FakeBackend("Убирайся!", delay=0)
+    conn = SimpleNamespace(send=AsyncMock())
+    writer = TraceWriter(tmp_path)
+    dialogue = DialogueManager(
+        GameLink(conn), FakeBackend(), PersonaProvider(None), quick=quick, trace=writer,
+    )
+    dialogue._nearby[XARDAS] = ("Ксардас", 100)
+    if busy == "scene":
+        dialogue._on_message(LineStarted(type="line_started", npc=XARDAS, line="scene", voiced=True))
+    conv = dialogue.open(XARDAS, "Ксардас", warm=False)
+    if busy == "turn":
+        conv.reply = asyncio.create_task(asyncio.Event().wait())
+    elif busy == "recent":
+        await dialogue._say(conv, "Стой.", None)
+        assert time.monotonic() - conv.said_at < 3
+        conn.send.reset_mock()
+    try:
+        dialogue._on_message(SvmLine(
+            type="svm_line", id="busy", npc=XARDAS, svm="$THREATEN", text="Берегись!", overlay=True,
+        ))
+        assert dialogue._svm_tasks == {} and quick.calls == []
+        conn.send.assert_not_awaited()
+        (record,) = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
+        assert record["outcome"] == "busy" and record["elapsed_ms"] >= 0
+    finally:
+        if conv.reply is not None:
+            conv.reply.cancel()
+            await asyncio.gather(conv.reply, return_exceptions=True)
+
+
+@pytest.mark.parametrize("source", ["roster", "snapshot"])
+async def test_svm_beyond_thirty_metres_is_silent_without_opening_a_conversation(tmp_path, source):
+    conn = SimpleNamespace(send=AsyncMock())
+    link = GameLink(conn)
+    quick = FakeBackend(delay=0)
+    writer = TraceWriter(tmp_path)
+    dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), quick=quick, trace=writer)
+    if source == "roster":
+        dialogue._nearby[XARDAS] = ("Ксардас", 3000.1)
+    else:
+        snapshot = FakeGame().snapshot(XARDAS)
+        snapshot["player"]["distance"] = 3000.1
+        link.snapshots[XARDAS] = Snapshot.model_validate(snapshot)
+    dialogue._on_message(SvmLine(
+        type="svm_line", id="far", npc=XARDAS, svm="$THREATEN", text="Берегись!", overlay=True,
+    ))
+    assert dialogue._svm_tasks == {} and quick.calls == [] and dialogue.conversations == {}
+    conn.send.assert_not_awaited()
+    (record,) = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
+    assert record["outcome"] == "far" and record["elapsed_ms"] >= 0
+
+
+async def test_svm_has_one_pending_line_per_npc_three_slots_and_yields_to_quick_words(tmp_path):
+    quick = FakeBackend("К оружию!", delay=0, first=60)
+    conn = SimpleNamespace(send=AsyncMock())
+    writer = TraceWriter(tmp_path)
+    dialogue = DialogueManager(
+        GameLink(conn), FakeBackend(), PersonaProvider(None), quick=quick, trace=writer,
+    )
+    for npc in (XARDAS, LOBART, HILDA, "MIL_320_SPEAKER"):
+        dialogue._nearby[npc] = (npc, 100)
+    line = SvmLine(type="svm_line", id="first", npc=XARDAS, svm="$THREATEN", text="Берегись!", overlay=True)
+    dialogue._on_message(line)
+    dialogue._on_message(line.model_copy(update={"id": "same-npc"}))
+    for npc in (LOBART, HILDA):
+        dialogue._on_message(line.model_copy(update={"id": npc, "npc": npc}))
+    dialogue._on_message(line.model_copy(update={"id": "fourth", "npc": "MIL_320_SPEAKER"}))
+    assert len(dialogue._svm_tasks) == 3
+    tasks = list(dialogue._svm_tasks.values())
+    await _until(lambda: len(quick.calls) == 3)
+    quick.first = 0
+    conv = dialogue.open("MIL_320_SPEAKER", "Стражник", warm=False)
+    words, _ = await asyncio.wait_for(dialogue._quick_words(conv, []), 0.5)
+    await asyncio.gather(*tasks, return_exceptions=True)
+    await _until(lambda: not dialogue._svm_tasks)
+    assert words == "К оружию!" and all(task.cancelled() for task in tasks)
+    conn.send.assert_not_awaited()
     records = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
-    assert records == [{**line.model_dump(mode="json"), "t": records[0]["t"]}]
-    assert conn.send.await_count == 1
-    assert llm.calls == []
+    assert {r["id"]: r["outcome"] for r in records} == {
+        "first": "busy", "same-npc": "busy", LOBART: "busy", HILDA: "busy", "fourth": "busy",
+    }
+    assert all(r["elapsed_ms"] >= 0 for r in records)
+
+
+async def test_svm_repeats_are_normalized_and_only_the_last_five_said_phrases_count(tmp_path, monkeypatch):
+    replies = ["Первый.", "Второй.", "Третий.", "Четвёртый.", "Пятый.", "ПЕРВЫЙ!!!", "Шестой.", "Первый."]
+    quick = FakeBackend(script=[FakeStep(text) for text in replies], delay=0)
+    writer = TraceWriter(tmp_path)
+    dialogue = DialogueManager(
+        GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(), PersonaProvider(None),
+        quick=quick, trace=writer,
+    )
+    dialogue._nearby[XARDAS] = ("Ксардас", 100)
+    monkeypatch.setattr(dialogue, "_say", AsyncMock())
+    conv = dialogue.open(XARDAS, "Ксардас", warm=False)
+    line = SvmLine(type="svm_line", id="repeat", npc=XARDAS, svm="$THREATEN", text="Берегись!", overlay=True)
+    for index in range(len(replies)):
+        conv.said_at = float("-inf")
+        dialogue._on_message(line.model_copy(update={"id": str(index)}))
+        await _until(lambda: not dialogue._svm_tasks)
+    records = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
+    assert [r["outcome"] for r in records] == ["said"] * 5 + ["repeat", "said", "said"]
+    assert [r["answer"] for r in records] == replies
+    assert dialogue._say.await_count == 7 and len(conv.svm_phrases) == 5
+    assert len(conv.history) == 7 and "ПЕРВЫЙ!!!" not in str(conv.history)
+
+
+async def test_svm_three_errors_restore_original_lines_then_probes_restore_replacement(tmp_path, monkeypatch):
+    assert dialogue_module.SVM_RECOVER_S == 30.0
+    monkeypatch.setattr(dialogue_module, "SVM_RECOVER_S", 0.05)
+    quick = FakeBackend("Снова на ногах!", delay=0)
+    monkeypatch.setattr(quick, "stream", FailingBackend().stream)
+    probe = AsyncMock(side_effect=[LLMError("still unavailable"), None])
+    monkeypatch.setattr(quick, "prewarm", probe)
+    conn = SimpleNamespace(send=AsyncMock())
+    link = GameLink(conn)
+    writer = TraceWriter(tmp_path)
+    dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), quick=quick, trace=writer)
+    dialogue._nearby[XARDAS] = ("Ксардас", 100)
+    link._dispatch(Hello(type="hello", protocol=50, client="fake", codepage="cp1251"))
+    await asyncio.gather(*dialogue._background)
+    line = SvmLine(type="svm_line", id="error", npc=XARDAS, svm="$THREATEN", text="Берегись!", overlay=True)
+    for index in range(3):
+        dialogue._on_message(line.model_copy(update={"id": str(index)}))
+        await _until(lambda: not dialogue._svm_tasks)
+        assert dialogue._svm_errors == index + 1
+        assert dialogue._svm_available is (index < 2)
+    await _until(lambda: len(conn.send.await_args_list) == 2)
+    assert [json.loads(c.args[0]) for c in conn.send.await_args_list] == [
+        {"type": "svm_mode", "replace": True}, {"type": "svm_mode", "replace": False},
+    ]
+    dialogue._on_message(line.model_copy(update={"id": "unavailable"}))
+    assert dialogue._svm_tasks == {}
+    await _until(lambda: dialogue._svm_available)
+    await _until(lambda: len(conn.send.await_args_list) == 3)
+    assert json.loads(conn.send.await_args.args[0]) == {"type": "svm_mode", "replace": True}
+    assert probe.await_count == 2 and dialogue._svm_errors == 0
+    assert all(call.kwargs["messages"] == [] for call in probe.await_args_list)
+    records = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
+    assert len(records) == 4 and all(r["outcome"] == "error" for r in records)
+    assert all(r["answer"] == "" and r["elapsed_ms"] >= 0 for r in records)
+    assert dialogue.conversations[XARDAS].history == []
 
 
 async def test_player_phrases_get_replies_line_by_line():

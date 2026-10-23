@@ -1578,7 +1578,9 @@ async def serve(args: argparse.Namespace) -> int:
                 exit_code = 1 if bad else 0
             elif args.scenario == "svm_lines":
                 assert state.dialogue is not None
-                results = await scenarios.svm_lines(link, state.dialogue)
+                results = await scenarios.svm_lines(
+                    link, state.dialogue, log_dir=Path(args.memory_db).parent
+                )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0

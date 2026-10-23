@@ -131,6 +131,14 @@ PREWARM_DELAY_S = 0.1  # notes come in bursts: the quick model's cache is filled
 TALK_WARM_S = 300.0  # an npc the hero spoke to this recently is kept warm in the quick model's cache
 PREWARM_CM = 800.0  # a new npc the hero looks at this close is warmed before he speaks
 PREWARM_SLOTS = 3  # the quick model's concurrent prompt-cache slots
+SVM_REPLY_S = 2.0  # from svm_line arrival to the first complete sentence; late lines stay silent
+SVM_WORDS_MAX = 12
+SVM_QUIET_S = 3.0
+SVM_RECOVER_S = 30.0
+SVM_HINT = (
+    "[Сейчас ты сказал бы вслух: «{text}». Скажи это своими словами, одной короткой фразой, "
+    "как сказал бы ты сейчас, по тому, что происходит. Не повторяй этих слов.]"
+)
 SUMMARY_FIRST_S = 60.0  # the summary is not waited for by anyone: more patience
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
@@ -521,6 +529,8 @@ class Conversation:
     talked_at: float = float("-inf")  # the hero last spoke to it (the quick model is kept warm for a while)
     first_words: str = ""  # the last it said at once to the hero's phrase: not the same twice in a row
     first_sounds: deque[bool] = field(default_factory=lambda: deque(maxlen=4))
+    said_at: float = float("-inf")
+    svm_phrases: deque[str] = field(default_factory=lambda: deque(maxlen=5))
 
     @property
     def history(self) -> list[Message]:
@@ -719,6 +729,11 @@ class DialogueManager:
         self.in_fight: Callable[[str], bool] = lambda npc: False
         self.quick = quick
         self.svm_lines = svm_lines
+        self._svm_available = True
+        self._svm_errors = 0
+        self._svm_tasks: dict[str, asyncio.Task[None]] = {}
+        self._svm_probe: asyncio.Task[None] | None = None
+        self._spoke_at: dict[str, float] = {}  # includes scenes before a conversation is opened
         self.quick_first_s, self.quick_idle_s = QUICK_FIRST_S, QUICK_IDLE_S
         self._prewarms: dict[str, asyncio.Task[None]] = {}  # npc -> filling the quick model's cache
         self._prewarm_history: dict[str, list[Message]] = {}  # pending or warmed histories
@@ -761,12 +776,11 @@ class DialogueManager:
             case Hello():
                 self._svm_mode()
             case SvmLine():
-                log.info("svm_line %s %s «%s»", msg.npc, msg.svm, msg.text)
-                if self.trace is not None:
-                    self.trace.write({**msg.model_dump(mode="json"), "t": round(time.time(), 3)})
+                self._start_svm(msg)
             case Session():
                 self._switch_branch(msg)
             case LineStarted():
+                self._spoke_at[msg.npc.upper()] = time.monotonic()
                 if msg.line in self._lines:
                     self._lines[msg.line] = (self._lines[msg.line][0], time.monotonic())
                 if (started := self._starts.pop(msg.line, None)) is not None:
@@ -791,7 +805,138 @@ class DialogueManager:
                 self._spawn_story_voice(msg)
 
     def _svm_mode(self) -> None:
-        self._spawn(self.link.send(SvmModeCmd(replace=self.svm_lines and self.quick is not None)))
+        self._spawn(self.link.send(SvmModeCmd(
+            replace=self.svm_lines and self.quick is not None and self._svm_available,
+        )))
+
+    def _start_svm(self, msg: SvmLine) -> None:
+        received = time.monotonic()
+        npc = msg.npc.upper()
+        attempt: dict[str, Any] = {"outcome": "busy", "answer": ""}
+
+        def record() -> None:
+            attempt["elapsed_ms"] = round((time.monotonic() - received) * 1000, 1)
+            log.info("svm_line %s %s «%s» -> %r (%s, %.1f ms)", npc, msg.svm, msg.text,
+                     attempt["answer"], attempt["outcome"], attempt["elapsed_ms"])
+            if self.trace is not None:
+                self.trace.write({**msg.model_dump(mode="json"), "t": round(time.time(), 3), **attempt})
+
+        if not self.svm_lines or self.quick is None or not self._svm_available:
+            attempt["outcome"] = "error"
+        elif self._distance(npc) > 3000:
+            attempt["outcome"] = "far"
+        elif (
+            npc == "PLAYER" or npc in self._svm_tasks or len(self._svm_tasks) >= PREWARM_SLOTS
+            or self._svm_busy(npc)
+        ):
+            pass
+        else:
+            conv = self.open(npc, self._nearby.get(npc, (npc, 0))[0], warm=False)
+            task = asyncio.create_task(self._svm_line(conv, msg, received, attempt))
+            self._svm_tasks[npc] = task
+
+            def finished(done: asyncio.Task[None]) -> None:
+                if self._svm_tasks.get(npc) is done:
+                    del self._svm_tasks[npc]
+                record()  # also records cancellation before the coroutine's first step
+
+            task.add_done_callback(finished)
+            return
+        record()
+
+    def _svm_busy(self, npc: str) -> bool:
+        conv = self.conversations.get(npc)
+        return (
+            (conv is not None and conv.reply is not None and not conv.reply.done())
+            or time.monotonic() - max(
+                conv.said_at if conv is not None else float("-inf"),
+                self._spoke_at.get(npc, float("-inf")),
+            ) < SVM_QUIET_S
+        )
+
+    async def _svm_line(
+        self, conv: Conversation, msg: SvmLine, received: float, attempt: dict[str, Any],
+    ) -> None:
+        assert self.quick is not None
+        text = ""
+        try:
+            async with (
+                asyncio.timeout_at(received + SVM_REPLY_S),
+                aclosing(self.quick.stream(
+                    instructions=conv.persona.instructions,
+                    messages=[*conv.history, Message("developer", f"{self._brief(conv)}\n"
+                                                      f"{SVM_HINT.format(text=msg.text)}")],
+                    tools=[], temperature=0.7,
+                )) as events,
+            ):
+                async for event in events:
+                    if isinstance(event, TextDelta):
+                        text += event.text
+                        if _FIRST_SENTENCE.search(text) or paragraph_end(text) is not None:
+                            break
+            self._svm_errors = 0
+            words, mood = first_words(text)
+            words = to_game_text(words)
+            attempt["answer"] = words
+            phrase = " ".join(_LETTERS.findall(words.casefold()))
+            if time.monotonic() >= received + SVM_REPLY_S:
+                attempt["outcome"] = "late"
+            elif self._svm_busy(conv.npc):
+                attempt["outcome"] = "busy"
+            elif len(_LETTERS.findall(words)) > SVM_WORDS_MAX:
+                attempt["outcome"] = "too_long"
+            elif phrase in conv.svm_phrases:
+                attempt["outcome"] = "repeat"
+            elif not phrase:
+                attempt["outcome"] = "error"
+            else:
+                await self._say(conv, words, None, overlay=True, mood=mood, to=msg.target)
+                conv.svm_phrases.append(phrase)
+                self._note(conv, f"Ты сказал вслух: «{words}»")
+                attempt["outcome"] = "said"
+        except TimeoutError:
+            attempt["answer"] = first_words(text)[0]
+            attempt["outcome"] = "late"
+        except LLMError as err:
+            attempt["outcome"] = "error"
+            attempt["error"] = str(err)
+            log.info("%s: SVM quick model failed: %s", conv.npc, err)
+            self._svm_errors += 1
+            if self._svm_errors >= 3 and self._svm_available:
+                self._svm_available = False
+                self._svm_mode()
+                self._svm_probe = asyncio.create_task(self._recover_svm())
+        except GameError:
+            attempt["outcome"] = "error"
+        except asyncio.CancelledError:
+            attempt["outcome"] = "busy"
+            raise
+
+    async def _recover_svm(self) -> None:
+        assert self.quick is not None
+        while not self._svm_available:
+            try:
+                await asyncio.wait_for(self.link.closed.wait(), SVM_RECOVER_S)
+                return
+            except TimeoutError:
+                pass
+            try:
+                async with asyncio.timeout(SVM_REPLY_S):
+                    warm = getattr(self.quick, "prewarm", None)
+                    if warm is not None:
+                        await warm(instructions="Ответь одним словом.", messages=[])
+                    else:
+                        async with aclosing(self.quick.stream(
+                            instructions="Ответь одним словом.", messages=[], tools=[],
+                        )) as events:
+                            async for event in events:
+                                if isinstance(event, TextDelta) and event.text.strip():
+                                    break
+                self._svm_errors = 0
+                self._svm_available = True
+                self._svm_mode()
+            except (LLMError, TimeoutError):
+                continue
 
     # --- memory -------------------------------------------------------------------------
 
@@ -802,6 +947,10 @@ class DialogueManager:
                 for task in conv.tasks():
                     task.cancel()
             self.conversations.clear()
+            for task in self._svm_tasks.values():
+                task.cancel()
+            self._svm_tasks.clear()
+            self._spoke_at.clear()
             for task in self._prewarms.values():
                 task.cancel()
             self._prewarms.clear()
@@ -999,6 +1148,8 @@ class DialogueManager:
         for other, task in list(self._prewarms.items()):
             if other != npc:
                 task.cancel()
+        for task in self._svm_tasks.values():
+            task.cancel()
 
     def _brief(self, conv: Conversation) -> str:
         """What the npc perceives now, briefly: the situation of the quick model's words."""
@@ -1435,6 +1586,7 @@ class DialogueManager:
         text = to_game_text(text)
         if not text:
             return
+        conv.said_at = time.monotonic()
         line = f"AIB_{next(self._line_ids)}"
         if reply is not None:  # first words and answers to orders are not the reply's: no gesture is too late
             conv.last_lines.append(line)
@@ -1509,6 +1661,7 @@ class DialogueManager:
                                 return
                         started = True
                         spoken_at = time.monotonic()
+                        conv.said_at = spoken_at
                         await self.link.send(
                             SayCmd(
                                 npc=conv.npc,

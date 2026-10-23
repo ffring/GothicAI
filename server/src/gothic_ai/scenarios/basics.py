@@ -4,6 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 from ..bodies import Bodies
@@ -39,7 +40,6 @@ from ..protocol import (
     Session,
     Snapshot,
     SvmLine,
-    SvmModeCmd,
     ThreatControlCmd,
 )
 from ..talk import TalkDesk
@@ -565,68 +565,121 @@ async def m4_planner_bridge(
     return results
 
 
-async def svm_lines(link: GameLink, dialogue: DialogueManager) -> dict[str, str]:
-    """Compare a human's native and intercepted SVM, including overlay, without a live model."""
-    npc, svm = "NONE_100_XARDAS", "$NOTNOW"
+async def svm_lines(
+    link: GameLink, dialogue: DialogueManager, *, log_dir: Path
+) -> dict[str, str]:
+    """Hear ten live quick-model SVM lines, or the native line after the model goes away."""
+    npc = "NONE_100_XARDAS"
     await link.wait_world()
     await link.debug("skip_important", near=npc)
     await attach_when_free(link, npc)
-    events: list[SvmLine] = []
+    await link.debug("player_goto", to=npc, distance=250)
+    events: list[tuple[SvmLine, float]] = []
+    starts: dict[str, tuple[bool, float]] = {}
 
     def record(message: GameMessage) -> None:
         if isinstance(message, SvmLine) and message.npc == npc:
-            events.append(message)
+            events.append((message, time.monotonic()))
+        elif isinstance(message, LineStarted) and message.npc == npc:
+            starts[message.line] = message.voiced, time.monotonic()
 
     results: dict[str, str] = {}
-    native: dict[bool, float] = {}
-    quick = dialogue.quick
-    # Presence enables replacement; this scenario never requests model generation.
-    dialogue.quick = FakeBackend("", delay=0)
+
+    def game_log() -> str:
+        return (log_dir / "game.log").read_text(encoding="utf-8", errors="replace")
+
+    def trace(event_id: str) -> dict[str, Any] | None:
+        if dialogue.trace is None or not dialogue.trace.path().exists():
+            return None
+        return next(
+            (row for row in read_trace(dialogue.trace.path())
+             if row.get("type") == "svm_line" and row.get("id") == event_id),
+            None,
+        )
+
+    async def native_line() -> None:
+        before = len(events)
+        native_before = game_log().count(f"[ai] native svm {npc} $NOTNOW ")
+        action = await link.act(npc, "say_svm", svm="$NOTNOW", overlay=False, npc="PLAYER")
+        following = await link.act(npc, "wait", ms=1)
+        native_after = game_log().count(f"[ai] native svm {npc} $NOTNOW ")
+        replace = dialogue.svm_lines and dialogue.quick is not None and dialogue._svm_available
+        ok = (not replace and action.status == following.status == "done" and len(events) == before
+              and native_after == native_before + 1)
+        results["native_fallback"] = (
+            f"{'done' if ok else 'failed'} (replace={str(replace).lower()}, "
+            f"native={native_after - native_before}, "
+            f"svm_line={len(events) - before}, action={action.status}, next={following.status})"
+        )
+
     link.listeners.append(record)
     try:
         await link.act(npc, "turn_to", npc="PLAYER")
-        for replace in (False, True) if dialogue.svm_lines else (False,):
-            mode = "replace" if replace else "native"
-            await link.send(SvmModeCmd(replace=replace))
-            for overlay in (False, True):
-                name = f"{mode}_{'overlay' if overlay else 'queued'}"
-                before = len(events)
-                started = time.monotonic()
-                said = await link.act(npc, "say_svm", svm=svm, overlay=overlay, npc="PLAYER")
-                elapsed = time.monotonic() - started
-                # A real following queue action supplies a game-clock timing marker in game.log.
-                following = await link.act(npc, "wait", ms=1)
-                received = events[before:]
-                valid = (
-                    len(received) == 1 and received[0].svm == svm and bool(received[0].text)
-                    and received[0].target == "PC_HERO" and received[0].overlay == overlay
-                ) if replace else not received
-                ok = said.status == following.status == "done" and valid
-                detail = (
-                    f"action={said.status}, next={following.status}, events={len(received)}, "
-                    f"queue_s={elapsed:.3f}"
+        await asyncio.sleep(3.1)
+        if not dialogue.svm_lines or dialogue.quick is None or not dialogue._svm_available:
+            await native_line()
+            return _logged(results)
+
+        svms = (
+            "NOTNOW", "GETOUTOFHERE", "WEAPONDOWN", "DIRTYTHIEF", "STOPMAGIC", "NOTBAD",
+            "NEVERHITMEAGAIN", "HELP", "OHMYGODITSAFIGHT", "GOODMONSTERKILL", "WHATWASTHAT",
+        )
+        said = errors = late = 0
+        for index in range(2 * len(svms)):
+            svm = f"${svms[index % len(svms)]}"
+            overlay = index % 2 == 0
+            before, lines_before = len(events), set(dialogue._lines)
+            native_before = game_log().count(f"[ai] native svm {npc} ")
+            action = await link.act(npc, "say_svm", svm=svm, overlay=overlay, npc="PLAYER")
+            if not await _until(lambda before=before: len(events) > before, 3):
+                results["intercept"] = f"failed ({svm}, action={action.status}, no svm_line)"
+                break
+            event, received_at = events[before]
+            valid = (event.svm == svm and bool(event.text) and event.target == "PC_HERO"
+                     and event.overlay == overlay)
+            if not valid or not await _until(lambda event=event: trace(event.id) is not None, 3):
+                results["trace"] = f"failed ({event.id}, valid={valid}, no result within 3s)"
+                break
+            row = trace(event.id)
+            assert row is not None
+            outcome, answer = row["outcome"], row.get("answer", "")
+            errors = errors + 1 if outcome == "error" else 0
+            late = late + 1 if outcome == "late" else 0
+            log.info("svm sample %s: %r -> %r (%s, %.1f ms)",
+                     event.id, event.text, answer, outcome, row["elapsed_ms"])
+            if late == 2:
+                results["deadline"] = "failed (two consecutive late SVM requests; stop)"
+                break
+            if not dialogue._svm_available:
+                results["model_errors"] = f"done ({errors} scenario errors, replacement disabled)"
+                await asyncio.sleep(0.2)
+                await native_line()
+                break
+            if outcome == "said":
+                line = next((line for line in dialogue._lines.keys() - lines_before
+                             if dialogue._lines[line][0] == answer), None)
+                voiced = line is not None and await _until(lambda line=line: line in starts, 8)
+                if voiced:
+                    voiced = starts[line][0]
+                played = voiced and f"[ai] voice {line} starts" in game_log()
+                native_after = game_log().count(f"[ai] native svm {npc} ")
+                ok = bool(played and native_after == native_before)
+                delay = starts[line][1] - received_at if voiced else 0
+                said += 1
+                results[f"gemma_{said:02}"] = (
+                    f"{'done' if ok else 'failed'} ({event.text!r} -> {answer!r}; "
+                    f"first_phrase_ms={row['elapsed_ms']:.1f}, voice_s={delay:.3f}, "
+                    f"line={line}, voiced={bool(voiced)}, native={native_after - native_before})"
                 )
-                if replace:
-                    delta = abs(elapsed - native[overlay])
-                    ok = ok and delta <= 0.3
-                    detail += f", native_s={native[overlay]:.3f}, delta_s={delta:.3f}"
-                else:
-                    native[overlay] = elapsed
-                if received:
-                    detail += f", {received[0].svm} {received[0].text!r}"
-                results[name] = f"{'done' if ok else 'failed'} ({detail})"
-                if not ok:
-                    return _logged(results)
-        if dialogue.svm_lines:
-            ids = [event.id for event in events]
-            results["unique_ids"] = "done" if len(ids) == len(set(ids)) else f"failed ({ids})"
-        else:
-            results["disabled"] = "done (--no-svm-lines, native sound and no svm_line)"
+                if not ok or said == 10:
+                    break
+            # Do not make the next SVM compete with this NPC's last words or overlay voice.
+            await asyncio.sleep(4)
+        if "native_fallback" not in results:
+            results["samples"] = f"{'done' if said == 10 else 'failed'} ({said}/10 live Gemma lines)"
         return _logged(results)
     finally:
         link.listeners.remove(record)
-        dialogue.quick = quick
-        await link.send(SvmModeCmd(replace=dialogue.svm_lines and quick is not None))
         await link.act(npc, "return_to_routine")
 
 
