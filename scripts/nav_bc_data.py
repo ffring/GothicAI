@@ -5,11 +5,12 @@
         --output /absolute/nav-bc/cache
 
 Only numpy is required. Preparation streams the recordings one episode at a time.
-Only NAVDEMO v2 recordings are accepted. The cache contains successful teacher
+The default cache accepts NAVDEMO v2 recordings and contains successful teacher
 episodes and all DAgger episodes from training pairs. A saved split preserves
 the held-out (start, goal) pairs; new successful v2 pairs join training.
 With --manifest, BC3 uses exactly the listed memory-v3 training episodes,
-including failed follow trials, without creating a new split.
+including failed follow trials, without creating a new split. BC4 uses the v5
+manifest's memory-v4 NAVDEMO v3 recordings and HD maps with familiar appended.
 """
 
 from __future__ import annotations
@@ -38,8 +39,11 @@ VECTOR_SIZE = nav_demos.RAY_COUNT * 9 + 10 + 14
 CACHE_VERSION = 3
 BC3_CACHE_VERSION = 4
 HD_CACHE_VERSION = 5
+BC4_CACHE_VERSION = 6
 HD_NEAR_SHAPE = (10, 64, 64)
 HD_FAR_SHAPE = (10, 50, 100)
+BC4_NEAR_SHAPE = (11, 64, 64)
+BC4_FAR_SHAPE = (11, 50, 100)
 INPUT_NAMES = frozenset(("body", "roads", "previous_keys", "eye", "memory_near", "memory_far"))
 
 PREPROCESSING = {
@@ -70,6 +74,14 @@ HD_PREPROCESSING = {
     "cache_quantization": "vector/height extrema float16, map probabilities/validity round(255*x) uint8, labels uint8",
 }
 
+BC4_PREPROCESSING = {
+    **HD_PREPROCESSING,
+    "navdemo_version": 3,
+    "navigation_memory_version": 4,
+    "input_variant": "hd-familiar",
+    "map_order": [*HD_PREPROCESSING["map_order"], "familiar"],
+}
+
 
 def _nearest_height(memory: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Infer the height origin entirely from the learner's remembered ground."""
@@ -90,7 +102,7 @@ def _pool_memory(memory: np.ndarray, factor: int, reference: np.ndarray) -> np.n
     out_h, out_w = height // factor, width // factor
     if height % factor or width % factor:
         raise ValueError("memory dimensions must be divisible by pooling factor")
-    probability = memory["channels"].astype(np.float32) / 255
+    probability = memory["channels"][..., :7].astype(np.float32) / 255
     probability = probability.reshape(count, out_h, factor, out_w, factor, 7).mean(axis=(2, 4))
     valid = memory["height_valid"].astype(np.float32)
     relative = memory["ground_height_cm"].astype(np.float32) - reference[:, None, None]
@@ -105,14 +117,18 @@ def _pool_memory(memory: np.ndarray, factor: int, reference: np.ndarray) -> np.n
     return np.ascontiguousarray(features.transpose(0, 3, 1, 2), dtype=np.float32)
 
 
-def _hd_memory(memory: np.ndarray, reference: np.ndarray) -> np.ndarray:
+def _hd_memory(memory: np.ndarray, reference: np.ndarray, familiar: bool = False) -> np.ndarray:
     """Keep every stored cell; NAVDEMO has one height, so its max equals min."""
-    probability = memory["channels"].astype(np.float32) / 255
+    probability = memory["channels"][..., :7].astype(np.float32) / 255
     valid = memory["height_valid"] != 0
     relative = (memory["ground_height_cm"].astype(np.float32) - reference[:, None, None]) / 200
     relative = np.where(valid, np.clip(relative, -10, 10), 0)
     features = np.concatenate((probability, relative[..., None], relative[..., None],
                                valid[..., None].astype(np.float32)), axis=-1)
+    if familiar:
+        if memory["channels"].shape[-1] != 8:
+            raise ValueError("HD familiar input requires NAVDEMO v3 memory channels")
+        features = np.concatenate((features, memory["channels"][..., 7:8].astype(np.float32) / 255), axis=-1)
     return np.ascontiguousarray(features.transpose(0, 3, 1, 2), dtype=np.float32)
 
 
@@ -140,14 +156,14 @@ def encode_features(inputs: dict[str, np.ndarray], layout: np.ndarray,
         reference = np.where(known, reference, far_reference)
         near = _pool_memory(inputs["memory_near"], 2, reference)
         far = _pool_memory(inputs["memory_far"], 4, reference)
-    elif input_variant == "hd":
+    elif input_variant in ("hd", "hd-familiar"):
         reference = np.asarray(feet_height_cm, dtype=np.float32)
         if reference.shape != (count,) or not np.isfinite(reference).all():
             raise ValueError("HD input requires one finite physical feet height per decision")
         if inputs["memory_near"].shape[1:] != (64, 64) or inputs["memory_far"].shape[1:] != (100, 100):
             raise ValueError("HD input requires the recorded 64x64 near and 100x100 far maps")
-        near = _hd_memory(inputs["memory_near"], reference)
-        far = _hd_memory(inputs["memory_far"][:, 50:100, :], reference)
+        near = _hd_memory(inputs["memory_near"], reference, input_variant == "hd-familiar")
+        far = _hd_memory(inputs["memory_far"][:, 50:100, :], reference, input_variant == "hd-familiar")
     else:
         raise ValueError(f"unsupported navigation input variant: {input_variant}")
 
@@ -323,9 +339,12 @@ def _pack(features: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     packed = {"vector": features["vector"].astype(np.float16)}
     for name in ("near", "far", *(["aux_near"] if "aux_near" in features else [])):
         values = features[name]
+        valid_index = 9 if values.shape[1] == 11 else values.shape[1] - 1
         packed[f"{name}_channels"] = np.rint(values[:, :7] * 255).astype(np.uint8)
-        packed[f"{name}_height"] = values[:, 7:-1].astype(np.float16)
-        packed[f"{name}_valid"] = np.rint(values[:, -1:] * 255).astype(np.uint8)
+        packed[f"{name}_height"] = values[:, 7:valid_index].astype(np.float16)
+        packed[f"{name}_valid"] = np.rint(values[:, valid_index:valid_index + 1] * 255).astype(np.uint8)
+        if values.shape[1] == 11:
+            packed[f"{name}_familiar"] = np.rint(values[:, 10:11] * 255).astype(np.uint8)
     return packed
 
 
@@ -365,6 +384,9 @@ def unpack_cached(source, start: int | None = None, stop: int | None = None) -> 
         result[name] = np.concatenate((source[f"{name}_channels"][selected].astype(np.float32) / 255,
                                        source[f"{name}_height"][selected].astype(np.float32),
                                        source[f"{name}_valid"][selected].astype(np.float32) / 255), axis=1)
+        if f"{name}_familiar" in source:
+            result[name] = np.concatenate((result[name],
+                source[f"{name}_familiar"][selected].astype(np.float32) / 255), axis=1)
     return result
 
 
@@ -470,26 +492,32 @@ def load_training_manifest(path: Path, source: Path) -> tuple[dict[str, Any], li
 
 def prepare_manifest(source: Path, output: Path, manifest_path: Path,
                      chunk_records: int = 32, input_variant: str = "compact") -> dict[str, Any]:
-    """Prepare the frozen BC3 training population, including failed follow trials."""
+    """Prepare the manifest's frozen training population without held-out reads."""
     if any(not path.is_absolute() for path in (source, output, manifest_path)):
         raise ValueError("source, output and manifest paths must be absolute")
     if output.resolve().is_relative_to(source.resolve()):
         raise ValueError("cache must be outside the source recordings")
-    if input_variant not in ("compact", "hd"):
+    if input_variant not in ("compact", "hd", "hd-familiar"):
         raise ValueError(f"unsupported navigation input variant: {input_variant}")
-    hd = input_variant == "hd"
-    cache_version = HD_CACHE_VERSION if hd else BC3_CACHE_VERSION
+    familiar = input_variant == "hd-familiar"
+    hd = input_variant in ("hd", "hd-familiar")
+    cache_version = BC4_CACHE_VERSION if familiar else HD_CACHE_VERSION if hd else BC3_CACHE_VERSION
     if (output / "index.json").exists():
         previous = json.loads((output / "index.json").read_text(encoding="utf-8"))
         if previous.get("cache_version") != cache_version:
             raise ValueError("input variants require separate cache directories")
-    _, episodes = load_training_manifest(manifest_path, source)
+    manifest, episodes = load_training_manifest(manifest_path, source)
+    navdemo_version, memory_version = (3, 4) if familiar else (2, 3)
+    if (manifest["format"]["version"] != navdemo_version
+            or manifest["format"]["navigation_memory_version"] != memory_version):
+        raise ValueError("manifest recording and memory versions differ from the requested input variant")
+    preprocessing = BC4_PREPROCESSING if familiar else HD_PREPROCESSING if hd else PREPROCESSING
     index: dict[str, Any] = {
-        "cache_version": cache_version, "navdemo_version": 2, "navigation_memory_version": 3,
+        "cache_version": cache_version, "navdemo_version": navdemo_version, "navigation_memory_version": memory_version,
         "manifest": str(manifest_path), "heads": list(BC3_HEADS), "classes": list(BC3_CLASSES),
-        "vector_size": VECTOR_SIZE, "near_shape": list(HD_NEAR_SHAPE) if hd else [9, 32, 32],
-        "far_shape": list(HD_FAR_SHAPE) if hd else [9, 25, 25],
-        "preprocessing": HD_PREPROCESSING if hd else PREPROCESSING,
+        "vector_size": VECTOR_SIZE, "near_shape": list(BC4_NEAR_SHAPE if familiar else HD_NEAR_SHAPE) if hd else [9, 32, 32],
+        "far_shape": list(BC4_FAR_SHAPE if familiar else HD_FAR_SHAPE) if hd else [9, 25, 25],
+        "preprocessing": preprocessing,
         "situations": list(SITUATIONS), "episodes": [],
         "class_counts": {"train": {head: [0] * count for head, count in zip(BC3_HEADS, BC3_CLASSES)}},
         "auxiliary": {"stuck": {"horizon_ms": 2000, "excursion_xz_cm": 25,
@@ -498,13 +526,13 @@ def prepare_manifest(source: Path, output: Path, manifest_path: Path,
                       "detour": {"weight": .5, "available_steps": 0,
                                  "target_order": ["path_cm/1000 clipped [0,50]", "right", "up", "forward"],
                                  "teacher_versions": [1, 2], "memory_teacher_hints_excluded": True},
-                      "true_map": {"available": False, "reason": "not recorded in NAVDEMO v2"}},
+                      "true_map": {"available": False, "reason": f"not recorded in NAVDEMO v{navdemo_version}"}},
     }
     common_layout, changes, decisions = None, 0, 0
     (output / "episodes").mkdir(parents=True, exist_ok=True)
     cache_bytes = sum(path.stat().st_size for path in output.rglob("*") if path.is_file()) if hd else 0
     if hd:
-        index["input_variant"] = "hd"
+        index["input_variant"] = input_variant
         index["auxiliary"]["next_near"]["target"] = "next compact encoded near map (aux_near only; not policy input)"
         index["storage"] = {"compression": "npz", "reserve_bytes": 20 * 1024**3,
                             "cache_limit_bytes": 9 * 1024**3}
@@ -513,8 +541,9 @@ def prepare_manifest(source: Path, output: Path, manifest_path: Path,
     for number, entry in enumerate(episodes, start=1):
         directory, scenario = entry["directory"], entry["scenario"]
         samples = directory / "samples.bin.gz"
-        if nav_demos.episode_version(samples) != 2 or nav_demos.episode_memory_version(samples) != 3:
-            raise ValueError(f"BC3 training episode is not NAVDEMO v2 memory-v3: {directory}")
+        if (nav_demos.episode_version(samples) != navdemo_version
+                or nav_demos.episode_memory_version(samples) != memory_version):
+            raise ValueError(f"training episode is not NAVDEMO v{navdemo_version} memory-v{memory_version}: {directory}")
         metadata = json.loads((directory / "episode.json").read_text(encoding="utf-8"))
         if metadata.get("decisions") != entry["decisions"]:
             raise ValueError(f"manifest decision count differs from recording: {directory}")
@@ -771,8 +800,8 @@ def main() -> None:
     prepare_command.add_argument("--dagger-source", type=Path, action="append", default=[],
                                  help="add all labelled learner drives from original training pairs; repeat per round")
     prepare_command.add_argument("--manifest", type=Path,
-                                 help="use only the frozen nav-demos-v4 splits.train recordings (BC3)")
-    prepare_command.add_argument("--input-variant", choices=("compact", "hd"), default="compact",
+                                 help="use only frozen manifest training recordings (v4 BC3 or v5 BC4)")
+    prepare_command.add_argument("--input-variant", choices=("compact", "hd", "hd-familiar"), default="compact",
                                  help="HD keeps native map cells and physical-feet-relative height extrema")
     args = parser.parse_args()
     prepare(args.source, args.output, args.seed, args.validation_fraction, args.chunk_records,

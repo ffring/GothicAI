@@ -21,6 +21,7 @@ HEAD_SIZES = {
     1: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "jump": 2, "climb": 2},
     2: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "maneuver": 3},
     3: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "maneuver": 3},
+    4: {"forward": 3, "strafe": 3, "turn": 3, "walk": 2, "maneuver": 3},
 }
 
 
@@ -84,10 +85,17 @@ class NumpyPolicy:
             raise ValueError("unsupported policy architecture")
         if self.format_version == 3 and self.header.get("preprocessing", {}).get("input_variant") != "hd":
             raise ValueError("navigation weight format 3 requires hd preprocessing")
+        if self.format_version == 4:
+            preprocessing = self.header.get("preprocessing", {})
+            if (preprocessing.get("input_variant") != "hd-familiar"
+                    or preprocessing.get("navdemo_version") != 3
+                    or preprocessing.get("navigation_memory_version") != 4):
+                raise ValueError("navigation weight format 4 requires hd-familiar NAVDEMO v3 memory-v4 preprocessing")
         self.near_shape = tuple(architecture["inputs"]["near"])
         self.far_shape = tuple(architecture["inputs"]["far"])
-        expected_near = (10, 64, 64) if self.format_version == 3 else (9, 32, 32)
-        expected_far = (10, 50, 100) if self.format_version == 3 else (9, 25, 25)
+        channels = 11 if self.format_version == 4 else 10
+        expected_near = (channels, 64, 64) if self.format_version >= 3 else (9, 32, 32)
+        expected_far = (channels, 50, 100) if self.format_version >= 3 else (9, 25, 25)
         if self.near_shape != expected_near or self.far_shape != expected_far:
             raise ValueError("unsupported policy map shapes")
         self.vector_size = int(architecture["inputs"]["vector"][0])
@@ -170,7 +178,7 @@ class NumpyPolicy:
         return probabilities
 
     def sample(self, logits: dict[str, np.ndarray], rng: np.random.Generator) -> dict[str, float | bool]:
-        """Sample runtime keys; v2/v3 jump and climb are mutually exclusive."""
+        """Sample runtime keys; v2 and newer jump and climb are mutually exclusive."""
         actions = {name: int(rng.choice(len(values), p=values))
                    for name, values in self.probabilities(logits).items()}
         return {

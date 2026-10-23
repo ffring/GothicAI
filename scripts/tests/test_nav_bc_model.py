@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from nav_bc_model import HEAD_SIZES, BC3_HEAD_SIZES, NavPolicy, export_weights
 from nav_bc_numpy import NumpyPolicy, _adaptive_avg_pool2d
-from nav_bc_data import HD_PREPROCESSING, PREPROCESSING, VECTOR_SIZE
+from nav_bc_data import BC4_PREPROCESSING, HD_PREPROCESSING, PREPROCESSING, VECTOR_SIZE
 
 
 class NavPolicyReferenceTest(unittest.TestCase):
@@ -124,10 +124,10 @@ class NavPolicyReferenceTest(unittest.TestCase):
             NumpyPolicy(self.path)
 
     def test_bc3_auxiliary_heads_are_training_only_and_recurrent_logits_match(self) -> None:
-        for version in (2, 3):
+        for version in (2, 3, 4):
             with self.subTest(version=version):
                 model = NavPolicy(37, hidden_size=16, format_version=version, auxiliary=True).eval()
-                preprocessing = HD_PREPROCESSING if version == 3 else self.preprocessing
+                preprocessing = BC4_PREPROCESSING if version == 4 else HD_PREPROCESSING if version == 3 else self.preprocessing
                 temperatures = dict.fromkeys(BC3_HEAD_SIZES, .8)
                 header = export_weights(model, self.path, preprocessing, temperatures)
                 self.assertEqual(header["version"], version)
@@ -202,6 +202,23 @@ class NavPolicyReferenceTest(unittest.TestCase):
         self.assertEqual(set(result["reset"]), reset)
         self.assertEqual(set(result["transferred"]), transferred)
         self.assertTrue(any(name.startswith("aux_") for name in transferred))
+
+        # BC4 must instead preserve all HD tensors, adding only a zero familiar
+        # input slice so its initial logits remain the HD policy's logits.
+        hd_state = {name: value.clone() for name, value in hd.state_dict().items()}
+        torch.save(dict(config=dict(config, format_version=3), model=hd_state), checkpoint)
+        export_weights(hd, checkpoint.parent / "policy.navbc",
+                       {**HD_PREPROCESSING, "eye_layout": eye_layout})
+        bc4 = NavPolicy(VECTOR_SIZE, hidden_size=16, format_version=4, auxiliary=True)
+        result = initialize_bc3_hd(bc4, checkpoint, {"eye_layout": eye_layout})
+        self.assertEqual(result["reset"], [])
+        self.assertEqual(set(result["expanded"]), {"near_encoder.0.weight", "far_encoder.0.weight"})
+        for name, actual in bc4.state_dict().items():
+            if name in result["expanded"]:
+                self.assertTrue(torch.equal(actual[:, :10], hd_state[name]))
+                self.assertFalse(actual[:, 10].any())
+            else:
+                self.assertTrue(torch.equal(actual, hd_state[name]))
 
     def test_hd_sampling_decodes_one_mutually_exclusive_maneuver(self) -> None:
         model = NavPolicy(37, hidden_size=16, format_version=3)

@@ -42,17 +42,23 @@ ROAD_FIELDS = {
     1: ["next_direction", "next_distance_cm", "goal_direction", "goal_distance_cm", "remaining_visual_cm", "goal_in_known"],
     2: ["carrot_direction", "carrot_distance_cm", "goal_direction", "goal_distance_cm", "remaining_known_cm", "beyond_known"],
 }
+ROAD_FIELDS[3] = ROAD_FIELDS[2].copy()
 
 
 def fixture_preprocessing(navdemo_version: int, input_variant: str = "compact") -> dict:
     """Describe the checker input without changing training metadata globally."""
     if navdemo_version not in ROAD_FIELDS:
         raise ValueError(f"unsupported NAVDEMO version: {navdemo_version}")
-    if input_variant not in ("compact", "hd") or (input_variant == "hd" and navdemo_version != 2):
+    if input_variant not in ("compact", "hd", "hd-familiar"):
+        raise ValueError(f"unsupported fixture input variant: {input_variant}")
+    if input_variant == "hd" and navdemo_version != 2:
         raise ValueError("HD fixture input requires NAVDEMO v2")
-    preprocessing = {**(data.HD_PREPROCESSING if input_variant == "hd" else data.PREPROCESSING),
+    if input_variant == "hd-familiar" and navdemo_version != 3:
+        raise ValueError("HD familiar fixture input requires NAVDEMO v3")
+    preprocessing = {**(data.BC4_PREPROCESSING if input_variant == "hd-familiar" else
+                         data.HD_PREPROCESSING if input_variant == "hd" else data.PREPROCESSING),
                      "navdemo_version": navdemo_version,
-                     "roads_schema": "carrot_v2" if navdemo_version == 2 else "next_v1",
+                     "roads_schema": "carrot_v2" if navdemo_version >= 2 else "next_v1",
                      "roads_fields": ROAD_FIELDS[navdemo_version].copy()}
     if navdemo_version == 1:
         preprocessing["roads"] = (
@@ -73,7 +79,7 @@ def weight_input_version(header: dict, vector_size: int) -> int:
         raise ValueError(f"unsupported weight NAVDEMO version: {version}")
     expected = fixture_preprocessing(version, weight_input_variant(header))
     for key in ("roads_schema", "roads_fields"):
-        if (version == 2 or key in preprocessing) and preprocessing.get(key) != expected[key]:
+        if (version >= 2 or key in preprocessing) and preprocessing.get(key) != expected[key]:
             raise ValueError(f"weight {key} differs from NAVDEMO v{version} preprocessing")
     return version
 
@@ -81,7 +87,7 @@ def weight_input_version(header: dict, vector_size: int) -> int:
 def weight_input_variant(header: dict) -> str:
     """Read the declared HD layout while preserving headers from v1 and v2."""
     variant = header.get("preprocessing", {}).get("input_variant", "compact")
-    expected = "hd" if header.get("version") == 3 else "compact"
+    expected = "hd-familiar" if header.get("version") == 4 else "hd" if header.get("version") == 3 else "compact"
     if variant != expected:
         raise ValueError(f"weight format v{header.get('version')} requires {expected} input_variant")
     return variant
@@ -99,16 +105,16 @@ def fixture_features(record: np.ndarray, layout: np.ndarray, navdemo_version: in
         # The checker only reads this view; the source record stays unchanged.
         inputs = {**inputs, "roads": inputs["roads"].view(demos.ROADS_V2_DTYPE)}
     return data.encode_features(inputs, layout, input_variant=input_variant,
-                                feet_height_cm=record["position_cm"][:, 1] if input_variant == "hd" else None)
+                                feet_height_cm=record["position_cm"][:, 1] if input_variant in ("hd", "hd-familiar") else None)
 
 
 def synthetic_weights(path: Path, navdemo_version: int = 2, format_version: int = 2,
                       temperatures: dict[str, float] | None = None) -> None:
     """A small valid export built without importing the Torch training module."""
-    input_variant = "hd" if format_version == 3 else "compact"
+    input_variant = "hd-familiar" if format_version == 4 else "hd" if format_version == 3 else "compact"
     preprocessing = fixture_preprocessing(navdemo_version, input_variant)
-    near_shape = data.HD_NEAR_SHAPE if input_variant == "hd" else (9, 32, 32)
-    far_shape = data.HD_FAR_SHAPE if input_variant == "hd" else (9, 25, 25)
+    near_shape = data.BC4_NEAR_SHAPE if format_version == 4 else data.HD_NEAR_SHAPE if format_version == 3 else (9, 32, 32)
+    far_shape = data.BC4_FAR_SHAPE if format_version == 4 else data.HD_FAR_SHAPE if format_version == 3 else (9, 25, 25)
     channels = near_shape[0]
     head_sizes = HEAD_SIZES[format_version]
     hidden = 8
@@ -174,7 +180,7 @@ def synthetic_records(steps: int, navdemo_version: int = 2) -> tuple[np.ndarray,
             # A varied small tile keeps the generated contract compact even
             # though its payload contains 1000 full-size raw sensor records.
             z, x = np.indices(memory.shape[1:]) % 8
-            memory["channels"] = rng.integers(0, 256, (8, 8, 7), dtype=np.uint8)[z, x]
+            memory["channels"] = rng.integers(0, 256, (8, 8, memory["channels"].shape[-1]), dtype=np.uint8)[z, x]
             memory["height_valid"] = rng.integers(0, 2, (8, 8), dtype=np.uint8)[z, x]
             heights = rng.integers(-1500, 1501, (8, 8)).astype(np.float32) + 12000
             memory["ground_height_cm"] = heights[z, x]
@@ -190,15 +196,15 @@ def synthetic_records(steps: int, navdemo_version: int = 2) -> tuple[np.ndarray,
             record["body"]["ground_slope_deg"] = rng.uniform(0, 180)
             record["body"]["head_yaw_deg"] = rng.uniform(-180, 180)
             record["body"]["head_pitch_deg"] = rng.uniform(-90, 90)
-            target = "carrot_direction" if navdemo_version == 2 else "next_direction"
+            target = "carrot_direction" if navdemo_version >= 2 else "next_direction"
             for name in (target, "goal_direction"):
                 direction = rng.normal(size=3)
                 record["roads"][name] = direction / np.linalg.norm(direction)
-            distances = (("carrot_distance_cm", "goal_distance_cm", "remaining_known_cm") if navdemo_version == 2 else
+            distances = (("carrot_distance_cm", "goal_distance_cm", "remaining_known_cm") if navdemo_version >= 2 else
                          ("next_distance_cm", "goal_distance_cm", "remaining_visual_cm"))
             for name in distances:
                 record["roads"][name] = rng.uniform(0, 75000)
-            record["roads"]["beyond_known" if navdemo_version == 2 else "goal_in_known"] = step % 2
+            record["roads"]["beyond_known" if navdemo_version >= 2 else "goal_in_known"] = step % 2
             for name in ("previous_keys", "keys"):
                 for axis in ("forward", "strafe", "turn"):
                     record[name][axis] = rng.integers(-1, 2)
@@ -255,9 +261,9 @@ def main() -> None:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--weights", type=Path)
     parser.add_argument("--source", type=Path)
-    parser.add_argument("--navdemo-version", type=int, choices=(1, 2),
+    parser.add_argument("--navdemo-version", type=int, choices=(1, 2, 3),
                         help="synthetic weight/record input version (default: 2); supplied weights use their header")
-    parser.add_argument("--weight-version", type=int, choices=(1, 2, 3),
+    parser.add_argument("--weight-version", type=int, choices=(1, 2, 3, 4),
                         help="synthetic weight format (default: 2); supplied weights use their header")
     parser.add_argument("--torch", action="store_true", help="also compare exported weights with Torch on every step")
     parser.add_argument("--steps", type=int, default=1000)
@@ -269,7 +275,7 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     weights = args.weights or args.output / "fixture.navbc"
     if args.weights is None:
-        synthetic_weights(weights, args.navdemo_version or 2, args.weight_version or 2)
+        synthetic_weights(weights, args.navdemo_version or (3 if args.weight_version == 4 else 2), args.weight_version or 2)
     policy = NumpyPolicy(weights)
     torch_policy = torch_hidden = None
     torch_logit_error = torch_hidden_error = 0.0
@@ -292,10 +298,12 @@ def main() -> None:
               "weight_version": policy.format_version,
               "near_shape": policy.header["architecture"]["inputs"]["near"],
               "far_shape": policy.header["architecture"]["inputs"]["far"],
-              "record_bytes": demos.RECORD_BYTES, "vector_size": policy.vector_size,
+              "record_bytes": demos.RECORD_BYTES_BY_VERSION[navdemo_version], "vector_size": policy.vector_size,
               "hidden_size": policy.hidden_size, "heads": list(policy.head_names), "classes": list(policy.head_sizes.values()),
               "temperatures": policy.temperatures,
               "eye_layout": layout.tolist(), "source": source_name, "carry_hidden": True}
+    if policy.format_version == 4:
+        header["navigation_memory_version"] = policy.header["preprocessing"]["navigation_memory_version"]
     destination = args.output / "parity.bin.gz"
     hidden = None
     count = 0

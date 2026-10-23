@@ -38,12 +38,13 @@ class NavPolicy(nn.Module):
             raise ValueError("vector_size and hidden_size must be positive")
         self.vector_size = int(vector_size)
         self.hidden_size = int(hidden_size)
-        if format_version not in (1, 2, 3):
+        if format_version not in (1, 2, 3, 4):
             raise ValueError("unsupported navigation weight format")
         self.format_version = format_version
         self.head_sizes = HEAD_SIZES if format_version == 1 else BC3_HEAD_SIZES
-        self.near_shape = (10, 64, 64) if format_version == 3 else (9, 32, 32)
-        self.far_shape = (10, 50, 100) if format_version == 3 else (9, 25, 25)
+        channels = 11 if format_version == 4 else 10
+        self.near_shape = (channels, 64, 64) if format_version >= 3 else (9, 32, 32)
+        self.far_shape = (channels, 50, 100) if format_version >= 3 else (9, 25, 25)
         self.auxiliary = auxiliary
         self.near_encoder = self._map_encoder(self.near_shape[0])
         self.far_encoder = self._map_encoder(self.far_shape[0])
@@ -57,7 +58,7 @@ class NavPolicy(nn.Module):
             self.aux_stuck = nn.Linear(hidden_size, 1)
             self.aux_next_near = nn.Linear(hidden_size, 9 * 8 * 8)
             self.aux_detour = nn.Linear(hidden_size, 4)
-        if format_version != 3 and self.mac_count()["total"] > 2_000_000:
+        if format_version < 3 and self.mac_count()["total"] > 2_000_000:
             raise ValueError("policy exceeds the 2,000,000 MAC decision budget")
 
     @staticmethod

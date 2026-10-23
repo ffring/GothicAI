@@ -105,6 +105,8 @@ struct Episode {
   double writeUs=0,maxWriteUs=0;
   double memoryUpdateUs=0,memoryViewUs=0;
   uint64_t memoryUpdates=0,memoryViews=0;
+  uint64_t familiarInputDecisions=0,familiarInputNonzeroDecisions=0;
+  uint64_t familiarNearInputNonzeroDecisions=0,familiarFarInputNonzeroDecisions=0;
   std::shared_ptr<const NavPolicy> policy;
   std::vector<NavPolicy::State> policyStates;
   std::vector<double> policyUs,encodeUs,populationUs;
@@ -411,6 +413,11 @@ void finish(Episode& ep,World& world) {
       out<<std::quoted(heads[i])<<':'<<(ep.decisions?double(ep.disagreements[i])/double(ep.decisions):0);
     }
     out<<'}';
+    if(ep.policy->weightVersion()==4)
+      out<<",\"familiar_input_decisions\":"<<ep.familiarInputDecisions
+         <<",\"familiar_input_nonzero_decisions\":"<<ep.familiarInputNonzeroDecisions
+         <<",\"familiar_near_input_nonzero_decisions\":"<<ep.familiarNearInputNonzeroDecisions
+         <<",\"familiar_far_input_nonzero_decisions\":"<<ep.familiarFarInputNonzeroDecisions;
   }
   out<<",\"eye_layout\":[";
   for(size_t i=0;i<ep.eye.samples().size();++i) {
@@ -1169,6 +1176,16 @@ NpcKeys::KeyState executePolicy(Episode& ep,const NavDemoWriter::Snapshot& sampl
   const auto populationStart=std::chrono::steady_clock::now();
   const auto features=policyFeatures(ep,sample);
   const auto encodeCost=micros(populationStart);
+  if(ep.policy->weightVersion()==4) {
+    const auto nonzero=[](const std::vector<float>& values,size_t area) {
+      return std::any_of(values.begin()+std::ptrdiff_t(10*area),values.end(),[](float value) {return value>0;});
+    };
+    const bool near=nonzero(features.near,64*64),far=nonzero(features.far,50*100);
+    ++ep.familiarInputDecisions;
+    ep.familiarInputNonzeroDecisions+=near || far;
+    ep.familiarNearInputNonzeroDecisions+=near;
+    ep.familiarFarInputNonzeroDecisions+=far;
+  }
   if(measure)ep.encodeUs.push_back(encodeCost);
   if(ep.population)ep.phaseUs[3]+=encodeCost;
   for(size_t i=0;i<ep.policyStates.size();++i) {
@@ -2007,9 +2024,9 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     const auto population=speed?std::stoul(a[7]):1;
     if(population==0 || population>1000)throw std::runtime_error("navdemos invalid policy population");
     ep.policy=std::make_unique<NavPolicy>(a[current?5:6]);
-    ep.teacherVersion=ep.policy->navDemoVersion()==2?3:1;
+    ep.teacherVersion=ep.policy->navDemoVersion()>=2?3:1;
     ep.policy->configureMemory(ep.memory,std::getenv("OPENGOTHIC_NAV_JOURNEY_MEMORY"));
-    if(ep.memory.journeyMemoryEnabled() && ep.policy->navDemoVersion()==2)
+    if(ep.memory.journeyMemoryEnabled() && ep.policy->navDemoVersion()>=2)
       KnownRoadsBench::attachFamiliar(w,*npc,ep.memory);
     const size_t betaIndex=current?6:7;
     if(!speed && a.size()>betaIndex)ep.teacherBeta=std::stod(a[betaIndex]);
