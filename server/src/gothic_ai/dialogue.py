@@ -65,6 +65,7 @@ from .protocol import (
     LineVoice,
     MemoryCmd,
     Mood,
+    NpcDied,
     NpcRoster,
     NpcViews,
     PttStart,
@@ -763,6 +764,7 @@ class DialogueManager:
         self._prewarms: dict[str, asyncio.Task[None]] = {}  # npc -> filling the quick model's cache
         self._prewarm_history: dict[str, list[Message]] = {}  # pending or warmed histories
         self._nearby: dict[str, tuple[str, float]] = {}  # human npc -> name, distance to the hero in cm
+        self._svm_down: dict[str, bool] = {}  # latest known deaths, roster and snapshot health
         self._focus: str | None = None
         # what the npc sees (perception.py), in place of the snapshot's omniscient lines
         self.sight: Callable[[str, Snapshot | None], Sight | None] | None = None
@@ -812,10 +814,17 @@ class DialogueManager:
                     started.set()
             case PttStart():
                 self.prewarm_listeners(msg.focus)  # while he speaks
+            case NpcDied():
+                self._svm_down[msg.npc.upper()] = True
+            case Snapshot():
+                if msg.npc.hp <= 0:
+                    self._svm_down[msg.npc.id.upper()] = True
+                self._svm_down.update((e.id.upper(), True) for e in msg.nearby_npcs if e.dead)
             case NpcRoster():
                 if msg.full:
                     self._nearby.clear()
                 self._nearby.update((e.id.upper(), (e.name, e.distance)) for e in msg.npcs)
+                self._svm_down.update((e.id.upper(), e.activity == "down") for e in msg.npcs)
                 self._prewarm_focus()
             case NpcViews():
                 self._focus = next(
@@ -896,17 +905,20 @@ class DialogueManager:
         text = ""
         target = (msg.target or "").upper()
         target_name = None
+        target_down = False
         if target:
             snap = self.link.snapshots.get(target)
             nearby = self.link.snapshots.get(conv.npc)
             seen = next(
-                (n.name for n in nearby.nearby_npcs if n.id.upper() == target), None,
+                (n for n in nearby.nearby_npcs if n.id.upper() == target), None,
             ) if nearby else None
+            target_down = (snap is not None and snap.npc.hp <= 0) or (seen is not None and seen.dead)
             card = self.personas.cards.get(target)
             target_name = (
                 "герой" if target in {"PLAYER", "PC_HERO"} else
                 snap.npc.name if snap is not None else
-                seen or self._nearby.get(target, ("", 0))[0] or (card.name if card else target)
+                (seen.name if seen else None) or self._nearby.get(target, ("", 0))[0]
+                or (card.name if card else target)
             )
         hint = svm_hint(msg.svm, msg.text, target_name=target_name, self_target=target == conv.npc)
         try:
@@ -945,7 +957,9 @@ class DialogueManager:
             else:
                 line = await self._say(
                     conv, words, None, overlay=True, mood=mood,
-                    to=msg.target if target != conv.npc else None,
+                    to=msg.target if target != conv.npc and not self._svm_down.get(
+                        target, target_down,
+                    ) else None,
                 )
                 if line is not None:
                     conv.svm_pending[line] = record
@@ -1023,6 +1037,7 @@ class DialogueManager:
             self._prewarms.clear()
             self._prewarm_history.clear()
             self._nearby.clear()
+            self._svm_down.clear()
             self._focus = None
             self.branch = session.branch
         head = self.memory.ensure_branch(session.branch, session.parent, session.parent_seq)
@@ -1404,7 +1419,12 @@ class DialogueManager:
         conv = self.conversations.get(npc.upper())
         if conv is None or not (self.speaking(npc) or conv.svm_pending):
             return False
-        said, _, _ = self._said(conv)
+        running = conv.reply is not None and not conv.reply.done()
+        replying = running or any(
+            self._line_replies.get(line) != line and self._to_hear(conv, line, time.monotonic())
+            for line in (*conv.earlier_lines, *conv.last_lines)
+        )
+        said, _, _ = self._said(conv) if replying else ([], False, False)
         spoken = " ".join(said)
         conv.hushed.update(
             line
@@ -1412,15 +1432,16 @@ class DialogueManager:
             if self._lines.get(line, ("", None))[1] is None
         )
         conv.earlier_lines = []
-        running = conv.reply is not None and not conv.reply.done()
         if running:
             conv.cut = spoken  # the turn remembers only this (see _turn)
         self._cancel(conv)
         self._drop_unvoiced(conv)
         self._reset_overlay(conv)
         log.info("%s interrupted after %d line(s)", conv.npc, len(said))
-        self._spawn(self.link.send(HushCmd(npc=conv.npc, reply=conv.reply_id or None, said=spoken or None)))
-        if not running:
+        self._spawn(self.link.send(HushCmd(
+            npc=conv.npc, reply=(conv.reply_id or None) if replying else None, said=spoken or None,
+        )))
+        if not running and replying:
             self._note(conv, f"Герой перебил тебя{f'; ты успел сказать: «{spoken}»' if spoken else ''}")
         return True
 

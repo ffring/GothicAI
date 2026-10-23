@@ -17,7 +17,7 @@ from gothic_ai.journal import Journal
 from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
-from gothic_ai.protocol import Hello, LineStarted, NpcRoster, Snapshot, SvmLine
+from gothic_ai.protocol import Hello, LineStarted, NpcDied, NpcRoster, Snapshot, SvmLine
 from gothic_ai.scenarios import basics as scenarios
 from gothic_ai.talk import TalkDesk
 from gothic_ai.trace import TraceWriter
@@ -59,21 +59,28 @@ async def test_svm_mode_waits_for_hello_and_requires_an_available_quick_model(
     assert llm.calls == []
 
 
-@pytest.mark.parametrize(("svm", "target", "event", "to", "native", "prompt_text"), [
+@pytest.mark.parametrize(("svm", "target", "event", "to", "native", "prompt_text", "target_state"), [
     (
         "$ENEMYKILLED", LOBART, "ты только что убил противника — Лобарт", "обращаясь к Лобарт",
-        "(дьявольский смех) Ты показал себя!", "Ты показал себя!",
+        "(дьявольский смех) Ты показал себя!", "Ты показал себя!", None,
     ),
-    ("$HELP", None, "на тебя напали, ты зовёшь на помощь", "вслух", "Помогите!", "Помогите!"),
-    ("$AWAKE", XARDAS.lower(), "ты проснулся и зеваешь", "вслух", "(зевает)", "зевает"),
+    *[
+        (
+            "$ENEMYKILLED", LOBART, "ты только что убил противника — Лобарт", "обращаясь к Лобарт",
+            "Ты заслужил это!", "Ты заслужил это!", state,
+        )
+        for state in ("died", "down", "snapshot", "revived")
+    ],
+    ("$HELP", None, "на тебя напали, ты зовёшь на помощь", "вслух", "Помогите!", "Помогите!", None),
+    ("$AWAKE", XARDAS.lower(), "ты проснулся и зеваешь", "вслух", "(зевает)", "зевает", None),
     (
         "$HELP", "PC_HERO", "на тебя напали, ты зовёшь на помощь", "обращаясь к герой",
-        "Помогите!", "Помогите!",
+        "Помогите!", "Помогите!", None,
     ),
-    ("$UNKNOWN", LOBART, "", "обращаясь к Лобарт", "(зевает)", "зевает"),
+    ("$UNKNOWN", LOBART, "", "обращаясь к Лобарт", "(зевает)", "зевает", None),
 ])
 async def test_svm_uses_persona_and_situation_without_history_and_voices_twelve_words(
-    tmp_path, svm, target, event, to, native, prompt_text,
+    tmp_path, svm, target, event, to, native, prompt_text, target_state,
 ):
     phrase = "Я ещё покажу тебе как надо встречать незваных гостей у моих ворот."
     quick = FakeBackend(f"[angry] (потягиваюсь) {phrase} Это уже вторая фраза.", delay=0, chunk=200)
@@ -91,6 +98,18 @@ async def test_svm_uses_persona_and_situation_without_history_and_voices_twelve_
         link.snapshots[XARDAS] = Snapshot.model_validate(fake.snapshot(XARDAS))
         dialogue._nearby[XARDAS] = ("Ксардас", 3000)
         dialogue._nearby[LOBART] = ("Лобарт", 100)
+        if target_state in {"died", "revived"}:
+            link._dispatch(NpcDied(type="npc_died", npc=LOBART, name="Лобарт", killer=XARDAS))
+        if target_state in {"down", "revived"}:
+            link._dispatch(NpcRoster.model_validate({
+                "type": "npc_roster", "t": 1, "full": False,
+                "npcs": [{"id": LOBART, "name": "Лобарт", "distance": 100,
+                          "activity": "down" if target_state == "down" else "routine"}],
+            }))
+        if target_state == "snapshot":
+            target_snapshot = fake.snapshot(LOBART)
+            target_snapshot["npc"].update(name="Лобарт", hp=0)
+            link._dispatch(Snapshot.model_validate(target_snapshot))
         dialogue.remember(XARDAS, "Ксардас", "Ты защищаешь свою башню от зверей")
         conv = dialogue.conversations[XARDAS]
         assert conv.history
@@ -102,6 +121,8 @@ async def test_svm_uses_persona_and_situation_without_history_and_voices_twelve_
     assert fake.said == [phrase] and fake.voiced == [True]
     (say,) = [message for message, _ in fake.says]
     recipient = target if (target or "").upper() != XARDAS else None
+    if target_state in {"died", "down", "snapshot"}:
+        recipient = None
     assert say["overlay"] is True and say.get("to") == recipient and say["mood"] == "angry"
     assert not say.get("reply") and not say.get("filler")
     assert [request["text"] for request in requests] == [phrase]
@@ -1212,10 +1233,20 @@ async def test_queued_svm_counts_for_cooldown_and_repeats_and_finishes_its_dropp
 
 async def test_a_started_svm_is_audible_and_can_be_interrupted():
     words = "Вон отсюда!"
-    async with one_voice_dialogue(True, FakeBackend(), audio_s=2.0) as (fake, dialogue, conv):
+    previous = "Наш разговор пока закончен."
+    llm = FakeBackend(previous, delay=0)
+    async with one_voice_dialogue(True, llm, audio_s=2.0) as (fake, dialogue, conv):
         talk = TalkDesk(dialogue.link, dialogue)
         assert talk.begin(XARDAS, "Ксардас")
-        conv.reply_id = "R-previous"
+        await dialogue.say_as_player(XARDAS, "Расскажи.")
+        await _until(
+            lambda: bool(fake.say_ends) and dialogue.started_at(fake.says[0][0]["line"]) is not None
+        )
+        old_line = fake.says[0][0]["line"]
+        assert conv.last_lines == [old_line] and conv.reply_id
+        old_at = time.monotonic() - 4  # the earlier answer ended and its cooldown passed
+        dialogue._lines[old_line] = (previous, old_at)
+        dialogue._spoke_at[XARDAS] = conv.said_at = conv.overlay_free_at = old_at
         dialogue.quick = FakeBackend(words, delay=0)
         dialogue._nearby[XARDAS] = ("Ксардас", 100)
         dialogue._on_message(SvmLine(
@@ -1223,13 +1254,15 @@ async def test_a_started_svm_is_audible_and_can_be_interrupted():
             text="Убирайся отсюда!", overlay=True,
         ))
         await _until(
-            lambda: bool(fake.say_ends) and dialogue.started_at(fake.says[0][0]["line"]) is not None
+            lambda: len(fake.say_ends) == 2 and dialogue.started_at(fake.says[1][0]["line"]) is not None
         )
         assert not conv.svm_pending
         assert dialogue.audible(XARDAS) and dialogue.speaking(XARDAS)
+        history = list(conv.history)
         await fake.send(type="ptt_start", focus=XARDAS)
         await _until(lambda: bool(fake.hushed))
-        assert fake.hushed == [{"type": "hush", "npc": XARDAS, "reply": "R-previous"}]
+        assert fake.hushed == [{"type": "hush", "npc": XARDAS}]
+        assert conv.history == history
         assert not dialogue.audible(XARDAS) and not dialogue.speaking(XARDAS)
 
 
