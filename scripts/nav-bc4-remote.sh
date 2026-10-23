@@ -3,18 +3,18 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ $# == 1 && ( "$1" == --help || "$1" == -h ) ]]; then
-  echo 'Usage: bash scripts/nav-bc4-remote.sh smoke|train'
+  echo 'Usage: bash scripts/nav-bc4-remote.sh smoke|train|validate-main|validate-detour'
   exit 0
 fi
-[[ $# == 1 ]] || { echo 'Usage: bash scripts/nav-bc4-remote.sh smoke|train' >&2; exit 2; }
+[[ $# == 1 ]] || { echo 'Usage: bash scripts/nav-bc4-remote.sh smoke|train|validate-main|validate-detour' >&2; exit 2; }
 stage="$1"
-case "$stage" in smoke|train) ;; *) echo "Unknown phase: $stage" >&2; exit 2 ;; esac
+case "$stage" in smoke|train|validate-main|validate-detour) ;; *) echo "Unknown phase: $stage" >&2; exit 2 ;; esac
 export GQ_OWNER=nav-bc4
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-bc4" "$HOME"')"
 archive=/mnt/shared/gothic-ai/nav-bc4
-ssh ryzen "bash -s -- '$task' '$archive'" <<'INPUTS'
+ssh ryzen "bash -s -- '$task' '$archive' '$stage'" <<'INPUTS'
 set -euo pipefail
-task="$1"; archive="$2"
+task="$1"; archive="$2"; stage="$3"
 df -h "$HOME" /mnt/shared
 python3 -c 'import pathlib,shutil; assert shutil.disk_usage(pathlib.Path.home()).free >= 22*1024**3, "Less than 22 GiB free"'
 mkdir -p "$task/source" "$task/input/hd" "$archive/logs"
@@ -26,6 +26,26 @@ done
 for name in save.sav places.json accepted-links.txt familiar.bin; do
   copy_input "$HOME/gothic-ai/nav-demos-v5/input/$name" "$task/input/$name"
 done
+if [[ "$stage" == validate-main || "$stage" == validate-detour ]]; then
+  for name in jump-links.txt object-probes.jsonl fixtures.json detour-val.jsonl; do
+    copy_input "$HOME/gothic-ai/nav-demos-v5/input/$name" "$task/input/$name"
+  done
+  modes=(ordinary)
+  if [[ "$stage" == validate-main ]]; then modes+=(jump); fi
+  for mode in "${modes[@]}"; do
+    destination="$task/validation-${stage#validate-}-cache/$mode"
+    mkdir -p "$destination"
+    for source in "$HOME/gothic-ai/nav-dagger3/hd-measure-cache/$mode/"*.navmesh; do
+      copy_input "$source" "$destination/$(basename "$source")"
+    done
+  done
+fi
+if [[ "$stage" == validate-main ]]; then
+  mkdir -p "$archive/validation/setup-rejections"
+  for source in "$HOME/gothic-ai/nav-dagger3/hd-validation/setup-rejections/"*.json; do
+    copy_input "$source" "$archive/validation/setup-rejections/$(basename "$source")"
+  done
+fi
 INPUTS
 rsync -a --no-links --exclude=build --exclude='build-*' --exclude=__pycache__ --exclude=.git \
   "$ROOT/OpenGothic" "$ROOT/scripts" "$ROOT/AGENTS.md" "ryzen:$task/source/"
@@ -154,6 +174,69 @@ elif [[ "$stage" == train ]]; then
   "$task/build/opengothic/gothic-navpolicy-contract" \
     "$archive/bc4/policy.navbc" "$archive/bc4/parity/parity.bin.gz"
   rm -rf -- "$task/cache"
+elif [[ "$stage" == validate-main || "$stage" == validate-detour ]]; then
+  test -f "$archive/bc4/policy.navbc"
+  test -x "$python"
+  test -x "$task/build/opengothic/gothic-body-runner"
+  if [[ "$stage" == validate-main ]]; then
+    output="$archive/validation/bc4"
+    "$python" -B -I scripts/nav_rl.py drive \
+      --manifest /mnt/shared/gothic-ai/nav-demos-v5/manifest.json --lean \
+      --runner "$task/build/opengothic/gothic-body-runner" \
+      --assets "$HOME/gothic-ai/game" --save "$task/input/save.sav" \
+      --cache "$task/validation-main-cache" --links "$task/input/accepted-links.txt" \
+      --jump-links "$task/input/jump-links.txt" --roads "$task/input/places.json" \
+      --familiar-map "$task/input/familiar.bin" --weights "$archive/bc4/policy.navbc" \
+      --output "$output" --physics cv --parallel 18 \
+      --action-mode sample --action-seeds 18102027,18102028,18102029 \
+      --safety-fixtures "$task/input/fixtures.json" --fence-control \
+      --limit-ms 30000 --watchdog-seconds 900 --resume
+    "$python" -B -I scripts/nav_rl.py summarize --source "$output" --output "$output" \
+      --object-probes "$task/input/object-probes.jsonl"
+  else
+    output="$archive/detour-validation/bc4"
+    "$python" -B -I scripts/nav_rl.py drive --detour-scenarios "$task/input/detour-val.jsonl" \
+      --runner "$task/build/opengothic/gothic-body-runner" \
+      --assets "$HOME/gothic-ai/game" --save "$task/input/save.sav" \
+      --cache "$task/validation-detour-cache" --links "$task/input/accepted-links.txt" \
+      --roads "$task/input/places.json" --familiar-map "$task/input/familiar.bin" \
+      --weights "$archive/bc4/policy.navbc" --output "$output" --physics cv --parallel 18 \
+      --action-mode sample --action-seeds 18102027,18102028,18102029 \
+      --limit-ms 240000 --watchdog-seconds 900 --resume
+    "$python" -B -I scripts/nav_rl.py summarize --source "$output" --output "$output"
+  fi
+  "$python" -B -I - "$stage" "$output" <<'COHORT'
+import json
+from pathlib import Path
+import sys
+stage, root = sys.argv[1], Path(sys.argv[2])
+baseline = Path.home() / "gothic-ai/nav-dagger3"
+references = ([baseline / "hd-validation" / name / "metrics.json" for name in ("bc3", "hd")]
+              if stage == "validate-main" else [baseline / "hd-detour/metrics.json"])
+expected = 1491 if stage == "validate-main" else 363
+result = json.loads((root / "metrics.json").read_text())
+episodes = result["episodes"]
+identity = lambda values: {(ep["id"], ep["action_seed"]) for ep in values}
+if len(episodes) != expected or len(identity(episodes)) != expected:
+    raise ValueError(f"BC4 validation cohort size differs: {len(episodes)} != {expected}")
+for reference in references:
+    original = json.loads(reference.read_text())
+    if identity(episodes) != identity(original["episodes"]):
+        raise ValueError(f"BC4 validation cohort differs from {reference}")
+if stage == "validate-main" and len(result["setup_rejections"]) != 2:
+    raise ValueError("BC4 validation requires the two frozen moving-target setup rejections")
+if any(ep["teacher_control_decisions"] != 0 or ep["recording"] != "text_only" for ep in episodes):
+    raise ValueError("BC4 validation used teacher control or NAVDEMO")
+if any(path.name.startswith("samples.bin") for path in root.rglob("samples.bin*")):
+    raise ValueError("BC4 validation wrote NAVDEMO")
+for episode in episodes:
+    metadata = json.loads((Path(episode["episode"]) / "episode.json").read_text())
+    if (metadata["navigation_memory_version"] != 4 or metadata["demo_version"] != 3
+            or metadata["observation_source"] != "learner_memory" or metadata["record"] is not False):
+        raise ValueError(f"BC4 validation memory/recording identity differs: {episode['id']}")
+print(json.dumps(dict(event="bc4_validation_complete", phase=stage, episodes=len(episodes),
+                      arrived=result["all"]["arrived"], memory_version=4)))
+COHORT
 else
   echo "Unknown phase: $stage" >&2; exit 2
 fi
@@ -162,7 +245,10 @@ PHASE
 if [[ "$stage" == smoke ]]; then
   "$ROOT/scripts/gq" submit --class quick --threads 12 --cpu-quota 1200% --mem 12G --max 45m \
     --name 'nav bc4 format and two train smoke episodes' -- bash "$task/phase.sh" smoke
-else
+elif [[ "$stage" == train ]]; then
   "$ROOT/scripts/gq" submit --class batch --threads 6 --cpu-quota 600% --mem 10G --gpu-mem 4G --max 2h \
     --name 'nav bc4 v5 training and recorded parity' -- bash "$task/phase.sh" train
+else
+  "$ROOT/scripts/gq" submit --class batch --threads 28 --cpu-quota 2800% --mem 20G --max 2h \
+    --name "nav bc4 $stage three-seed lean validation" -- bash "$task/phase.sh" "$stage"
 fi
