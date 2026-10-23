@@ -2562,6 +2562,328 @@
           "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
         }
       }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_03-attempt-14.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_03.TGA",
+      "attempt": 14,
+      "sha256": "5a38b57f02a76008c61d1b5a8955d446d3b4772580cc55ae898ecf524a3cb9d5",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:36:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-15.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-14.normal.png",
+          "sha256": "6e4b99fb6ac6a9642e0cbc14a6a91b87f5e89acc0e85b5549834744cd451ba9d"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-14.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-15.png",
+      "role": "texture",
+      "texture": "NW_CITY_WINDOW_03.TGA",
+      "attempt": 15,
+      "sha256": "8d72cc0c7966f9824b3c455ec4b3d72aaba5164d865d5fda03988042f623fa94",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:36:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-16.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-15.normal.png",
+          "sha256": "e317993e9fbc1b07a482b7c1d9a913b37cdf99d50d4f67098eb5d46028310d19"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-15.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_04-attempt-12.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_04.TGA",
+      "attempt": 12,
+      "sha256": "c649637361ceaef4db114351323141bded92c3e33475455509f80a9505b887ac",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:36:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-17.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-12.normal.png",
+          "sha256": "5f32f168b20fcf0bec0aaa7c83f42512edf9d77cb051023aab0c85d2e890c872"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-12.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_05-attempt-12.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_05.TGA",
+      "attempt": 12,
+      "sha256": "788cf46ce3fae4e64c0a608c25c320cc4add64fcf0cfe54933ad91da33e629b9",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:36:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-18.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-12.normal.png",
+          "sha256": "715455fa0f6518dd0ce786f6da90fc779eff6f54503cb797bb5e3941d1960e6d"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-12.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-17.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA",
+      "attempt": 17,
+      "sha256": "5d49386a25556b2ae228a8ac59bfa2acb089469efb211073eea1f082d7003a43",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:36:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-19.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-17.normal.png",
+          "sha256": "8946910d1bf6e20cbad09a98ce6b8be600db330733aeffc2e7c215aef9a83852"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-17.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-18.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA",
+      "attempt": 18,
+      "sha256": "611d7dc9c031dad03627169a7c9d783b079757bc0ebb98c53c9e920270006d34",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:36:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-20.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-18.normal.png",
+          "sha256": "66db4d6d0b97fd81ff971b31e77d0630d88f3c6869b562eea034d561fa58e978"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-18.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-17.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA",
+      "attempt": 17,
+      "sha256": "ad29a9c353aabffffad319bf6e8e46a7f3e3f543ebab5100a1d3649835fa7aa7",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:36:23Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-21.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-17.normal.png",
+          "sha256": "da648364676ae0928ac9d9c6768917abc08bcff84f6f00ec15decfc50dcc66f6"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-17.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_03-attempt-15.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_03.TGA",
+      "attempt": 15,
+      "sha256": "6fcb6c497ccbdb1c2dab0f1e6b047dd393a6a7219acd533009af896c0bb25c59",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:42:48Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-15.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-15.normal.png",
+          "sha256": "6e4b99fb6ac6a9642e0cbc14a6a91b87f5e89acc0e85b5549834744cd451ba9d"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-15.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-16.png",
+      "role": "texture",
+      "texture": "NW_CITY_WINDOW_03.TGA",
+      "attempt": 16,
+      "sha256": "afe1caaf20bf78c8203b1e4f5d3f9cd4caadeb953922c1b9a23a77cbe3818956",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:42:48Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-16.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-16.normal.png",
+          "sha256": "e317993e9fbc1b07a482b7c1d9a913b37cdf99d50d4f67098eb5d46028310d19"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-16.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_04-attempt-13.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_04.TGA",
+      "attempt": 13,
+      "sha256": "839a76f26a6758ee789a05e7e9477edb2d53f0c3ba37616261a4b4fc8b2cefed",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:42:48Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-17.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-13.normal.png",
+          "sha256": "5f32f168b20fcf0bec0aaa7c83f42512edf9d77cb051023aab0c85d2e890c872"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-13.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_05-attempt-13.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_05.TGA",
+      "attempt": 13,
+      "sha256": "bd4a2711aacebb16fccc1ac9d974f1277c1614d9051fd16f6b98c8ec18c9fe27",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:42:48Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-18.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-13.normal.png",
+          "sha256": "715455fa0f6518dd0ce786f6da90fc779eff6f54503cb797bb5e3941d1960e6d"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-13.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-18.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA",
+      "attempt": 18,
+      "sha256": "440a325d8c6186aa7a802219c5f6fe3b5c8b06794a5cb0c9d73de8f854c39944",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:42:48Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-19.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-18.normal.png",
+          "sha256": "70fce00b3f52d73a91d6dd190534aeb3ca752c64b27d922934e58fc6d867a2a2"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-18.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-19.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA",
+      "attempt": 19,
+      "sha256": "84c8e961fa72d1faa3299417b5526ebb4ab6635e639f536f2c1887c7ac5e55ee",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:42:48Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-20.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-19.normal.png",
+          "sha256": "03db9134e50fddf3fee62de4e3f190a917dad49c2d28c3299f60f1197de49382"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-19.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-18.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA",
+      "attempt": 18,
+      "sha256": "6986b0c2e1209f30b19f6e90f2e915fe3224fe783023fc515a00347680f57061",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-23T15:42:48Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-21.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-18.normal.png",
+          "sha256": "ba83dcebd4bd08cbe04a3c7980b10f6276111c8c11cf9d3150dc6ce38f5f6425"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-18.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
     }
   ],
   "selected": {
@@ -2571,28 +2893,28 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_03.TGA": {
-      "file": "market-house/NW_CITY_WALL_03-attempt-13.png",
-      "reason": "market-13c: all seven from image_gen edits of the original textures (user allowed, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_03-attempt-15.png",
+      "reason": "market-15: hue from the original's own pixels, rubble relief 11 deg (reviewer: moss lost at the foot, ripple)",
       "date": "2026-10-23"
     },
     "NW_CITY_WINDOW_03.TGA": {
-      "file": "market-house/NW_CITY_WINDOW_03-attempt-14.png",
-      "reason": "market-13c: all seven from image_gen edits of the original textures (user allowed, 2026-10-23)",
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-16.png",
+      "reason": "market-15: hue from the original's own pixels, rubble relief 11 deg (reviewer: moss lost at the foot, ripple)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-17.png",
-      "reason": "market-13c: all seven from image_gen edits of the original textures (user allowed, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-19.png",
+      "reason": "market-15: hue from the original's own pixels, rubble relief 11 deg (reviewer: moss lost at the foot, ripple)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-16.png",
-      "reason": "market-13c: all seven from image_gen edits of the original textures (user allowed, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-18.png",
+      "reason": "market-15: hue from the original's own pixels, rubble relief 11 deg (reviewer: moss lost at the foot, ripple)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-16.png",
-      "reason": "market-13c: all seven from image_gen edits of the original textures (user allowed, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-18.png",
+      "reason": "market-15: hue from the original's own pixels, rubble relief 11 deg (reviewer: moss lost at the foot, ripple)",
       "date": "2026-10-23"
     },
     "NW_CITY_WOODBEAM_02.TGA": {
@@ -2601,13 +2923,13 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_04.TGA": {
-      "file": "market-house/NW_CITY_WALL_04-attempt-11.png",
-      "reason": "market-13c: all seven from image_gen edits of the original textures (user allowed, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_04-attempt-13.png",
+      "reason": "market-15: hue from the original's own pixels, rubble relief 11 deg (reviewer: moss lost at the foot, ripple)",
       "date": "2026-10-23"
     },
     "NW_CITY_WALL_05.TGA": {
-      "file": "market-house/NW_CITY_WALL_05-attempt-11.png",
-      "reason": "market-13c: all seven from image_gen edits of the original textures (user allowed, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_05-attempt-13.png",
+      "reason": "market-15: hue from the original's own pixels, rubble relief 11 deg (reviewer: moss lost at the foot, ripple)",
       "date": "2026-10-23"
     }
   },
@@ -2851,6 +3173,54 @@
       "verdict": "REJECT",
       "date": "2026-10-23",
       "path": "reviews/r3-m8-basement-window/merged.json"
+    },
+    {
+      "id": "r3-m14-front",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "PASS",
+      "date": "2026-10-23",
+      "path": "reviews/r3-m14-front/merged.json"
+    },
+    {
+      "id": "r3-m14-facade",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "PASS",
+      "date": "2026-10-23",
+      "path": "reviews/r3-m14-facade/merged.json"
+    },
+    {
+      "id": "r3-m14-basement-window",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "PASS",
+      "date": "2026-10-23",
+      "path": "reviews/r3-m14-basement-window/merged.json"
+    },
+    {
+      "id": "r3-m14-basement-chain",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "DISPUTED",
+      "date": "2026-10-23",
+      "path": "reviews/r3-m14-basement-chain/merged.json"
+    },
+    {
+      "id": "r3-m15-front",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "PASS",
+      "date": "2026-10-23",
+      "path": "reviews/r3-m15-front/merged.json"
+    },
+    {
+      "id": "r3-m15-basement-chain",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "DISPUTED",
+      "date": "2026-10-23",
+      "path": "reviews/r3-m15-basement-chain/merged.json"
     }
   ],
   "gates": [
@@ -2896,17 +3266,17 @@
     }
   ],
   "build": {
-    "set": "market-13c",
+    "set": "market-15",
     "base": "original",
     "date": "2026-10-23",
     "albedo_sha256": {
-      "NW_CITY_WALL_03.TGA": "763e3fa8ccdd329bcf4035506b9fdd8d8977e9fb82eaed6913b380935ddb1b43",
-      "NW_CITY_WINDOW_03.TGA": "b5ac5ae083b405625a481307b7613e5fa7a2a0a1780df8cc881f4ff3d9bc9f3a",
-      "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": "40910dacd6f440fe1e28f1e5d43112f92139a35ba60eeeb23bb4d1ae10fdec70",
-      "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": "0ca9d8509e4d1c3027af5d7bcea2d98b989e4153c9ab926d08b4e1d954320af6",
-      "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": "7efe9b679f30304201b0c9b5a559bd54965549eaacbd4a0b7dafa8f1faeadb27",
-      "NW_CITY_WALL_04.TGA": "a7cb445e29766558b1d2cc1cb8b177df244c6ebdbe42f7d6bb6139bd13391c5d",
-      "NW_CITY_WALL_05.TGA": "682a1171d353822b25d29d0e240aefa183ec102f509aa4c60eef5d4f2d03705b"
+      "NW_CITY_WALL_03.TGA": "881058553ba7533311d02d6aefbade03243e1a21dd8d4a0b4fc99c1e60477d15",
+      "NW_CITY_WINDOW_03.TGA": "56a9d8e3767bbbd7ab59101cd816a43d58e3b0f71fd7af5570c567e2dd3597bd",
+      "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": "bcccddf03bc5b481fb09ec490689dcf53ecaa4819ab223878d8f1b5fca2077e0",
+      "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": "b4ab53677de39e3ca576c2f2eade4b6c5ebf48d42344ba5fb9db935f28a14587",
+      "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": "60bda1847fefd3808098e7e46bc7bfd2a927b8e006dd071e329b4d1415b44556",
+      "NW_CITY_WALL_04.TGA": "bc5da54b50c852b1d737a5cd1680a07c39318e51730b08c67c723dabdad62ad5",
+      "NW_CITY_WALL_05.TGA": "798a19086e1b0bd9515ad2bb40b5a7502f08d05ad7086130aa73c22a104c3e1e"
     },
     "entries": 7,
     "replaced": [
