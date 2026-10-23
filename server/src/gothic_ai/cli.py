@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import (
+    characters,
     lore,
     npc_tools,
     places,
@@ -52,7 +53,7 @@ from .crime_react import CrimeReact
 from .crimes import COMMUNITIES, Crimes
 from .daylife import DayDesk
 from .deals import Deals
-from .dialogue import REACT_HINT, DialogueManager
+from .dialogue import REACT_HINT, SVM_HINT, DialogueManager
 from .director import Director
 from .errands import Errands
 from .executor import Intent
@@ -112,6 +113,7 @@ from .questlog import QuestLog
 from .quests import QuestBoard
 from .replay import replay as replay_turn
 from .replay import replay_first_words as replay_first_words_turn
+from .replay import replay_svm_lines as replay_svm_lines_turn
 from .scenarios import occasions as scenario_occasions
 from .scenarios import questlog as scenario_questlog
 from .scenarios import showrunner as scenario_showrunner
@@ -2678,6 +2680,81 @@ async def replay_first_words(args: argparse.Namespace) -> int:
     return 0
 
 
+async def replay_svm_lines(args: argparse.Namespace) -> int:
+    """Compare SVM lines in the last recorded situation of each NPC, without a game."""
+    if args.runs < 1:
+        print("--runs must be at least 1", file=sys.stderr)
+        return 2
+    quick_at = quick_url(args.quick_url, os.environ.get("GOTHIC_DECIDER_URL"))
+    if not quick_at:
+        settings_path = Path.home() / ".config/gothic-ai/settings.toml"
+        if await asyncio.to_thread(settings_path.is_file):
+            settings = tomllib.loads(await asyncio.to_thread(settings_path.read_text, encoding="utf-8"))
+            llm_settings = settings.get("llm", {})
+            quick_at = quick_url(llm_settings.get("quick_url"), llm_settings.get("decider_url"))
+    if not quick_at:
+        print(
+            "set --quick-url, GOTHIC_QUICK_LLM_URL/GOTHIC_DECIDER_URL or [llm] in settings.toml",
+            file=sys.stderr,
+        )
+        return 2
+    records = await asyncio.to_thread(read, Path(args.file))
+    instructions = {r["hash"]: r["text"] for r in records if r.get("type") == "instructions"}
+    turns = {}
+    names = {npc: card.name for npc, card in characters.load().items()}
+    for record in records:
+        snapshot = record.get("snapshot") or {}
+        for npc in [snapshot.get("npc", {}), *snapshot.get("nearby_npcs", [])]:
+            if npc.get("id") and npc.get("name"):
+                names[npc["id"].upper()] = npc["name"]
+        if (
+            record.get("type") == "turn"
+            and record.get("steps")
+            and any(m.get("role") == "developer" for m in record["steps"][0]["added"])
+            and (not args.npc or record["npc"].upper() == args.npc.upper())
+        ):
+            turns[record["npc"]] = record
+    names.update(PLAYER="герой", PC_HERO="герой")
+    if not turns:
+        print("no matching turns with a recorded situation", file=sys.stderr)
+        return 2
+    missing = [r["id"] for r in turns.values() if r["instructions"] not in instructions]
+    if missing:
+        print(f"missing recorded instructions for turns: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    lines = await asyncio.to_thread(read, Path(args.svm_file))
+    hint = (
+        (await asyncio.to_thread(Path(args.hint_file).read_text, encoding="utf-8")).strip()
+        if args.hint_file else SVM_HINT
+    )
+    llm = make_quick(quick_at)
+    try:
+        with (
+            await asyncio.to_thread(Path(args.out).open, "w", encoding="utf-8")
+            if args.out else nullcontext()
+        ) as output:
+            for turn in turns.values():
+                for line in lines:
+                    [result] = await replay_svm_lines_turn(
+                        llm, turn, instructions[turn["instructions"]], [line],
+                        names=names, hint=hint, no_history=args.no_history, runs=args.runs,
+                    )
+                    rendered = [
+                        f"{n + 1}: {run['words'] or '—'} [{run['outcome']}, {run['first_phrase_ms']} ms]"
+                        for n, run in enumerate(result["runs"])
+                    ]
+                    native = " ".join(result["text"].split())
+                    print(
+                        f"{result['npc']} | {result['svm']} | {native} | {' | '.join(rendered)}", flush=True,
+                    )
+                    if output is not None:
+                        output.write(json.dumps(result, ensure_ascii=False) + "\n")
+                        output.flush()
+    finally:
+        await llm.aclose()
+    return 0
+
+
 async def login_chatgpt() -> int:
     store = TokenStore()
     try:
@@ -3217,6 +3294,16 @@ def main() -> None:
     p.add_argument("--npc", help="only this npc id")
     p.add_argument("--out", help="write turn results to a JSONL file")
 
+    p = sub.add_parser("replay-svm-lines", help="compare SVM replacements in recorded NPC situations")
+    p.add_argument("file", help="recorded traces.jsonl")
+    p.add_argument("--svm-file", required=True, help="JSONL native SVM lines: svm, text, target id")
+    p.add_argument("--hint-file", help="replacement SVM hint template with {event}, {text} and {to}")
+    p.add_argument("--no-history", action="store_true", help="keep only persona, situation and SVM hint")
+    p.add_argument("--runs", type=int, default=1, help="independent runs per native line (default: 1)")
+    p.add_argument("--quick-url", default=os.environ.get("GOTHIC_QUICK_LLM_URL"))
+    p.add_argument("--npc", help="only this npc id")
+    p.add_argument("--out", help="write comparison results to a JSONL file")
+
     p = sub.add_parser(
         "places", help="the book of places: group a world dump (SCENARIO=places) and name them"
     )
@@ -3288,6 +3375,8 @@ def main() -> None:
                 code = asyncio.run(replay(args))
             case "replay-first-words":
                 code = asyncio.run(replay_first_words(args))
+            case "replay-svm-lines":
+                code = asyncio.run(replay_svm_lines(args))
             case "places":
                 code = asyncio.run(places_cmd(args))
             case "lore":

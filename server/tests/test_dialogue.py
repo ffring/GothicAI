@@ -58,15 +58,24 @@ async def test_svm_mode_waits_for_hello_and_requires_an_available_quick_model(
     assert llm.calls == []
 
 
-async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(tmp_path):
+@pytest.mark.parametrize(("svm", "target", "event", "to"), [
+    ("$ENEMYKILLED", LOBART, "ты только что убил противника — Лобарт", "обращаясь к Лобарт"),
+    ("$HELP", None, "на тебя напали, ты зовёшь на помощь", "вслух"),
+    ("$HELP", XARDAS, "на тебя напали, ты зовёшь на помощь", "вслух"),
+    ("$HELP", "PC_HERO", "на тебя напали, ты зовёшь на помощь", "обращаясь к герой"),
+    ("$UNKNOWN", LOBART, "", "обращаясь к Лобарт"),
+])
+async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(
+    tmp_path, svm, target, event, to,
+):
     phrase = "Я ещё покажу тебе как надо встречать незваных гостей у моих ворот."
     quick = FakeBackend(f"[angry] {phrase} Это уже вторая фраза.", delay=0, chunk=200)
     llm = FakeBackend()
     fake = FakeGame()
     writer = TraceWriter(tmp_path)
     line = SvmLine(
-        type="svm_line", id="svm-1", npc=XARDAS, svm="$KILLENEMY",
-        text="Ещё одним монстром меньше.", target="WOLF", overlay=False,
+        type="svm_line", id="svm-1", npc=XARDAS, svm=svm,
+        text="Ещё одним монстром меньше.", target=target, overlay=False,
     )
     async with scene_tts(per_char=0.0001) as (url, requests), connected(fake) as link:
         dialogue = DialogueManager(
@@ -74,6 +83,7 @@ async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(tm
         )
         link.snapshots[XARDAS] = Snapshot.model_validate(fake.snapshot(XARDAS))
         dialogue._nearby[XARDAS] = ("Ксардас", 3000)
+        dialogue._nearby[LOBART] = ("Лобарт", 100)
         dialogue.remember(XARDAS, "Ксардас", "Ты защищаешь свою башню от зверей")
         conv = dialogue.conversations[XARDAS]
         history = list(conv.history)
@@ -84,7 +94,7 @@ async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(tm
 
     assert fake.said == [phrase] and fake.voiced == [True]
     (say,) = [message for message, _ in fake.says]
-    assert say["overlay"] is True and say["to"] == "WOLF" and say["mood"] == "angry"
+    assert say["overlay"] is True and say.get("to") == target and say["mood"] == "angry"
     assert not say.get("reply") and not say.get("filler")
     assert [request["text"] for request in requests] == [phrase]
     assert llm.calls == [] and quick.temperatures == [0.7]
@@ -92,9 +102,10 @@ async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(tm
     assert instructions == conv.persona.instructions and messages[:len(history)] == history
     context = "\n".join(m.content for m in messages[len(history):] if m.role == "developer")
     assert brief in context
+    moment = f"Сейчас: {event}. " if event else ""
     assert (
-        f"[Сейчас ты сказал бы вслух: «{line.text}». Скажи это своими словами, одной короткой фразой, "
-        "как сказал бы ты сейчас, по тому, что происходит. Не повторяй этих слов.]"
+        f"[{moment}Ты бы сказал: «{line.text}». Скажи то же по смыслу своими словами, не дословно, "
+        f"одной короткой фразой — как сказал бы ты, {to}.]"
     ) in context
     assert tools == [] and conv.reply is None and conv.talked_at == float("-inf")
     assert conv.history[-1] == Message("developer", f"[Ты сказал вслух: «{phrase}»]")
@@ -103,6 +114,7 @@ async def test_svm_uses_persona_history_and_situation_and_voices_twelve_words(tm
     assert record.items() >= line.model_dump(mode="json").items()
     assert record["outcome"] == "said" and record["answer"] == phrase
     assert 0 <= record["elapsed_ms"] < 2000 and "t" in record
+    assert 0 <= record["first_phrase_ms"] <= record["voice_ms"] <= record["elapsed_ms"]
 
 
 async def test_svm_thirteen_words_are_silent_and_traced(tmp_path):
@@ -1110,7 +1122,8 @@ async def test_a_turn_cancels_svm_waiting_to_be_heard(tmp_path, trigger, with_tt
         assert not conv.svm_phrases and note not in conv.history
         (record,) = [r for r in map(json.loads, writer.path().read_text().splitlines())
                      if r["type"] == "svm_line"]
-        assert record["id"] == "svm-held" and record["outcome"] == "busy"
+        outcome = "dropped" if with_tts and trigger == "player" else "busy"
+        assert record["id"] == "svm-held" and record["outcome"] == outcome
         assert record["answer"] == words and record["elapsed_ms"] >= 0
 
         turn.cancel()
@@ -1124,7 +1137,56 @@ async def test_a_turn_cancels_svm_waiting_to_be_heard(tmp_path, trigger, with_tt
         records = [r for r in map(json.loads, writer.path().read_text().splitlines())
                    if r["type"] == "svm_line"]
         assert [(r["id"], r["outcome"]) for r in records] == [
-            ("svm-held", "busy"), ("svm-retry", "said"),
+            ("svm-held", outcome), ("svm-retry", "said"),
+        ]
+
+
+@pytest.mark.parametrize("drop", ["queue", "interrupt"])
+async def test_queued_svm_counts_for_cooldown_and_repeats_and_finishes_its_dropped_trace(tmp_path, drop):
+    words = "Вон отсюда!"
+    note = Message("developer", f"[Ты сказал вслух: «{words}»]")
+    writer = TraceWriter(tmp_path)
+    async with one_voice_dialogue(True, FakeBackend()) as (fake, dialogue, conv):
+        dialogue.trace = writer
+        blocker = "Сначала закончу мысль." if drop == "queue" else words
+        held = dialogue.tts.held[blocker] = asyncio.Event()
+        if drop == "queue":
+            await dialogue._say(conv, blocker, None)
+            await _until(lambda: blocker in dialogue.tts.requested)
+        dialogue.quick = FakeBackend(words, delay=0)
+        dialogue._nearby[XARDAS] = ("Ксардас", 100)
+        conv.said_at = float("-inf")
+        svm = SvmLine(
+            type="svm_line", id="queued", npc=XARDAS, svm="$GETOUTOFHERE",
+            text="Убирайся отсюда!", overlay=True,
+        )
+        dialogue._on_message(svm)
+        await _until(lambda: bool(conv.svm_pending) and not dialogue._svm_tasks)
+        assert conv.voice.qsize() == (1 if drop == "queue" else 0)
+
+        conv.said_at = float("-inf")  # the pending line's own clock enforces its cooldown
+        dialogue._on_message(svm.model_copy(update={"id": "recent"}))
+        assert len(dialogue.quick.calls) == 1
+        for line in conv.svm_pending:
+            dialogue._sent[line] -= 3.05
+        dialogue.quick = FakeBackend("ВОН ОТСЮДА!!!", delay=0)
+        dialogue._on_message(svm.model_copy(update={"id": "repeat"}))
+        await _until(lambda: not dialogue._svm_tasks)
+        assert not conv.svm_phrases and note not in conv.history
+
+        if drop == "queue":
+            dialogue._drop_unvoiced(conv)
+        else:
+            assert dialogue.interrupt(XARDAS)
+        assert not conv.svm_pending
+        held.set()
+        await asyncio.wait_for(conv.voice.join(), 1)
+        await dialogue.link.snapshot(XARDAS, fresh=True)
+        assert words not in fake.said and not conv.svm_phrases and note not in conv.history
+        records = [r for r in map(json.loads, writer.path().read_text().splitlines())
+                   if r["type"] == "svm_line"]
+        assert [(r["id"], r["outcome"]) for r in records] == [
+            ("recent", "busy"), ("repeat", "repeat"), ("queued", "dropped"),
         ]
 
 

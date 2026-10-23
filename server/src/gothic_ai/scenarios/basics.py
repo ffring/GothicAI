@@ -574,14 +574,14 @@ async def svm_lines(
     await link.debug("skip_important", near=npc)
     await attach_when_free(link, npc)
     await link.debug("player_goto", to=npc, distance=250)
-    events: list[tuple[SvmLine, float]] = []
-    starts: dict[str, tuple[bool, float]] = {}
+    events: list[SvmLine] = []
+    starts: dict[str, bool] = {}
 
     def record(message: GameMessage) -> None:
         if isinstance(message, SvmLine) and message.npc == npc:
-            events.append((message, time.monotonic()))
+            events.append(message)
         elif isinstance(message, LineStarted) and message.npc == npc:
-            starts[message.line] = message.voiced, time.monotonic()
+            starts[message.line] = message.voiced
 
     results: dict[str, str] = {}
 
@@ -612,7 +612,7 @@ async def svm_lines(
             f"svm_line={len(events) - before}, action={action.status}, next={following.status})"
         )
 
-    link.listeners.insert(0, record)  # timestamp arrival before dialogue opens the persona and history
+    link.listeners.insert(0, record)
     try:
         await link.act(npc, "turn_to", npc="PLAYER")
         await asyncio.sleep(3.1)
@@ -634,11 +634,11 @@ async def svm_lines(
             if not await _until(lambda before=before: len(events) > before, 3):
                 results["intercept"] = f"failed ({svm}, action={action.status}, no svm_line)"
                 break
-            event, received_at = events[before]
+            event = events[before]
             valid = (event.svm == svm and bool(event.text) and event.target == "PC_HERO"
                      and event.overlay == overlay)
-            if not valid or not await _until(lambda event=event: trace(event.id) is not None, 3):
-                results["trace"] = f"failed ({event.id}, valid={valid}, no result within 3s)"
+            if not valid or not await _until(lambda event=event: trace(event.id) is not None, 8):
+                results["trace"] = f"failed ({event.id}, valid={valid}, no result within 8s)"
                 break
             row = trace(event.id)
             assert row is not None
@@ -660,15 +660,14 @@ async def svm_lines(
                              if dialogue._lines[line][0] == answer), None)
                 voiced = line is not None and await _until(lambda line=line: line in starts, 8)
                 if voiced:
-                    voiced = starts[line][0]
+                    voiced = starts[line]
                 played = voiced and f"[ai] voice {line} starts" in game_log()
                 native_after = game_log().count(f"[ai] native svm {npc} ")
                 ok = bool(played and native_after == native_before)
-                delay = starts[line][1] - received_at if voiced else 0
                 said += 1
                 results[f"gemma_{said:02}"] = (
                     f"{'done' if ok else 'failed'} ({event.text!r} -> {answer!r}; "
-                    f"first_phrase_ms={row['elapsed_ms']:.1f}, voice_s={delay:.3f}, "
+                    f"first_phrase_ms={row['first_phrase_ms']:.1f}, voice_ms={row['voice_ms']:.1f}, "
                     f"line={line}, voiced={bool(voiced)}, native={native_after - native_before})"
                 )
                 if not ok or said == 10:

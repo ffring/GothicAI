@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import itertools
+import json
 import logging
 import re
 import time
@@ -27,6 +28,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable, Collection, Coroutine, Iterator
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from . import commands, executor, npc_tools
@@ -136,9 +138,10 @@ SVM_WORDS_MAX = 12
 SVM_QUIET_S = 3.0
 SVM_RECOVER_S = 30.0
 SVM_HINT = (
-    "[Сейчас ты сказал бы вслух: «{text}». Скажи это своими словами, одной короткой фразой, "
-    "как сказал бы ты сейчас, по тому, что происходит. Не повторяй этих слов.]"
+    "[Сейчас: {event}. Ты бы сказал: «{text}». Скажи то же по смыслу своими словами, не дословно, "
+    "одной короткой фразой — как сказал бы ты, {to}.]"
 )
+SVM_EVENTS = json.loads((Path(__file__).parent / "gamedata" / "svm_events.json").read_text(encoding="utf-8"))
 SUMMARY_FIRST_S = 60.0  # the summary is not waited for by anyone: more patience
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
@@ -252,6 +255,21 @@ def first_words(text: str) -> tuple[str, Mood | None]:
     if _NOTHING.match(words):
         return "", None
     return words.lstrip("—–- "), mood  # "— Пошли тогда.": the dash of a written reply is not said
+
+
+def svm_hint(
+    svm: str, text: str, *, target_name: str | None = None, self_target: bool = False,
+    hint: str = SVM_HINT,
+) -> str:
+    event = SVM_EVENTS.get(svm.upper(), {}).get("event", "").format(
+        target=f" — {target_name}" if target_name else "",
+    )
+    if not event:
+        hint = hint.replace("Сейчас: {event}. ", "")
+    return hint.format(
+        event=event, text=text,
+        to=f"обращаясь к {target_name}" if target_name and not self_target else "вслух",
+    )
 
 
 def line_duration(text: str) -> float:
@@ -820,6 +838,8 @@ class DialogueManager:
             if outcome is not None:
                 attempt["outcome"] = outcome
             attempt["elapsed_ms"] = round((time.monotonic() - received) * 1000, 1)
+            if outcome == "said":
+                attempt["voice_ms"] = attempt["elapsed_ms"]
             log.info("svm_line %s %s «%s» -> %r (%s, %.1f ms)", npc, msg.svm, msg.text,
                      attempt["answer"], attempt["outcome"], attempt["elapsed_ms"])
             if self.trace is not None:
@@ -851,11 +871,15 @@ class DialogueManager:
 
     def _svm_busy(self, npc: str) -> bool:
         conv = self.conversations.get(npc)
+        queued_at = max(
+            (self._sent[line] for line in conv.svm_pending), default=float("-inf"),
+        ) if conv is not None else float("-inf")
         return (
             (conv is not None and conv.reply is not None and not conv.reply.done())
             or time.monotonic() - max(
                 conv.said_at if conv is not None else float("-inf"),
                 self._spoke_at.get(npc, float("-inf")),
+                queued_at,
             ) < SVM_QUIET_S
         )
 
@@ -865,13 +889,28 @@ class DialogueManager:
     ) -> str | None:
         assert self.quick is not None
         text = ""
+        target = (msg.target or "").upper()
+        target_name = None
+        if target:
+            snap = self.link.snapshots.get(target)
+            nearby = self.link.snapshots.get(conv.npc)
+            seen = next(
+                (n.name for n in nearby.nearby_npcs if n.id.upper() == target), None,
+            ) if nearby else None
+            card = self.personas.cards.get(target)
+            target_name = (
+                "герой" if target in {"PLAYER", "PC_HERO"} else
+                snap.npc.name if snap is not None else
+                seen or self._nearby.get(target, ("", 0))[0] or (card.name if card else target)
+            )
+        hint = svm_hint(msg.svm, msg.text, target_name=target_name, self_target=target == conv.npc)
         try:
             async with (
                 asyncio.timeout_at(received + SVM_REPLY_S),
                 aclosing(self.quick.stream(
                     instructions=conv.persona.instructions,
                     messages=[*conv.history, Message("developer", f"{self._brief(conv)}\n"
-                                                      f"{SVM_HINT.format(text=msg.text)}")],
+                                                      f"{hint}")],
                     tools=[], temperature=0.7,
                 )) as events,
             ):
@@ -884,6 +923,7 @@ class DialogueManager:
             words, mood = first_words(text)
             words = to_game_text(words)
             attempt["answer"] = words
+            attempt["first_phrase_ms"] = round((time.monotonic() - received) * 1000, 1)
             phrase = " ".join(_LETTERS.findall(words.casefold()))
             if time.monotonic() >= received + SVM_REPLY_S:
                 attempt["outcome"] = "late"
@@ -891,7 +931,10 @@ class DialogueManager:
                 attempt["outcome"] = "busy"
             elif len(_LETTERS.findall(words)) > SVM_WORDS_MAX:
                 attempt["outcome"] = "too_long"
-            elif phrase in conv.svm_phrases:
+            elif phrase in conv.svm_phrases or any(
+                phrase == " ".join(_LETTERS.findall(self._lines[line][0].casefold()))
+                for line in conv.svm_pending
+            ):
                 attempt["outcome"] = "repeat"
             elif not phrase:
                 attempt["outcome"] = "error"
@@ -1273,6 +1316,10 @@ class DialogueManager:
         conv.reply = None
 
     def _drop_unvoiced(self, conv: Conversation, lines: Collection[str] | None = None) -> None:
+        for line in tuple(conv.svm_pending):
+            if lines is None or line in lines:
+                conv.hushed.add(line)
+                conv.svm_pending.pop(line)("dropped")
         if conv.voice is not None:
             for _ in range(conv.voice.qsize()):
                 item = conv.voice.get_nowait()
@@ -1346,7 +1393,7 @@ class DialogueManager:
         """The hero speaks while the npc answers: it stops at once (its voice, the lines it did not say
         yet, the turn if it is still thinking) and remembers being interrupted. False if it was silent."""
         conv = self.conversations.get(npc.upper())
-        if conv is None or not self.speaking(npc):
+        if conv is None or not (self.speaking(npc) or conv.svm_pending):
             return False
         said, _, _ = self._said(conv)
         spoken = " ".join(said)
