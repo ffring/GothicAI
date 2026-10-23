@@ -81,13 +81,16 @@ size_t parseVectorInputSize(const Json& preprocessing, uint32_t& demoVersion, ui
     fail("unsupported preprocessing vector_order");
   if(preprocessing.HasMember("navdemo_version")) {
     const auto& version = preprocessing["navdemo_version"];
-    if(!version.IsUint() || (version.GetUint()!=1 && version.GetUint()!=2))
+    if(!version.IsUint() || (version.GetUint()!=1 && version.GetUint()!=2 &&
+                           !(weightVersion==4 && version.GetUint()==3)))
       fail("unsupported NAVDEMO input version");
     demoVersion = version.GetUint();
     }
-  if(demoVersion==2) {
+  if(weightVersion==4 && demoVersion!=3)
+    fail("unsupported NAVDEMO input version");
+  if(demoVersion>=2) {
     expectStrings(order,{"eye","roads","body"});
-    if(weightVersion==3)
+    if(weightVersion>=3)
       expectStrings(field(preprocessing,"input_fields"),{"body","roads","eye","memory_near","memory_far","feet_height_cm"});
     else
       expectStrings(field(preprocessing,"input_fields"),{"body","roads","eye","memory_near","memory_far"});
@@ -106,12 +109,16 @@ size_t parseVectorInputSize(const Json& preprocessing, uint32_t& demoVersion, ui
   return NavPolicy::legacyVectorSize;
   }
 
-void validateHdPreprocessing(const Json& preprocessing, uint32_t demoVersion) {
-  if(demoVersion!=2)
+void validateHdPreprocessing(const Json& preprocessing, uint32_t demoVersion, uint32_t weightVersion) {
+  if(weightVersion==3 && demoVersion!=2)
     fail("HD weights require NAVDEMO v2 inputs");
-  expectString(field(preprocessing,"input_variant"),"hd");
-  expectStrings(field(preprocessing,"map_order"),{"confidence","free","wall","ledge","drop","water","movable",
-    "relative_ground_height_max","relative_ground_height_min","height_valid_fraction"});
+  expectString(field(preprocessing,"input_variant"),weightVersion==4 ? "hd-familiar" : "hd");
+  if(weightVersion==4)
+    expectStrings(field(preprocessing,"map_order"),{"confidence","free","wall","ledge","drop","water","movable",
+      "relative_ground_height_max","relative_ground_height_min","height_valid_fraction","familiar"});
+  else
+    expectStrings(field(preprocessing,"map_order"),{"confidence","free","wall","ledge","drop","water","movable",
+      "relative_ground_height_max","relative_ground_height_min","height_valid_fraction"});
   expectString(field(preprocessing,"memory"),
     "7 probability channels unpooled; near 64x64 at 25cm; far forward rows[50:100] and all 100 columns at 200cm; one recorded height per cell");
   expectString(field(preprocessing,"height"),
@@ -126,9 +133,10 @@ void validateArchitecture(const Json& architecture, size_t& hidden, size_t vecto
   expectString(field(architecture,"name"),"map-cnn-vector-gru");
   expectInt(field(architecture,"version"),1);
   const auto& inputs = field(architecture,"inputs");
-  if(version==3) {
-    expectShape(field(inputs,"near"),{10,64,64});
-    expectShape(field(inputs,"far"),{10,50,100});
+  const size_t channels = version==4 ? 11 : version==3 ? 10 : 9;
+  if(version>=3) {
+    expectShape(field(inputs,"near"),{channels,64,64});
+    expectShape(field(inputs,"far"),{channels,50,100});
     }
   else {
     expectShape(field(inputs,"near"),{9,32,32});
@@ -146,7 +154,7 @@ void validateArchitecture(const Json& architecture, size_t& hidden, size_t vecto
   for(unsigned i=0; i<2; ++i) {
     const auto& conv = layers[i];
     expectString(field(conv,"type"),"conv2d");
-    expectInt(field(conv,"in_channels"),i==0 ? (version==3 ? 10 : 9) : 8);
+    expectInt(field(conv,"in_channels"),i==0 ? channels : 8);
     expectInt(field(conv,"out_channels"),i==0 ? 8 : 16);
     expectInt(field(conv,"kernel"),3);
     expectInt(field(conv,"stride"),2);
@@ -279,7 +287,7 @@ void poolMemory(const NavigationMemory::Layer& layer, size_t factor, float refer
   }
 
 void nativeMemory(const NavigationMemory::Layer& layer, size_t firstRow, size_t rows,
-                  float reference, float* output) {
+                  float reference, bool familiar, float* output) {
   const size_t columns = layer.size, area = rows*columns;
   for(size_t z=0; z<rows; ++z) {
     for(size_t x=0; x<columns; ++x) {
@@ -301,6 +309,11 @@ void nativeMemory(const NavigationMemory::Layer& layer, size_t firstRow, size_t 
       output[7*area+index] = relative;
       output[8*area+index] = relative;
       output[9*area+index] = valid ? 1.f : 0.f;
+      if(familiar) {
+        if(!std::isfinite(cell.familiar) || cell.familiar<0 || cell.familiar>1)
+          fail("memory familiar channel outside [0,1]");
+        output[10*area+index] = float(std::lround(cell.familiar*255.f))/255.f;
+        }
       }
     }
   }
@@ -327,21 +340,23 @@ NavPolicy::NavPolicy(const std::string& path) {
     fail("invalid or duplicate-key weight JSON header");
   expectString(field(header,"format"),"gothic-nav-bc");
   const auto& version = field(header,"version");
-  if(!version.IsUint() || (version.GetUint()!=1 && version.GetUint()!=2 && version.GetUint()!=3))
+  if(!version.IsUint() || (version.GetUint()!=1 && version.GetUint()!=2 && version.GetUint()!=3 && version.GetUint()!=4))
     fail("unsupported navigation weight version");
   formatVersion = version.GetUint();
   expectString(field(header,"byte_order"),"little");
   expectString(field(header,"offset_origin"),"first byte after JSON header newline");
   const auto& preprocessing = field(header,"preprocessing");
   const size_t vectorInputs = parseVectorInputSize(preprocessing,demoVersion,formatVersion);
-  if(formatVersion==3)
-    validateHdPreprocessing(preprocessing,demoVersion);
+  if(formatVersion>=3)
+    validateHdPreprocessing(preprocessing,demoVersion,formatVersion);
   if(preprocessing.HasMember("navigation_memory_version")) {
     const auto& memory = preprocessing["navigation_memory_version"];
     if(!memory.IsUint() || (memory.GetUint()!=3 && memory.GetUint()!=4))
       fail("unsupported navigation memory version");
     memoryVersion = memory.GetUint();
     }
+  if(formatVersion==4 && memoryVersion!=4)
+    fail("BC4 weights require navigation memory version 4");
   validateArchitecture(field(header,"architecture"),hidden,vectorInputs,formatVersion);
   if(header.HasMember("temperatures")) {
     const auto& values = header["temperatures"];
@@ -432,7 +447,7 @@ NavPolicy::NavPolicy(const std::string& path) {
     layer.bias = take(name+".bias",{out});
     };
   const auto loadMap = [&](MapEncoder& encoder, const char* prefix) {
-    const size_t channels = formatVersion==3 ? 10 : 9;
+    const size_t channels = formatVersion==4 ? 11 : formatVersion==3 ? 10 : 9;
     encoder.first.inputs = channels*3*3;
     encoder.first.outputs = 8;
     encoder.first.weight = take(std::string(prefix)+".0.weight",{8,channels,3,3});
@@ -483,13 +498,13 @@ NavPolicy::Features NavPolicy::encode(const NavDemoWriter::Snapshot& observation
   validateLayer(far,NavDemoWriter::farSize,NavigationMemory::Constants::farCellCm);
   Features features;
   features.vector.resize(vectorInputSize());
-  if(formatVersion==3) {
+  if(formatVersion>=3) {
     if(!std::isfinite(observation.position[1]))
       fail("non-finite feet height");
-    features.near.resize(hdNearSize);
-    features.far.resize(hdFarSize);
-    nativeMemory(near,0,64,observation.position[1],features.near.data());
-    nativeMemory(far,50,50,observation.position[1],features.far.data());
+    features.near.resize(nearInputSize());
+    features.far.resize(farInputSize());
+    nativeMemory(near,0,64,observation.position[1],formatVersion==4,features.near.data());
+    nativeMemory(far,50,50,observation.position[1],formatVersion==4,features.far.data());
     }
   else {
     float nearReference = 0, farReference = 0;
@@ -512,14 +527,14 @@ NavPolicy::Features NavPolicy::encode(const NavDemoWriter::Snapshot& observation
     vector[cursor++] = ray.hit ? 1.f : 0.f;
     }
   const auto distance = [](float value) { return std::clamp(value/1000.f,0.f,50.f); };
-  for(float value:demoVersion==2 ? observation.roads.carrotDirection : observation.roads.nextDirection)
+  for(float value:demoVersion>=2 ? observation.roads.carrotDirection : observation.roads.nextDirection)
     vector[cursor++] = value;
-  vector[cursor++] = distance(demoVersion==2 ? observation.roads.carrotDistanceCm : observation.roads.nextDistanceCm);
+  vector[cursor++] = distance(demoVersion>=2 ? observation.roads.carrotDistanceCm : observation.roads.nextDistanceCm);
   for(float value:observation.roads.goalDirection)
     vector[cursor++] = value;
   vector[cursor++] = distance(observation.roads.goalDistanceCm);
-  vector[cursor++] = distance(demoVersion==2 ? observation.roads.remainingKnownCm : observation.roads.remainingVisualCm);
-  vector[cursor++] = (demoVersion==2 ? observation.roads.beyondKnown : observation.roads.goalInKnown) ? 1.f : 0.f;
+  vector[cursor++] = distance(demoVersion>=2 ? observation.roads.remainingKnownCm : observation.roads.remainingVisualCm);
+  vector[cursor++] = (demoVersion>=2 ? observation.roads.beyondKnown : observation.roads.goalInKnown) ? 1.f : 0.f;
   for(float value:observation.body.velocityCmS)
     vector[cursor++] = std::clamp(value/500.f,-4.f,4.f);
   for(uint8_t flag:observation.body.flags) {
@@ -566,7 +581,7 @@ std::array<float,64> NavPolicy::map(const float* input, size_t rows, size_t colu
     std::vector<float> result(layer.outputs*area);
     // A zero-padded window is shared by every output channel. OIHW tap order
     // agrees with the reference's im2col cross-correlation (no kernel flip).
-    std::array<float,10*3*3> window;
+    std::array<float,11*3*3> window;
     for(size_t z=0; z<outputHeight; ++z) {
       for(size_t x=0; x<outputWidth; ++x) {
         size_t tap = 0;
@@ -624,8 +639,8 @@ NavPolicy::Result NavPolicy::step(const Features& features, State& state) const 
     fail("incorrect GRU state size");
   for(float value:state.hidden)
     if(!std::isfinite(value)) fail("non-finite GRU state");
-  const auto near = map(features.near.data(),formatVersion==3 ? 64 : 32,formatVersion==3 ? 64 : 32,nearEncoder);
-  const auto far = map(features.far.data(),formatVersion==3 ? 50 : 25,formatVersion==3 ? 100 : 25,farEncoder);
+  const auto near = map(features.near.data(),formatVersion>=3 ? 64 : 32,formatVersion>=3 ? 64 : 32,nearEncoder);
+  const auto far = map(features.far.data(),formatVersion>=3 ? 50 : 25,formatVersion>=3 ? 100 : 25,farEncoder);
   const auto vector = linear(features.vector.data(),vectorEncoder,true);
   std::array<float,256> joined;
   std::copy(near.begin(),near.end(),joined.begin());

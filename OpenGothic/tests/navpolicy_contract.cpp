@@ -29,7 +29,7 @@ void require(bool condition,const std::string& message) {
 
 void memoryContract(const std::string& weights) {
   const NavPolicy original(weights);
-  require(original.navDemoVersion()==1 || original.navDemoVersion()==2,"memory contract requires a supported policy");
+  require(original.navDemoVersion()>=1 && original.navDemoVersion()<=3,"memory contract requires a supported policy");
   std::ifstream input(weights,std::ios::binary);
   std::string headerText;
   require(bool(std::getline(input,headerText)),"cannot read memory contract weight header");
@@ -43,7 +43,7 @@ void memoryContract(const std::string& weights) {
   require(std::filesystem::create_directory(temporary.directory),"cannot create memory contract temporary directory");
   temporary.created=true;
   const auto path=temporary.directory/"fixture.navbc";
-  const auto variant=[&](const char* memoryVersion,bool navdemo3=false) {
+  const auto variant=[&](const char* memoryVersion,uint32_t navdemoVersion=0) {
     rapidjson::Document header;header.Parse(headerText.c_str());
     auto& preprocessing=header["preprocessing"];
     preprocessing.RemoveMember("navigation_memory_version");
@@ -53,9 +53,9 @@ void memoryContract(const std::string& weights) {
       rapidjson::Value copied;copied.CopyFrom(value,header.GetAllocator());
       preprocessing.AddMember("navigation_memory_version",copied,header.GetAllocator());
     }
-    if(navdemo3) {
+    if(navdemoVersion) {
       preprocessing.RemoveMember("navdemo_version");
-      preprocessing.AddMember("navdemo_version",3,header.GetAllocator());
+      preprocessing.AddMember("navdemo_version",navdemoVersion,header.GetAllocator());
     }
     rapidjson::StringBuffer buffer;rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);header.Accept(writer);
     std::ofstream out(path,std::ios::binary|std::ios::trunc);
@@ -78,6 +78,13 @@ void memoryContract(const std::string& weights) {
   const char* overrides[]={nullptr,"0","1"};
   size_t cases=0;float legacyConfidence=0,journeyConfidence=0;
   for(const char* version:versions) {
+    if(original.weightVersion()==4 && (!version || std::string(version)!="4")) {
+      variant(version);bool rejected=false;
+      try {const NavPolicy policy(path.string());}
+      catch(const std::runtime_error& error) {rejected=std::string(error.what())=="nav policy: BC4 weights require navigation memory version 4";}
+      require(rejected,"BC4 accepted missing or legacy memory metadata");
+      continue;
+    }
     variant(version);
     const NavPolicy policy(path.string());
     const uint32_t expectedVersion=version && std::string(version)=="4" ? 4u : 3u;
@@ -112,10 +119,10 @@ void memoryContract(const std::string& weights) {
     catch(const std::runtime_error& error) {rejected=std::string(error.what())=="nav policy: unsupported navigation memory version";}
     require(rejected,"invalid navigation memory metadata was not rejected");
   }
-  variant("4",true);bool rejectedDemo=false;
+  variant("4",original.weightVersion()==4 ? 2u : 3u);bool rejectedDemo=false;
   try {const NavPolicy policy(path.string());}
   catch(const std::runtime_error& error) {rejectedDemo=std::string(error.what())=="nav policy: unsupported NAVDEMO input version";}
-  require(rejectedDemo,"unsupported NAVDEMO v3 policy was not rejected");
+  require(rejectedDemo,"unsupported policy NAVDEMO version was not rejected");
   variant("4");const NavPolicy policy(path.string());
   for(const char* invalid:{"","2","-1","true"}) {
     Memory memory;bool rejected=false;
@@ -180,14 +187,14 @@ struct Observation final {
     for(auto& flag:snapshot.body.flags) flag=in.u8();
     snapshot.body.groundNormal=in.vec();snapshot.body.groundSlopeDeg=in.f32();
     snapshot.body.headYawDeg=in.f32();snapshot.body.headPitchDeg=in.f32();
-    if(version==2) {
+    if(version>=2) {
       snapshot.roads.carrotDirection=in.vec();snapshot.roads.carrotDistanceCm=in.f32();
       }
     else {
       snapshot.roads.nextDirection=in.vec();snapshot.roads.nextDistanceCm=in.f32();
       }
     snapshot.roads.goalDirection=in.vec();snapshot.roads.goalDistanceCm=in.f32();
-    if(version==2) {
+    if(version>=2) {
       snapshot.roads.remainingKnownCm=in.f32();snapshot.roads.beyondKnown=in.u8()!=0;
       }
     else {
@@ -204,20 +211,21 @@ struct Observation final {
       ray.sampledAtMs=snapshot.gameMs-age;ray.nearSampledAtMs=snapshot.gameMs-nearAge;
       ray.complete=in.u8()!=0;ray.hit=in.u8()!=0;
       }
-    layer(in,memory.near,NavDemoWriter::nearSize,NavigationMemory::Constants::nearCellCm);
-    layer(in,memory.far,NavDemoWriter::farSize,NavigationMemory::Constants::farCellCm);
+    layer(in,memory.near,NavDemoWriter::nearSize,NavigationMemory::Constants::nearCellCm,version);
+    layer(in,memory.far,NavDemoWriter::farSize,NavigationMemory::Constants::farCellCm,version);
     snapshot.teacherCorner=in.vec();snapshot.teacherPathCm=in.f32();
     require(in.current==in.end,"NAVDEMO fixture layout mismatch");
     memory.pose.gameMs=snapshot.gameMs;
     snapshot.eye=&eye;snapshot.memory=&memory;
     }
 
-  static void layer(Cursor& in,NavigationMemory::Layer& value,size_t size,float cellCm) {
+  static void layer(Cursor& in,NavigationMemory::Layer& value,size_t size,float cellCm,uint32_t version) {
     value.size=size;value.cellCm=cellCm;value.cells.resize(size*size);
     for(auto& cell:value.cells) {
       cell.confidence=float(in.u8())/255.f;cell.free=float(in.u8())/255.f;
       cell.wall=float(in.u8())/255.f;cell.ledge=float(in.u8())/255.f;
       cell.drop=float(in.u8())/255.f;cell.water=float(in.u8())/255.f;cell.movable=float(in.u8())/255.f;
+      cell.familiar=version==3 ? float(in.u8())/255.f : 0.f;
       const float height=in.f32();
       cell.groundHeightCm=in.u8()!=0 ? height : std::numeric_limits<float>::quiet_NaN();
       }
@@ -262,7 +270,7 @@ struct Fixture final {
       steps=number("steps");hidden=number("hidden_size");
       if(header.HasMember("navdemo_version")) demoVersion=uint32_t(number("navdemo_version"));
       if(header.HasMember("weight_version")) weightVersion=uint32_t(number("weight_version"));
-      require(weightVersion==1 || weightVersion==2 || weightVersion==3,"unsupported fixture weight version");
+      require(weightVersion>=1 && weightVersion<=4,"unsupported fixture weight version");
       if(weightVersion>=2) {
         heads={"forward","strafe","turn","walk","maneuver"};classes={3,3,3,2,3};
         }
@@ -270,15 +278,15 @@ struct Fixture final {
         heads={"forward","strafe","turn","walk","jump","climb"};classes={3,3,3,2,2,2};
         }
       logits.resize(heads.size());temperatures.assign(heads.size(),1.);
-      require(demoVersion==1 || demoVersion==2,"unsupported fixture NAVDEMO version");
+      require(demoVersion>=1 && demoVersion<=3,"unsupported fixture NAVDEMO version");
       require(steps>0 && steps<=100000 && hidden>0 && hidden<=4096,"fixture dimensions out of bounds");
       const auto vectorSize=number("vector_size");
-      require(number("record_bytes")==NavDemoWriter::recordBytes &&
+      require(number("record_bytes")==NavDemoWriter::recordBytesForVersion(demoVersion) &&
               (vectorSize==NavPolicy::vectorSize || vectorSize==NavPolicy::legacyVectorSize),
               "fixture input dimensions differ from NAVDEMO");
-      if(weightVersion==3) {
-        expected.near.resize(NavPolicy::hdNearSize);
-        expected.far.resize(NavPolicy::hdFarSize);
+      if(weightVersion>=3) {
+        expected.near.resize(weightVersion==4 ? NavPolicy::bc4NearSize : NavPolicy::hdNearSize);
+        expected.far.resize(weightVersion==4 ? NavPolicy::bc4FarSize : NavPolicy::hdFarSize);
         }
       const auto shape=[&](const char* name,std::initializer_list<size_t> dimensions) {
         if(!header.HasMember(name)) return;
@@ -290,7 +298,10 @@ struct Fixture final {
           require(item.IsUint() && item.GetUint()==dimension,std::string("fixture shape mismatch: ")+name);
           }
         };
-      if(weightVersion==3) { shape("near_shape",{10,64,64});shape("far_shape",{10,50,100}); }
+      if(weightVersion>=3) {
+        const size_t channels=weightVersion==4 ? 11 : 10;
+        shape("near_shape",{channels,64,64});shape("far_shape",{channels,50,100});
+        }
       else { shape("near_shape",{9,32,32});shape("far_shape",{9,25,25}); }
       expected.vector.resize(vectorSize);
       require(header.HasMember("carry_hidden") && header["carry_hidden"].IsTrue(),"fixture must carry GRU state");
@@ -326,7 +337,7 @@ struct Fixture final {
         layout.push_back(ray);
         }
       if(header.HasMember("source") && header["source"].IsString()) source=header["source"].GetString();
-      raw.resize(NavDemoWriter::recordBytes);hiddenState.resize(hidden);
+      raw.resize(NavDemoWriter::recordBytesForVersion(demoVersion));hiddenState.resize(hidden);
       }
     catch(...) { gzclose(stream);stream=nullptr;throw; }
     }
@@ -427,7 +438,7 @@ void parity(const std::string& weights,const std::string& path) {
       // HD uses physical feet Y only as the local height origin. All policies
       // ignore absolute X/Z, yaw and the record's teacher annotations.
       const float feetY=observation.snapshot.position[1];
-      observation.snapshot.position={99999,policy.weightVersion()==3 ? feetY : -77777,33333};
+      observation.snapshot.position={99999,policy.weightVersion()>=3 ? feetY : -77777,33333};
       observation.snapshot.bodyYawDeg=-177;
       observation.snapshot.gameMs+=9876;
       observation.snapshot.keys.forward=12345;observation.snapshot.keys.strafe=-12345;
@@ -448,7 +459,7 @@ void parity(const std::string& weights,const std::string& path) {
       observation.memory.traveledCm=987654;
       observation.snapshot.teacherCorner={-99,88,77};
       observation.snapshot.teacherPathCm=88888;
-      if(policy.navDemoVersion()==2) {
+      if(policy.navDemoVersion()>=2) {
         observation.snapshot.roads.nextDirection={-99,88,77};
         observation.snapshot.roads.nextDistanceCm=std::numeric_limits<float>::quiet_NaN();
         observation.snapshot.roads.remainingVisualCm=std::numeric_limits<float>::quiet_NaN();

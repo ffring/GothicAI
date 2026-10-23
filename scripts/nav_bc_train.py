@@ -19,8 +19,9 @@ import numpy as np
 import torch
 from torch import nn
 
-from nav_bc_data import (CACHE_VERSION, BC3_CACHE_VERSION, HD_CACHE_VERSION, HEADS, CLASSES, BC3_HEADS,
-                         BC3_CLASSES, PREPROCESSING, HD_PREPROCESSING, HD_NEAR_SHAPE, HD_FAR_SHAPE,
+from nav_bc_data import (CACHE_VERSION, BC3_CACHE_VERSION, HD_CACHE_VERSION, BC4_CACHE_VERSION, HEADS, CLASSES, BC3_HEADS,
+                         BC3_CLASSES, PREPROCESSING, HD_PREPROCESSING, BC4_PREPROCESSING,
+                         HD_NEAR_SHAPE, HD_FAR_SHAPE, BC4_NEAR_SHAPE, BC4_FAR_SHAPE,
                          VECTOR_SIZE, load_cached, unpack_cached)
 from nav_bc_model import NavPolicy, export_weights
 
@@ -31,13 +32,17 @@ def write_json(path, value):
 
 def read_index(cache):
     index = json.loads((cache / "index.json").read_text())
-    hd = index.get("cache_version") == HD_CACHE_VERSION
-    preprocessing = HD_PREPROCESSING if hd else PREPROCESSING
-    if (index.get("cache_version") not in (CACHE_VERSION, BC3_CACHE_VERSION, HD_CACHE_VERSION)
+    familiar = index.get("cache_version") == BC4_CACHE_VERSION
+    hd = index.get("cache_version") in (HD_CACHE_VERSION, BC4_CACHE_VERSION)
+    preprocessing = BC4_PREPROCESSING if familiar else HD_PREPROCESSING if hd else PREPROCESSING
+    if (index.get("cache_version") not in (CACHE_VERSION, BC3_CACHE_VERSION, HD_CACHE_VERSION, BC4_CACHE_VERSION)
             or index.get("vector_size") != VECTOR_SIZE or index.get("preprocessing") != preprocessing):
         raise ValueError("rebuild cache for NAVDEMO v2 carrot inputs without previous_keys")
-    if hd and (index.get("near_shape") != list(HD_NEAR_SHAPE) or index.get("far_shape") != list(HD_FAR_SHAPE)):
+    near_shape, far_shape = (BC4_NEAR_SHAPE, BC4_FAR_SHAPE) if familiar else (HD_NEAR_SHAPE, HD_FAR_SHAPE)
+    if hd and (index.get("near_shape") != list(near_shape) or index.get("far_shape") != list(far_shape)):
         raise ValueError("rebuild HD cache for native near cells and the forward far-memory window")
+    if familiar and (index.get("navdemo_version") != 3 or index.get("navigation_memory_version") != 4):
+        raise ValueError("rebuild BC4 cache for NAVDEMO v3 memory-v4 recordings")
     train = {tuple(ep["pair"]) for ep in index["episodes"] if ep["split"] == "train"}
     valid = {tuple(ep["pair"]) for ep in index["episodes"] if ep["split"] != "train"}
     if train & valid:
@@ -179,7 +184,7 @@ def train(args):
     cache, out = Path(args.cache), Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     index = read_index(cache)
-    if index["cache_version"] in (BC3_CACHE_VERSION, HD_CACHE_VERSION):
+    if index["cache_version"] in (BC3_CACHE_VERSION, HD_CACHE_VERSION, BC4_CACHE_VERSION):
         return train_bc3(args, index)
     train_eps = [e for e in index["episodes"] if e["split"] == "train"]
     val_eps = [e for e in index["episodes"] if e["split"] != "train"]
@@ -283,28 +288,39 @@ def initialize_bc3(model, path, index):
 
 
 def initialize_bc3_hd(model, path, index):
-    """Transfer BC3's compatible tensors, always resetting both map encoders."""
+    """Initialize HD from BC3, or expand HD's first convolutions for BC4."""
     from nav_bc_numpy import NumpyPolicy
     path = Path(path)
     if path.suffix != ".pt":
-        raise ValueError("HD initialization requires the BC3 last.pt training checkpoint")
+        raise ValueError("HD initialization requires a last.pt training checkpoint")
     source = torch.load(path, map_location="cpu", weights_only=False)
     config = source["config"]
-    if (config.get("format_version") != 2 or config.get("auxiliary") is not True
+    familiar = model.format_version == 4
+    source_version = 3 if familiar else 2
+    if (config.get("format_version") != source_version or config.get("auxiliary") is not True
             or config.get("vector_size") != model.vector_size or config.get("hidden_size") != model.hidden_size):
-        raise ValueError("HD initialization requires a compatible BC3 checkpoint with auxiliary heads")
+        raise ValueError(f"initialization requires a compatible v{source_version} checkpoint with auxiliary heads")
     # Check the paired portable policy's sensor layout; the new map encoding is
     # deliberately different, while every transferred vector field stays exact.
     portable = NumpyPolicy(path.parent / "policy.navbc")
     preprocessing = portable.header.get("preprocessing", {})
-    if any(preprocessing.get(name) != value for name, value in PREPROCESSING.items()):
-        raise ValueError("HD source checkpoint requires the original BC3 preprocessing")
+    expected_preprocessing = HD_PREPROCESSING if familiar else PREPROCESSING
+    if any(preprocessing.get(name) != value for name, value in expected_preprocessing.items()):
+        raise ValueError("source checkpoint preprocessing differs from the compatible input layout")
     if not np.array_equal(preprocessing.get("eye_layout"), index["eye_layout"]):
         raise ValueError("HD source eye layout differs from the demonstrations")
-    state, transferred, reset = model.state_dict(), [], []
+    state, transferred, reset, expanded = model.state_dict(), [], [], []
     for name in state:
-        if name.startswith(("near_encoder.", "far_encoder.")):
+        if not familiar and name.startswith(("near_encoder.", "far_encoder.")):
             reset.append(name)
+            continue
+        if familiar and name in ("near_encoder.0.weight", "far_encoder.0.weight"):
+            values = source["model"][name]
+            if values.shape != (state[name].shape[0], 10, *state[name].shape[2:]):
+                raise ValueError(f"HD source first convolution is incompatible: {name}")
+            state[name].zero_()
+            state[name][:, :10] = values
+            expanded.append(name)
             continue
         if name not in source["model"] or source["model"][name].shape != state[name].shape:
             raise ValueError(f"HD source tensor is missing or incompatible: {name}")
@@ -314,8 +330,9 @@ def initialize_bc3_hd(model, path, index):
     if unexpected:
         raise ValueError(f"unexpected BC3 source tensors: {sorted(unexpected)}")
     model.load_state_dict(state)
-    return dict(source=str(path), transferred=transferred, reset=reset,
-                maps="both CNNs initialized from scratch, including shape-compatible tensors")
+    return dict(source=str(path), transferred=transferred, reset=reset, expanded=expanded,
+                maps=("HD tensors preserved; familiar input channel initialized to zero" if familiar else
+                      "both CNNs initialized from scratch, including shape-compatible tensors"))
 
 
 def bc3_targets(episodes, start, length, device):
@@ -374,8 +391,10 @@ def train_bc3(args, index):
     torch.manual_seed(args.seed)
     torch.set_num_threads(args.threads)
     device = torch.device(args.device)
-    hd = index["cache_version"] == HD_CACHE_VERSION
-    config = dict(vector_size=index["vector_size"], hidden_size=256, format_version=3 if hd else 2, auxiliary=True)
+    familiar = index["cache_version"] == BC4_CACHE_VERSION
+    hd = index["cache_version"] in (HD_CACHE_VERSION, BC4_CACHE_VERSION)
+    config = dict(vector_size=index["vector_size"], hidden_size=256,
+                  format_version=4 if familiar else 3 if hd else 2, auxiliary=True)
     model = NavPolicy(**config).to(device)
     initialization = None
     if args.init and not args.resume:
@@ -444,7 +463,8 @@ def train_bc3(args, index):
                       losses={name: value / steps for name, value in losses.items()})
         history.append(record)
         torch.save(dict(config=config, model=model.state_dict(), optimizer=optimizer.state_dict(),
-                        history=history), out / "last.pt")
+                        history=history, navigation_memory_version=index["navigation_memory_version"],
+                        preprocessing={**index["preprocessing"], "eye_layout": index["eye_layout"]}), out / "last.pt")
         export_weights(model, out / "policy.navbc",
                        preprocessing={**index["preprocessing"], "eye_layout": index["eye_layout"]})
         write_json(out / "history.json", history)
@@ -470,7 +490,7 @@ def verify(args):
     torch.set_num_interop_threads(1)
     cache, out = Path(args.cache), Path(args.output)
     index = read_index(cache)
-    bc3 = index["cache_version"] in (BC3_CACHE_VERSION, HD_CACHE_VERSION)
+    bc3 = index["cache_version"] in (BC3_CACHE_VERSION, HD_CACHE_VERSION, BC4_CACHE_VERSION)
     model, state = checkpoint_model(out / ("last.pt" if bc3 else "best.pt"), "cpu")
     heads = tuple(model.head_sizes)
     model.eval()
@@ -533,7 +553,7 @@ def final_evaluate(args):
     torch.set_num_threads(args.threads)
     cache, out = Path(args.cache), Path(args.output)
     index = read_index(cache)
-    if index["cache_version"] in (BC3_CACHE_VERSION, HD_CACHE_VERSION):
+    if index["cache_version"] in (BC3_CACHE_VERSION, HD_CACHE_VERSION, BC4_CACHE_VERSION):
         raise ValueError("BC3 validation is unrecorded; use nav_rl.py drive --manifest in closed loop")
     model, _ = checkpoint_model(out / "best.pt", args.device)
     result = evaluate(model, cache, [e for e in index["episodes"] if e["split"] != "train"], args.device, True)
@@ -585,7 +605,7 @@ def main():
             p.add_argument("--lr", type=float, default=3e-4)
             p.add_argument("--seed", type=int, default=17)
             p.add_argument("--resume", action="store_true")
-            p.add_argument("--init", help="compatible .navbc for compact BC3; BC3 last.pt for HD (map CNNs reset)")
+            p.add_argument("--init", help="compatible .navbc for BC3; BC3 last.pt for HD; HD last.pt for BC4")
         if command == "verify":
             p.add_argument("--steps", type=int, default=1000)
             p.add_argument("--iterations", type=int, default=1000)
