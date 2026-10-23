@@ -47,14 +47,15 @@ DROP = -.14                  # heights outside a piece: under the pieces next to
 TOP = (0., .032)             # a row of flat stones over the beam
 BEAM = (.032, .105)          # the sill beam
 RUBBLE = (.105, .849)        # the rubble
-BLOCK_ROWS = (.849, .903, .962, 1.)   # the dressed blocks: two courses and the top of a third
+BLOCK_ROWS = (.849, .903, .962, 1.)   # the dressed blocks: two courses, then a smooth plinth ledge
 
 COURSE = (.03, .14)         # rubble course heights, metres
 STONE = (.22, .55, (.08, .50))        # rubble stone lengths: median, log spread, limits
 JOINT = (.014, .008)         # joint width between stones: mean, spread
 COURSE_WAVE = (.014, (1.2, .5))       # the courses wander and break: amplitude, wavelengths
 BLOCK = (.30, .08, (.22, .40))        # block lengths: mean, spread, limits
-BLOCK_JOINT = .036   # wide light pointing: the course reads from across the square
+PLINTH = (1.2, .2, (.9, 1.5))         # the ledge at the foot: long slabs
+BLOCK_JOINT = .020   # wide light pointing: the course reads from across the square
 MORTAR = (-.030, .004)       # the joints' bottom: depth behind the stone faces, roughness
 BEAM_PROUD = .035            # the beam stands out of the rubble face
 
@@ -312,7 +313,9 @@ def basement(seed: int, variant: str):
     labels = np.zeros(gx.shape, int)
     kinds = ['mortar']
     y = lambda v: (1 - v) * py
-    _lay(rng, gx, gy, height, labels, kinds, 'block', [np.full_like(xs, y(v)) for v in BLOCK_ROWS[::-1]], BLOCK, False)
+    # two courses of blocks over a long smooth plinth ledge at the very foot
+    _lay(rng, gx, gy, height, labels, kinds, 'block', [np.full_like(xs, y(v)) for v in BLOCK_ROWS[-2::-1]], BLOCK, False)
+    _lay(rng, gx, gy, height, labels, kinds, 'block', [np.full_like(xs, 0.), np.full_like(xs, y(BLOCK_ROWS[-2]))], PLINTH, False)
     _lay(rng, gx, gy, height, labels, kinds, 'rubble', _course_lines(rng, xs, y(RUBBLE[1]), y(RUBBLE[0])), STONE)
     _chinks(rng, gx, gy, height, labels, kinds, y(RUBBLE[1]), y(RUBBLE[0]))
     _lay(rng, gx, gy, height, labels, kinds, 'top', [np.full_like(xs, y(TOP[1])), np.full_like(xs, y(TOP[1]) + .045),
@@ -403,7 +406,8 @@ LAYOUTS = ('empty', 'window', 'chain')
 # joints. The rubble darkens and greens towards the foot: its colour at v (from the top), the light lime
 # bed under the beam first.
 PART_COLOUR = dict(top=(115, 98, 79), beam=(46, 40, 42), block=(78, 70, 47))
-BLOCK_DARKER = .82    # the blocks read in game 12% darker than the rubble, the original's 22-29%: look over number
+FOOT = dict(blocks=(57, 46, 30), joints=(131, 118, 88), plinth=(71, 66, 40))   # sRGB means of the original's foot
+BLOCK_DARKER = .78    # the blocks read in game 12% darker than the rubble, the original's 22-29%: look over number
 RUBBLE_COLOUR = [(.105, (134, 130, 120)), (.215, (128, 118, 101)), (.40, (121, 111, 90)), (.59, (112, 104, 78)),
                  (.765, (86, 79, 56)), (.849, (82, 76, 53))]   # the foot darker: the original's median falls 92 -> 71
 FRAME_COLOUR = dict(window=(159, 148, 117), chain=(143, 131, 106))
@@ -481,7 +485,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
             out[mask] = (lum[mask] / np.median(lum[mask]))[:, None]
     idx = np.maximum(stone, 0)
     blocks = np.array(spec['stones']) == 'block'          # the blocks keep their red-brown, some redder
-    tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .6, np.array([1., .70, .55]), np.array([1., .82, .68]))[blocks]
+    tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .6, np.array([1., .62, .58]), np.where(rng.uniform(0, 1, (count, 1)) < .5, np.array([1., .74, .66]), np.array([.9, 1., .62])))[blocks]   # red-purple brown, some mossy
     tone[blocks] = np.clip(np.exp(rng.normal(0, .4, blocks.sum())), .5, 1.7)
     out[rock] *= (tone[idx[rock]][:, None] * tint[idx[rock]])
     out[frame] *= np.exp(.08 * rng.normal(0, 1, count))[idx[frame]][:, None] * np.array([1., .93, .74])
@@ -525,7 +529,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     # the blocks' joints are pointed with lime, flush and light, mossy in places
     pointing = mortar & (v > RUBBLE[1] + .004)
     lime = _linear(LIME[0]) * 1.1 * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .03))[..., None]
-    out[pointing] = lime[pointing] * (1 - .35 * moss[pointing, None]) + (green * .06)[None] * .35 * moss[pointing, None]
+    out[pointing] = lime[pointing] * (1 - .12 * moss[pointing, None]) + (green * .06)[None] * .12 * moss[pointing, None]   # grey lime, not green
 
     # the original's colour part by part, the joints and their shadow included; the rubble darkens and
     # greens towards the foot. Frames, openings and iron keep their own colour.
@@ -536,7 +540,13 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
             target = _rubble_target if part == 'rubble' else (lambda _v, c=_linear(PART_COLOUR[part]): c)
             _match(out, mask, v, target, 14 if part == 'rubble' else 3)
             if part == 'block':
-                out[mask & ~mortar] *= BLOCK_DARKER
+                # the foot measured part by part on the original: red-brown blocks, light grey-ochre
+                # pointing, a plain olive ledge under them
+                plinth = v > BLOCK_ROWS[2]
+                for m, srgb in ((mask & ~mortar & ~plinth, FOOT['blocks']), (mask & mortar, FOOT['joints']),
+                                (mask & plinth & ~mortar, FOOT['plinth'])):
+                    if m.sum() > 50:
+                        out[m] *= _linear(srgb) / np.maximum(out[m].mean(axis=0), 1e-6)
     for mask, srgb in ((frame, FRAME_COLOUR.get(spec['wall'])), (opening, OPENING_COLOUR.get(spec['wall'])),
                        (iron, IRON)):
         if mask.any() and srgb:
