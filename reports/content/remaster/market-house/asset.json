@@ -1326,6 +1326,212 @@
           "sha256": "b629b8a8ceced9a9fb730caddb2d32f3a98a3ca6804b6f203a1a1d0469c975f4"
         }
       }
+    },
+    {
+      "file": "market-house-stone/reference-attempt-4.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 4,
+      "sha256": "8dea83ab7c3324c3ad86c5729cf338a8d198bbcf17181a3140e0e36cf7c50cb3",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T08:40:00Z",
+      "thread": "codex-scout-mh-dirty-1",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-5.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 5,
+      "sha256": "97c7ca7a15e88b3594ea9ad43cefebc3ff5e2ee4b413602300e4c4f2aefc4cda",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T08:40:00Z",
+      "thread": "codex-scout-mh-dirty-2",
+      "parent": null
+    },
+    {
+      "file": "market-house-stone/reference-attempt-6.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 6,
+      "sha256": "6e27d5cc0aed284515c3bdae92ce966e1f2a80ef8e5764d19d460d2026b1be49",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-23T08:40:00Z",
+      "thread": "codex-scout-mh-dirty-3",
+      "parent": null
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_03-attempt-8.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_03.TGA",
+      "attempt": 8,
+      "sha256": "d52f5e3a70ed6b1697200e53218724bbf0bbfe4070d1a381dc2d34e16e4263a4",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T11:23:45Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-5.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-8.normal.png",
+          "sha256": "0a5a4590c72c50c35c538e2e716923b194b78d51c69548f025f7e9710321a837"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_03-attempt-8.roughness.png",
+          "sha256": "772887bbdc16ba359217175aebe079b0685c61f192f06715a6a5af6a65954946"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-9.png",
+      "role": "texture",
+      "texture": "NW_CITY_WINDOW_03.TGA",
+      "attempt": 9,
+      "sha256": "773dd98ca8e8243a8f94a10d1d193535907c68d9b3490a87cdab0ec860d9882a",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T11:23:45Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-5.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-9.normal.png",
+          "sha256": "85053bd5913d550911e1acda13b601224bde6783c80cd711479b797298482c36"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WINDOW_03-attempt-9.roughness.png",
+          "sha256": "01d2f320752bfc41ead56f0d4481b0b8415205c59c103d7da43d0eece6838093"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_04-attempt-6.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_04.TGA",
+      "attempt": 6,
+      "sha256": "84c823f178a847535f37822f8c093a9dae3caa4d06692cc7759932918a65cc70",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T11:23:45Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-5.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-6.normal.png",
+          "sha256": "ddacb56608acdc83eea13453b354109303ad1fa4c85734d972519d6b000549d6"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_04-attempt-6.roughness.png",
+          "sha256": "2a8578b2fe66d96e1d9ad5173eb21d07f729475d95ff2193b441941923f091f3"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_WALL_05-attempt-6.png",
+      "role": "texture",
+      "texture": "NW_CITY_WALL_05.TGA",
+      "attempt": 6,
+      "sha256": "f2eec861c99751eecb28b1aa26793c6b0dd8aca99342c620eee32f1379c356ce",
+      "c2pa": null,
+      "model": "derived: scripts/content/fachwerk_bake.py",
+      "utc": "2026-10-23T11:23:45Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-5.png",
+      "tool": "scripts/content/fachwerk_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-6.normal.png",
+          "sha256": "ce11ac24e6ad71a6225fc149ef2fc14ca53a9d4b5dc3dc5b5ed71f794bd4054f"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_WALL_05-attempt-6.roughness.png",
+          "sha256": "4c017e4eac5b58cfa920899343d2f6f5395ac0c00558b1971a1d3c8f108e72be"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-11.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA",
+      "attempt": 11,
+      "sha256": "4240f7f4ab06c3cd8281e4315f6301cee0a2349f711b5cd9b3eed27588ef5030",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T11:23:45Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-11.normal.png",
+          "sha256": "92c4bb8d404b4a784b0c01095d31398b15b8a6787a6884fdb857839a9af938b5"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-11.roughness.png",
+          "sha256": "f8a83fe680b56b35f275d95e1e6fea2d8492803348a4feafd8febf57b21d96c1"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-12.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA",
+      "attempt": 12,
+      "sha256": "c8c59e1fc857d62286d2f035346d3b32c56bb1009903372e0a9ec30c9def3d77",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T11:23:45Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-12.normal.png",
+          "sha256": "c38c76f1c6d3551dca16ddcd06a1f62b00399e6de55ced0256f51a3f2984a9c7"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-12.roughness.png",
+          "sha256": "46f1a04d03b08b952033cb37eda777ec07b5524ee3812486e29b49d2eb6f581a"
+        }
+      }
+    },
+    {
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-11.png",
+      "role": "texture",
+      "texture": "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA",
+      "attempt": 11,
+      "sha256": "b6121b1596f5164188a028d82ac071a3dc1de733e9bd1d687a8e666929aa123b",
+      "c2pa": null,
+      "model": "derived: scripts/content/basement_bake.py",
+      "utc": "2026-10-23T11:23:45Z",
+      "thread": "none",
+      "parent": "market-house-stone/reference-attempt-1.png",
+      "tool": "scripts/content/basement_bake.py",
+      "maps": {
+        "normal": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-11.normal.png",
+          "sha256": "2fac30de0224d8e976b070e4352a4efc4afe7cd7f4dc00d1dfce770929cd1777"
+        },
+        "roughness": {
+          "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-11.roughness.png",
+          "sha256": "b629b8a8ceced9a9fb730caddb2d32f3a98a3ca6804b6f203a1a1d0469c975f4"
+        }
+      }
     }
   ],
   "selected": {
@@ -1335,28 +1541,28 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_03.TGA": {
-      "file": "market-house/NW_CITY_WALL_03-attempt-7.png",
-      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_03-attempt-8.png",
+      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WINDOW_03.TGA": {
-      "file": "market-house/NW_CITY_WINDOW_03-attempt-8.png",
-      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_WINDOW_03-attempt-9.png",
+      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-11.png",
-      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_WINDOW_01-attempt-12.png",
+      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-10.png",
-      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_EMPTY_01-attempt-11.png",
+      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": {
-      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-10.png",
-      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_FACHWERKBASEMENT_CHAIN_01-attempt-11.png",
+      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WOODBEAM_02.TGA": {
@@ -1365,13 +1571,13 @@
       "date": "2026-10-21"
     },
     "NW_CITY_WALL_04.TGA": {
-      "file": "market-house/NW_CITY_WALL_04-attempt-5.png",
-      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_04-attempt-6.png",
+      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
       "date": "2026-10-23"
     },
     "NW_CITY_WALL_05.TGA": {
-      "file": "market-house/NW_CITY_WALL_05-attempt-5.png",
-      "reason": "market-9: dirty plaster as the original, irregular rubble and foot blocks (user, 2026-10-23)",
+      "file": "market-house/NW_CITY_WALL_05-attempt-6.png",
+      "reason": "market-10: dirty plaster from a picture, housed braces (user, 2026-10-23)",
       "date": "2026-10-23"
     }
   },
@@ -1660,17 +1866,17 @@
     }
   ],
   "build": {
-    "set": "market-9",
+    "set": "market-10",
     "base": "original",
     "date": "2026-10-23",
     "albedo_sha256": {
-      "NW_CITY_WALL_03.TGA": "b73ea97cf812962ad605f4b6f4a6b26d513748df8df6b813a17c40cdf5cbbef4",
-      "NW_CITY_WINDOW_03.TGA": "e54bec578aea490d3ddbc964f2961bcf67067f17ec38dd309bf5a2eaacb082cb",
+      "NW_CITY_WALL_03.TGA": "b666c1316f543e5c9658c298fed5a61f0a75b6a80b93c04f6ac32d9d6fac711b",
+      "NW_CITY_WINDOW_03.TGA": "5f0d5f3cbe6a6322b93d42036faf25e9237bc4a3a9172f2ffbadc47315e1ba08",
       "NW_CITY_FACHWERKBASEMENT_EMPTY_01.TGA": "32307052873bb5971682660bd1623f7f3a857554e81cceed30b493fe0c7b347e",
       "NW_CITY_FACHWERKBASEMENT_WINDOW_01.TGA": "5504692943d2b1d37023811075f49290a3715de93a8ca9ac7770597fc8cbd888",
       "NW_CITY_FACHWERKBASEMENT_CHAIN_01.TGA": "537dab389454692a32d0534adbe2c2915f000c20b79f52560842518808c38e75",
-      "NW_CITY_WALL_04.TGA": "3097eb5c311b8a7cb1930248bc024972ac9f7e22988a2f43bbeb48bb9dd25e2c",
-      "NW_CITY_WALL_05.TGA": "e4a9ce44a73dcbb6499965bf753d1b4efc5e972c5fd84b3a90fc4636e7bcefb3"
+      "NW_CITY_WALL_04.TGA": "23848bf19ea7cdb3e71e0759dd97480c19c52924d84e12c71bd1d5dab99a95e4",
+      "NW_CITY_WALL_05.TGA": "a8098165e37bede2107e22a132ae787eb0291a0a6c8976909896a82aad05c0f6"
     },
     "entries": 7,
     "replaced": [

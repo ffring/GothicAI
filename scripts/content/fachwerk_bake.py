@@ -61,7 +61,8 @@ SHUTTER = dict(rect=(.21, .79, .19, .63), boards=5, gap=.007, z=.006, straps=(.2
 GAP = (.004, .010, .4)       # the plaster's shrinkage gap at the timber: width, depth, share of the edge
 PEG = (.013, .003)           # oak pegs at the joints: radius, how far they stand out
 PLASTER_RELIEF = ((.5, .004), (.12, .0022), (.03, .0008))   # median tilt about 5°   # undulation of the render: size, height
-SPALLS = (2.5, (.02, .07), .003)  # places where the whitewash flaked off: count per m², radius, depth
+SPALLS = (0, (.02, .07), .003)    # flaked whitewash as dips: count per m², radius, depth; none now, the
+                                  # plaster picture has its own flakes and gives them relief in compose
 WOOD_STYLE = dict(adze=tb.STROKE, grain=(.0018, (.003, .009)), pits=((.006, .05), .005, .09, .12),
                   arris=(.018, .012), cup=0.)   # median normal tilt about 8°: the frame beam timber-7 is 6.8°, the hut boards 9°
 KIND_IDS = dict(plaster=0, post=1, rail=1, head=1, sill=1, jamb=1, brace=2, shutter=3, iron=4, peg=5)
@@ -111,7 +112,8 @@ def fachwerk(seed: int, variant: str):
         dip = np.clip(3 - d * 3, 0, 1)
         height -= SPALLS[2] * dip
         labels[dip > .5] = 1
-    members = MEMBERS[variant]
+    # the braces last: housed into the posts and rails, their ends cut to those members' faces
+    members = sorted(MEMBERS[variant], key=lambda m: m[0] == 'brace')
     timber = np.zeros(gx.shape, bool)
     for index, member in enumerate(members):
         kind, _, _, width = member
@@ -122,10 +124,14 @@ def fachwerk(seed: int, variant: str):
             across = across + rng.uniform(.004, .016) * np.sin(math.pi * t) * (1 if kind != 'rail' or member[1][1] > .5 else .6)
         elif kind in ('post', 'jamb'):
             across = across + rng.normal(0, .006) * (t - .5) * 2
-        ends = .0 if kind == 'brace' else width       # posts and rails run on past the square's edge
+        ends = width                                  # posts and rails run on past the square's edge
         inside = (np.abs(across) < width / 2) & (along > -ends) & (along < length + ends)
-        if kind == 'brace':                           # housed into the post and rail: cut to them
-            inside &= ~timber
+        if kind == 'brace':                           # run into the post and rail and cut flush to their
+            from scipy.ndimage import label as _label  # faces: only the bay the brace stands in
+            bays, _ = _label(~timber)
+            mid = bays[round((1 - (member[1][1] + member[2][1]) / 2) * (gy.shape[0] - 1)),
+                       round((member[1][0] + member[2][0]) / 2 * (gx.shape[1] - 1))]
+            inside &= bays == mid
         w = width + .02 * rng.normal()
         face = tb._hewn(rng, np.clip(across + w / 2, 0, w), along % max(length, .01), w, max(length, .01),
                         (STEP, STEP), **WOOD_STYLE)
@@ -221,24 +227,21 @@ def _shutter(rng, gx, gy, period, height, labels, kinds):
 # Targets: the original's plaster as measured, dirty like it (the user, 2026-10-23: clean white walls
 # belong to the upper quarter), the oak as accepted on house-2, the shutter as the original's boards.
 PLASTER = (159, 158, 134)
+PLASTER_HUE = ((52, 50, 24), (107, 106, 69), (138, 137, 107), (163, 163, 139), (186, 186, 168), (212, 213, 200))
+SPREAD_FIT = .5                        # how far the picture's light goes to the original's quantiles
+OWN_HUE = .5                           # how much of the plaster picture's own hue stays over the original's by light
 PLASTER_SPREAD = ((0, 55), (5, 83), (10, 108), (25, 137), (50, 160), (75, 178), (90, 193), (95, 202),
                   (99, 220), (100, 232))       # the original's plaster luminance (sRGB) by percentile
-PLASTER_HUE = ((52, 50, 24), (107, 106, 69), (138, 137, 107), (163, 163, 139), (186, 186, 168), (212, 213, 200))
-# its colour by light: olive-black in the mould and stains, near-neutral in the thick wash
+
 OAK = (41, 34, 20)
 OAK_SPREAD = (31, 56)                  # the original timber's sRGB luminance: median, p90
 GRAIN = 2.8                            # power on the oak picture's light: stripier grain
 EDGE = (.03, .004, 2.8, .3)          # worn arris: reach, the dark rim's width (metres), lightening; the rim's factor
 SHUTTER_TONE = (63, 58, 47)
 IRON = (35, 31, 23)
-WASH = (206, 207, 193)                 # the lime wash where it is thick: the original's lightest tenth
-RENDER = (120, 119, 85)                # the olive render under it where it is worn thin: its darkest tenth
-WASH_COVER = ((.3, .45), (.09, .4), (.025, .3), (.01, .25))   # patchiness of the wash: sizes in metres, weights
-WASH_EDGE, WASH_SHARE = 3., .7       # how sharp the wash's patches are, how much of the wall it holds
-SPALL_TONE = 1.1                       # flaked to the render, a little lighter than its stains
-DAMP = (.45, 1.6)                      # the wash washed off under each rail: reach in metres, how much
-STREAKS = (.035, .5)                   # rain streaks down the panels: width and length in metres
-MOULD = (.16, 1.)                     # black-green mould hanging from each rail: reach in metres, strength
+PLASTER_METRES = 1.2                   # the plaster picture covers this much of the wall
+PLASTER_RELIEF_PX = (.0008, .012)      # the picture's flakes and grain as relief: metres per unit of its light, blur in metres
+MOULD = (.10, .6)                     # black-green mould hanging from each rail: reach in metres, strength
 MOULD_TONE = (48, 52, 28)
 RIM = (.025, .3)                       # grime at the timber: reach in metres, darkening
 GREEN = ((92, 100, 70), .12, .06)      # a faint green film above the sole rail: colour, reach, share
@@ -248,6 +251,24 @@ ROUGH = dict(plaster=.93, wood=.88, iron=.72)
 
 def _linear(srgb) -> np.ndarray:
     return (np.asarray(srgb, dtype=np.float64) / 255) ** 2.2
+
+
+def _bays(plaster: np.ndarray) -> np.ndarray:
+    """Number of the plaster bay of every pixel (0 off the plaster); a bay cut by the square's edge keeps
+    one number on both sides, so the picture runs on across the seam."""
+    from scipy.ndimage import label
+    bays, n = label(plaster)
+    parent = list(range(n + 1))
+
+    def find(i):
+        while parent[i] != i:
+            i = parent[i]
+        return i
+    for a, b in ((bays[:, 0], bays[:, -1]), (bays[0], bays[-1])):
+        for i, j in zip(a, b):
+            if i and j:
+                parent[find(i)] = find(j)
+    return np.array([find(i) for i in range(n + 1)])[bays]
 
 
 def _sample(image: np.ndarray, a, b, metres: float) -> np.ndarray:
@@ -280,8 +301,12 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
     iron = kinds == 'iron'
     wood = np.isin(kinds, ['post', 'rail', 'head', 'sill', 'jamb', 'brace', 'peg'])
     out = np.zeros((rows, cols, 3))
-    # the plaster: its picture, softly clouded
-    pl = _sample(plaster_img, x, y, .6)
+    # the plaster: the picture of old dirty whitewash, every bay of it read from its own place and
+    # mirrored or not, so that no two bays repeat each other
+    bays = _bays(plaster)
+    shift = rng.uniform(0, PLASTER_METRES, (bays.max() + 1, 2))
+    flip = np.where(rng.uniform(0, 1, bays.max() + 1) < .5, -1., 1.)
+    pl = _sample(plaster_img, flip[bays] * x + shift[bays, 0], y + shift[bays, 1], PLASTER_METRES)
     out[plaster] = pl[plaster]
     # the oak: its picture read along each member's grain; every member a little its own tone
     members = spec['members']
@@ -315,27 +340,14 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
     out *= (1 + EDGE[2] * worn)[..., None]
     out[wood & (inner <= EDGE[1])] *= EDGE[3]
 
-    # plaster weathering, by form only: a lime wash, thick in places and worn thin in others down to the
-    # olive render under it, washed off under the rails and blackened by mould there, rain streaks down
-    # the panels, grime gathered at the timber
+    # plaster weathering by form, over the picture's own: black-green mould hanging from each rail,
+    # grime gathered at the timber, a faint green film above the sole rail
     timber_px = ~plaster & ~(kinds == 'shutter')
     r_idx = np.arange(rows)[:, None] * np.ones((1, cols))
     last = np.maximum.accumulate(np.where(timber_px, r_idx, -1e6), axis=0)
     rails_above = (r_idx - last) * (py / rows)       # how far the nearest timber straight above is
-    streaks = pb.periodic_noise(rng, (rows, cols), px / STREAKS[0], py / STREAKS[1])
-    cover = sum(w * pb.noise_metres(rng, (rows, cols), period, size) for size, w in WASH_COVER)
-    reach, washed = DAMP
-    ragged = reach * (1 + .5 * pb.noise_metres(rng, (rows, cols), period, .09) + .4 * streaks)
-    damp = np.clip(1 - rails_above / np.maximum(ragged, .02), 0, 1) * plaster
-    cover = 1 / (1 + np.exp(-WASH_EDGE * (cover + WASH_SHARE - washed * damp + .25 * streaks)))
-    wash = _linear(WASH) / _linear(PLASTER)
-    render = _linear(RENDER) / _linear(PLASTER)
-    tone = render + (wash - render) * cover[..., None]
-    detail = np.where(plaster[..., None], (out @ tb.LUM)[..., None] ** .6, 1.)   # the lime picture's grain, softened, without its hue
-    out = np.where(plaster[..., None], tone * detail, out)
-    out = out * (1 - spall[..., None]) + render * SPALL_TONE * spall[..., None]
     m_reach, m_depth = MOULD
-    m_ragged = m_reach * (1 + .6 * pb.noise_metres(rng, (rows, cols), period, .05) + .7 * np.clip(streaks, 0, None))
+    m_ragged = m_reach * (1 + .6 * pb.noise_metres(rng, (rows, cols), period, .05))
     mould = np.clip(1 - rails_above / np.maximum(m_ragged, .01), 0, 1) ** 1.2 * plaster
     mould *= np.clip(.8 + .6 * pb.noise_metres(rng, (rows, cols), period, .03), 0, 1)
     out = out * (1 - m_depth * mould[..., None]) + _linear(MOULD_TONE) / _linear(PLASTER) * m_depth * mould[..., None]
@@ -361,20 +373,23 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
             out[mask] *= _linear(srgb) / np.maximum(out[mask].mean(axis=0), 1e-6)
 
     # the plaster's light spread as the original's: its luminance mapped rank by rank onto the
-    # original's quantiles, its colour by light from the original's, a third of each pixel's own hue kept
+    # original's quantiles
     pix = out[plaster]
     lum = pix @ tb.LUM
     srgb = np.clip(lum, 1e-6, 1) ** (1 / 2.2) * 255
     q, values = zip(*PLASTER_SPREAD)
     ranks = np.argsort(np.argsort(srgb)) / max(len(srgb) - 1, 1) * 100
     target = np.interp(ranks, q, values)
-    hue = np.array(PLASTER_HUE, dtype=float)
-    hue_lum = hue @ tb.LUM
-    colour = np.stack([np.interp(target, hue_lum, hue[:, k]) for k in range(3)], axis=-1) * \
-        (target / np.maximum(np.stack([np.interp(target, hue_lum, hue[:, k]) for k in range(3)], -1) @ tb.LUM, 1e-6))[:, None]
-    own = pix / np.maximum(lum, 1e-6)[:, None]
+    target = SPREAD_FIT * target + (1 - SPREAD_FIT) * srgb * np.median(target) / max(np.median(srgb), 1e-6)   # the picture keeps half its own light
+    # colour by light as the original's: olive-black grime, near-neutral thick wash; the picture's own
+    # hue over it in part
+    hue = _linear(np.array(PLASTER_HUE, dtype=float))
+    hue /= (hue @ tb.LUM)[:, None]
+    keys = np.array(PLASTER_HUE, dtype=float) @ tb.LUM
+    by_light = np.stack([np.interp(target, keys, hue[:, k]) for k in range(3)], axis=-1)
+    own = pix / np.maximum(lum, 1e-9)[:, None]
     own /= own.mean(axis=0)
-    out[plaster] = _linear(np.clip(colour, 0, 255)) * own ** .35
+    out[plaster] = ((target / 255) ** 2.2)[:, None] * by_light * own ** OWN_HUE
 
     # the oak's light spread as the original's, not only its mean: sRGB luminance median and p90 of its
     # timber (31 and 56); a power curve through both keeps the dark rims dark
@@ -387,8 +402,18 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
     out[wood] *= (((target / 255) ** 2.2) / np.maximum(lum, 1e-6))[:, None]
 
     normal = passes['normal'] / (np.linalg.norm(passes['normal'], axis=-1, keepdims=True) + 1e-9)
+    # the picture's flakes and grain as relief: its light, less its broad stains, as a height
+    from scipy.ndimage import gaussian_filter
+    metres = py / rows
+    light = pl @ tb.LUM
+    relief = (light - gaussian_filter(light, PLASTER_RELIEF_PX[1] / metres, mode='wrap')) * PLASTER_RELIEF_PX[0]
+    relief = gaussian_filter(relief, 1., mode='wrap')
+    dy_, dx_ = np.gradient(relief, metres)
+    tilt = np.stack([-dx_, dy_, np.zeros_like(dx_)], axis=-1) * plaster[..., None]
+    normal = normal + tilt
+    normal /= np.linalg.norm(normal, axis=-1, keepdims=True) + 1e-9
     rough = np.where(plaster, ROUGH['plaster'], np.where(iron, ROUGH['iron'], ROUGH['wood']))
-    rough = np.where(damp > .3, rough - .04, rough)
+    rough = np.where(mould > .3, rough - .04, rough)
     return dict(albedo=np.clip(out, 0, 1), roughness=rough, normal=normal)
 
 
