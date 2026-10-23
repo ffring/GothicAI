@@ -740,8 +740,16 @@ def test_existing_record_still_runs_navdemo_check(tmp_path, monkeypatch):
     assert episode_files(directory) == before
 
 
-def test_new_recording_finalizes_once_then_resume_preserves_all_episode_files(tmp_path, monkeypatch):
+@pytest.mark.parametrize("witness_state", ["current", "stale_worker", "stale_teacher", "tampered", "missing"])
+def test_new_recording_checks_own_witness_then_resume_preserves_all_episode_files(tmp_path, monkeypatch, witness_state):
     worker, value, directory = retained_record(tmp_path, monkeypatch, finalized=False)
+    witness = worker.args.output / "scenarios" / f"demos-v4-{value['id']}.bench"
+    original_commands = witness.read_text()
+    other_mode = "0/jumps" if witness_state == "stale_teacher" else "1/v3"
+    other = tmp_path / "recording-workers" / other_mode / "scenarios" / witness.name
+    other.parent.mkdir(parents=True)
+    other.write_text(original_commands if witness_state in ("tampered", "missing") else "seed 0\n")
+    other_before = other.read_bytes(), other.stat().st_mtime_ns
     originals = {path.name: path.read_bytes() for path in directory.iterdir() if path.name != "contract.json"}
     for path in directory.iterdir():
         path.unlink()
@@ -754,10 +762,22 @@ def test_new_recording_finalizes_once_then_resume_preserves_all_episode_files(tm
         destination.mkdir(parents=True)
         for name, payload in originals.items():
             (destination / name).write_bytes(payload)
+        witness.write_text(original_commands)
+        if witness_state == "tampered":
+            witness.write_text(original_commands.replace(f"seed {seed}", "seed 0", 1))
+        elif witness_state == "missing":
+            witness.unlink()
 
     monkeypatch.setattr(worker, "scenario", scenario)
     worker.budget = SimpleNamespace(reserve=lambda *args, **kwargs: nullcontext())
+    if witness_state in ("tampered", "missing"):
+        with pytest.raises(ValueError, match="Missing or changed seeded command witness"):
+            worker.trial(value)
+        assert "id" not in v3.read_json(directory / "episode.json")
+        assert (other.read_bytes(), other.stat().st_mtime_ns) == other_before
+        return
     result = worker.trial(value)
+    assert (other.read_bytes(), other.stat().st_mtime_ns) == other_before
     metadata = v3.read_json(directory / "episode.json")
     assert calls == [f"demos-v4-{value['id']}"]
     assert metadata["recording_identity"] == legacy_identity()

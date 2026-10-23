@@ -135,7 +135,7 @@ uint32_t demoVersion(const Episode& ep) {
     const auto input=ep.policy->navDemoVersion();
     return input==2 && ep.memory.representationVersion()==4 ? 3 : input;
   }
-  return ep.teacherVersion==3 ? (ep.memory.representationVersion()==4 ? 3 : 2) : ep.teacherVersion;
+  return ep.teacherVersion>=2 ? (ep.memory.representationVersion()==4 ? 3 : 2) : ep.teacherVersion;
 }
 
 struct Pair {std::string from,to;};
@@ -1704,7 +1704,7 @@ bool NavDemos::fullSimulation(const Npc& npc) {
 }
 void NavDemos::reset() {legacy=Episode{};population=Population{};settings=Settings{};preparingLegacy=nullptr;}
 void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player,const std::string& output) {
-  if(args.size()>=2 && (args[1]=="perception-hazards" || args[1]=="perception-shores")) {
+  if(args.size()>=2 && (args[1]=="perception-hazards" || args[1]=="perception-shores" || args[1]=="water-probes")) {
     if(running() || NavBench::running())throw std::runtime_error("navdemos cannot probe hazards during an episode");
     NavPerceptionSafety::command(args,w,output);
     return;
@@ -1985,10 +1985,11 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     throw std::runtime_error("navdemos rows is evaluation-only; use record off");
   ep.cvMode=settings.cv;ep.heroNear=!current && settings.heroNear;
   ep.teacherVersion=(memory || object || moving)?scenarioTeacher:(carrot?2:1);
-  if(ep.teacherVersion==3 && !learner && !replay) {
+  if((ep.teacherVersion==3 || (ep.teacherVersion==2 && settings.recordDemos)) && !learner && !replay) {
     const auto* journey=std::getenv("OPENGOTHIC_NAV_JOURNEY_MEMORY");
     ep.memory.setJourneyMemory(journey==nullptr || std::string_view(journey)!="0");
-    KnownRoadsBench::attachFamiliar(w,*npc,ep.memory);
+    if(ep.teacherVersion==3 || ep.memory.journeyMemoryEnabled())
+      KnownRoadsBench::attachFamiliar(w,*npc,ep.memory);
   }
   ep.oracle=settings.oracle;
   if(ep.oracle && ep.teacherVersion!=3) {
