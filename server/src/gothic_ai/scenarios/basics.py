@@ -612,7 +612,7 @@ async def svm_lines(
             f"svm_line={len(events) - before}, action={action.status}, next={following.status})"
         )
 
-    link.listeners.append(record)
+    link.listeners.insert(0, record)  # timestamp arrival before dialogue opens the persona and history
     try:
         await link.act(npc, "turn_to", npc="PLAYER")
         await asyncio.sleep(3.1)
