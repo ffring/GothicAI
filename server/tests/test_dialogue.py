@@ -1059,12 +1059,23 @@ async def one_voice_dialogue(with_tts, llm, *, queued=(), audio_s=0.1):
 
 
 @pytest.mark.parametrize("trigger", ["player", "event"])
-async def test_a_turn_cancels_svm_audio_already_taken_by_tts(trigger):
+@pytest.mark.parametrize("with_tts", [True, False])
+async def test_a_turn_cancels_svm_waiting_to_be_heard(tmp_path, trigger, with_tts):
     words = "Вон отсюда!"
     note = Message("developer", f"[Ты сказал вслух: «{words}»]")
     llm = FakeBackend("Теперь я тебя слушаю.", delay=0, first=60)
-    async with one_voice_dialogue(True, llm) as (fake, dialogue, conv):
-        held = dialogue.tts.held[words] = asyncio.Event()
+    writer = TraceWriter(tmp_path)
+    async with one_voice_dialogue(with_tts, llm) as (fake, dialogue, conv):
+        dialogue.trace = writer
+        if with_tts:
+            held = dialogue.tts.held[words] = asyncio.Event()
+        else:
+            await dialogue._say(conv, "Сначала я должен закончить свою прежнюю мысль.", None, overlay=True)
+            await _until(lambda: bool(fake.said))
+            await dialogue.link.snapshot(XARDAS, fresh=True)
+            conv.said_at -= 3.05  # the cooldown passed while the long overlay is still running
+            dialogue._spoke_at[XARDAS] -= 3.05
+        previous = list(fake.said)
         dialogue.quick = FakeBackend(words, delay=0)
         dialogue._nearby[XARDAS] = ("Ксардас", 100)
         conv.talked_at = float("-inf")
@@ -1073,20 +1084,34 @@ async def test_a_turn_cancels_svm_audio_already_taken_by_tts(trigger):
             text="Убирайся отсюда!", overlay=True,
         )
         dialogue._on_message(svm)
-        await _until(lambda: words in dialogue.tts.requested and not dialogue._svm_tasks)
-        assert conv.voice.empty() and not fake.said  # TTS already owns the line
+        if with_tts:
+            await _until(lambda: words in dialogue.tts.requested and not dialogue._svm_tasks)
+            assert conv.voice.empty()  # TTS already owns the line
+        else:
+            await _until(lambda: any(text == words for text, _ in dialogue._lines.values()))
+            assert XARDAS in dialogue._svm_tasks  # _say is waiting for the previous overlay
+        assert fake.said == previous and not writer.path().exists()
         assert not conv.svm_phrases and note not in conv.history
 
         dialogue.quick = None  # isolate the held SVM from the new turn's first words
-        turn = (dialogue.say_as_player(XARDAS, "Подожди, поговорим.") if trigger == "player"
-                else dialogue.event_turn(XARDAS, "[Событие: герой заговорил]"))
+        turn = (dialogue.say_as_player(XARDAS, "Подожди, поговорим.", overlay=True)
+                if trigger == "player"
+                else dialogue.event_turn(XARDAS, "[Событие: герой заговорил]", overlay=True))
         await _until(lambda: bool(llm.calls))
-        held.set()
-        await asyncio.wait_for(conv.voice.join(), 1)
+        if with_tts:
+            held.set()
+            await asyncio.wait_for(conv.voice.join(), 1)
+        else:
+            dialogue._reset_overlay(conv)
+            await _until(lambda: not dialogue._svm_tasks)
         await dialogue.link.snapshot(XARDAS, fresh=True)  # drain preceding game messages
         assert not turn.done()
-        assert not fake.said and not fake.say_chunks
+        assert fake.said == previous and not fake.say_chunks
         assert not conv.svm_phrases and note not in conv.history
+        (record,) = [r for r in map(json.loads, writer.path().read_text().splitlines())
+                     if r["type"] == "svm_line"]
+        assert record["id"] == "svm-held" and record["outcome"] == "busy"
+        assert record["answer"] == words and record["elapsed_ms"] >= 0
 
         turn.cancel()
         await asyncio.gather(turn, return_exceptions=True)
@@ -1094,8 +1119,13 @@ async def test_a_turn_cancels_svm_audio_already_taken_by_tts(trigger):
         conv.said_at = conv.talked_at = float("-inf")
         conv.overlay_free_at = 0
         dialogue._on_message(svm.model_copy(update={"id": "svm-retry"}))
-        await _until(lambda: fake.said == [words] and bool(conv.svm_phrases))
+        await _until(lambda: fake.said == [*previous, words] and bool(conv.svm_phrases))
         assert len(conv.svm_phrases) == 1 and conv.history.count(note) == 1
+        records = [r for r in map(json.loads, writer.path().read_text().splitlines())
+                   if r["type"] == "svm_line"]
+        assert [(r["id"], r["outcome"]) for r in records] == [
+            ("svm-held", "busy"), ("svm-retry", "said"),
+        ]
 
 
 @pytest.mark.parametrize("with_tts", [True, False])

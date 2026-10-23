@@ -531,7 +531,8 @@ class Conversation:
     first_sounds: deque[bool] = field(default_factory=lambda: deque(maxlen=4))
     said_at: float = float("-inf")
     svm_phrases: deque[str] = field(default_factory=lambda: deque(maxlen=5))
-    svm_pending: set[str] = field(default_factory=set)  # queued or synthesizing, before its first sound
+    # queued or synthesizing, before its first sound: line -> finish its SVM trace
+    svm_pending: dict[str, Callable[[str], None]] = field(default_factory=dict)
 
     @property
     def history(self) -> list[Message]:
@@ -732,7 +733,7 @@ class DialogueManager:
         self.svm_lines = svm_lines
         self._svm_available = True
         self._svm_errors = 0
-        self._svm_tasks: dict[str, asyncio.Task[None]] = {}
+        self._svm_tasks: dict[str, asyncio.Task[str | None]] = {}
         self._svm_probe: asyncio.Task[None] | None = None
         self._spoke_at: dict[str, float] = {}  # includes scenes before a conversation is opened
         self.quick_first_s, self.quick_idle_s = QUICK_FIRST_S, QUICK_IDLE_S
@@ -815,7 +816,9 @@ class DialogueManager:
         npc = msg.npc.upper()
         attempt: dict[str, Any] = {"outcome": "busy", "answer": ""}
 
-        def record() -> None:
+        def record(outcome: str | None = None) -> None:
+            if outcome is not None:
+                attempt["outcome"] = outcome
             attempt["elapsed_ms"] = round((time.monotonic() - received) * 1000, 1)
             log.info("svm_line %s %s «%s» -> %r (%s, %.1f ms)", npc, msg.svm, msg.text,
                      attempt["answer"], attempt["outcome"], attempt["elapsed_ms"])
@@ -833,13 +836,14 @@ class DialogueManager:
             pass
         else:
             conv = self.open(npc, self._nearby.get(npc, (npc, 0))[0], warm=False)
-            task = asyncio.create_task(self._svm_line(conv, msg, received, attempt))
+            task = asyncio.create_task(self._svm_line(conv, msg, received, attempt, record))
             self._svm_tasks[npc] = task
 
-            def finished(done: asyncio.Task[None]) -> None:
+            def finished(done: asyncio.Task[str | None]) -> None:
                 if self._svm_tasks.get(npc) is done:
                     del self._svm_tasks[npc]
-                record()  # also records cancellation before the coroutine's first step
+                if done.cancelled() or done.result() is None:
+                    record()  # also records cancellation before the coroutine's first step
 
             task.add_done_callback(finished)
             return
@@ -857,7 +861,8 @@ class DialogueManager:
 
     async def _svm_line(
         self, conv: Conversation, msg: SvmLine, received: float, attempt: dict[str, Any],
-    ) -> None:
+        record: Callable[[str], None],
+    ) -> str | None:
         assert self.quick is not None
         text = ""
         try:
@@ -893,10 +898,10 @@ class DialogueManager:
             else:
                 line = await self._say(conv, words, None, overlay=True, mood=mood, to=msg.target)
                 if line is not None:
-                    conv.svm_pending.add(line)
+                    conv.svm_pending[line] = record
                     if self.tts is None:
                         self._svm_started(conv, line)
-                attempt["outcome"] = "said"
+                    return line  # its first sound or cancellation finishes the trace
         except TimeoutError:
             attempt["answer"] = first_words(text)[0]
             attempt["outcome"] = "late"
@@ -916,11 +921,11 @@ class DialogueManager:
             raise
 
     def _svm_started(self, conv: Conversation, line: str) -> None:
-        if line in conv.svm_pending:
-            conv.svm_pending.remove(line)
+        if record := conv.svm_pending.pop(line, None):
             words = self._lines[line][0]
             conv.svm_phrases.append(" ".join(_LETTERS.findall(words.casefold())))
             self._note(conv, f"Ты сказал вслух: «{words}»")
+            record("said")
 
     async def _recover_svm(self) -> None:
         assert self.quick is not None
@@ -1214,7 +1219,11 @@ class DialogueManager:
 
     def _reply(self, conv: Conversation, turn: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         """The npc's turn; once it is over, its history (grown by it) warms the quick model."""
+        if svm := self._svm_tasks.get(conv.npc):
+            svm.cancel()
         conv.hushed.update(conv.svm_pending)
+        for record in conv.svm_pending.values():
+            record("busy")
         conv.svm_pending.clear()
         conv.reply = asyncio.create_task(turn)
         conv.reply.add_done_callback(lambda _: self.prewarm(conv.npc))
@@ -1634,6 +1643,13 @@ class DialogueManager:
         if conv.voice is None:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
+
+            def finished(_done: asyncio.Task[None]) -> None:
+                while conv.svm_pending:
+                    _, record = conv.svm_pending.popitem()
+                    record("busy")
+
+            conv.voicing.add_done_callback(finished)
         conv.voice.put_nowait((line, text, reply, overlay, mood, filler, to))
         return line
 
@@ -1749,7 +1765,8 @@ class DialogueManager:
             except GameError:
                 pass
             finally:
-                conv.svm_pending.discard(line)
+                if record := conv.svm_pending.pop(line, None):
+                    record("busy" if line in conv.hushed else "error")
                 queue.task_done()
 
     async def _wait_floor(self, conv: Conversation, line: str) -> None:
