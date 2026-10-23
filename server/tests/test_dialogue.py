@@ -14,6 +14,7 @@ from gothic_ai.journal import Journal
 from gothic_ai.llm import Done, LLMError, LLMEvent, Message, TextDelta, Tool, ToolCall, ToolResult
 from gothic_ai.llm.fake import FakeBackend, FakeStep
 from gothic_ai.persona import MOOD_DELIVERY, PersonaProvider
+from gothic_ai.protocol import NpcRoster
 from gothic_ai.scenarios import basics as scenarios
 from gothic_ai.tts import Speech, TtsClient, TtsError
 from tests.fake_game import FakeGame, connected
@@ -1192,6 +1193,131 @@ async def test_notes_do_not_warm_the_quick_model_but_talking_to_the_npc_does(mon
     assert heard == "[Ты слышал, как Лобарт и Хильда говорили о герое: Лобарт: «Слыхала?» — Хильда: «Да ну?»]"
 
 
+@pytest.mark.parametrize("distance", [600, 1200])
+async def test_a_new_focused_npc_is_warmed_only_within_eight_metres(distance, monkeypatch):
+    monkeypatch.setattr(dialogue_module, "PREWARM_DELAY_S", 0)
+    fake = FakeGame()
+    quick = FakeBackend(delay=0)
+    warm = quick.prewarm
+    attempts = 0
+
+    async def prewarm(*, instructions, messages):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise LLMError("temporary prewarm failure")
+        await warm(instructions=instructions, messages=messages)
+
+    monkeypatch.setattr(quick, "prewarm", prewarm)
+    view = {
+        "npc": HILDA,
+        "name": "Хильда",
+        "hero": {"id": "PLAYER", "name": "Я", "distance": distance, "focus": HILDA},
+    }
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), quick=quick)
+        await fake.push_views(view)
+        if distance > 800:
+            await asyncio.sleep(0.05)
+            assert quick.prewarms == [] and HILDA not in dialogue.conversations
+            return
+
+        await _until(lambda: attempts == 1 and not dialogue._prewarms)
+        assert quick.prewarms == []
+        await fake.push_views(view)  # retry the unchanged history after the service recovers
+        await _until(lambda: len(quick.prewarms) == 1)
+        assert attempts == 2
+        conv = dialogue.conversations[HILDA]
+        assert quick.prewarms == [(conv.persona.instructions, [])]
+        assert conv.history == [] and conv.reply is None and conv.talked_at == float("-inf")
+        assert dialogue.memory.load("test-branch", HILDA).entries == []
+        assert dialogue.llm.calls == [] and fake.said == [] and fake.statuses == []
+
+        await fake.push_views(view)
+        await asyncio.sleep(0.05)
+        assert len(quick.prewarms) == 1  # unchanged views do not reread the same history
+
+        dialogue.note(HILDA, "Ты заметила героя")
+        dialogue.note(HILDA, "Герой остановился рядом")
+        await _until(lambda: len(quick.prewarms) == 2)
+        assert quick.prewarms[-1][1] == conv.history  # the newer history replaces the pending warm
+
+
+async def test_the_talk_key_warms_a_new_focused_npc(monkeypatch):
+    monkeypatch.setattr(dialogue_module, "PREWARM_DELAY_S", 0)
+    fake = FakeGame()
+    quick = FakeBackend(delay=0)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), quick=quick)
+        await fake.roster({"id": HILDA, "name": "Хильда", "distance": 1200})
+        await fake.send(type="ptt_start", focus=HILDA)
+        await _until(lambda: len(quick.prewarms) == 1)
+        conv = dialogue.conversations[HILDA]
+        assert quick.prewarms == [(conv.persona.instructions, [])]
+        assert conv.history == [] and conv.reply is None and fake.said == []
+
+
+async def test_three_nearest_listeners_are_warmed_with_the_focus_last(monkeypatch):
+    monkeypatch.setattr(dialogue_module, "PREWARM_DELAY_S", 0)
+    fake = FakeGame()
+    quick = FakeBackend(delay=0)
+    people = [
+        {"id": HILDA, "name": "Хильда", "distance": 700},
+        {"id": "PC_THIEF", "name": "Диего", "distance": 500},
+        {"id": LOBART, "name": "Лобарт", "distance": 200},
+        {"id": XARDAS, "name": "Ксардас", "distance": 100},
+        {"id": "BAU_4300_ADDON_CAVALORN", "name": "Кавалорн", "distance": 300},
+    ]
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, FakeBackend(), PersonaProvider(None), quick=quick)
+        for person in people:
+            dialogue.open(person["id"], person["name"], warm=False).talked_at = time.monotonic()
+        dialogue._on_message(NpcRoster(type="npc_roster", t=1000, full=True, npcs=people))
+        dialogue.prewarm_listeners(HILDA)
+        await _until(lambda: len(quick.prewarms) >= 3)
+        assert [instructions for instructions, _ in quick.prewarms] == [
+            dialogue.conversations[npc].persona.instructions for npc in (XARDAS, LOBART, HILDA)
+        ]
+
+        quick.prewarms.clear()
+        wolf = fake.snapshot("WOLF")
+        wolf["npc"]["name"], wolf["player"]["distance"] = "Волк", 600
+        await fake.send(**wolf)
+        await fake.push_views(
+            {
+                "npc": HILDA,
+                "name": "Хильда",
+                "hero": {"id": "PLAYER", "name": "Я", "distance": 700, "focus": "WOLF"},
+            }
+        )
+        await fake.send(type="ptt_start", focus="WOLF")
+        await _until(lambda: len(quick.prewarms) >= 3)
+        assert "WOLF" not in dialogue.conversations
+        assert [instructions for instructions, _ in quick.prewarms] == [
+            dialogue.conversations[npc].persona.instructions
+            for npc in (XARDAS, LOBART, "BAU_4300_ADDON_CAVALORN")
+        ]
+
+
+async def test_a_running_npcs_turn_does_not_start_a_prewarm(monkeypatch):
+    monkeypatch.setattr(dialogue_module, "PREWARM_DELAY_S", 0)
+    fake = FakeGame()
+    quick = FakeBackend("Хм...", delay=0)
+    llm = StallingBackend("Слушаю.")
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        dialogue.open(HILDA, "Хильда", warm=False)
+        turn = dialogue.say_as_player(HILDA, "Что скажешь?")
+        try:
+            await _until(lambda: llm.calls == 1)
+            dialogue.prewarm_listeners(HILDA)
+            await asyncio.sleep(0.05)
+            assert not turn.done() and quick.prewarms == []
+        finally:
+            turn.cancel()
+            await asyncio.gather(turn, return_exceptions=True)
+
+
 async def test_a_line_that_never_starts_is_not_spoken_forever(monkeypatch):
     """The game does not start a line of an npc far from the hero (or one the bridge refused): after a while
     the npc is not counted as speaking any more, or whatever waits for it (a scene) would wait forever."""
@@ -1404,12 +1530,12 @@ async def test_the_quick_model_is_kept_warm_with_the_history_of_an_npc_in_a_figh
         assert "Лобарт" in instructions and history == dialogue.conversations[LOBART].history
 
         await dialogue.event_turn(LOBART, "[Событие: Волк нападает на тебя]")
-        # not during the turn (its line would wait for the server's one slot), once after it
+        # not during its own turn (its words take priority over warming), once after it
         await _until(lambda: len(quick.prewarms) == 2)
         assert quick.prewarms[-1][1] == dialogue.conversations[LOBART].history
         assert quick.prewarms[-1][1][-1] == Message("assistant", "Держись!")
 
-        await fake.send(type="ptt_start", focus=LOBART)  # the hero speaks: warmed again (the server's slot)
+        await fake.send(type="ptt_start", focus=LOBART)  # the hero speaks: its slot is refreshed
         await _until(lambda: len(quick.prewarms) == 3)
 
 

@@ -10,8 +10,8 @@ The quick model (a local one, `quick`) says what has to be said at once:
 - in a fight the whole line, and the conversational model only acts on it, its words unsaid: a bandit
   that shouts "Держи его!" attacks;
 - a companion's answer to the hero's order ("Есть!", "Стою.", orders.py).
-Its prompt cache is kept filled with the instructions and history of the npc's the hero talks to or that
-are in a fight (`prewarm`), so what it says only reads the situation and what started the turn.
+Its three prompt-cache slots hold the instructions and history of nearby npc's the hero looks at,
+talks to, or that are in a fight (`prewarm`), so their words only read the situation and the trigger.
 """
 
 from __future__ import annotations
@@ -62,6 +62,8 @@ from .protocol import (
     LineVoice,
     MemoryCmd,
     Mood,
+    NpcRoster,
+    NpcViews,
     PttStart,
     SayAudioCmd,
     SayCmd,
@@ -124,6 +126,8 @@ ACK_HINT = (
 SOUND_SAID = "\nТы уже сказал вслух: «{}» — ответ продолжает это, не повторяй его."
 PREWARM_DELAY_S = 0.1  # notes come in bursts: the quick model's cache is filled once they are in
 TALK_WARM_S = 300.0  # an npc the hero spoke to this recently is kept warm in the quick model's cache
+PREWARM_CM = 800.0  # a new npc the hero looks at this close is warmed before he speaks
+PREWARM_SLOTS = 3  # the quick model's concurrent prompt-cache slots
 SUMMARY_FIRST_S = 60.0  # the summary is not waited for by anyone: more patience
 MAX_HISTORY = 40  # messages in the prompt; older ones are folded into a summary
 KEEP_RECENT = 16  # messages left verbatim after folding
@@ -712,6 +716,9 @@ class DialogueManager:
         self.quick = quick
         self.quick_first_s, self.quick_idle_s = QUICK_FIRST_S, QUICK_IDLE_S
         self._prewarms: dict[str, asyncio.Task[None]] = {}  # npc -> filling the quick model's cache
+        self._prewarm_history: dict[str, list[Message]] = {}  # pending or warmed histories
+        self._nearby: dict[str, tuple[str, float]] = {}  # human npc -> name, distance to the hero in cm
+        self._focus: str | None = None
         # what the npc sees (perception.py), in place of the snapshot's omniscient lines
         self.sight: Callable[[str, Snapshot | None], Sight | None] | None = None
         self.extensions: list[TurnExtension] = []
@@ -753,6 +760,20 @@ class DialogueManager:
                     started.set()
             case PttStart():
                 self.prewarm_listeners(msg.focus)  # while he speaks
+            case NpcRoster():
+                if msg.full:
+                    self._nearby.clear()
+                self._nearby.update((e.id.upper(), (e.name, e.distance)) for e in msg.npcs)
+                self._prewarm_focus()
+            case NpcViews():
+                self._focus = next(
+                    (v.hero.focus.upper() for v in msg.views if v.hero is not None and v.hero.focus),
+                    None,
+                )
+                for view in msg.views:
+                    if view.hero is not None:
+                        self._nearby[view.npc.upper()] = (view.name, view.hero.distance)
+                self._prewarm_focus()
             case LineVoice():
                 self._spawn_story_voice(msg)
 
@@ -765,6 +786,12 @@ class DialogueManager:
                 for task in conv.tasks():
                     task.cancel()
             self.conversations.clear()
+            for task in self._prewarms.values():
+                task.cancel()
+            self._prewarms.clear()
+            self._prewarm_history.clear()
+            self._nearby.clear()
+            self._focus = None
             self.branch = session.branch
         head = self.memory.ensure_branch(session.branch, session.parent, session.parent_seq)
         log.info(
@@ -853,42 +880,85 @@ class DialogueManager:
 
     def _listening(self, conv: Conversation) -> bool:
         """The quick model is likely to speak for the npc soon: it is in a fight, or the hero talked to it
-        a moment ago."""
-        return self._fighting(conv) or time.monotonic() - conv.talked_at < TALK_WARM_S
+        a moment ago, or looks at it within eight meters."""
+        return (
+            self._fighting(conv)
+            or time.monotonic() - conv.talked_at < TALK_WARM_S
+            or (conv.npc == self._focus and self._distance(conv.npc) <= PREWARM_CM)
+        )
+
+    def _distance(self, npc: str) -> float:
+        if npc in self._nearby:
+            return self._nearby[npc][1]
+        snap = self.link.snapshots.get(npc)
+        return snap.player.distance if snap is not None and snap.player is not None else float("inf")
+
+    def _warm_candidates(self, focus: str | None = None) -> list[str]:
+        """Up to three likely speakers: the focused npc and the nearest others, focus warmed last."""
+        candidates = [n for n, c in self.conversations.items() if n == focus or self._listening(c)]
+        looking_at = focus or self._focus
+        candidates.sort(key=lambda n: (n != looking_at, self._distance(n)))
+        return sorted(candidates[:PREWARM_SLOTS], key=lambda n: n == looking_at)
+
+    def _prewarm_focus(self) -> None:
+        """Open a nearby focused npc without a turn; repeated views reuse its unchanged history."""
+        npc = self._focus
+        if (
+            npc not in self._nearby
+            or self._distance(npc) > PREWARM_CM
+            or not hasattr(self.quick, "prewarm")
+        ):
+            return
+        conv = self.open(npc, self._nearby[npc][0], warm=False)
+        if self._prewarm_history.get(npc) != conv.history:
+            self.prewarm(npc)
 
     def prewarm(self, npc: str) -> None:
-        """Fill the quick model's cache with the instructions and history of an npc the hero talks to or
-        that is in a fight: what it says next only reads the situation and what started the turn (~0.1 s
-        instead of ~1 s). Done again whenever the history grows; one running for the npc is replaced."""
+        """Fill one of the quick model's three slots for a nearby focused npc, recent partner or fighter.
+        Its next words only read the situation and trigger. New history replaces a running warm."""
         conv = self.conversations.get(npc.upper())
         if conv is None or not self._listening(conv):
             return
+        candidates = self._warm_candidates()
+        if conv.npc in candidates:
+            self._start_prewarm(conv, candidates)
+
+    def _start_prewarm(self, conv: Conversation, candidates: list[str]) -> None:
         self._open_ahead(conv.npc)
         warm = getattr(self.quick, "prewarm", None)
         if warm is None:
             return
         if conv.reply is not None and not conv.reply.done():
             return  # its turn is on (warming now would hold up its line): once it is over
+        for other, task in self._prewarms.items():
+            if other not in candidates:
+                task.cancel()
+        self._prewarm_history = {n: h for n, h in self._prewarm_history.items() if n in candidates}
         if (old := self._prewarms.get(conv.npc)) is not None:
             old.cancel()
+        self._prewarm_history[conv.npc] = conv.history
         task = asyncio.create_task(self._prewarm(conv, warm))
         self._prewarms[conv.npc] = task
 
         def forget(t: asyncio.Task[None], npc: str = conv.npc) -> None:
             if self._prewarms.get(npc) is t:
                 del self._prewarms[npc]
+                if t.cancelled():
+                    self._prewarm_history.pop(npc, None)
 
         task.add_done_callback(forget)
 
     def prewarm_listeners(self, focus: str | None = None) -> None:
-        """The hero starts to speak (push-to-talk): the npc's he talks to and those in a fight get the
-        quick model ready, the one he looks at last (the server keeps the latest in its slot, the others
-        in its RAM cache)."""
-        focus = (focus or "").upper()
+        """Push-to-talk warms up to three npc's: the focused one (even before a first conversation)
+        and the nearest recent partners or fighters. Focus goes last, freshest in the three slots."""
+        focus = focus.upper() if focus else None
+        if focus in self._nearby and focus not in self.conversations and hasattr(self.quick, "prewarm"):
+            self.open(focus, self._nearby[focus][0], warm=False)
         if focus in self.conversations:
             self._open_ahead(focus)  # though it has not talked lately: the words to it are on their way
-        for npc in sorted(self.conversations, key=lambda n: n == focus):
-            self.prewarm(npc)
+        candidates = self._warm_candidates(focus)
+        for npc in candidates:
+            self._start_prewarm(self.conversations[npc], candidates)
 
     def _open_ahead(self, npc: str) -> None:
         """The conversational model's connection for the npc, opened before its turn (openai_responses.py)."""
@@ -896,16 +966,19 @@ class DialogueManager:
 
     async def _prewarm(self, conv: Conversation, warm: Callable[..., Awaitable[None]]) -> None:
         await asyncio.sleep(PREWARM_DELAY_S)
+        if conv.reply is not None and not conv.reply.done():
+            return  # a turn started during the debounce: warming waits for its reply
         started = time.monotonic()
         try:
             await warm(instructions=conv.persona.instructions, messages=conv.history)
         except LLMError as err:
+            self._prewarm_history.pop(conv.npc, None)
             log.info("%s: the quick model was not warmed: %s", conv.npc, err)
             return
         log.debug("%s: the quick model warmed in %.2fs", conv.npc, time.monotonic() - started)
 
     def _yield_to(self, npc: str) -> None:
-        """The quick model's one slot goes to `npc`'s words: the others' warming waits. Its own goes on,
+        """The quick model's slots go to `npc`'s words: the others' warming waits. Its own goes on,
         the words wait for it: it reads what they need (a fight's first line: the incident warmed it)."""
         for other, task in list(self._prewarms.items()):
             if other != npc:
