@@ -531,6 +531,7 @@ class Conversation:
     first_sounds: deque[bool] = field(default_factory=lambda: deque(maxlen=4))
     said_at: float = float("-inf")
     svm_phrases: deque[str] = field(default_factory=lambda: deque(maxlen=5))
+    svm_pending: set[str] = field(default_factory=set)  # queued or synthesizing, before its first sound
 
     @property
     def history(self) -> list[Message]:
@@ -890,7 +891,9 @@ class DialogueManager:
             elif not phrase:
                 attempt["outcome"] = "error"
             else:
-                await self._say(conv, words, None, overlay=True, mood=mood, to=msg.target)
+                line = await self._say(conv, words, None, overlay=True, mood=mood, to=msg.target)
+                if self.tts is not None and line is not None:
+                    conv.svm_pending.add(line)
                 conv.svm_phrases.append(phrase)
                 self._note(conv, f"Ты сказал вслух: «{words}»")
                 attempt["outcome"] = "said"
@@ -1204,6 +1207,8 @@ class DialogueManager:
 
     def _reply(self, conv: Conversation, turn: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         """The npc's turn; once it is over, its history (grown by it) warms the quick model."""
+        conv.hushed.update(conv.svm_pending)
+        conv.svm_pending.clear()
         conv.reply = asyncio.create_task(turn)
         conv.reply.add_done_callback(lambda _: self.prewarm(conv.npc))
         return conv.reply
@@ -1579,7 +1584,7 @@ class DialogueManager:
         *,
         filler: bool = False,
         to: str | None = None,
-    ) -> None:
+    ) -> str | None:
         """A line of the npc's, voiced if there is TTS. `filler`: its first words before the answer (the
         npc goes on thinking after them, protocol v14); `reply` None: not a line of a reply's text; `to`:
         the npc it is said to (v15: the two look at each other), None: the hero."""
@@ -1623,6 +1628,7 @@ class DialogueManager:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
         conv.voice.put_nowait((line, text, reply, overlay, mood, filler, to))
+        return line
 
     async def _voice(self, conv: Conversation, queue: asyncio.Queue[QueuedLine]) -> None:
         """Voices the lines one by one and streams them to the game: `say` goes out with the first
@@ -1660,6 +1666,7 @@ class DialogueManager:
                             if line in conv.hushed:
                                 return
                         started = True
+                        conv.svm_pending.discard(line)
                         spoken_at = time.monotonic()
                         conv.said_at = spoken_at
                         await self.link.send(
@@ -1734,6 +1741,7 @@ class DialogueManager:
             except GameError:
                 pass
             finally:
+                conv.svm_pending.discard(line)
                 queue.task_done()
 
     async def _wait_floor(self, conv: Conversation, line: str) -> None:
