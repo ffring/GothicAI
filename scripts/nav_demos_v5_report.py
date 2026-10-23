@@ -223,7 +223,9 @@ def verified_episodes(task, archive_root, summary, forbidden_ids, forbidden_pair
             samples_sha256=checksum, scenario=deepcopy(scenario), key_counts=checked["key_counts"],
             teacher_variant=metadata["teacher_variant"], teacher_familiar_hint=False,
             local=metadata["local"], residency=metadata["residency"], npc=metadata["npc"],
-            knownroads=metadata["knownroads"], knownroads_selection=metadata["knownroads_selection"],
+            knownroads={key: value for key, value in metadata["knownroads"].items()
+                        if key not in ("known_node_ids", "known_edge_ids")},
+            knownroads_selection=metadata["knownroads_selection"],
             **water, **metrics))
     require(visited == inventory, "Archived episode inventory differs from final collection summary")
     return sorted(entries, key=lambda value: (value["family"], value["id"]))
@@ -292,7 +294,7 @@ def report_text(manifest, groups, comparisons):
         "## Водные сценарии", "",
         f"Train-сценариев {len(water)}, годных {sum(entry['training_eligible'] for entry in water)}. "
         f"Входов в воду {safety['water']['water_entries']}, глубоких входов {safety['water']['deep_water_entries']}; "
-        "Вход — переход из сухого состояния: вода глубже 10 см; глубокая вода — порог груди соответствующей гильдии "
+        "Вход — начало непрерывного интервала, включая мокрый первый кадр: вода глубже 10 см; глубокая вода — порог груди соответствующей гильдии "
         "с допуском 1 см. Счётчики рассчитаны по нативным физическим кадрам, включая начало и конец эпизода.", "",
         "| Сценарий | Начало → цель | Годен | Входы в воду | Глубокие входы | Кадры глубокой воды | Плавание, кадры |",
         "|---|---|---:|---:|---:|---:|---:|"])
