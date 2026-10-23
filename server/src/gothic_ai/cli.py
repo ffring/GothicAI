@@ -11,7 +11,9 @@ import os
 import shlex
 import sys
 import time
+import tomllib
 from array import array
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +52,7 @@ from .crime_react import CrimeReact
 from .crimes import COMMUNITIES, Crimes
 from .daylife import DayDesk
 from .deals import Deals
-from .dialogue import DialogueManager
+from .dialogue import REACT_HINT, DialogueManager
 from .director import Director
 from .errands import Errands
 from .executor import Intent
@@ -109,6 +111,7 @@ from .questbook import QuestBook
 from .questlog import QuestLog
 from .quests import QuestBoard
 from .replay import replay as replay_turn
+from .replay import replay_first_words as replay_first_words_turn
 from .scenarios import occasions as scenario_occasions
 from .scenarios import questlog as scenario_questlog
 from .scenarios import showrunner as scenario_showrunner
@@ -123,7 +126,7 @@ from .social import Rumors
 from .story import StoryPatches, freed
 from .storyguard import StoryGuard
 from .talk import TalkDesk, fights
-from .trace import TraceWriter, find_turn, latest
+from .trace import TraceWriter, find_turn, latest, read
 from .triggers import Triggers
 from .trust import Trust
 from .tts import DEFAULT_TTS_URL, TtsClient, TtsError
@@ -2586,6 +2589,86 @@ async def replay(args: argparse.Namespace) -> int:
     return 0
 
 
+async def replay_first_words(args: argparse.Namespace) -> int:
+    """Compare quick first reactions to the hero's recorded phrases, without running the game."""
+    if args.runs < 1:
+        print("--runs must be at least 1", file=sys.stderr)
+        return 2
+    quick_at = quick_url(args.quick_url, os.environ.get("GOTHIC_DECIDER_URL"))
+    if not quick_at:
+        settings_path = Path.home() / ".config/gothic-ai/settings.toml"
+        if await asyncio.to_thread(settings_path.is_file):
+            settings = tomllib.loads(await asyncio.to_thread(settings_path.read_text, encoding="utf-8"))
+            llm_settings = settings.get("llm", {})
+            quick_at = quick_url(llm_settings.get("quick_url"), llm_settings.get("decider_url"))
+    if not quick_at:
+        print(
+            "set --quick-url, GOTHIC_QUICK_LLM_URL/GOTHIC_DECIDER_URL or [llm] in settings.toml",
+            file=sys.stderr,
+        )
+        return 2
+    records = await asyncio.to_thread(read, Path(args.file))
+    instructions = {r["hash"]: r["text"] for r in records if r.get("type") == "instructions"}
+    turns = [
+        r
+        for r in records
+        if r.get("type") == "turn"
+        and r.get("trigger", {}).get("kind") == "player"
+        and r.get("steps")
+        and not r["steps"][0].get("llm")
+        and (not args.npc or r["npc"].upper() == args.npc.upper())
+    ]
+    if not turns:
+        print("no matching player turns with a conversational first step", file=sys.stderr)
+        return 2
+    missing = [r["id"] for r in turns if r["instructions"] not in instructions]
+    if missing:
+        print(f"missing recorded instructions for turns: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    hint = (
+        (await asyncio.to_thread(Path(args.hint_file).read_text, encoding="utf-8")).strip()
+        if args.hint_file else REACT_HINT
+    )
+    previous: dict[str, list[str]] = {}
+    branch: str | None = None
+    llm = make_quick(quick_at)
+    try:
+        with (
+            await asyncio.to_thread(Path(args.out).open, "w", encoding="utf-8")
+            if args.out else nullcontext()
+        ) as output:
+            for turn in turns:
+                if turn.get("branch") != branch:
+                    previous.clear()
+                    branch = turn.get("branch")
+                last = previous.setdefault(turn["npc"], [""] * args.runs)
+                result = await replay_first_words_turn(
+                    llm,
+                    turn,
+                    instructions[turn["instructions"]],
+                    hint=hint,
+                    runs=args.runs,
+                    temperature=args.temperature,
+                    previous=last,
+                )
+                rendered = []
+                for n, run in enumerate(result["runs"]):
+                    if run["outcome"] == "said":
+                        last[n] = run["words"]
+                    sound = ", pure_sound" if run["pure_sound"] else ""
+                    rendered.append(
+                        f"{n + 1}: {run['words'] or '—'} [{run['outcome']}{sound}, {run['elapsed_ms']} ms]"
+                    )
+                phrase = " ".join(result["phrase"].split())[:80]
+                print(f"{result['npc']} | {phrase} | {' | '.join(rendered)}", flush=True)
+                if output is not None:
+                    output.write(json.dumps(result, ensure_ascii=False) + "\n")
+                    output.flush()
+    finally:
+        await llm.aclose()
+    return 0
+
+
 async def login_chatgpt() -> int:
     store = TokenStore()
     try:
@@ -3112,6 +3195,15 @@ def main() -> None:
     p.add_argument("--json", action="store_true", help="one JSON object on stdout")
     _add_llm_args(p)
 
+    p = sub.add_parser("replay-first-words", help="replay quick first reactions to recorded player phrases")
+    p.add_argument("file", help="recorded traces.jsonl")
+    p.add_argument("--hint-file", help="use this file instead of the current first-reaction hint")
+    p.add_argument("--runs", type=int, default=1, help="independent runs per turn (default: 1)")
+    p.add_argument("--temperature", type=float, default=0.6)
+    p.add_argument("--quick-url", default=os.environ.get("GOTHIC_QUICK_LLM_URL"))
+    p.add_argument("--npc", help="only this npc id")
+    p.add_argument("--out", help="write turn results to a JSONL file")
+
     p = sub.add_parser(
         "places", help="the book of places: group a world dump (SCENARIO=places) and name them"
     )
@@ -3181,6 +3273,8 @@ def main() -> None:
                 code = asyncio.run(llm_test(args))
             case "replay":
                 code = asyncio.run(replay(args))
+            case "replay-first-words":
+                code = asyncio.run(replay_first_words(args))
             case "places":
                 code = asyncio.run(places_cmd(args))
             case "lore":

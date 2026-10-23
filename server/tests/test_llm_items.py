@@ -224,6 +224,14 @@ async def test_fake_backend_makes_no_calls_with_tool_choice_none():
     assert llm.tool_choices == ["none"]
 
 
+async def test_fake_backend_records_the_temperature_of_each_request():
+    llm = FakeBackend("Держись!", delay=0)
+    for kwargs in ({"temperature": 0.6}, {}):
+        async for _ in llm.stream(instructions="", messages=[], **kwargs):
+            pass
+    assert llm.temperatures == [0.6, None]
+
+
 async def test_the_quick_backend_caps_its_answers_and_warms_the_servers_cache():
     backend = make_quick("http://127.0.0.1:9/v1")
     sent: list[dict] = []
@@ -243,10 +251,15 @@ async def test_the_quick_backend_caps_its_answers_and_warms_the_servers_cache():
     messages = [Message("user", "Волк!")]
     await backend.prewarm(instructions="Ты Кавалорн.", messages=messages)
     events = [e async for e in backend.stream(instructions="Ты Кавалорн.", messages=messages)]
+    async for _ in backend.stream(instructions="Ты Кавалорн.", messages=messages, temperature=0.6):
+        pass
+    await backend.aclose()
 
     chat = [{"role": "system", "content": "Ты Кавалорн."}, {"role": "user", "content": "Волк!"}]
     assert sent[0]["messages"] == chat and sent[0]["max_tokens"] == 1  # the same prefix, nothing said
     assert sent[1]["messages"] == chat and sent[1]["max_tokens"] == QUICK_MAX_TOKENS and sent[1]["stream"]
+    assert "temperature" not in sent[0] and "temperature" not in sent[1]
+    assert sent[2]["temperature"] == 0.6
     assert isinstance(events[-1], Done) and events[-1].text == "Держись!"
 
 

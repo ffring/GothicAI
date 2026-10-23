@@ -73,8 +73,10 @@ class Parley:
         self._roster: dict[str, Any] = {}
         self._roster_complete = False
         self._guilds: dict[str, int] = {}
+        self._last_balance: dict[str, str] = {}
         self._loading = False
         dialogue.fight_reason = self.fight_reason
+        dialogue.balance = self.balance
         dialogue.on_player_said.append(self.hero_said)
         link.listeners.append(self._on_message)
 
@@ -350,6 +352,18 @@ class Parley:
     async def prepare(self, npc: str) -> None:
         self.tick()
 
+    def balance(self, npc: str) -> str | None:
+        """The quick model's balance, using only snapshots and cached information, without I/O."""
+        npc = npc.upper()
+        guild = self.dialogue.guild_of(npc)
+        if guild is None:
+            guild = self._guilds.get(npc)
+        if guild is None:
+            return self._last_balance.get(npc)
+        if guild not in KILLERS:
+            return None
+        return self._balance(npc) or self._last_balance.get(npc)
+
     def _balance(self, npc: str) -> str | None:
         snap = self.link.snapshots.get(npc)
         if snap is None or snap.player is None:
@@ -394,12 +408,14 @@ class Parley:
             )
         )
         state = "ранен" if health < 1 else "цел"
-        return (
+        line = (
             f"Силы: {verdict}; вас на ногах {count}, "
             f"спутников у героя {len(companions)}; "
             f"герой {state}, {'в доспехе' if hero.armor else 'без доспеха'}, "
             f"{'с оружием' if armed else 'без оружия'}."
         )
+        self._last_balance[npc] = line
+        return line
 
     def situation(self, npc: str) -> str | None:
         npc = npc.upper()
@@ -501,6 +517,7 @@ class Parley:
                         if threat := self.ultimatum(npc):
                             self.chronicle.record({**threat, "status": "cleared", "why": "left"})
                 self._ticks, self._minute, self._roster = 0, None, {}
+                self._last_balance.clear()
                 self._roster_complete = False
                 self._loading = False
             case Snapshot():

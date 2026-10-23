@@ -4,9 +4,9 @@ from contextlib import asynccontextmanager
 import pytest
 
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.dialogue import DialogueManager
+from gothic_ai.dialogue import REACT_HINT, DialogueManager
 from gothic_ai.executor import Intent
-from gothic_ai.llm import FakeBackend, FakeStep, ToolCall, ToolResult
+from gothic_ai.llm import FakeBackend, FakeStep, Message, ToolCall, ToolResult
 from gothic_ai.memory import MemoryStore
 from gothic_ai.parley import AGREEMENT, EXPIRY_CUE, NO_REASON, Parley
 from gothic_ai.perception import PerceptionDesk
@@ -664,3 +664,40 @@ async def test_balance_uses_visible_equipment_health_and_people_not_levels():
         )
         assert "он опасен" in parley.situation(BRAGO)
         assert "уров" not in parley.situation(BRAGO).lower()
+
+
+async def test_quick_summaries_include_the_same_balance_without_waiting_for_extensions(monkeypatch):
+    async with world() as (_, link, dialogue, _, parley):
+        conv = dialogue.conversations[BRAGO]
+        conv.intent = Intent(attitude="wary")
+        quick = FakeBackend("Твоё невежество граничит с безумием.", delay=0)
+        dialogue.quick = quick
+
+        async def no_preparation(npc):
+            raise AssertionError("the quick summary must not prepare extensions")
+
+        parley.prepare = no_preparation
+        brief, _, _ = await dialogue._situation(conv, None, brief=True)
+        balance = parley.balance(BRAGO)
+        assert balance and balance in brief and balance in parley.situation(BRAGO)
+        assert conv.intent.describe() in brief
+        assert balance in dialogue._brief(conv)
+        request = [
+            *conv.history, Message("developer", brief + "\n" + REACT_HINT), Message("user", "Я убью вас!")
+        ]
+        await dialogue._first_reaction(conv, "Я убью вас!", request)
+        assert balance in quick.calls[0][1][-2].content
+        assert quick.temperatures == [0.6]
+        assert parley.balance(OTHER) is None
+
+        dialogue.guild_of = lambda npc: None
+        parley._guilds.clear()
+
+        def no_facts(*args):
+            raise AssertionError("the quick summary must not read the database")
+
+        monkeypatch.setattr(parley.chronicle, "facts", no_facts)
+        assert parley.balance(BRAGO) == balance
+        assert parley.balance(OTHER) is None
+        parley._on_message(Session(type="session", branch="another"))
+        assert parley.balance(BRAGO) is None

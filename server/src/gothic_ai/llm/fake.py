@@ -47,6 +47,7 @@ class FakeBackend:
         self.tool_choices: list[ToolChoice | None] = []
         self.sent_tools: list[list[Tool]] = []  # all the tools of each request
         self.cache_keys: list[str | None] = []
+        self.temperatures: list[float | None] = []
         self.prewarms: list[tuple[str, list[Item]]] = []  # what was sent to fill the prompt cache
 
     @property
@@ -68,10 +69,12 @@ class FakeBackend:
         tool_choice: ToolChoice | None = None,
         allowed: Collection[str] | None = None,
         cache_key: str | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[LLMEvent]:
         step = self.script[min(len(self.calls), len(self.script) - 1)]
         self.sent_tools.append(list(tools or []))
         self.cache_keys.append(cache_key)
+        self.temperatures.append(temperature)
         tools = [t for t in tools or [] if allowed is None or t.name in allowed]
         self.calls.append((instructions, list(messages), tools))
         self.tool_choices.append(tool_choice)
