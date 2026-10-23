@@ -791,7 +791,7 @@ class DialogueManager:
         self._story_voices: set[asyncio.Task[float | None]] = set()
         self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
-        if link.hello is not None:
+        if getattr(link, "hello", None) is not None:
             self._svm_mode()
         if link.session is not None:
             self._switch_branch(link.session)

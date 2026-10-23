@@ -113,7 +113,7 @@ class OpenAICompatBackend:
             raise LLMError(f"{self.name}: cannot reach {self._client.base_url}", retryable=True) from err
         finally:
             if stream is not None:
-                await stream.close()  # release the model slot when a short line is cut or yields priority
+                await stream.aclose()  # release the model slot when a short line is cut or yields priority
         items: list[Item] = [Message("assistant", text)] if text else []
         for acc in calls.values():
             try:
