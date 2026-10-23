@@ -323,6 +323,11 @@ def checked_paths(args, policy=False):
             raise ValueError("Weight file has no bounded JSON header line")
         preprocessing = json.loads(line).get("preprocessing", {})
         args.navigation_memory_version = preprocessing.get("navigation_memory_version", 3)
+        journey_override = os.environ.get("OPENGOTHIC_NAV_JOURNEY_MEMORY")
+        if journey_override is not None:
+            if journey_override not in ("0", "1"):
+                raise ValueError("OPENGOTHIC_NAV_JOURNEY_MEMORY must be 0 or 1")
+            args.navigation_memory_version = 4 if journey_override == "1" else 3
         version = preprocessing.get("navdemo_version", 1)
         args.navdemo_version = 3 if version == 2 and args.navigation_memory_version == 4 else version
         if args.navigation_memory_version == 4:
@@ -601,7 +606,8 @@ def validation_commands(args, value, action_seed):
         raise ValueError("Validation scenario limit must be positive")
     suffix = f"{limit} {args.weights} 0 {action_seed} sample"
     record = "off" if getattr(args, "lean", False) or value.get("family") == "detour" else "on"
-    commands = [f"roads load {args.roads}", f"roads on {npc}", f"navdemos record {record}",
+    roads_mode = "stranger" if getattr(args, "stranger", False) else "on"
+    commands = [f"roads load {args.roads}", f"roads {roads_mode} {npc}", f"navdemos record {record}",
                 "navdemos perception-mode gaze", "navdemos oracle off"]
     if getattr(args, "familiar_map", None) is not None:
         commands.insert(1, f"roads familiar-load {args.familiar_map}")
@@ -1028,6 +1034,10 @@ def text_episode_metrics(directory):
         action_fraction={key: count / steps for key, count in counts.items()}, action_presses=presses,
         travelled_xz_cm=float(np.linalg.norm(np.diff(trajectory[:, [1, 3]], axis=0), axis=1).sum()),
         recording="text_only")
+    for key in ("familiar_input_decisions", "familiar_input_nonzero_decisions",
+                "familiar_near_input_nonzero_decisions", "familiar_far_input_nonzero_decisions"):
+        if key in episode:
+            result[key] = episode[key]
     return result
 
 
@@ -1654,6 +1664,7 @@ def main():
     parser.add_argument("--indices")
     parser.add_argument("--roads", type=Path, default=REPO / "server/src/gothic_ai/gamedata/places.json")
     parser.add_argument("--familiar-map", type=Path, help="Eye-baked familiar atlas; required for memory-v4 policy evaluation")
+    parser.add_argument("--stranger", action="store_true", help="Evaluate validation drive without the resident's known roads or familiar map")
     parser.add_argument("--links", type=Path, default=REPO / "reports/navigation/2026-10-16-teacher/raw/accepted-links.txt")
     for name in ("runner", "assets", "save", "cache", "ini", "weights"):
         parser.add_argument("--" + name, type=Path)
@@ -1676,6 +1687,8 @@ def main():
         parser.error("--detour-scenarios is exclusive with --pairs/--manifest and only supports validation drive")
     if args.lean and (args.command != "drive" or (args.manifest is None and args.detour_scenarios is None)):
         parser.error("--lean requires manifest or detour validation drive")
+    if args.stranger and (args.command != "drive" or (args.manifest is None and args.detour_scenarios is None)):
+        parser.error("--stranger requires manifest or detour validation drive")
     if (args.command in ("qualify", "drive", "population", "equivalence", "death-smoke")
             and args.pairs is None and args.manifest is None and args.detour_scenarios is None):
         parser.error("--pairs is required")

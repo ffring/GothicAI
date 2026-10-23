@@ -3,12 +3,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ $# == 1 && ( "$1" == --help || "$1" == -h ) ]]; then
-  echo 'Usage: bash scripts/nav-bc4-remote.sh smoke|train|validate-main|validate-detour'
+  echo 'Usage: bash scripts/nav-bc4-remote.sh smoke|train|validate-main|validate-detour|validate-follow|validate-jump|validate-safety|diagnose-quick|diagnose-data'
   exit 0
 fi
-[[ $# == 1 ]] || { echo 'Usage: bash scripts/nav-bc4-remote.sh smoke|train|validate-main|validate-detour' >&2; exit 2; }
+[[ $# == 1 ]] || { echo 'Usage: bash scripts/nav-bc4-remote.sh smoke|train|validate-main|validate-detour|validate-follow|validate-jump|validate-safety|diagnose-quick|diagnose-data' >&2; exit 2; }
 stage="$1"
-case "$stage" in smoke|train|validate-main|validate-detour) ;; *) echo "Unknown phase: $stage" >&2; exit 2 ;; esac
+case "$stage" in smoke|train|validate-main|validate-detour|validate-follow|validate-jump|validate-safety|diagnose-quick|diagnose-data) ;; *) echo "Unknown phase: $stage" >&2; exit 2 ;; esac
 export GQ_OWNER=nav-bc4
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-bc4" "$HOME"')"
 archive=/mnt/shared/gothic-ai/nav-bc4
@@ -26,21 +26,27 @@ done
 for name in save.sav places.json accepted-links.txt familiar.bin; do
   copy_input "$HOME/gothic-ai/nav-demos-v5/input/$name" "$task/input/$name"
 done
-if [[ "$stage" == validate-main || "$stage" == validate-detour ]]; then
+if [[ "$stage" == validate-* || "$stage" == diagnose-quick ]]; then
   for name in jump-links.txt object-probes.jsonl fixtures.json detour-val.jsonl; do
     copy_input "$HOME/gothic-ai/nav-demos-v5/input/$name" "$task/input/$name"
   done
   modes=(ordinary)
-  if [[ "$stage" == validate-main ]]; then modes+=(jump); fi
+  if [[ "$stage" == validate-main || "$stage" == validate-jump ]]; then modes+=(jump); fi
   for mode in "${modes[@]}"; do
-    destination="$task/validation-${stage#validate-}-cache/$mode"
+    if [[ "$stage" == validate-detour ]]; then
+      destination="$task/validation-detour-cache/$mode"
+    elif [[ "$stage" == diagnose-quick ]]; then
+      destination="$task/smoke-cache"
+    else
+      destination="$task/validation-main-cache/$mode"
+    fi
     mkdir -p "$destination"
     for source in "$HOME/gothic-ai/nav-dagger3/hd-measure-cache/$mode/"*.navmesh; do
       copy_input "$source" "$destination/$(basename "$source")"
     done
   done
 fi
-if [[ "$stage" == validate-main ]]; then
+if [[ "$stage" == validate-* && "$stage" != validate-detour ]]; then
   mkdir -p "$archive/validation/setup-rejections"
   for source in "$HOME/gothic-ai/nav-dagger3/hd-validation/setup-rejections/"*.json; do
     copy_input "$source" "$archive/validation/setup-rejections/$(basename "$source")"
@@ -174,23 +180,85 @@ elif [[ "$stage" == train ]]; then
   "$task/build/opengothic/gothic-navpolicy-contract" \
     "$archive/bc4/policy.navbc" "$archive/bc4/parity/parity.bin.gz"
   rm -rf -- "$task/cache"
-elif [[ "$stage" == validate-main || "$stage" == validate-detour ]]; then
+elif [[ "$stage" == diagnose-quick ]]; then
+  rm -f -- "$archive/diagnostics/smoke-passed"
+  "$python" -B -m pytest -q -p no:cacheprovider scripts/tests/test_nav_rl.py
+  cmake --build "$task/build" --target gothic-body-runner --parallel 3
+  "$python" -B -I - "$task" "$archive" <<'DIAGNOSE'
+import json
+import os
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+sys.path.insert(0, str(Path.cwd() / "scripts"))
+import nav_rl as rl
+task, archive = map(Path, sys.argv[1:])
+value = dict(rl.detour_scenarios(task / "input/detour-val.jsonl")[0], limit_ms=10000)
+cases = [("bc4-memory3-stranger", archive / "bc4/policy.navbc", "0", True, 3),
+         ("hd-memory4-local", task / "input/hd/policy.navbc", "1", False, 4)]
+try:
+    for name, weights, override, stranger, memory in cases:
+        os.environ["OPENGOTHIC_NAV_JOURNEY_MEMORY"] = override
+        args = SimpleNamespace(output=archive / "diagnostics/smoke" / name,
+            cache=task / "smoke-cache", runner=task / "build/opengothic/gothic-body-runner",
+            assets=Path.home() / "gothic-ai/game", save=task / "input/save.sav",
+            links=task / "input/accepted-links.txt", roads=task / "input/places.json",
+            familiar_map=task / "input/familiar.bin", weights=weights, npc="BAU_954_MALETH",
+            ini=None, physics="cv", seed=17, watchdog_seconds=900, lean=True,
+            limit_ms=10000, stranger=stranger)
+        rl.checked_paths(args, policy=True)
+        runner = rl.new_runner(args, name)
+        try:
+            directory = args.output / "episode"
+            rl.scenario(args, runner, name, rl.validation_commands(args, value, 18102027), directory)
+            episode = rl.read_json(directory / "episode.json")
+            if (episode["navigation_memory_version"] != memory or episode["demo_version"] != 3
+                    or episode["record"] is not False or episode["teacher_beta"] != 0
+                    or episode["teacher_control_decisions"] != 0 or episode["action_mode"] != "sample"
+                    or episode["decisions"] <= 0 or any(directory.glob("samples.bin*"))):
+                raise ValueError(f"BC4 diagnostic drive identity differs: {directory}")
+            if name.startswith("bc4") and (
+                    episode["familiar_input_decisions"] != episode["decisions"]
+                    or episode["familiar_input_nonzero_decisions"] != 0):
+                raise ValueError("Memory-3 BC4 diagnostic must receive an all-zero familiar channel")
+            print(json.dumps(dict(event="bc4_diagnostic_smoke", case=name,
+                decisions=episode["decisions"], memory_version=memory,
+                **{key: episode[key] for key in ("familiar_input_decisions",
+                    "familiar_input_nonzero_decisions") if key in episode})))
+        finally:
+            runner.close()
+finally:
+    os.environ.pop("OPENGOTHIC_NAV_JOURNEY_MEMORY", None)
+(archive / "diagnostics/smoke-passed").write_text("Memory override and residency diagnostics passed\n")
+DIAGNOSE
+elif [[ "$stage" == diagnose-data ]]; then
+  "$python" -B -I scripts/nav_bc4_diagnose.py outcomes --task "$task" --archive "$archive"
+  "$python" -B -I scripts/nav_bc4_diagnose.py corpus --task "$task" --archive "$archive"
+elif [[ "$stage" == validate-* ]]; then
   test -f "$archive/bc4/policy.navbc"
   test -x "$python"
   test -x "$task/build/opengothic/gothic-body-runner"
-  if [[ "$stage" == validate-main ]]; then
+  if [[ "$stage" != validate-detour ]]; then
     output="$archive/validation/bc4"
+    selection=()
+    case "$stage" in
+      validate-main) selection=(--jump-links "$task/input/jump-links.txt"
+        --safety-fixtures "$task/input/fixtures.json" --fence-control) ;;
+      validate-follow) selection=(--families follow_below_gate) ;;
+      validate-jump) selection=(--families jump --jump-links "$task/input/jump-links.txt") ;;
+      validate-safety) selection=(--families point --indices 0
+        --safety-fixtures "$task/input/fixtures.json" --fence-control) ;;
+    esac
     "$python" -B -I scripts/nav_rl.py drive \
       --manifest /mnt/shared/gothic-ai/nav-demos-v5/manifest.json --lean \
       --runner "$task/build/opengothic/gothic-body-runner" \
       --assets "$HOME/gothic-ai/game" --save "$task/input/save.sav" \
       --cache "$task/validation-main-cache" --links "$task/input/accepted-links.txt" \
-      --jump-links "$task/input/jump-links.txt" --roads "$task/input/places.json" \
+      --roads "$task/input/places.json" \
       --familiar-map "$task/input/familiar.bin" --weights "$archive/bc4/policy.navbc" \
       --output "$output" --physics cv --parallel 18 \
       --action-mode sample --action-seeds 18102027,18102028,18102029 \
-      --safety-fixtures "$task/input/fixtures.json" --fence-control \
-      --limit-ms 30000 --watchdog-seconds 900 --resume
+      --limit-ms 30000 --watchdog-seconds 900 --resume "${selection[@]}"
     "$python" -B -I scripts/nav_rl.py summarize --source "$output" --output "$output" \
       --object-probes "$task/input/object-probes.jsonl"
   else
@@ -212,18 +280,21 @@ import sys
 stage, root = sys.argv[1], Path(sys.argv[2])
 baseline = Path.home() / "gothic-ai/nav-dagger3"
 references = ([baseline / "hd-validation" / name / "metrics.json" for name in ("bc3", "hd")]
-              if stage == "validate-main" else [baseline / "hd-detour/metrics.json"])
-expected = 1491 if stage == "validate-main" else 363
+              if stage != "validate-detour" else [baseline / "hd-detour/metrics.json"])
+family, expected = {"validate-main": (None, 1491), "validate-detour": ("detour", 363),
+    "validate-follow": ("follow_below_gate", 306), "validate-jump": ("jump", 135),
+    "validate-safety": ("safety", 30)}[stage]
+selected = lambda values: [ep for ep in values if family is None or ep["family"] == family]
 result = json.loads((root / "metrics.json").read_text())
-episodes = result["episodes"]
+episodes = selected(result["episodes"])
 identity = lambda values: {(ep["id"], ep["action_seed"]) for ep in values}
 if len(episodes) != expected or len(identity(episodes)) != expected:
     raise ValueError(f"BC4 validation cohort size differs: {len(episodes)} != {expected}")
 for reference in references:
     original = json.loads(reference.read_text())
-    if identity(episodes) != identity(original["episodes"]):
+    if identity(episodes) != identity(selected(original["episodes"])):
         raise ValueError(f"BC4 validation cohort differs from {reference}")
-if stage == "validate-main" and len(result["setup_rejections"]) != 2:
+if stage != "validate-detour" and len(result["setup_rejections"]) != 2:
     raise ValueError("BC4 validation requires the two frozen moving-target setup rejections")
 if any(ep["teacher_control_decisions"] != 0 or ep["recording"] != "text_only" for ep in episodes):
     raise ValueError("BC4 validation used teacher control or NAVDEMO")
@@ -235,7 +306,7 @@ for episode in episodes:
             or metadata["observation_source"] != "learner_memory" or metadata["record"] is not False):
         raise ValueError(f"BC4 validation memory/recording identity differs: {episode['id']}")
 print(json.dumps(dict(event="bc4_validation_complete", phase=stage, episodes=len(episodes),
-                      arrived=result["all"]["arrived"], memory_version=4)))
+                      arrived=sum(bool(ep["success"]) for ep in episodes), memory_version=4)))
 COHORT
 else
   echo "Unknown phase: $stage" >&2; exit 2
@@ -248,6 +319,12 @@ if [[ "$stage" == smoke ]]; then
 elif [[ "$stage" == train ]]; then
   "$ROOT/scripts/gq" submit --class batch --threads 6 --cpu-quota 600% --mem 10G --gpu-mem 4G --max 2h \
     --name 'nav bc4 v5 training and recorded parity' -- bash "$task/phase.sh" train
+elif [[ "$stage" == diagnose-quick ]]; then
+  "$ROOT/scripts/gq" submit --class quick --threads 12 --cpu-quota 1200% --mem 12G --max 45m \
+    --name 'nav bc4 diagnostic overrides and two train-free smoke episodes' -- bash "$task/phase.sh" diagnose-quick
+elif [[ "$stage" == diagnose-data ]]; then
+  "$ROOT/scripts/gq" submit --class batch --threads 6 --cpu-quota 600% --mem 4G --max 2h \
+    --name 'nav bc4 validation outcomes and corpus diagnostics' -- bash "$task/phase.sh" diagnose-data
 else
   "$ROOT/scripts/gq" submit --class batch --threads 28 --cpu-quota 2800% --mem 20G --max 2h \
     --name "nav bc4 $stage three-seed lean validation" -- bash "$task/phase.sh" "$stage"

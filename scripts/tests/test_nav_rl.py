@@ -784,6 +784,9 @@ def test_validation_commands_preserve_world_seed_and_force_sampled_zero_teacher(
     assert "navdemos oracle off" in moving
     assert "navdemos perception-mode gaze" in moving
     assert rl.validation_commands(args, groups["jump"][0], 43)[-2].endswith("sample 43")
+    assert "roads on NPC" in point
+    args.stranger = True
+    assert "roads stranger NPC" in rl.validation_commands(args, groups["point"][0], 43)
     assert rl.action_seeds(None) == list(rl.ACTION_SEEDS)
     assert rl.action_seeds("7,19,43") == [7, 19, 43]
     with pytest.raises(ValueError, match="uint32"):
@@ -1101,6 +1104,14 @@ def test_lean_metrics_match_recorded_physical_outcomes_without_navdemo(tmp_path,
         return original_module(name)
     monkeypatch.setattr(rl, "module", lean_module)
     measured = rl.lean_validation_episode_metrics(tmp_path)
+    assert "familiar_input_decisions" not in measured
+    episode = rl.read_json(tmp_path / "episode.json")
+    counters = dict(familiar_input_decisions=4, familiar_input_nonzero_decisions=3,
+        familiar_near_input_nonzero_decisions=2, familiar_far_input_nonzero_decisions=1)
+    episode.update(counters)
+    rl.write_json(tmp_path / "episode.json", episode)
+    measured = rl.lean_validation_episode_metrics(tmp_path)
+    assert all(measured[key] == count for key, count in counters.items())
     for key in ("success", "elapsed_ms", "decisions", "travelled_xz_cm", "blocked_ms"):
         assert measured[key] == recorded[key]
     for key in ("turn_only", "idle", "jump", "climb", "walk", "forward"):
@@ -1149,8 +1160,9 @@ def test_lean_summary_pools_families_seeds_and_physical_evidence_without_samples
 
 @pytest.mark.parametrize("bad_moving_seed", [False, True])
 @pytest.mark.parametrize("memory_version", [3, 4])
+@pytest.mark.parametrize("journey_override", [None, "0", "1"])
 def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(tmp_path, monkeypatch,
-                                                                            bad_moving_seed, memory_version,
+                                                                            bad_moving_seed, memory_version, journey_override,
                                                                             validation_disk_space):
     manifest, groups = validation_manifest(tmp_path)
     args = validation_drive_args(tmp_path, manifest, family=None)
@@ -1158,7 +1170,13 @@ def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(
     args.weights = tmp_path / "policy.navbc"
     args.weights.write_text(json.dumps(dict(preprocessing=dict(navdemo_version=3 if memory_version == 4 else 2,
         navigation_memory_version=memory_version))) + "\n")
-    if memory_version == 4:
+    if journey_override is None:
+        monkeypatch.delenv("OPENGOTHIC_NAV_JOURNEY_MEMORY", raising=False)
+    else:
+        monkeypatch.setenv("OPENGOTHIC_NAV_JOURNEY_MEMORY", journey_override)
+    effective_memory_version = memory_version if journey_override is None else 4 if journey_override == "1" else 3
+    effective_demo_version = 3 if memory_version == 4 or effective_memory_version == 4 else 2
+    if effective_memory_version == 4:
         args.familiar_map = tmp_path / "familiar.bin"
         args.familiar_map.touch()
     for name in ("runner", "assets", "save", "links", "roads"):
@@ -1171,10 +1189,10 @@ def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(
         value = groups[directory.parent.parent.name][0]
         seed = int(directory.name.removeprefix("seed-"))
         assert "navdemos record off" in commands
-        if memory_version == 4:
+        if effective_memory_version == 4:
             assert f"roads familiar-load {args.familiar_map}" in commands
         metadata = validation_runner_metadata(value, seed)
-        metadata.update(demo_version=3 if memory_version == 4 else 2, navigation_memory_version=memory_version)
+        metadata.update(demo_version=effective_demo_version, navigation_memory_version=effective_memory_version)
         moving = value["goal_kind"] in ("approach", "follow")
         metadata.update(start=value["start"],
             goal="RESOLVED_CONNECTED_WAYPOINT" if value["goal_kind"] in ("approach", "follow") else value["goal"],
