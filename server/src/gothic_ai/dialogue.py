@@ -717,7 +717,7 @@ class DialogueManager:
         self.quick_first_s, self.quick_idle_s = QUICK_FIRST_S, QUICK_IDLE_S
         self._prewarms: dict[str, asyncio.Task[None]] = {}  # npc -> filling the quick model's cache
         self._prewarm_history: dict[str, list[Message]] = {}  # pending or warmed histories
-        self._nearby: dict[str, tuple[str, float]] = {}  # npc -> name, distance to the hero in cm
+        self._nearby: dict[str, tuple[str, float]] = {}  # human npc -> name, distance to the hero in cm
         self._focus: str | None = None
         # what the npc sees (perception.py), in place of the snapshot's omniscient lines
         self.sight: Callable[[str, Snapshot | None], Sight | None] | None = None
@@ -903,11 +903,13 @@ class DialogueManager:
     def _prewarm_focus(self) -> None:
         """Open a nearby focused npc without a turn; repeated views reuse its unchanged history."""
         npc = self._focus
-        if npc is None or self._distance(npc) > PREWARM_CM or not hasattr(self.quick, "prewarm"):
+        if (
+            npc not in self._nearby
+            or self._distance(npc) > PREWARM_CM
+            or not hasattr(self.quick, "prewarm")
+        ):
             return
-        snap = self.link.snapshots.get(npc)
-        name = self._nearby[npc][0] if npc in self._nearby else snap.npc.name
-        conv = self.open(npc, name, warm=False)
+        conv = self.open(npc, self._nearby[npc][0], warm=False)
         if self._prewarm_history.get(npc) != conv.history:
             self.prewarm(npc)
 
@@ -950,10 +952,8 @@ class DialogueManager:
         """Push-to-talk warms up to three npc's: the focused one (even before a first conversation)
         and the nearest recent partners or fighters. Focus goes last, freshest in the three slots."""
         focus = focus.upper() if focus else None
-        if focus and focus not in self.conversations and hasattr(self.quick, "prewarm"):
-            snap = self.link.snapshots.get(focus)
-            name = self._nearby.get(focus, (snap.npc.name if snap else focus, 0))[0]
-            self.open(focus, name, warm=False)
+        if focus in self._nearby and focus not in self.conversations and hasattr(self.quick, "prewarm"):
+            self.open(focus, self._nearby[focus][0], warm=False)
         if focus in self.conversations:
             self._open_ahead(focus)  # though it has not talked lately: the words to it are on their way
         candidates = self._warm_candidates(focus)
@@ -972,6 +972,7 @@ class DialogueManager:
         try:
             await warm(instructions=conv.persona.instructions, messages=conv.history)
         except LLMError as err:
+            self._prewarm_history.pop(conv.npc, None)
             log.info("%s: the quick model was not warmed: %s", conv.npc, err)
             return
         log.debug("%s: the quick model warmed in %.2fs", conv.npc, time.monotonic() - started)

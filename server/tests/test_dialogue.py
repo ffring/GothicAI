@@ -1198,6 +1198,17 @@ async def test_a_new_focused_npc_is_warmed_only_within_eight_metres(distance, mo
     monkeypatch.setattr(dialogue_module, "PREWARM_DELAY_S", 0)
     fake = FakeGame()
     quick = FakeBackend(delay=0)
+    warm = quick.prewarm
+    attempts = 0
+
+    async def prewarm(*, instructions, messages):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise LLMError("temporary prewarm failure")
+        await warm(instructions=instructions, messages=messages)
+
+    monkeypatch.setattr(quick, "prewarm", prewarm)
     view = {
         "npc": HILDA,
         "name": "Хильда",
@@ -1211,7 +1222,11 @@ async def test_a_new_focused_npc_is_warmed_only_within_eight_metres(distance, mo
             assert quick.prewarms == [] and HILDA not in dialogue.conversations
             return
 
+        await _until(lambda: attempts == 1 and not dialogue._prewarms)
+        assert quick.prewarms == []
+        await fake.push_views(view)  # retry the unchanged history after the service recovers
         await _until(lambda: len(quick.prewarms) == 1)
+        assert attempts == 2
         conv = dialogue.conversations[HILDA]
         assert quick.prewarms == [(conv.persona.instructions, [])]
         assert conv.history == [] and conv.reply is None and conv.talked_at == float("-inf")
@@ -1262,6 +1277,25 @@ async def test_three_nearest_listeners_are_warmed_with_the_focus_last(monkeypatc
         await _until(lambda: len(quick.prewarms) >= 3)
         assert [instructions for instructions, _ in quick.prewarms] == [
             dialogue.conversations[npc].persona.instructions for npc in (XARDAS, LOBART, HILDA)
+        ]
+
+        quick.prewarms.clear()
+        wolf = fake.snapshot("WOLF")
+        wolf["npc"]["name"], wolf["player"]["distance"] = "Волк", 600
+        await fake.send(**wolf)
+        await fake.push_views(
+            {
+                "npc": HILDA,
+                "name": "Хильда",
+                "hero": {"id": "PLAYER", "name": "Я", "distance": 700, "focus": "WOLF"},
+            }
+        )
+        await fake.send(type="ptt_start", focus="WOLF")
+        await _until(lambda: len(quick.prewarms) >= 3)
+        assert "WOLF" not in dialogue.conversations
+        assert [instructions for instructions, _ in quick.prewarms] == [
+            dialogue.conversations[npc].persona.instructions
+            for npc in (XARDAS, LOBART, "BAU_4300_ADDON_CAVALORN")
         ]
 
 
