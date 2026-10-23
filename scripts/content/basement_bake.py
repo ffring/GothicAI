@@ -49,9 +49,9 @@ BEAM = (.032, .105)          # the sill beam
 RUBBLE = (.105, .849)        # the rubble
 BLOCK_ROWS = (.849, .903, .962, 1.)   # the dressed blocks: two courses and the top of a third
 
-COURSE = (.035, .12)         # rubble course heights, metres
-STONE = (.26, .45, (.13, .50))        # rubble stone lengths: median, log spread, limits
-JOINT = (.014, .005)         # joint width between stones: mean, spread
+COURSE = (.03, .14)         # rubble course heights, metres
+STONE = (.22, .55, (.08, .50))        # rubble stone lengths: median, log spread, limits
+JOINT = (.014, .008)         # joint width between stones: mean, spread
 COURSE_WAVE = (.014, (1.2, .5))       # the courses wander and break: amplitude, wavelengths
 BLOCK = (.30, .08, (.22, .40))        # block lengths: mean, spread, limits
 BLOCK_JOINT = .024
@@ -409,9 +409,10 @@ RUBBLE_COLOUR = [(.105, (134, 130, 120)), (.215, (128, 118, 101)), (.40, (121, 1
 FRAME_COLOUR = dict(window=(159, 148, 117), chain=(143, 131, 106))
 OPENING_COLOUR = dict(window=(24, 21, 16), chain=(15, 12, 11), empty=(18, 16, 13))
 IRON = (35, 31, 23)
-STONE_TINTS = [((1., .92, .78), .62), ((1., .86, .76), .12), ((1., .93, .70), .14), ((.97, .95, .82), .12)]
+STONE_TINTS = [((1., .92, .78), .50), ((1., .86, .76), .12), ((1., .93, .70), .12), ((.97, .95, .82), .10),
+               ((1., .80, .62), .08), ((.92, .97, .78), .08)]   # and rusty, and green-stained
                                        # olive-grey, pinkish, ochre, grey: linear ratios to R, and their share
-STONE_SPREAD = .30                     # log spread of the stones' own tone
+STONE_SPREAD = .34                     # log spread of the stones' own tone
 MOSS = ((40, 50, 24), (.55, .85), .45)  # moss colour, the v where it starts and where it is full, its share there
 LIME = ((150, 146, 132), .035)         # the light lime bed under the beam and how far below it reaches (v)
 OCCLUSION = (1.8, 1.4)
@@ -472,7 +473,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     out = np.zeros((rows, cols, 3))
     # every stone its own tone and tint, the surface picture's light over it
     count = len(spec['stones'])
-    tone = np.clip(np.exp(rng.normal(0, STONE_SPREAD, count)), .6, 1.3)   # no single pale stone flares in the shade
+    tone = np.clip(np.exp(rng.normal(0, STONE_SPREAD, count)), .55, 1.4)   # no single pale stone flares in the shade
     tints = np.array([t for t, _ in STONE_TINTS])
     tint = tints[rng.choice(len(STONE_TINTS), count, p=[w for _, w in STONE_TINTS])]
     for mask in (rock, frame, beam, iron, mortar, opening):
@@ -480,10 +481,13 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
             out[mask] = (lum[mask] / np.median(lum[mask]))[:, None]
     idx = np.maximum(stone, 0)
     blocks = np.array(spec['stones']) == 'block'          # the blocks keep their red-brown, some redder
-    tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .6, np.array([1., .72, .58]), np.array([1., .84, .72]))[blocks]
+    tint[blocks] = np.where(rng.uniform(0, 1, (count, 1)) < .6, np.array([1., .70, .55]), np.array([1., .82, .68]))[blocks]
+    tone[blocks] = np.clip(np.exp(rng.normal(0, .3, blocks.sum())), .6, 1.5)
     out[rock] *= (tone[idx[rock]][:, None] * tint[idx[rock]])
     out[frame] *= np.exp(.08 * rng.normal(0, 1, count))[idx[frame]][:, None] * np.array([1., .93, .74])
     out[mortar] *= np.array([1., .97, .86])
+    # the joints keep their lime in patches: light mortar flush with the faces, elsewhere washed out deep
+    lime_patch = np.clip(2.5 * pb.noise_metres(rng, (rows, cols), period, .12) - 1.2, 0, 1) * mortar * (v < RUBBLE[1])
     # the blocks' joints are pointed with light lime, the rubble's lie deep
     out[beam] *= np.array([1., .87, .88])
     out[iron] *= np.array([1., .88, .62])
@@ -510,6 +514,9 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     under *= np.clip(.8 + .6 * pb.noise_metres(rng, (rows, cols), period, .05), 0, 1)
     out = out * (1 - under[..., None]) + (_linear(lime_srgb) / (_linear(lime_srgb) @ tb.LUM)) * under[..., None]
     occlusion = np.maximum(occlusion, under * .8)
+    lime_rgb = _linear(lime_srgb) / (_linear(lime_srgb) @ tb.LUM)
+    out = out * (1 - .7 * lime_patch[..., None]) + lime_rgb * .7 * lime_patch[..., None]
+    occlusion = np.maximum(occlusion, .55 * lime_patch)
     out *= occlusion[..., None]
     # the sky from above is cut off under every stone's lower edge: a dark line under each, as on the
     # original
