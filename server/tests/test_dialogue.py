@@ -243,11 +243,12 @@ async def test_svm_repeats_are_normalized_and_only_the_last_five_said_phrases_co
         quick=quick, trace=writer,
     )
     dialogue._nearby[XARDAS] = ("Ксардас", 100)
-    monkeypatch.setattr(dialogue, "_say", AsyncMock())
+    monkeypatch.setattr(dialogue, "_say", AsyncMock(wraps=dialogue._say))
     conv = dialogue.open(XARDAS, "Ксардас", warm=False)
     line = SvmLine(type="svm_line", id="repeat", npc=XARDAS, svm="$THREATEN", text="Берегись!", overlay=True)
     for index in range(len(replies)):
         conv.said_at = float("-inf")
+        conv.overlay_free_at = 0
         dialogue._on_message(line.model_copy(update={"id": str(index)}))
         await _until(lambda: not dialogue._svm_tasks)
     records = [json.loads(raw) for raw in writer.path().read_text().splitlines()]
@@ -1060,18 +1061,21 @@ async def one_voice_dialogue(with_tts, llm, *, queued=(), audio_s=0.1):
 @pytest.mark.parametrize("trigger", ["player", "event"])
 async def test_a_turn_cancels_svm_audio_already_taken_by_tts(trigger):
     words = "Вон отсюда!"
+    note = Message("developer", f"[Ты сказал вслух: «{words}»]")
     llm = FakeBackend("Теперь я тебя слушаю.", delay=0, first=60)
     async with one_voice_dialogue(True, llm) as (fake, dialogue, conv):
         held = dialogue.tts.held[words] = asyncio.Event()
         dialogue.quick = FakeBackend(words, delay=0)
         dialogue._nearby[XARDAS] = ("Ксардас", 100)
         conv.talked_at = float("-inf")
-        dialogue._on_message(SvmLine(
+        svm = SvmLine(
             type="svm_line", id="svm-held", npc=XARDAS, svm="$GETOUTOFHERE",
             text="Убирайся отсюда!", overlay=True,
-        ))
+        )
+        dialogue._on_message(svm)
         await _until(lambda: words in dialogue.tts.requested and not dialogue._svm_tasks)
         assert conv.voice.empty() and not fake.said  # TTS already owns the line
+        assert not conv.svm_phrases and note not in conv.history
 
         dialogue.quick = None  # isolate the held SVM from the new turn's first words
         turn = (dialogue.say_as_player(XARDAS, "Подожди, поговорим.") if trigger == "player"
@@ -1082,6 +1086,16 @@ async def test_a_turn_cancels_svm_audio_already_taken_by_tts(trigger):
         await dialogue.link.snapshot(XARDAS, fresh=True)  # drain preceding game messages
         assert not turn.done()
         assert not fake.said and not fake.say_chunks
+        assert not conv.svm_phrases and note not in conv.history
+
+        turn.cancel()
+        await asyncio.gather(turn, return_exceptions=True)
+        dialogue.quick = FakeBackend(words, delay=0)
+        conv.said_at = conv.talked_at = float("-inf")
+        conv.overlay_free_at = 0
+        dialogue._on_message(svm.model_copy(update={"id": "svm-retry"}))
+        await _until(lambda: fake.said == [words] and bool(conv.svm_phrases))
+        assert len(conv.svm_phrases) == 1 and conv.history.count(note) == 1
 
 
 @pytest.mark.parametrize("with_tts", [True, False])

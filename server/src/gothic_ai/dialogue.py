@@ -892,10 +892,10 @@ class DialogueManager:
                 attempt["outcome"] = "error"
             else:
                 line = await self._say(conv, words, None, overlay=True, mood=mood, to=msg.target)
-                if self.tts is not None and line is not None:
+                if line is not None:
                     conv.svm_pending.add(line)
-                conv.svm_phrases.append(phrase)
-                self._note(conv, f"Ты сказал вслух: «{words}»")
+                    if self.tts is None:
+                        self._svm_started(conv, line)
                 attempt["outcome"] = "said"
         except TimeoutError:
             attempt["answer"] = first_words(text)[0]
@@ -914,6 +914,13 @@ class DialogueManager:
         except asyncio.CancelledError:
             attempt["outcome"] = "busy"
             raise
+
+    def _svm_started(self, conv: Conversation, line: str) -> None:
+        if line in conv.svm_pending:
+            conv.svm_pending.remove(line)
+            words = self._lines[line][0]
+            conv.svm_phrases.append(" ".join(_LETTERS.findall(words.casefold())))
+            self._note(conv, f"Ты сказал вслух: «{words}»")
 
     async def _recover_svm(self) -> None:
         assert self.quick is not None
@@ -1623,7 +1630,7 @@ class DialogueManager:
                     to=to,
                 )
             )
-            return
+            return line
         if conv.voice is None:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
@@ -1666,7 +1673,6 @@ class DialogueManager:
                             if line in conv.hushed:
                                 return
                         started = True
-                        conv.svm_pending.discard(line)
                         spoken_at = time.monotonic()
                         conv.said_at = spoken_at
                         await self.link.send(
@@ -1683,6 +1689,7 @@ class DialogueManager:
                                 to=to,
                             )
                         )
+                        self._svm_started(conv, line)
 
                     async def chunk(pcm: bytes, line: str = line) -> None:
                         if line in conv.hushed:
@@ -1738,6 +1745,7 @@ class DialogueManager:
                             to=to,
                         )
                     )
+                    self._svm_started(conv, line)
             except GameError:
                 pass
             finally:
