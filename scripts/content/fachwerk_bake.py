@@ -57,7 +57,7 @@ MEMBERS = {
     'gable': [('brace', (.17, .90), (.47, .12), .2), ('brace', (.83, .90), (.53, .12), .2),
               ('post', (.50, 0.), (.50, 1.), .2), ('rail', (0., .935), (1., .935), .17)],
 }
-SHUTTER = dict(rect=(.21, .79, .19, .63), boards=5, gap=.005, z=.006, straps=(.25, .57), strap=(.028, .004))
+SHUTTER = dict(rect=(.21, .79, .19, .63), boards=5, gap=.007, z=.006, straps=(.25, .57), strap=(.028, .004))
 GAP = (.004, .010, .4)       # the plaster's shrinkage gap at the timber: width, depth, share of the edge
 PEG = (.013, .003)           # oak pegs at the joints: radius, how far they stand out
 PLASTER_RELIEF = ((.5, .004), (.12, .0022), (.03, .0008))   # median tilt about 5°   # undulation of the render: size, height
@@ -184,6 +184,7 @@ def _shutter(rng, gx, gy, period, height, labels, kinds):
     labels[inside] = len(kinds)
     kinds.append('dark')
     middle = (x0 + x1) / 2
+    split = np.abs(gx - middle) < .008                  # the two leaves meet with a clear dark line
     for leaf, (a, b) in enumerate(((x0, middle), (middle, x1))):
         widths = rng.uniform(.82, 1.18, SHUTTER['boards'])     # boards of the widths a plank gave
         edges = a + np.concatenate([[0], np.cumsum(widths)]) / widths.sum() * (b - a)
@@ -191,7 +192,7 @@ def _shutter(rng, gx, gy, period, height, labels, kinds):
             bx0 = edges[k] + SHUTTER['gap'] / 2
             bx1 = edges[k + 1] - SHUTTER['gap'] / 2
             top, foot = y1 - rng.uniform(0, .012), y0 + rng.uniform(0, .012)   # uneven ends
-            board = inside & (gx > bx0) & (gx < bx1) & (gy < top) & (gy > foot)
+            board = inside & (gx > bx0) & (gx < bx1) & (gy < top) & (gy > foot) & ~split
             local = np.clip(gx - bx0, 0, bx1 - bx0)
             style = dict(adze=None, grain=(.0010, (.002, .007)), pits=((.005, .05), .002, .08, .12),
                          arris=(.006, .004), cup=.003)
@@ -220,6 +221,7 @@ def _shutter(rng, gx, gy, period, height, labels, kinds):
 # cleaner than the original's, the accepted deviation), the shutter as the original's weathered boards.
 PLASTER = (156, 156, 134)
 OAK = (41, 34, 20)
+OAK_SPREAD = (31, 56)                  # the original timber's sRGB luminance: median, p90
 GRAIN = 2.8                            # power on the oak picture's light: stripier grain
 EDGE = (.03, .004, 2.8, .3)          # worn arris: reach, the dark rim's width (metres), lightening; the rim's factor
 SHUTTER_TONE = (63, 58, 47)
@@ -333,6 +335,16 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, plaster_img: np.ndarra
     for mask, srgb in ((plaster, PLASTER), (wood, OAK), (shutter, SHUTTER_TONE), (iron, IRON)):
         if mask.any():
             out[mask] *= _linear(srgb) / np.maximum(out[mask].mean(axis=0), 1e-6)
+
+    # the oak's light spread as the original's, not only its mean: sRGB luminance median and p90 of its
+    # timber (31 and 56); a power curve through both keeps the dark rims dark
+    lum = out[wood] @ tb.LUM
+    srgb = np.clip(lum, 1e-6, 1) ** (1 / 2.2) * 255
+    x50, x90 = np.percentile(srgb, [50, 90])
+    b_ = math.log(OAK_SPREAD[1] / OAK_SPREAD[0]) / math.log(max(x90, 1e-3) / max(x50, 1e-3))
+    a_ = math.log(OAK_SPREAD[0]) - b_ * math.log(max(x50, 1e-3))
+    target = np.exp(a_ + b_ * np.log(np.maximum(srgb, 1e-3)))
+    out[wood] *= (((target / 255) ** 2.2) / np.maximum(lum, 1e-6))[:, None]
 
     normal = passes['normal'] / (np.linalg.norm(passes['normal'], axis=-1, keepdims=True) + 1e-9)
     rough = np.where(plaster, ROUGH['plaster'], np.where(iron, ROUGH['iron'], ROUGH['wood']))

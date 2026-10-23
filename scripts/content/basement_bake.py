@@ -54,7 +54,7 @@ STONE = (.22, .55, (.08, .50))        # rubble stone lengths: median, log spread
 JOINT = (.014, .008)         # joint width between stones: mean, spread
 COURSE_WAVE = (.014, (1.2, .5))       # the courses wander and break: amplitude, wavelengths
 BLOCK = (.30, .08, (.22, .40))        # block lengths: mean, spread, limits
-BLOCK_JOINT = .024
+BLOCK_JOINT = .036   # wide light pointing: the course reads from across the square
 MORTAR = (-.030, .004)       # the joints' bottom: depth behind the stone faces, roughness
 BEAM_PROUD = .035            # the beam stands out of the rubble face
 
@@ -524,7 +524,7 @@ def compose(passes: dict, spec: dict, labels: np.ndarray, seed: int = 0) -> dict
     out *= (1 - .65 * shade * (rock | mortar))[..., None]
     # the blocks' joints are pointed with lime, flush and light, mossy in places
     pointing = mortar & (v > RUBBLE[1] + .004)
-    lime = _linear(LIME[0]) * .9 * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .03))[..., None]
+    lime = _linear(LIME[0]) * 1.1 * np.exp(.25 * pb.noise_metres(rng, (rows, cols), period, .03))[..., None]
     out[pointing] = lime[pointing] * (1 - .35 * moss[pointing, None]) + (green * .06)[None] * .35 * moss[pointing, None]
 
     # the original's colour part by part, the joints and their shadow included; the rubble darkens and
