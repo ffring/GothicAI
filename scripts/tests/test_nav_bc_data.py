@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -361,7 +362,7 @@ def test_bc3_manifest_uses_exact_train_refs_including_failed_follow(tmp_path):
 
 
 @pytest.mark.parametrize("relative", ["point/train/point-0", "../outside", "/outside"])
-def test_compact_v5_manifest_uses_supplied_root_and_only_eligible_train(tmp_path, relative):
+def test_compact_v5_manifest_uses_supplied_root_and_only_eligible_train(tmp_path, monkeypatch, relative):
     source = tmp_path / "relocated-corpus"
     directory = source / "point/train/point-0"
     directory.mkdir(parents=True)
@@ -392,14 +393,64 @@ def test_compact_v5_manifest_uses_supplied_root_and_only_eligible_train(tmp_path
     assert loaded == manifest
     assert selected == [{**entry, "scenario": metadata, "directory": directory}]
     assert not (source / "missing").exists()
+    records = np.zeros(2, dtype=demos.RECORD_V3_DTYPE)
+    records["time_ms"] = [100, 200]
+    records["position_cm"][:, 1] = 700
+    records["memory_near"]["height_valid"][:, 3, 4] = 1
+    records["memory_near"]["ground_height_cm"][:, 3, 4] = 940
+    records["memory_near"]["channels"][:, 3, 4, 7] = [255, 128]
+    records["memory_far"]["channels"][:, 60, 70, 7] = [128, 255]
+    layout = np.tile([0., 0., 1000.], (demos.RAY_COUNT, 1)).astype(np.float32)
+    metadata["eye_layout"] = layout.tolist()
+    (directory / "episode.json").write_text(json.dumps(metadata))
+    with gzip.open(directory / "samples.bin.gz", "wb") as stream:
+        stream.write(demos.HEADER.pack(demos.MAGIC, 3, demos.RECORD_BYTES_BY_VERSION[3],
+                                      demos.RAY_COUNT, demos.NEAR_SIZE, demos.FAR_SIZE, demos.PERIOD_MS))
+        stream.write(records.tobytes())
+    entry["samples_sha256"] = hashlib.sha256((directory / "samples.bin.gz").read_bytes()).hexdigest()
+    path.write_text(json.dumps(manifest))
+    output = tmp_path / "cache"
+    original_stat = Path.stat
+    def cache_stat(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if path.is_relative_to(output):
+            return type(result)((*result[:6], 1024, *result[7:]))
+        return result
+    with monkeypatch.context() as storage:
+        storage.setattr(data.shutil, "disk_usage", lambda path: SimpleNamespace(free=32 * 1024**3))
+        storage.setattr(Path, "stat", cache_stat)
+        index = data.prepare(source, output, manifest=path, input_variant="hd-familiar", chunk_records=1)
+    assert index["cache_version"] == data.BC4_CACHE_VERSION
+    assert index["navigation_memory_version"] == 4 and index["navdemo_version"] == 3
+    assert index["preprocessing"] == data.BC4_PREPROCESSING
+    cached = data.load_cached(tmp_path / "cache" / index["episodes"][0]["file"])
+    assert cached["near"].shape == (2, 11, 64, 64)
+    assert cached["far"].shape == (2, 11, 50, 100)
+    np.testing.assert_allclose(cached["near"][:, 7:10, 3, 4], [[1.2, 1.2, 1]] * 2, atol=1e-3)
+    np.testing.assert_allclose(cached["near"][:, 10, 3, 4], [1, 128 / 255])
+    np.testing.assert_allclose(cached["far"][:, 10, 10, 70], [128 / 255, 1])
+    assert cached["aux_near"].shape == (2, 9, 32, 32)
 
 
-@pytest.mark.parametrize("input_variant", ["compact", "hd"])
+@pytest.mark.parametrize("input_variant", ["compact", "hd", "hd-familiar"])
 def test_packed_cache_slices_match_expanded_episode(tmp_path, input_variant):
     records, layout = fixture_records(4)
+    if input_variant == "hd-familiar":
+        familiar_records = np.zeros(4, dtype=demos.RECORD_V3_DTYPE)
+        for name in records.dtype.names:
+            if name.startswith("memory_"):
+                for field in records[name].dtype.names:
+                    if field == "channels":
+                        familiar_records[name][field][..., :7] = records[name][field]
+                    else:
+                        familiar_records[name][field] = records[name][field]
+                familiar_records[name]["channels"][..., 7] = 128
+            else:
+                familiar_records[name] = records[name]
+        records = familiar_records
     features = data.encode_features(demos.learner_input(records), layout, input_variant,
-                                    records["position_cm"][:, 1] if input_variant == "hd" else None)
-    if input_variant == "hd":
+                                    records["position_cm"][:, 1] if input_variant != "compact" else None)
+    if input_variant != "compact":
         features["aux_near"] = data.encode_features(demos.learner_input(records), layout)["near"]
     packed = data._pack(features)
     packed.update(labels=data.encode_bc3_labels(records["keys"]),

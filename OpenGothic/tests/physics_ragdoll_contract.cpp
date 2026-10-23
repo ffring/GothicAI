@@ -495,6 +495,11 @@ void testScaledMassAndInertia() {
       hit=fixture.create(hitWorld,object); control=fixture.create(controlWorld,object);
       require(hit->restore(initial) && control->restore(initial),"scaled corpse state must restore into a fresh native rig");
     }
+    else {
+      // A fresh corpse starts with fading muscles that resist the impulse;
+      // restoring its own state leaves the bare body the restored case has.
+      require(hit->restore(initial) && control->restore(initial),"a fresh corpse must accept its own state");
+    }
     const auto part=std::find_if(initial.parts.begin(),initial.parts.end(),[](const auto& p) { return p.bone==7; });
     require(part!=initial.parts.end(),"mass/inertia oracle needs a physical forearm");
     const auto point=part->centerOfMassMeters*100.f+Tempest::Vec3(12*scale,0,0);
@@ -827,6 +832,39 @@ void testDropSleepWake() {
   joints(fixture,*body);
   body.reset();
   require(world.bodyCount()==emptyCount,"destroying the owner must remove all ragdoll parts and joints");
+  }
+
+void testAnatomicalHipAndAnkle() {
+  // The fixture's bind faces +Z with its left at +X. Hard kicks drive a hip
+  // backwards and a foot sideways, beyond what any human joint allows.
+  Fixture fixture;
+  CollisionWorld world;
+  auto body=fixture.create(world,at(0,4000,0));
+  // Let the muscles of the moment of death fade first.
+  for(int i=0;i<70;++i) world.tick(17);
+  const auto frame=[&](size_t bone) {
+    for(const auto& part:body->state().parts) if(part.bone==bone) return part.transform;
+    require(false,"anatomy oracle needs the part");
+    return Tempest::Matrix4x4();
+    };
+  const auto local=[](const Tempest::Matrix4x4& m, const Tempest::Vec3& v) {
+    const auto* d=m.data();
+    return Tempest::Vec3(d[0]*v.x+d[1]*v.y+d[2]*v.z,d[4]*v.x+d[5]*v.y+d[6]*v.z,d[8]*v.x+d[9]*v.y+d[10]*v.z);
+    };
+  const float deg=180.f/float(3.14159265358979323846);
+  require(body->queueHit(13,position(frame(13)),{0,0,-30},1),"a corpse calf must accept a kick");
+  require(body->queueHit(19,position(frame(19)),{40,0,0},1),"a corpse toe must accept a kick");
+  float hipBack=0,footOut=0;
+  for(int i=0;i<40;++i) {
+    world.tick(17);
+    const auto thigh=local(frame(1),position(frame(13))-position(frame(12)));
+    hipBack=std::max(hipBack,std::atan2(-thigh.z,-thigh.y)*deg);
+    const auto foot=local(frame(17),position(frame(19))-position(frame(18)));
+    footOut=std::max(footOut,std::asin(std::clamp(-foot.x/foot.length(),-1.f,1.f))*deg);
+    }
+  std::printf("anatomical limits hip_extension_deg=%.3f foot_out_deg=%.3f\n",double(hipBack),double(footOut));
+  require(hipBack<22.f,"a hip must not extend backwards beyond its anatomical range");
+  require(footOut<22.f,"a foot must not turn out beyond its anatomical range");
   }
 
 zenkit::ModelHierarchy insectHierarchy() {
@@ -1650,8 +1688,10 @@ void testAnatomicalKneeWithLongitudinalBoneAxis() {
     const float final=kneeAngle();
     std::printf("anatomical calf bindX=longitudinal input_deg=%.9g initial_deg=%.9g after60_deg=%.9g\n",
                 double(degrees),double(initial),double(final));
+    // The limit snaps a hyperextended knee straight; a corpse's light knee
+    // friction lets that swing carry on into some flexion, never backwards.
     if(degrees<0)
-      require(final>-5.f && final<15.f,"a knee must correct thirty-degree anatomical hyperextension toward its straight limit");
+      require(final>-5.f && final<45.f,"a knee must correct thirty-degree anatomical hyperextension toward its straight limit");
     else
       require(final>5.f && final<60.f,"a knee must allow positive anatomical flexion rather than locking the projected local-axis plane");
     }
@@ -2766,6 +2806,7 @@ int main(int argc, const char** argv) {
     testFiniteRecoveryHierarchy();
     testBenchmarkSleepPolicy();
     testDropSleepWake();
+    testAnatomicalHipAndAnkle();
     testInsectRootBody();
     testRagdollWaterWolfHockTargetIndependentOfMass();
     testRagdollWaterFloatSleepRestoreAndToggle();
