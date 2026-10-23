@@ -504,6 +504,29 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
   float stepMilliseconds = 0;
   float characterMilliseconds = 0;
   std::vector<VirtualCharacter*> virtualCharacters;
+  struct MeleeBlade {
+    const Npc* owner=nullptr;
+    JPH::BodyID body;
+    JPH::RefConst<JPH::CapsuleShape> shape;
+    JPH::RVec3 position=JPH::RVec3::sZero(),targetPosition=JPH::RVec3::sZero();
+    JPH::Quat rotation=JPH::Quat::sIdentity(),targetRotation=JPH::Quat::sIdentity();
+    };
+  std::vector<MeleeBlade> meleeBlades;
+  std::mutex meleeMutex;
+  int meleeSubsteps=0;
+  struct MeleeSample {
+    uint64_t step=0;
+    float milliseconds=0,solveMs=0,castMs=0;
+    size_t updates=0,casts=0,bodyHits=0,worldHits=0,parts=0,blades=0,floorSamples=0,floorMisses=0;
+    float linear=0,angular=0,poseRms=0,poseMax=0,footDrop=0,footPenetration=0;
+    bool finite=true;
+    };
+  MeleeSample meleeSample;
+  std::vector<MeleeSample> meleeSamples;
+  struct MeleeStep { uint64_t step;float milliseconds,castMs;int substeps; };
+  std::vector<MeleeStep> meleeSteps;
+  std::string meleeOutput;
+  float meleeDiagnosticMs=0;
   };
 
 struct CollisionWorld::VirtualCharacter::Impl final : JPH::CharacterContactListener {
@@ -1291,9 +1314,16 @@ CollisionWorld::CollisionWorld() {
   Physics::initialize();
   impl = std::make_unique<Impl>();
   impl->waterStep=[this](float seconds) { applyBuoyancyStep(seconds); };
+  if(const auto* mode=std::getenv("OPENGOTHIC_MELEE_BENCH"); mode!=nullptr &&
+     (std::string_view(mode)=="blade" || std::string_view(mode)=="blade-motors"))
+    impl->meleeSubsteps=2;
   }
 
 CollisionWorld::~CollisionWorld() {
+  for(const auto& blade:impl->meleeBlades) {
+    impl->system.GetBodyInterface().RemoveBody(blade.body);
+    impl->system.GetBodyInterface().DestroyBody(blade.body);
+    }
   while(!ragdolls.empty())
     ragdolls.back()->detach();
   while(!bodies.empty()) {
@@ -2097,13 +2127,161 @@ bool CollisionWorld::hasCollision(const JPH::Shape* shape, const Tempest::Vec3& 
   return true;
   }
 
+void CollisionWorld::configureMeleeBench(int substeps) {
+  const auto* flag=std::getenv("OPENGOTHIC_MELEE_BENCH");
+  if(flag==nullptr || flag[0]==0 || std::string_view(flag)=="0")
+    throw std::runtime_error("Melee physics probe requires OPENGOTHIC_MELEE_BENCH");
+  if(substeps!=1 && substeps!=2) throw std::runtime_error("Melee physics probe requires one or two substeps");
+  impl->meleeSubsteps=substeps;
+  }
+
+void CollisionWorld::updateMeleeBlade(const Npc* owner, const Tempest::Matrix4x4& hand, float lengthCm) {
+  std::lock_guard<std::mutex> guard(impl->meleeMutex);
+  if(impl->meleeSubsteps==0) throw std::runtime_error("Melee blade probe is not configured");
+  if(owner==nullptr || !std::isfinite(lengthCm) || lengthCm<=4.f)
+    throw std::runtime_error("Melee blade probe requires an equipped weapon");
+  const auto* m=hand.data();
+  // Stock sword meshes extend along local -X. The native capsule's
+  // cylinder is centred halfway along the blade, with 2 cm rounded ends.
+  const auto axis=JPH::Vec3(m[4],m[5],m[6]).Normalized();
+  const auto x=JPH::Vec3(m[0],m[1],m[2]).Normalized();
+  const auto z=JPH::Vec3(m[8],m[9],m[10]).Normalized();
+  const auto rotation=JPH::Mat44(JPH::Vec4(x,0),JPH::Vec4(axis,0),JPH::Vec4(z,0),JPH::Vec3::sZero()).GetQuaternion().Normalized();
+  const auto bladeRotation=rotation*JPH::Quat::sRotation(JPH::Vec3::sAxisZ(),JPH::JPH_PI*.5f);
+  const auto position=JPH::RVec3(m[12]*.01f,m[13]*.01f,m[14]*.01f)-x*(lengthCm*.005f);
+  auto it=std::find_if(impl->meleeBlades.begin(),impl->meleeBlades.end(),[owner](const auto& b) { return b.owner==owner; });
+  if(it==impl->meleeBlades.end()) {
+    Impl::MeleeBlade blade;
+    blade.owner=owner;blade.position=position;blade.rotation=bladeRotation;
+    blade.shape=new JPH::CapsuleShape(lengthCm*.005f-.02f,.02f);
+    JPH::BodyCreationSettings settings(blade.shape,position,bladeRotation,JPH::EMotionType::Kinematic,DynamicWorld::C_Cloth);
+    settings.mIsSensor=true;
+    settings.mAllowSleeping=false;
+    blade.body=impl->system.GetBodyInterface().CreateAndAddBody(settings,JPH::EActivation::Activate);
+    if(blade.body.IsInvalid()) throw std::runtime_error("Melee blade probe body creation failed");
+    impl->meleeBlades.push_back(std::move(blade));it=impl->meleeBlades.end()-1;
+    std::fprintf(stderr,"[melee-bench] blade length_cm=%.1f\n",double(lengthCm));
+    }
+  it->targetPosition=position;it->targetRotation=bladeRotation;
+  }
+
+void CollisionWorld::removeMeleeBlade(const Npc* owner) {
+  std::lock_guard<std::mutex> guard(impl->meleeMutex);
+  auto it=std::find_if(impl->meleeBlades.begin(),impl->meleeBlades.end(),[owner](const auto& blade) { return blade.owner==owner; });
+  if(it==impl->meleeBlades.end()) return;
+  impl->system.GetBodyInterface().RemoveBody(it->body);
+  impl->system.GetBodyInterface().DestroyBody(it->body);
+  impl->meleeBlades.erase(it);
+  }
+
+void CollisionWorld::stepMeleeBlades(float seconds, float fraction) {
+  std::lock_guard<std::mutex> guard(impl->meleeMutex);
+  const auto started=std::chrono::steady_clock::now();
+  auto& sample=impl->meleeSample;
+  constexpr uint32_t mask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|
+                          (1u<<DynamicWorld::C_Item)|(1u<<DynamicWorld::C_MovableVob)|
+                          (1u<<DynamicWorld::C_Ragdoll)|(1u<<DynamicWorld::C_LivingBody)|(1u<<DynamicWorld::C_ActiveBody);
+  const QueryLayerFilter layers(mask);
+  const QueryBroadPhaseFilter broad(mask);
+  JPH::ShapeCastSettings settings;
+  settings.SetBackFaceMode(JPH::EBackFaceMode::CollideWithBackFaces);
+  settings.mReturnDeepestPoint=true;
+  struct ExcludeOwner final : JPH::BodyFilter {
+    std::vector<uint32_t> ids;
+    bool ShouldCollide(const JPH::BodyID& id) const override {
+      return std::find(ids.begin(),ids.end(),id.GetIndexAndSequenceNumber())==ids.end();
+      }
+    };
+  for(auto& blade:impl->meleeBlades) {
+    ExcludeOwner filter;
+    for(const auto* rig:ragdolls)
+      if(rig->noiseNpc()==blade.owner) filter.ids=rig->diagnosticBodyIds();
+    const auto end=blade.position+(blade.targetPosition-blade.position)*fraction;
+    const auto rotation=blade.rotation.SLERP(blade.targetRotation,fraction);
+    const float angle=2.f*std::acos(std::clamp(std::abs(blade.rotation.Dot(rotation)),0.f,1.f));
+    const int segments=std::max(1,int(std::ceil(angle/(5.f*JPH::JPH_PI/180.f))));
+    // CastShape translates a fixed orientation. Cover rotation conservatively:
+    // each <=5 degree interval uses its middle orientation and a radius band
+    // enclosing the whole endpoint arc. No sampled thin rotational gaps.
+    const float radius=blade.shape->GetRadius()+blade.shape->GetHalfHeightOfCylinder()*std::sin(angle/(2.f*float(segments)));
+    const JPH::CapsuleShape sweep(blade.shape->GetHalfHeightOfCylinder(),radius);
+    for(int segment=0;segment<segments;++segment) {
+      const float t0=float(segment)/float(segments),t1=float(segment+1)/float(segments);
+      const auto from=blade.position+(end-blade.position)*t0;
+      const auto to=blade.position+(end-blade.position)*t1;
+      const auto q=blade.rotation.SLERP(rotation,(t0+t1)*.5f);
+      JPH::RShapeCast cast(&sweep,JPH::Vec3::sOne(),JPH::RMat44::sRotationTranslation(q,from),JPH::Vec3(to-from));
+      JPH::AllHitCollisionCollector<JPH::CastShapeCollector> hits;
+      impl->system.GetNarrowPhaseQuery().CastShape(cast,settings,JPH::RVec3::sZero(),hits,broad,layers,filter);
+      ++sample.casts;
+      for(const auto& hit:hits.mHits) {
+        JPH::BodyLockRead lock(impl->system.GetBodyLockInterface(),hit.mBodyID2);
+        if(!lock.Succeeded()) continue;
+        const auto layer=lock.GetBody().GetObjectLayer();
+        if(layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody || layer==DynamicWorld::C_Ragdoll) ++sample.bodyHits;
+        else ++sample.worldHits;
+        }
+      }
+    impl->system.GetBodyInterface().MoveKinematic(blade.body,end,rotation,seconds);
+    blade.position=end;blade.rotation=rotation;
+    }
+  sample.castMs+=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  }
+
+void CollisionWorld::measureMeleeBench(std::string path) {
+  if(impl->meleeSubsteps==0) throw std::runtime_error("Melee measurement requires a configured probe");
+  impl->meleeOutput=std::move(path);impl->meleeSamples.clear();impl->meleeSamples.reserve(20000);
+  impl->meleeSteps.clear();impl->meleeSteps.reserve(4000);
+  }
+
+void CollisionWorld::reportMeleeBench() {
+  auto* file=std::fopen(impl->meleeOutput.c_str(),"w");
+  if(file==nullptr) throw std::runtime_error("Cannot write melee physics measurements");
+  std::fprintf(file,"step,physics_ms,solve_ms,cast_ms,updates,casts,body_hits,world_hits,dynamic_parts,blades,max_linear_cm_s,max_angular_rad_s,pose_rms_cm,pose_max_cm,max_foot_drop_cm,max_foot_penetration_cm,floor_samples,floor_misses,finite\n");
+  for(const auto& s:impl->meleeSamples)
+    std::fprintf(file,"%llu,%.9g,%.9g,%.9g,%zu,%zu,%zu,%zu,%zu,%zu,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%zu,%zu,%d\n",
+      (unsigned long long)s.step,double(s.milliseconds),double(s.solveMs),double(s.castMs),s.updates,s.casts,s.bodyHits,s.worldHits,
+      s.parts,s.blades,double(s.linear),double(s.angular),double(s.poseRms),double(s.poseMax),double(s.footDrop),double(s.footPenetration),s.floorSamples,s.floorMisses,int(s.finite));
+  std::fclose(file);
+  file=std::fopen((impl->meleeOutput+".steps.csv").c_str(),"w");
+  if(file==nullptr) throw std::runtime_error("Cannot write melee fixed-step measurements");
+  std::fprintf(file,"step,physics_ms,cast_ms,substeps\n");
+  for(const auto& s:impl->meleeSteps)
+    std::fprintf(file,"%llu,%.9g,%.9g,%d\n",(unsigned long long)s.step,double(s.milliseconds),double(s.castMs),s.substeps);
+  std::fclose(file);impl->meleeOutput.clear();
+  }
+
+void CollisionWorld::sampleMeleeBench() {
+  if(impl->meleeOutput.empty()) return;
+  const auto started=std::chrono::steady_clock::now();
+  auto& sample=impl->meleeSample;
+  size_t parts=0;
+  float squaredError=0;
+  for(const auto* rig:ragdolls) {
+    const auto stats=rig->benchStats();
+    parts+=stats.dynamicParts;
+    sample.linear=std::max(sample.linear,stats.maxLinearCmS);
+    sample.angular=std::max(sample.angular,stats.maxAngularRadS);
+    sample.poseMax=std::max(sample.poseMax,stats.poseMaxCm);
+    sample.footDrop=std::max(sample.footDrop,stats.maxFootDropCm);
+    sample.footPenetration=std::max(sample.footPenetration,stats.maxFootPenetrationCm);
+    sample.floorSamples+=stats.footFloorSamples;sample.floorMisses+=stats.footFloorMisses;
+    sample.finite&=stats.finite;
+    squaredError+=stats.poseRmsCm*stats.poseRmsCm*float(stats.dynamicParts);
+    }
+  sample.parts=std::max(sample.parts,parts);
+  sample.poseRms=std::max(sample.poseRms,parts>0 ? std::sqrt(squaredError/float(parts)) : 0.f);
+  impl->meleeDiagnosticMs+=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  }
+
 void CollisionWorld::tick(uint64_t dt) {
   const auto started=std::chrono::steady_clock::now();
+  if(impl->meleeSubsteps!=0) { impl->meleeSample={};impl->meleeDiagnosticMs=0; }
   if(cloth!=nullptr) cloth->prepareFrame(dt);
   constexpr float step = 1.f/60.f;
   bool advanced = false;
   std::vector<PhysicsNoise> splashes;
-  if(!rigid.empty() || !ragdolls.empty()) {
+  if(!rigid.empty() || !ragdolls.empty() || impl->meleeSubsteps!=0) {
     accumulatedTime += float(dt)/1000.f;
     int wholeSteps = 0;
     if(accumulatedTime>=step) {
@@ -2115,6 +2293,26 @@ void CollisionWorld::tick(uint64_t dt) {
     const int count = std::min(wholeSteps,2);
     for(int i=0;i<count;++i) {
       ++impl->simulationStep;
+      if(impl->meleeSubsteps!=0) {
+        const float solveBefore=impl->meleeSample.solveMs,castBefore=impl->meleeSample.castMs;
+        const float seconds=step/float(impl->meleeSubsteps);
+        for(int sub=0;sub<impl->meleeSubsteps;++sub) {
+          const auto solveStart=std::chrono::steady_clock::now();
+          prepareBuoyancy(splashes);
+          for(auto* body:ragdolls) body->prepareKinematicStep(seconds,1.f/float(impl->meleeSubsteps-sub));
+          stepMeleeBlades(seconds,1.f/float(impl->meleeSubsteps-sub));
+          impl->system.Update(seconds,1,&impl->allocator,&impl->jobs);
+          finishBuoyancy(seconds);
+          for(auto* body:ragdolls) body->finishKinematicStep();
+          impl->meleeSample.solveMs+=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-solveStart).count();
+          ++impl->meleeSample.updates;
+          sampleMeleeBench();
+          }
+        if(!impl->meleeOutput.empty())
+          impl->meleeSteps.push_back({impl->simulationStep,impl->meleeSample.solveMs-solveBefore,impl->meleeSample.castMs-castBefore,impl->meleeSubsteps});
+        advanced=true;
+        continue;
+        }
       prepareBuoyancy(splashes);
       for(auto* body:ragdolls) body->prepareKinematicStep(step);
       const bool dynamicRagdolls=std::any_of(ragdolls.begin(),ragdolls.end(),[](const Ragdoll* body) { return !body->isKinematic(); });
@@ -2384,7 +2582,15 @@ void CollisionWorld::tick(uint64_t dt) {
     if(disable)
       item->setPhysicsDisable();
     }
-  impl->stepMilliseconds=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count()+impl->characterMilliseconds;
+  impl->stepMilliseconds=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count()+impl->characterMilliseconds-impl->meleeDiagnosticMs;
+  if(!impl->meleeOutput.empty()) {
+    auto& sample=impl->meleeSample;
+    sample.step=impl->simulationStep;sample.milliseconds=impl->stepMilliseconds;
+    sample.solveMs-=sample.castMs;
+    sample.blades=impl->meleeBlades.size();
+    if(impl->meleeSamples.size()==20000) throw std::runtime_error("Melee physics measurement overflow");
+    impl->meleeSamples.push_back(sample);
+    }
   impl->characterMilliseconds = 0;
   impl->lastRayCount=impl->rayCount.exchange(0,std::memory_order_relaxed);
   }

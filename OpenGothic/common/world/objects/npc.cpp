@@ -1,4 +1,5 @@
 #include "npc.h"
+#include "graphics/mesh/protomesh.h"
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Log>
@@ -274,6 +275,8 @@ Npc::Npc(World &owner, size_t instance, std::string_view waypoint, NpcProcessPol
   }
 
 Npc::~Npc(){
+  if(std::getenv("OPENGOTHIC_MELEE_BENCH")!=nullptr && owner.physic()!=nullptr)
+    owner.physic()->removeMeleeBlade(this);
   NpcKeys::forget(this);
   BodyObservations::forget(this);
   TestBench::bodyForget(this);
@@ -1240,8 +1243,58 @@ void Npc::prepareRagdoll() {
     }
   }
 
+Npc::MeleeBenchMode Npc::meleeBenchMode() const {
+  if(meleeBench!=MeleeBenchMode::Off)
+    return meleeBench;
+  static const MeleeBenchMode runnerMode = [] {
+    const auto* value = std::getenv("OPENGOTHIC_MELEE_BENCH");
+    if(value!=nullptr && std::string_view(value)=="blade-motors")
+      return MeleeBenchMode::Full;
+    if(value!=nullptr && std::string_view(value)=="blade")
+      return MeleeBenchMode::Blade;
+    return MeleeBenchMode::Off;
+    }();
+  if(runnerMode==MeleeBenchMode::Off)
+    return MeleeBenchMode::Off;
+  return BodyObservations::watched(*this) ? runnerMode : MeleeBenchMode::Off;
+  }
+
+void Npc::configureMeleeBench(MeleeBenchMode mode, bool dynamicPelvis) {
+  const auto* value = std::getenv("OPENGOTHIC_MELEE_BENCH");
+  if(value==nullptr || std::string_view(value)!="fixture")
+    return;
+  meleeBench = mode;
+  meleeBenchDynamicPelvis = dynamicPelvis;
+  living.reset();
+  livingRetryTick = 0;
+  livingNeedsRebuild = false;
+  prepareLivingBody();
+  }
+
+void Npc::updateMeleeBenchBlade() {
+  const auto mode = meleeBenchMode();
+  if(mode==MeleeBenchMode::Off || mode==MeleeBenchMode::Base || mode==MeleeBenchMode::Chain)
+    return;
+  // Full fixture takes isolate motors. Runner full takes also include their blade.
+  if(mode==MeleeBenchMode::Full && meleeBench!=MeleeBenchMode::Off)
+    return;
+  const auto* weapon = invent.activeWeapon();
+  const auto* skeleton = visual.visualSkeleton();
+  if(weapon==nullptr || skeleton==nullptr || weapon->swordLength()<=0)
+    return;
+  const auto hand = skeleton->findNode("ZS_RIGHTHAND");
+  if(hand<visual.pose().boneCount()) {
+    const auto* mesh=Resources::loadMesh(weapon->handle().visual);
+    if(mesh==nullptr || mesh->bbox()[0].x>=-4.f)
+      throw std::runtime_error("Melee benchmark requires a weapon mesh extending along local -X");
+    owner.physic()->updateMeleeBlade(this,visual.pose().bone(hand),-mesh->bbox()[0].x);
+    }
+  }
+
 void Npc::prepareLivingBody() {
   constexpr float enterRadius = 2000.f, leaveRadius = 2200.f;
+  const auto benchMode = meleeBenchMode();
+  const bool benchRig = benchMode==MeleeBenchMode::Full || benchMode==MeleeBenchMode::Chain || benchMode==MeleeBenchMode::Blade;
   if(currentInteract!=nullptr)
     livingWasInteracting = true;
   else if(visual.pose().isStanding())
@@ -1271,7 +1324,7 @@ void Npc::prepareLivingBody() {
   const bool outside = !NavDemos::fullSimulation(*this) && hero!=nullptr &&
                        (living ? qDistTo(*hero)>leaveRadius*leaveRadius
                                : qDistTo(*hero)>=enterRadius*enterRadius);
-  if(isDown() || ragdoll || interacting || (!frozen && (isPlayer() || hero==nullptr ||
+  if(benchMode==MeleeBenchMode::Base || isDown() || ragdoll || interacting || (!benchRig && !frozen && (isPlayer() || hero==nullptr ||
      !Gothic::physicsFlags().livingBodies || outside))) {
     living.reset();
     livingRetryTick = 0;
@@ -1281,7 +1334,7 @@ void Npc::prepareLivingBody() {
     }
   if(frozen)
     arrowImpacts.clear();
-  if(livingNeedsRebuild || (living && !living->isKinematic() && !Gothic::physicsFlags().arrowPhysics)) {
+  if(livingNeedsRebuild || (!benchRig && living && !living->isKinematic() && !Gothic::physicsFlags().arrowPhysics)) {
     living.reset();
     livingNeedsRebuild = false;
     }
@@ -1296,6 +1349,7 @@ void Npc::prepareLivingBody() {
     }
   const auto* skeleton = visual.visualSkeleton();
   if(skeleton==nullptr || !visual.hitZoneShape().isValid()) {
+    if(benchRig) throw std::runtime_error("Melee benchmark requires a skeleton with fitted HitZones");
     arrowImpacts.clear();
     return;
     }
@@ -1304,8 +1358,14 @@ void Npc::prepareLivingBody() {
   updateAnimation(0,true);
   living = owner.physic()->createKinematicBody(*skeleton,visual.hitZoneShape(),visual.pose().transform(),
                                              visual.pose().boneCount(),visual.transform());
+  if(benchRig && !living)
+    throw std::runtime_error("melee benchmark requires a valid 24-part living body");
   if(living) {
     living->setNpc(this);
+    if(benchMode==MeleeBenchMode::Full || benchMode==MeleeBenchMode::Chain)
+      if(!living->configureBench(benchMode==MeleeBenchMode::Full ? Ragdoll::BenchMode::Full : Ragdoll::BenchMode::Chain,
+                                meleeBenchDynamicPelvis ? Ragdoll::BenchPelvis::Dynamic : Ragdoll::BenchPelvis::Kinematic))
+        throw std::runtime_error("melee benchmark motor configuration failed");
     if(const auto culprit = spellImpulseCulprit.lock())
       living->setNoiseCulprit(static_cast<Npc*>(culprit->user_ptr));
     }
@@ -7423,6 +7483,7 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
   if(living)
     livingNeedsRebuild = !living->moveKinematic(visual.pose().transform(),visual.pose().boneCount(),visual.transform(),
                                               float(std::max<uint64_t>(dt,1))*0.001f);
+  updateMeleeBenchBlade();
   if(living && living->reactionWeight()>0.f && living->getPose(arrowPhysicalPose))
     syncAtt |= visual.setPhysicalPose(arrowPhysicalPose,living->reactionBones(),living->reactionWeight());
   if(syncAtt)

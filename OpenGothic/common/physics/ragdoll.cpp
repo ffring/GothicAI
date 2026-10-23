@@ -14,6 +14,7 @@
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
@@ -824,7 +825,7 @@ struct Ragdoll::Impl final {
   void driveMotors() {
     // Same body-relative orientation convention as DriveToPoseUsingMotors;
     // the already decomposed animation targets avoid another SkeletonPose solve.
-    const float recovery=std::clamp(reactionAge/.35f,0.f,1.f);
+    const float recovery=benchActive ? 1.f : std::clamp(reactionAge/.35f,0.f,1.f);
     const float torqueScale=1.f-.9f*reactionStrength*(1.f-recovery);
     for(size_t i=1;i<activeParts.size();++i) {
       if(!activeParts[i]) continue;
@@ -840,6 +841,10 @@ struct Ragdoll::Impl final {
       joint->SetSwingMotorState(JPH::EMotorState::Position);
       joint->SetTwistMotorState(JPH::EMotorState::Position);
       joint->SetTargetOrientationBS(targets[size_t(parent)].GetQuaternion().Conjugated()*targets[i].GetQuaternion());
+      }
+    if(benchHand!=nullptr) {
+      benchHand->SetTargetPositionCS(targets[0].GetTranslation()-benchHandOrigin);
+      benchHand->SetTargetOrientationBS(targets[0].GetQuaternion());
       }
     }
 
@@ -945,6 +950,9 @@ struct Ragdoll::Impl final {
   std::vector<Hit> hits;
   JPH::Ref<JPH::RagdollSettings> motorSource;
   bool motorReady=false;
+  bool benchActive=false;
+  JPH::Ref<JPH::SixDOFConstraint> benchHand;
+  JPH::Vec3 benchHandOrigin=JPH::Vec3::sZero();
   std::vector<bool> activeParts;
   std::vector<size_t> reactionBones;
   float reactionStrength=0.f,reactionWeight=0.f,reactionAge=0.f,stepSeconds=0.f;
@@ -1142,6 +1150,10 @@ Ragdoll::~Ragdoll() { detach(); }
 
 void Ragdoll::detach() {
   impl->waterParts.clear();
+  if(impl->benchHand!=nullptr) {
+    impl->world->physicsSystem().RemoveConstraint(impl->benchHand.GetPtr());
+    impl->benchHand=nullptr;
+    }
   if(impl->native!=nullptr) {
     impl->native->RemoveFromPhysicsSystem();
     impl->native=nullptr;
@@ -1242,6 +1254,136 @@ float Ragdoll::reactionWeight() const { return impl->reactionWeight; }
 
 const std::vector<size_t>& Ragdoll::reactionBones() const { return impl->reactionBones; }
 
+bool Ragdoll::configureBench(BenchMode mode, BenchPelvis pelvis) {
+  const char* flag=std::getenv("OPENGOTHIC_MELEE_BENCH");
+  if(flag==nullptr || flag[0]==0 || std::string_view(flag)=="0" || !valid() || !impl->kinematic || partCount()!=24) return false;
+  auto& system=impl->world->physicsSystem();
+  if(!impl->ensureMotors(system)) return false;
+  clearBench();
+  impl->endReaction(system);
+  auto& interface=system.GetBodyInterface();
+  if(pelvis==BenchPelvis::Dynamic) {
+    JPH::SixDOFConstraintSettings hand;
+    hand.mSpace=JPH::EConstraintSpace::LocalToBodyCOM;
+    impl->benchHandOrigin=impl->targets[0].GetTranslation();
+    hand.mPosition1=impl->benchHandOrigin;
+    hand.mPosition2=-interface.GetShape(impl->native->GetBodyID(0))->GetCenterOfMass();
+    hand.mNumVelocityStepsOverride=12;
+    hand.mNumPositionStepsOverride=10;
+    for(int axis=0;axis<JPH::SixDOFConstraint::EAxis::Num;++axis) {
+      auto& motor=hand.mMotorSettings[axis];
+      motor.mSpringSettings=JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping,6.f,1.f);
+      if(axis<JPH::SixDOFConstraint::EAxis::NumTranslation) motor.SetForceLimit(impl->actualMass*50.f);
+      else motor.SetTorqueLimit(impl->actualMass*10.f);
+      }
+    impl->benchHand=static_cast<JPH::SixDOFConstraint*>(interface.CreateConstraint(&hand,JPH::BodyID(),impl->native->GetBodyID(0)));
+    for(int axis=0;axis<JPH::SixDOFConstraint::EAxis::Num;++axis)
+      impl->benchHand->SetMotorState(JPH::SixDOFConstraint::EAxis(axis),JPH::EMotorState::Position);
+    system.AddConstraint(impl->benchHand.GetPtr());
+    }
+  for(size_t i=0;i<partCount();++i) {
+    const auto& name=impl->rig->parts[i].name;
+    const bool arm=named(name," R ") && (named(name,"CLAVICLE") || named(name,"UPPERARM") || named(name,"FOREARM") || named(name,"HAND") || named(name,"FINGER"));
+    const bool dynamic=i==0 ? pelvis==BenchPelvis::Dynamic : mode==BenchMode::Full || named(name,"SPINE") || arm;
+    impl->activeParts[i]=dynamic;
+    const auto id=impl->native->GetBodyID(int(i));
+    interface.SetObjectLayer(id,dynamic ? DynamicWorld::C_ActiveBody : DynamicWorld::C_LivingBody);
+    interface.SetMotionType(id,dynamic ? JPH::EMotionType::Dynamic : JPH::EMotionType::Kinematic,
+                            dynamic ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
+    interface.SetMotionQuality(id,dynamic ? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete);
+    JPH::BodyLockWrite lock(system.GetBodyLockInterface(),id);
+    if(lock.Succeeded()) lock.GetBody().SetAllowSleeping(!dynamic);
+    }
+  for(size_t i=1;i<partCount();++i) {
+    const int index=impl->native->GetRagdollSettings()->GetConstraintIndexForBodyIndex(int(i));
+    if(index>=0) impl->native->GetConstraint(index)->SetEnabled(impl->activeParts[i]);
+    }
+  impl->native->ResetWarmStart();
+  impl->benchActive=true;
+  impl->driveMotors();
+  std::fprintf(stderr,"[melee-bench] rig parts=%zu dynamic=%zu mode=%s pelvis=%s\n",partCount(),
+    size_t(std::count(impl->activeParts.begin(),impl->activeParts.end(),true)),
+    mode==BenchMode::Full ? "full" : "chain",pelvis==BenchPelvis::Dynamic ? "dynamic" : "kinematic");
+  return true;
+  }
+
+void Ragdoll::clearBench() {
+  if(!valid() || !impl->benchActive) return;
+  auto& system=impl->world->physicsSystem();
+  auto& interface=system.GetBodyInterface();
+  if(impl->benchHand!=nullptr) {
+    system.RemoveConstraint(impl->benchHand.GetPtr());
+    impl->benchHand=nullptr;
+    }
+  if(impl->activeParts[0]) {
+    const auto id=impl->native->GetBodyID(0);
+    interface.SetMotionType(id,JPH::EMotionType::Kinematic,JPH::EActivation::DontActivate);
+    interface.SetObjectLayer(id,DynamicWorld::C_LivingBody);
+    interface.SetMotionQuality(id,JPH::EMotionQuality::Discrete);
+    interface.SetPositionAndRotation(id,impl->targets[0].GetTranslation(),impl->targets[0].GetQuaternion(),JPH::EActivation::DontActivate);
+    interface.SetLinearAndAngularVelocity(id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
+    impl->activeParts[0]=false;
+    }
+  impl->endReaction(system);
+  for(auto id:impl->native->GetBodyIDs()) {
+    JPH::BodyLockWrite lock(system.GetBodyLockInterface(),id);
+    if(lock.Succeeded()) lock.GetBody().SetAllowSleeping(true);
+    }
+  impl->benchActive=false;
+  }
+
+Ragdoll::BenchStats Ragdoll::benchStats() const {
+  BenchStats result;
+  if(!valid() || !impl->kinematic) return result;
+  auto& system=impl->world->physicsSystem();
+  double squaredError=0;
+  std::vector<JPH::AABox> feet;
+  feet.reserve(4);
+  for(size_t i=0;i<partCount();++i) {
+    JPH::BodyLockRead lock(system.GetBodyLockInterface(),impl->native->GetBodyID(int(i)));
+    if(!lock.Succeeded()) { result.finite=false; continue; }
+    const auto& body=lock.GetBody();
+    const float linear=body.GetLinearVelocity().Length()*100.f;
+    const float angular=body.GetAngularVelocity().Length();
+    const float error=(JPH::Vec3(body.GetPosition())-impl->targets[i].GetTranslation()).Length()*100.f;
+    result.finite=result.finite && std::isfinite(linear) && std::isfinite(angular) && std::isfinite(error);
+    result.maxLinearCmS=std::max(result.maxLinearCmS,linear);
+    result.maxAngularRadS=std::max(result.maxAngularRadS,angular);
+    if(impl->activeParts[i]) {
+      ++result.dynamicParts;
+      squaredError+=double(error)*error;
+      result.poseMaxCm=std::max(result.poseMaxCm,error);
+      }
+    const auto& name=impl->rig->parts[i].name;
+    if(named(name,"FOOT") || named(name,"TOE")) {
+      const auto bounds=body.GetWorldSpaceBounds();
+      const float bottom=bounds.mMin.GetY()*100.f;
+      const auto* shape=body.GetShape();
+      const auto targetCom=impl->targets[i]*JPH::Mat44::sTranslation(shape->GetCenterOfMass());
+      const float targetBottom=shape->GetWorldSpaceBounds(targetCom,JPH::Vec3::sOne()).mMin.GetY()*100.f;
+      result.maxFootDropCm=std::max(result.maxFootDropCm,targetBottom-bottom);
+      const bool validBounds=finite(CollisionWorld::toCentimeters(bounds.mMin)) && finite(CollisionWorld::toCentimeters(bounds.mMax));
+      result.finite=result.finite && validBounds && std::isfinite(targetBottom);
+      if(validBounds) feet.push_back(bounds);
+      }
+    }
+  // World queries take native body locks too. All foot bounds are copied and
+  // their read locks released before looking up the supporting static surface.
+  constexpr uint32_t floorMask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object);
+  for(const auto& bounds:feet) {
+    const auto center=CollisionWorld::toCentimeters(bounds.GetCenter());
+    const float bottom=bounds.mMin.GetY()*100.f;
+    const Tempest::Vec3 from {center.x,bounds.mMax.GetY()*100.f+100.f,center.z};
+    const Tempest::Vec3 to {center.x,bottom-200.f,center.z};
+    const auto floor=impl->world->rayCast(from,to,floorMask);
+    if(!floor.hasHit) { ++result.footFloorMisses; continue; }
+    ++result.footFloorSamples;
+    result.maxFootPenetrationCm=std::max(result.maxFootPenetrationCm,floor.point.y-bottom);
+    }
+  if(result.dynamicParts!=0) result.poseRmsCm=float(std::sqrt(squaredError/double(result.dynamicParts)));
+  return result;
+  }
+
 bool Ragdoll::moveKinematic(const Tempest::Matrix4x4* worldPose, size_t numBones,
                             const Tempest::Matrix4x4& objectMatrix, float deltaSeconds) {
   if(!valid() || !impl->kinematic || worldPose==nullptr || numBones!=boneCount() ||
@@ -1283,7 +1425,7 @@ bool Ragdoll::moveKinematic(const Tempest::Matrix4x4* worldPose, size_t numBones
   return true;
   }
 
-void Ragdoll::prepareKinematicStep(float deltaSeconds) {
+void Ragdoll::prepareKinematicStep(float deltaSeconds, float targetFraction) {
   if(!valid()) return;
   impl->stepSeconds=deltaSeconds;
   auto& system=impl->world->physicsSystem();
@@ -1304,10 +1446,10 @@ void Ragdoll::prepareKinematicStep(float deltaSeconds) {
     impl->stepFade(deltaSeconds);
     return;
     }
-  if(!impl->reactionBones.empty()) impl->driveMotors();
+  if(impl->benchActive || !impl->reactionBones.empty()) impl->driveMotors();
   for(size_t i=0;i<impl->dirty.size();++i) {
     if(!impl->dirty[i]) continue;
-    impl->dirty[i]=false;
+    impl->dirty[i]=targetFraction<1.f;
     if(impl->activeParts[i]) continue;
     const auto& target=impl->targets[i];
     const auto id=impl->native->GetBodyID(int(i));
@@ -1319,7 +1461,13 @@ void Ragdoll::prepareKinematicStep(float deltaSeconds) {
       interface.SetLinearAndAngularVelocity(id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
       }
     else {
-      interface.MoveKinematic(id,target.GetTranslation(),target.GetQuaternion(),deltaSeconds);
+      if(targetFraction<1.f) {
+        const auto from=interface.GetPosition(id);
+        interface.MoveKinematic(id,from+(JPH::RVec3(target.GetTranslation())-from)*targetFraction,
+                                interface.GetRotation(id).SLERP(target.GetQuaternion(),targetFraction),deltaSeconds);
+        }
+      else
+        interface.MoveKinematic(id,target.GetTranslation(),target.GetQuaternion(),deltaSeconds);
       impl->moving.push_back(i);
       }
     }
@@ -1333,7 +1481,7 @@ void Ragdoll::finishKinematicStep() {
   for(size_t i:impl->moving)
     interface.SetLinearAndAngularVelocity(impl->native->GetBodyID(int(i)),JPH::Vec3::sZero(),JPH::Vec3::sZero());
   impl->moving.clear();
-  if(!impl->reactionBones.empty()) {
+  if(!impl->benchActive && !impl->reactionBones.empty()) {
     // The native rig may remain displaced against an obstacle; its visible
     // influence fades out before the bounded return to the ordinary kin pose.
     constexpr float hold=.12f, duration=1.1f;

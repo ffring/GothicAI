@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Stage 9.1: lockstep simulation throughput of the headless runner.
 
-Runs native-vs-native arena duels (no policy, no model) and measures what an RL
-collector pays per simulated tick and per reset. Variants switch the native
-worker pool and the heavy body diagnostics. Measurement only: no quality credit.
+Runs native-vs-native arena duels and measures what an RL collector pays per
+simulated tick and per reset. Melee variants enable only the physical benchmark;
+--checkpoint also measures the existing frozen-policy collector with greedy
+decisions. Measurement only: no quality credit.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import resource
+import subprocess
 import sys
 import time
 
@@ -27,7 +29,33 @@ VISUAL_EXTRAS = ("OPENGOTHIC_FOOTIK", "OPENGOTHIC_LEAN", "OPENGOTHIC_AIM", "OPEN
                  "OPENGOTHIC_GESTURES")
 
 
-def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: bool, watch: bool, off=(), env=None, extra=()) -> dict:
+def run_policy(args: argparse.Namespace, output: Path) -> dict:
+    """Measure the existing single-runner collector without changing its policy."""
+    command = [sys.executable, str(Path(__file__).with_name("body_rl_collect.py"))]
+    for name in ("runner", "assets", "save", "reference", "scenario", "checkpoint"):
+        command.extend(("--"+name, str(getattr(args, name))))
+    command.extend(("--output", str(output/"policy"), "--workers", "1", "--envs-per-worker", "1",
+                    "--episodes", str(args.episodes), "--seed-start", str(args.seed), "--temperature", "0",
+                    "--sampling-seed", "1", "--timeout-ms", str(args.timeout_ms)))
+    with (output/"policy-collector.log").open("w") as log:
+        subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT)
+    summary = json.loads((output/"policy/summary.json").read_text())
+    episodes = [json.loads(line) for path in sorted((output/"policy").glob("worker-*/episodes.jsonl"))
+                for line in path.read_text().splitlines()]
+    ticks = sum(row["ticks"] for row in episodes)
+    rollout = sum(row["rollout_s"] for row in episodes)
+    if ticks <= 0 or rollout <= 0 or summary["decisions"] <= 0:
+        raise RuntimeError("policy benchmark did not advance ticks and decisions")
+    return {"provider": "frozen_checkpoint", "temperature": 0, "workers": 1, "envs_per_worker": 1,
+            "checkpoint_sha256": episodes[0]["checkpoint_sha256"], "episodes": episodes,
+            "decisions": summary["decisions"], "decisions_per_s": summary["decisions_per_s"],
+            "rollout_decisions_per_s": summary["decisions"]/rollout,
+            "ms_per_tick": rollout*1000/ticks, "ticks": ticks, "rollout_s": rollout,
+            "wall_s_including_startup_resets": summary["wall_s"], "fallbacks": summary["fallbacks"]}
+
+
+def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: bool, watch: bool,
+                visibility: bool = True, off=(), env=None, extra=()) -> dict:
     output = args.output/name
     output.mkdir(parents=True)
     variant = argparse.Namespace(**vars(args))
@@ -44,6 +72,7 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
         os.environ[key] = "0"
     for key in FROZEN_ENV:
         os.environ.pop(key, None)
+    os.environ.pop("OPENGOTHIC_MELEE_BENCH", None)
     os.environ.update(env or {})
     cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     runner = ObserverRunner(variant)
@@ -60,7 +89,7 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
                                                                   "timeout_ms": args.timeout_ms}})
             if not watch:
                 runner.request({"cmd": "body_watch", "enabled": False}, allow_error=True)
-            else:
+            elif visibility:
                 runner.request({"cmd": "body_visibility_watch", "enabled": True}, allow_error=True)
             reset_s = time.monotonic()-begin
             native_reset_ms = reset.get("reset_wall_ms")
@@ -90,12 +119,15 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
     runner_cpu_s = (cpu_after.ru_utime+cpu_after.ru_stime)-(cpu_before.ru_utime+cpu_before.ru_stime)
     ticks = sum(e["steps"] for e in episodes)
     wall = sum(e["wall_s"] for e in episodes)
-    return {"name": name, "serial_workers": serial, "body_trace": trace, "visibility_watch": watch, "disabled": list(off),
+    result = {"name": name, "serial_workers": serial, "body_trace": trace, "visibility_watch": watch and visibility, "disabled": list(off),
             "environment": dict(env or {}), "runner_peak_rss": sample.get("VmHWM"),
             "runner_cpu_s_including_resets": runner_cpu_s,
             "episodes": episodes, "ms_per_tick": wall*1000/max(1, ticks),
             "reset_s_mean": sum(e["reset_s"] for e in episodes)/len(episodes),
             "game_speed": sum(e["game_ms"] for e in episodes)/1000/max(wall, 1e-9)}
+    if args.checkpoint is not None:
+        result["policy"] = run_policy(args, output)
+    return result
 
 
 def main() -> int:
@@ -107,6 +139,8 @@ def main() -> int:
     parser.add_argument("--timeout-ms", type=int, default=20000)
     parser.add_argument("--substeps", type=int, default=30)
     parser.add_argument("--variants", default="gate,lean,pool-lean,pool-gate")
+    parser.add_argument("--checkpoint", type=Path,
+                        help="also measure the existing deterministic P30 collector, one duel runner at a time")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     table = {"gate": dict(serial=True, trace=True, watch=True), "lean": dict(serial=True, trace=False, watch=False),
@@ -122,7 +156,11 @@ def main() -> int:
                                     env={"OPENGOTHIC_FOOTIK_WATCHED_ONLY": "1", "OPENGOTHIC_ANIM_SKIP_FAR": "1"}),
              "frozen-fork": dict(serial=True, trace=False, watch=False, extra=("--fork-reset",), env=FROZEN_ENV),
              "frozen-prefix": dict(serial=True, trace=False, watch=False, extra=("--fork-reset", "--fork-prefix"),
-                                   env=FROZEN_ENV)}
+                                   env=FROZEN_ENV),
+             "melee-blade": dict(serial=True, trace=False, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                                 env={**FROZEN_ENV, "OPENGOTHIC_MELEE_BENCH": "blade"}),
+             "melee-blade-motors": dict(serial=True, trace=False, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                                        env={**FROZEN_ENV, "OPENGOTHIC_MELEE_BENCH": "blade-motors"})}
     results = [run_variant(args, name, **table[name]) for name in args.variants.split(",")]
     (args.output/"bench.json").write_text(json.dumps({"schema_version": 1, "kind": "body_sim_bench", "quality_credit": False,
                                                       "results": results}, indent=2)+"\n")
@@ -131,6 +169,11 @@ def main() -> int:
         print(f"== {result['name']}: {result['ms_per_tick']:.2f} ms/tick, speed {result['game_speed']:.2f}x, "
               f"reset {result['reset_s_mean']:.2f}s, runner CPU {result['runner_cpu_s_including_resets']*1000/max(1,ticks):.1f} ms/tick "
               f"(incl. resets), peak RSS {result['runner_peak_rss']}", flush=True)
+        if "policy" in result:
+            policy = result["policy"]
+            print(f"   policy: {policy['decisions_per_s']:.2f} decisions/s incl. resets, "
+                  f"{policy['rollout_decisions_per_s']:.2f} rollout decisions/s, "
+                  f"{policy['ms_per_tick']:.2f} ms/tick, fallbacks {policy['fallbacks']}", flush=True)
     return 0
 
 

@@ -509,6 +509,8 @@ class Npc final {
     const Skeleton* visualSkeleton() const { return visual.visualSkeleton(); }
     const Ragdoll* ragdollBody() const { return ragdoll.get(); }
     const Ragdoll* livingBody() const { return living.get(); }
+    enum class MeleeBenchMode : uint8_t { Off, Base, Full, Chain, Blade };
+    void configureMeleeBench(MeleeBenchMode mode, bool dynamicPelvis);
     struct ArrowPhysicsProbe {
       size_t bone = size_t(-1);
       Tempest::Vec3 point, impulseNs;
@@ -870,10 +872,14 @@ class Npc final {
 
     DynamicWorld::NpcItem          physic;
     std::unique_ptr<Ragdoll>       living;
+    MeleeBenchMode                meleeBench = MeleeBenchMode::Off;
+    bool                          meleeBenchDynamicPelvis = false;
     uint64_t                      livingRetryTick = 0;
     bool                          livingNeedsRebuild = false;
     bool                          livingWasFrozen = false;
     bool                          livingWasInteracting = false;
+    MeleeBenchMode meleeBenchMode() const;
+    void updateMeleeBenchBlade();
     ArrowPhysicsProbe             arrowPhysics;
     struct ArrowImpact {
       size_t bone;

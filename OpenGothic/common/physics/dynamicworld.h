@@ -451,6 +451,11 @@ class DynamicWorld final {
       bool sleeping = true, inWater = false;
       };
     std::vector<WaterBodySnapshot> waterBodySnapshot() const;
+    void configureMeleeBench(int substeps);
+    void updateMeleeBlade(const Npc* owner, const Tempest::Matrix4x4& hand, float lengthCm);
+    void removeMeleeBlade(const Npc* owner);
+    void measureMeleeBench(std::string path);
+    void reportMeleeBench();
     struct RagdollSupport {
       size_t        bone = 0;
       uint32_t      partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);
