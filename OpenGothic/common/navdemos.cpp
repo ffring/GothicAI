@@ -2007,9 +2007,9 @@ void NavDemos::command(const std::vector<std::string>& args,World& w,Npc& player
     const auto population=speed?std::stoul(a[7]):1;
     if(population==0 || population>1000)throw std::runtime_error("navdemos invalid policy population");
     ep.policy=std::make_unique<NavPolicy>(a[current?5:6]);
-    ep.teacherVersion=ep.policy->navDemoVersion()==2?3:1;
+    ep.teacherVersion=ep.policy->navDemoVersion()>=2?3:1;
     ep.policy->configureMemory(ep.memory,std::getenv("OPENGOTHIC_NAV_JOURNEY_MEMORY"));
-    if(ep.memory.journeyMemoryEnabled() && ep.policy->navDemoVersion()==2)
+    if(ep.memory.journeyMemoryEnabled() && ep.policy->navDemoVersion()>=2)
       KnownRoadsBench::attachFamiliar(w,*npc,ep.memory);
     const size_t betaIndex=current?6:7;
     if(!speed && a.size()>betaIndex)ep.teacherBeta=std::stod(a[betaIndex]);

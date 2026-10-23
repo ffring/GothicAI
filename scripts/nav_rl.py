@@ -316,6 +316,19 @@ def checked_paths(args, policy=False):
         path = getattr(args, name)
         if path is None or (name != "cache" and not path.exists()):
             raise ValueError(f"--{name} must exist")
+    if policy:
+        with args.weights.open("rb") as stream:
+            line = stream.readline(4 * 1024 * 1024)
+        if not line.endswith(b"\n"):
+            raise ValueError("Weight file has no bounded JSON header line")
+        preprocessing = json.loads(line).get("preprocessing", {})
+        args.navigation_memory_version = preprocessing.get("navigation_memory_version", 3)
+        version = preprocessing.get("navdemo_version", 1)
+        args.navdemo_version = 3 if version == 2 and args.navigation_memory_version == 4 else version
+        if args.navigation_memory_version == 4:
+            familiar = getattr(args, "familiar_map", None)
+            if familiar is None or not familiar.is_file():
+                raise ValueError("Memory-v4 policy evaluation requires --familiar-map")
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
     os.environ["OPENGOTHIC_BODY_TRACE"] = "0"
@@ -590,6 +603,8 @@ def validation_commands(args, value, action_seed):
     record = "off" if getattr(args, "lean", False) or value.get("family") == "detour" else "on"
     commands = [f"roads load {args.roads}", f"roads on {npc}", f"navdemos record {record}",
                 "navdemos perception-mode gaze", "navdemos oracle off"]
+    if getattr(args, "familiar_map", None) is not None:
+        commands.insert(1, f"roads familiar-load {args.familiar_map}")
     if value.get("family") == "safety":
         commands.append("navdemos perception-monitor on")
     if value.get("fence_control"):
@@ -739,7 +754,8 @@ def drive_validation(args):
                             runner = new_runner(worker, "validation")
                             continue
                         episode = read_json(directory / "episode.json")
-                    if (episode.get("demo_version") != 2 or episode.get("navigation_memory_version") != 3
+                    if (episode.get("demo_version") != getattr(args, "navdemo_version", 2)
+                            or episode.get("navigation_memory_version") != getattr(args, "navigation_memory_version", 3)
                             or episode.get("physics_mode") != args.physics or episode.get("oracle") is not False
                             or episode.get("action_mode") != "sample" or episode.get("teacher_beta") != 0
                             or episode.get("mixing_seed") != seed or episode.get("drive") is not True
@@ -1637,6 +1653,7 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--indices")
     parser.add_argument("--roads", type=Path, default=REPO / "server/src/gothic_ai/gamedata/places.json")
+    parser.add_argument("--familiar-map", type=Path, help="Eye-baked familiar atlas; required for memory-v4 policy evaluation")
     parser.add_argument("--links", type=Path, default=REPO / "reports/navigation/2026-10-16-teacher/raw/accepted-links.txt")
     for name in ("runner", "assets", "save", "cache", "ini", "weights"):
         parser.add_argument("--" + name, type=Path)

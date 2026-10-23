@@ -1148,12 +1148,22 @@ def test_lean_summary_pools_families_seeds_and_physical_evidence_without_samples
 
 
 @pytest.mark.parametrize("bad_moving_seed", [False, True])
+@pytest.mark.parametrize("memory_version", [3, 4])
 def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(tmp_path, monkeypatch,
-                                                                            bad_moving_seed, validation_disk_space):
+                                                                            bad_moving_seed, memory_version,
+                                                                            validation_disk_space):
     manifest, groups = validation_manifest(tmp_path)
     args = validation_drive_args(tmp_path, manifest, family=None)
     args.lean, args.jump_links = True, Path("/accepted-links-cv.txt")
-    monkeypatch.setattr(rl, "checked_paths", lambda *args, **kwargs: None)
+    args.weights = tmp_path / "policy.navbc"
+    args.weights.write_text(json.dumps(dict(preprocessing=dict(navdemo_version=3 if memory_version == 4 else 2,
+        navigation_memory_version=memory_version))) + "\n")
+    if memory_version == 4:
+        args.familiar_map = tmp_path / "familiar.bin"
+        args.familiar_map.touch()
+    for name in ("runner", "assets", "save", "links", "roads"):
+        setattr(args, name, tmp_path)
+    monkeypatch.setattr(rl.sys, "platform", "linux")
     monkeypatch.setattr(rl, "new_runner", lambda *args: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(rl, "module", lambda name: pytest.fail("Lean drive must not read samples or retain tails"))
     calls = []
@@ -1161,7 +1171,10 @@ def test_lean_manifest_drive_keeps_three_action_seeds_and_never_retains_navdemo(
         value = groups[directory.parent.parent.name][0]
         seed = int(directory.name.removeprefix("seed-"))
         assert "navdemos record off" in commands
+        if memory_version == 4:
+            assert f"roads familiar-load {args.familiar_map}" in commands
         metadata = validation_runner_metadata(value, seed)
+        metadata.update(demo_version=3 if memory_version == 4 else 2, navigation_memory_version=memory_version)
         moving = value["goal_kind"] in ("approach", "follow")
         metadata.update(start=value["start"],
             goal="RESOLVED_CONNECTED_WAYPOINT" if value["goal_kind"] in ("approach", "follow") else value["goal"],

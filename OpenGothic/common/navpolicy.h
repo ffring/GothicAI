@@ -13,6 +13,7 @@ class NavPolicy final {
   public:
     static constexpr size_t nearSize = 9*32*32, farSize = 9*25*25;
     static constexpr size_t hdNearSize = 10*64*64, hdFarSize = 10*50*100;
+    static constexpr size_t bc4NearSize = 11*64*64, bc4FarSize = 11*50*100;
     static constexpr size_t vectorSize = NavDemoWriter::rayCount*9+24, legacyVectorSize = vectorSize+8;
     static constexpr size_t headCount = 6;
     inline static constexpr std::array<const char*,headCount> headNames = {
@@ -57,8 +58,8 @@ class NavPolicy final {
     // experiment override uses OPENGOTHIC_NAV_JOURNEY_MEMORY's 0/1 values.
     void configureMemory(NavigationMemory& memory, const char* journeyOverride = nullptr) const;
     uint32_t weightVersion() const { return formatVersion; }
-    size_t nearInputSize() const { return formatVersion==3 ? hdNearSize : nearSize; }
-    size_t farInputSize() const { return formatVersion==3 ? hdFarSize : farSize; }
+    size_t nearInputSize() const { return formatVersion==4 ? bc4NearSize : formatVersion==3 ? hdNearSize : nearSize; }
+    size_t farInputSize() const { return formatVersion==4 ? bc4FarSize : formatVersion==3 ? hdFarSize : farSize; }
     size_t actionHeadCount() const { return formatVersion>=2 ? bc3HeadNames.size() : headNames.size(); }
     const char* headName(size_t index) const { return formatVersion>=2 ? bc3HeadNames.at(index) : headNames.at(index); }
     size_t headSize(size_t index) const { return index<3 || (formatVersion>=2 && index==4) ? 3 : 2; }
