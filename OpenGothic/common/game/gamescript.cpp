@@ -57,12 +57,12 @@ bool GameScript::GlobalOutput::output(Npc& npc, std::string_view text) {
   return owner.aiOutput(npc,text,false);
   }
 
-bool GameScript::GlobalOutput::outputSvm(Npc &npc, std::string_view text) {
-  return owner.aiOutputSvm(npc,text,false);
+bool GameScript::GlobalOutput::outputSvm(Npc &npc, std::string_view text, std::string_view svm, Npc* target) {
+  return owner.aiOutputSvm(npc,text,svm,target,false);
   }
 
-bool GameScript::GlobalOutput::outputOv(Npc &npc, std::string_view text) {
-  return owner.aiOutputSvm(npc,text,true);
+bool GameScript::GlobalOutput::outputOv(Npc &npc, std::string_view text, std::string_view svm, Npc* target) {
+  return owner.aiOutputSvm(npc,text,svm,target,true);
   }
 
 bool GameScript::GlobalOutput::printScr(Npc& npc, int time, std::string_view msg, int x, int y, std::string_view font) {
@@ -1372,15 +1372,20 @@ bool GameScript::aiOutput(Npc &npc, std::string_view outputname, bool overlay) {
   return true;
   }
 
-bool GameScript::aiOutputSvm(Npc &npc, std::string_view outputname, bool overlay) {
+bool GameScript::aiOutputSvm(Npc &npc, std::string_view outputname, std::string_view svm, Npc* target, bool overlay) {
   if(overlay) {
     if(tickCount()<svmBarrier)
       return true;
     svmBarrier = tickCount()+messageTime(outputname);
     }
 
-  if(!outputname.empty())
+  if(!outputname.empty()) {
+    if(auto& fn = Gothic::inst().interceptSvm; fn && fn(npc,svm,outputname,target,overlay)) {
+      npc.setAiOutputBarrier(messageTime(outputname),overlay);
+      return true;
+      }
     return aiOutput(npc,outputname,overlay);
+    }
   return true;
   }
 

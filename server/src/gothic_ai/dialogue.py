@@ -57,6 +57,7 @@ from .protocol import (
     ChatStatusCmd,
     ChatTextCmd,
     GameMessage,
+    Hello,
     HushCmd,
     LineStarted,
     LineVoice,
@@ -70,6 +71,8 @@ from .protocol import (
     SayEndCmd,
     Session,
     Snapshot,
+    SvmLine,
+    SvmModeCmd,
 )
 from .quest_tools import AMEND
 from .trace import CallTrace, StepTrace, TraceWriter, TurnTrace
@@ -662,6 +665,7 @@ class DialogueManager:
         trace: TraceWriter | None = None,
         budget: Budget | None = None,
         quick: LLMBackend | None = None,
+        svm_lines: bool = True,
     ) -> None:
         self.link = link
         self.journal = journal or Journal()  # lines and actions for the launcher (see journal.py)
@@ -714,6 +718,7 @@ class DialogueManager:
         # the npc is in a fight (incidents.py): its lines come from the quick model, if there is one
         self.in_fight: Callable[[str], bool] = lambda npc: False
         self.quick = quick
+        self.svm_lines = svm_lines
         self.quick_first_s, self.quick_idle_s = QUICK_FIRST_S, QUICK_IDLE_S
         self._prewarms: dict[str, asyncio.Task[None]] = {}  # npc -> filling the quick model's cache
         self._prewarm_history: dict[str, list[Message]] = {}  # pending or warmed histories
@@ -746,11 +751,19 @@ class DialogueManager:
         self._story_voices: set[asyncio.Task[float | None]] = set()
         self._background: set[asyncio.Task[Any]] = set()
         link.listeners.append(self._on_message)
+        if link.hello is not None:
+            self._svm_mode()
         if link.session is not None:
             self._switch_branch(link.session)
 
     def _on_message(self, msg: GameMessage) -> None:
         match msg:
+            case Hello():
+                self._svm_mode()
+            case SvmLine():
+                log.info("svm_line %s %s «%s»", msg.npc, msg.svm, msg.text)
+                if self.trace is not None:
+                    self.trace.write({**msg.model_dump(mode="json"), "t": round(time.time(), 3)})
             case Session():
                 self._switch_branch(msg)
             case LineStarted():
@@ -776,6 +789,9 @@ class DialogueManager:
                 self._prewarm_focus()
             case LineVoice():
                 self._spawn_story_voice(msg)
+
+    def _svm_mode(self) -> None:
+        self._spawn(self.link.send(SvmModeCmd(replace=self.svm_lines and self.quick is not None)))
 
     # --- memory -------------------------------------------------------------------------
 

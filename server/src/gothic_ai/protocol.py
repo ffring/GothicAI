@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 49
+PROTOCOL_VERSION = 50
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -44,6 +44,18 @@ class Hello(_GameMessage):
     protocol: int
     client: str
     codepage: str
+
+
+class SvmLine(_GameMessage):
+    """A suppressed human SVM line, offered to the server without a required reply."""
+
+    type: Literal["svm_line"]
+    id: str
+    npc: str
+    svm: str
+    text: str
+    target: str | None = None
+    overlay: bool
 
 
 class WorldLoaded(_GameMessage):
@@ -1163,6 +1175,7 @@ class BodyControlEvents(_BodyModel):
 
 GameMessage = Annotated[
     Hello
+    | SvmLine
     | WorldLoaded
     | Loading
     | Session
@@ -1242,6 +1255,11 @@ class _Command(BaseModel):
 
     def to_json(self) -> str:
         return self.model_dump_json(exclude_none=True)
+
+
+class SvmModeCmd(_Command):
+    type: Literal["svm_mode"] = "svm_mode"
+    replace: bool
 
 
 class AttachCmd(_Command):

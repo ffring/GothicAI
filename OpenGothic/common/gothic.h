@@ -224,6 +224,8 @@ class Gothic final {
     // a perception the scripts would handle may be taken over (true: the scripts do not get it now);
     // the taker decides and hands it back with Npc::passPerception if it does not act on it
     std::function<bool(Npc&,Npc&,Npc*,PercType,const HeroDeed*)>         interceptPerception;
+    // A native SVM line is ready to start: true replaces its sound and subtitle, retaining its wait.
+    std::function<bool(Npc&,std::string_view,std::string_view,Npc*,bool)> interceptSvm;
     std::function<bool(std::string_view,std::string&)>                  consoleCommandFn;
     // runtime dialog lines: id -> subtitle text and duration (ms); false if the id is not external
     std::function<bool(std::string_view,std::string_view&,uint32_t&)>   externalMessageFn;

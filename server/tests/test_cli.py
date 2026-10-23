@@ -160,6 +160,19 @@ def test_questlog_is_enabled_by_default_including_scenarios(monkeypatch, flags):
     assert exit.value.code == 0
 
 
+@pytest.mark.parametrize("flags", [[], ["--no-svm-lines"]])
+def test_svm_lines_are_enabled_by_default(monkeypatch, flags):
+    async def serve(args):
+        assert args.no_svm_lines == ("--no-svm-lines" in flags)
+        return 0
+
+    monkeypatch.setattr(cli, "serve", serve)
+    monkeypatch.setattr("sys.argv", ["gothic-ai", "serve", *flags])
+    with pytest.raises(SystemExit) as exit:
+        cli.main()
+    assert exit.value.code == 0
+
+
 @pytest.mark.parametrize(
     "flags", [[], ["--scenario", "crimes"], ["--scenario", "crime_meet"], ["--no-crimes"]]
 )

@@ -11,6 +11,7 @@ from .basics import m5b_bridge as m5b_bridge
 from .basics import m5c_free_npc as m5c_free_npc
 from .basics import m5e_talk as m5e_talk
 from .basics import m6_knows as m6_knows
+from .basics import svm_lines as svm_lines
 from .basics import tts_lines as tts_lines
 from .basics import websocket as websocket
 from .cheat import cheat_scenario as cheat_scenario
