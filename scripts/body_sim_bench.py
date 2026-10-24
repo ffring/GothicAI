@@ -9,6 +9,7 @@ decisions. Measurement only: no quality credit.
 from __future__ import annotations
 
 import argparse
+import configparser
 import json
 import os
 from pathlib import Path
@@ -37,11 +38,16 @@ def run_policy(args: argparse.Namespace, output: Path) -> dict:
     command.extend(("--output", str(output/"policy"), "--workers", "1", "--envs-per-worker", "1",
                     "--episodes", str(args.episodes), "--seed-start", str(args.seed), "--temperature", "0",
                     "--sampling-seed", "1", "--timeout-ms", str(args.timeout_ms)))
+    if args.melee_shadow is not None:
+        command.append("--keep-journals")
     with (output/"policy-collector.log").open("w") as log:
         subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT)
     summary = json.loads((output/"policy/summary.json").read_text())
     episodes = [json.loads(line) for path in sorted((output/"policy").glob("worker-*/episodes.jsonl"))
                 for line in path.read_text().splitlines()]
+    if args.melee_shadow is not None:
+        for row in episodes:
+            row["damage"] = damage_rows(output/"policy"/f"worker-{row['worker']:02d}"/row["name"])
     ticks = sum(row["ticks"] for row in episodes)
     rollout = sum(row["rollout_s"] for row in episodes)
     if ticks <= 0 or rollout <= 0 or summary["decisions"] <= 0:
@@ -54,8 +60,38 @@ def run_policy(args: argparse.Namespace, output: Path) -> dict:
             "wall_s_including_startup_resets": summary["wall_s"], "fallbacks": summary["fallbacks"]}
 
 
+def damage_rows(output: Path) -> list[dict]:
+    """Keep ordered native damage results, excluding journal bookkeeping."""
+    keys = ("t_game", "actor", "target", "damage_kind", "hp_before", "hp_after", "net", "has_hit", "down", "dead")
+    with (output/"events.jsonl").open() as stream:
+        return [{key: row[key] for key in keys} for line in stream
+                if (row := json.loads(line)).get("kind") == "body_combat" and row.get("phase") == "damage"]
+
+
+def shadow_comparison(results: list[dict]) -> dict | None:
+    variants = {row["name"]: row for row in results}
+    if not {"shadow-off", "shadow-on"} <= variants.keys():
+        return None
+    off, on = variants["shadow-off"], variants["shadow-on"]
+    comparisons = {}
+    groups = [("native", off["episodes"], on["episodes"],
+               ("seed", "side", "steps", "game_ms", "outcome", "reason", "actors", "damage"))]
+    if "policy" in off and "policy" in on:
+        groups.append(("policy", off["policy"]["episodes"], on["policy"]["episodes"],
+                       ("name", "task", "seed", "side", "distance_cm", "geometry", "opponent", "learner_seat",
+                        "arena_reason", "reason", "outcome", "elapsed_game_ms", "primary_hp", "primary_hp_max",
+                        "opponent_hp", "opponent_hp_max", "ticks", "checkpoint_sha256", "damage")))
+    for name, baseline, candidate, keys in groups:
+        differences = [{"episode": index, "seed": a["seed"], "fields": [key for key in keys if a[key] != b[key]]}
+                       for index, (a, b) in enumerate(zip(baseline, candidate)) if any(a[key] != b[key] for key in keys)]
+        comparisons[name] = {"off_episodes": len(baseline), "on_episodes": len(candidate),
+                             "matched": min(len(baseline), len(candidate))-len(differences),
+                             "differences": differences, "equal": len(baseline) == len(candidate) and not differences}
+    return comparisons
+
+
 def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: bool, watch: bool,
-                visibility: bool = True, off=(), env=None, extra=()) -> dict:
+                visibility: bool = True, off=(), env=None, extra=(), melee_shadow=None) -> dict:
     output = args.output/name
     output.mkdir(parents=True)
     variant = argparse.Namespace(**vars(args))
@@ -63,6 +99,19 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
     variant.native_serial_workers = serial
     variant.compact_replies = True
     variant.runner_extra_args = list(extra)
+    variant.melee_shadow = melee_shadow
+    if melee_shadow is not None:
+        # Both collectors copy this private INI; the archived reference stays unchanged.
+        variant.reference = output/"reference"
+        settings = variant.reference/"run/Gothic.ini"
+        settings.parent.mkdir(parents=True)
+        config = configparser.ConfigParser(interpolation=None, strict=False)
+        config.read(args.reference/"run/Gothic.ini")
+        if not config.has_section("GAME"):
+            config.add_section("GAME")
+        config.set("GAME", "melee_blade_shadow", str(melee_shadow))
+        with settings.open("w") as stream:
+            config.write(stream)
     os.environ.pop("OPENGOTHIC_BODY_TRACE", None)
     if trace:
         os.environ["OPENGOTHIC_BODY_TRACE"] = "1"
@@ -109,6 +158,10 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             episodes.append({"reset_s": reset_s, "native_reset_ms": native_reset_ms, "warmup_game_ms": warmup_ms, "steps": steps, "wall_s": wall, "game_ms": game,
                              "ms_per_tick": wall*1000/max(1, steps), "speed": game/1000/max(wall, 1e-9),
                              "outcome": arena.get("outcome")})
+            if melee_shadow is not None:
+                episodes[-1].update(seed=args.seed+index, side=index % 2, reason=arena["reason"],
+                                    actors=[{key: actor[key] for key in ("hp", "hp_max", "received_damage", "outgoing_damage", "blocked_hits")}
+                                            for actor in arena["actors"]], damage=damage_rows(folder))
             print(f"{name} ep{index}: reset {reset_s:.2f}s (runner {native_reset_ms} ms, warmup {warmup_ms} game ms) steps {steps} {wall*1000/max(1,steps):.2f} ms/tick "
                   f"speed {game/1000/max(wall,1e-9):.2f}x {arena.get('outcome')}", flush=True)
         sample = runner.sample()
@@ -126,7 +179,7 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             "reset_s_mean": sum(e["reset_s"] for e in episodes)/len(episodes),
             "game_speed": sum(e["game_ms"] for e in episodes)/1000/max(wall, 1e-9)}
     if args.checkpoint is not None:
-        result["policy"] = run_policy(args, output)
+        result["policy"] = run_policy(variant, output)
     return result
 
 
@@ -142,6 +195,10 @@ def main() -> int:
     parser.add_argument("--checkpoint", type=Path,
                         help="also measure the existing deterministic P30 collector, one duel runner at a time")
     args = parser.parse_args()
+    for name in ("runner", "assets", "save", "reference", "scenario", "output", "checkpoint"):
+        value = getattr(args, name)
+        if value is not None:
+            setattr(args, name, value.resolve())
     args.output.mkdir(parents=True, exist_ok=False)
     table = {"gate": dict(serial=True, trace=True, watch=True), "lean": dict(serial=True, trace=False, watch=False),
              "pool-lean": dict(serial=False, trace=False, watch=False), "pool-gate": dict(serial=False, trace=True, watch=True),
@@ -160,10 +217,15 @@ def main() -> int:
              "melee-blade": dict(serial=True, trace=False, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
                                  env={**FROZEN_ENV, "OPENGOTHIC_MELEE_BENCH": "blade"}),
              "melee-blade-motors": dict(serial=True, trace=False, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
-                                        env={**FROZEN_ENV, "OPENGOTHIC_MELEE_BENCH": "blade-motors"})}
+                                        env={**FROZEN_ENV, "OPENGOTHIC_MELEE_BENCH": "blade-motors"}),
+             "shadow-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                                env=FROZEN_ENV, melee_shadow=0),
+             "shadow-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                               env=FROZEN_ENV, melee_shadow=1)}
     results = [run_variant(args, name, **table[name]) for name in args.variants.split(",")]
+    comparison = shadow_comparison(results)
     (args.output/"bench.json").write_text(json.dumps({"schema_version": 1, "kind": "body_sim_bench", "quality_credit": False,
-                                                      "results": results}, indent=2)+"\n")
+                                                      "results": results, "shadow_comparison": comparison}, indent=2)+"\n")
     for result in results:
         ticks = sum(e["steps"] for e in result["episodes"])
         print(f"== {result['name']}: {result['ms_per_tick']:.2f} ms/tick, speed {result['game_speed']:.2f}x, "
@@ -174,6 +236,10 @@ def main() -> int:
             print(f"   policy: {policy['decisions_per_s']:.2f} decisions/s incl. resets, "
                   f"{policy['rollout_decisions_per_s']:.2f} rollout decisions/s, "
                   f"{policy['ms_per_tick']:.2f} ms/tick, fallbacks {policy['fallbacks']}", flush=True)
+    if comparison is not None:
+        for name, row in comparison.items():
+            print(f"shadow {name}: {row['matched']}/{row['off_episodes']} identical outcomes and damage", flush=True)
+        return int(any(not row["equal"] for row in comparison.values()))
     return 0
 
 
