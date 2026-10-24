@@ -106,6 +106,8 @@ description: Remaster pipeline for Gothic content — rebuild a building, a set 
 2. Пропусти результат через `scripts/content/edit_texture.py EDIT ORIGINAL OUT --period W H --tilt T`. Цвет и оттенок скрипт берёт из оригинала, деталь — из правки. Наклон бери по принятым материалам: штукатурка и брус 8°, бут 11°.
 3. Импортируй: `R import … --role texture --map normal=… --map roughness=…`. В реестре вход `original texture <имя>`.
 
+Ассет, где верна форма всех текстур (**Texture Only**): `scripts/content/texture_only.py prepare <текстуры> --originals <вид original_view.py> --out <пустой каталог>` пишет входы и брифы, `assemble` собирает правку обратно, `edit_texture.py … --relief-size .025 --relief-blur .01`. Концепт — сам оригинал, решает Р3 по ракурсу на текстуру. Пример — `harbour-quay`.
+
 ## 5. Обработка
 
 `build.json` в папке ассета:

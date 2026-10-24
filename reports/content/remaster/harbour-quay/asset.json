@@ -680,15 +680,17 @@
       "id": "r3-q3-kerb",
       "stage": "ingame",
       "mode": "blind",
-      "verdict": "pending",
-      "date": "2026-10-24"
+      "verdict": "DISPUTED",
+      "date": "2026-10-24",
+      "path": "reviews/r3-q3-kerb/merged.json"
     },
     {
       "id": "r3-q3-trans",
       "stage": "ingame",
       "mode": "blind",
-      "verdict": "pending",
-      "date": "2026-10-24"
+      "verdict": "DISPUTED",
+      "date": "2026-10-24",
+      "path": "reviews/r3-q3-trans/merged.json"
     }
   ],
   "gates": [],
