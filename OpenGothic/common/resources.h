@@ -3,6 +3,7 @@
 #include <Tempest/Font>
 #include <Tempest/Texture2d>
 #include <Tempest/Device>
+#include <Tempest/Pixmap>
 #include <Tempest/SoundDevice>
 
 #include <zenkit/Vfs.hh>
@@ -30,6 +31,7 @@ class ContentCensus;
 
 namespace zenkit {
 class ModelMesh;
+class Texture;
 }
 
 namespace Dx8 {
@@ -198,8 +200,30 @@ class Resources final {
     static const Tempest::IndexBuffer<uint16_t>&   cubeIbo();
 
   private:
+    friend struct BaseContentContract;
     static Resources* inst;
     void initCensus();
+
+    struct BaseIndex {
+      std::filesystem::path dir;
+      std::vector<std::pair<std::string,uintmax_t>> archives;
+      std::map<std::string,std::string> files;
+      bool enabled = false;
+
+      void load(const std::filesystem::path& root, const char* kind);
+      void validate(const std::vector<std::pair<std::string,uintmax_t>>& mounted);
+      };
+    BaseIndex baseTextures, baseMeshes;
+    static std::filesystem::path baseDir();
+    void indexBaseContent();
+
+    struct TextureData {
+      Tempest::Pixmap pixmap;
+      bool useMipmap = false;
+      };
+    static TextureData decodeTexture(zenkit::Read& data, bool forceMips);
+    static TextureData decodeTexture(const zenkit::Texture& texture, bool forceMips);
+    static TextureData decodeBaseTexture(const std::filesystem::path& path, bool forceMips);
 
     struct Archive {
       std::u16string name;
