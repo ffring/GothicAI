@@ -483,8 +483,10 @@ class DynamicWorld final {
     void reportMeleeBench();
     void updateShadowBody(Npc* owner, const std::vector<MeleeBodyCapsule>& capsules);
     void removeShadowBody(const Npc* owner);
+    // Pose time and the half-open active window use absolute game milliseconds.
     void updateShadowBlade(const Npc* owner, uint64_t swingId,
-                           const std::vector<MeleeBladeSegment>& segments, bool active);
+                           const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
+                           double activeBeginMs, double activeEndMs);
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     struct RagdollSupport {

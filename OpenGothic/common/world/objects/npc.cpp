@@ -358,9 +358,7 @@ Npc::Npc(World &owner, size_t instance, std::string_view waypoint, NpcProcessPol
   }
 
 Npc::~Npc(){
-  finishMeleeShadowSwing();
-  if(meleeShadowBody && owner.physic()!=nullptr)
-    owner.physic()->removeShadowBody(this);
+  clearMeleeShadow();
   if(std::getenv("OPENGOTHIC_MELEE_BENCH")!=nullptr && owner.physic()!=nullptr)
     owner.physic()->removeMeleeBlade(this);
   NpcKeys::forget(this);
@@ -1027,6 +1025,10 @@ bool Npc::addSpellImpulse(const Vec3& impulseNs, bool reaction, Npc* culprit) {
   }
 
 void Npc::suspendRagdoll() {
+  // Removed/invalid NPCs can survive until world unload and still receive a
+  // transform update at deadPoint. Keep that update out of shadow physics.
+  meleeShadowSuspended = true;
+  clearMeleeShadow();
   pendingSpellImpulse = {};
   spellImpulseCulprit.reset();
   living.reset();
@@ -1379,7 +1381,7 @@ void Npc::updateMeleeBenchBlade() {
 
 void Npc::syncMeleeShadowSwing() {
   const auto mode = weaponState();
-  if(!Gothic::physicsFlags().meleeBladeShadow || !isHuman() || isDown() ||
+  if(meleeShadowSuspended || !Gothic::physicsFlags().meleeBladeShadow || !isHuman() || isDown() ||
      (mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)) {
     finishMeleeShadowSwing();
     return;
@@ -1515,12 +1517,8 @@ void Npc::syncMeleeShadowSwing() {
   }
 
 void Npc::updateMeleeShadow() {
-  if(!Gothic::physicsFlags().meleeBladeShadow) {
-    finishMeleeShadowSwing();
-    if(meleeShadowBody) {
-      owner.physic()->removeShadowBody(this);
-      meleeShadowBody = false;
-      }
+  if(meleeShadowSuspended || !Gothic::physicsFlags().meleeBladeShadow) {
+    clearMeleeShadow();
     return;
     }
   std::vector<HitZones::Posed> zones;
@@ -1563,14 +1561,22 @@ void Npc::updateMeleeShadow() {
       blade.push_back({grip,bonePoint(hand,{-window.length,0,0}),bonePoint(hand,normal)-grip,2.f});
       }
     }
-  float clock = 0;
-  for(const auto& layer:pose.combatLayers(owner.tickCount()))
-    if(layer.sequence==window.sequence)
-      clock = float(layer.time-layer.start);
-  owner.physic()->updateShadowBlade(this,shadow.id,blade,clock>=window.beginMs && clock<window.endMs);
+  // Publish the whole pose interval. Physics clips it to the authored window,
+  // including frames whose endpoint is already past the end of that window.
+  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),
+                                   double(shadow.start)+double(window.beginMs)/shadow.speed,
+                                   double(shadow.start)+double(window.endMs)/shadow.speed);
   auto contacts = owner.physic()->takeShadowBladeContacts(this);
   for(const auto& hit:contacts)
     shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
+  }
+
+void Npc::clearMeleeShadow() {
+  finishMeleeShadowSwing();
+  if(meleeShadowBody && owner.physic()!=nullptr) {
+    owner.physic()->removeShadowBody(this);
+    meleeShadowBody = false;
+    }
   }
 
 void Npc::finishMeleeShadowSwing(bool remove) {
@@ -4193,6 +4199,9 @@ void Npc::tickAnimationTags() {
   }
 
 void Npc::tick(uint64_t dt) {
+  // Only NPCs inserted in the live world are ticked. A restored NPC starts
+  // with fresh shadow geometry, never a sweep from its former holding point.
+  meleeShadowSuspended = false;
   headInput.reset();
   if(nonlethalTarget!=size_t(-1) && owner.tickCount()>nonlethalUntil) {
     auto* other = owner.findNpcByInstance(nonlethalTarget);

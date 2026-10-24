@@ -4014,6 +4014,55 @@ namespace {
               "mesh hit must retain its sector beyond 32 segments");
       }
 
+    // Clip both ends of a published pose interval, including a whole window
+    // between two inactive poses. A target outside that overlap stays untouched.
+    for(const auto window: {std::pair(0.,240.),std::pair(240.,260.),std::pair(235.,245.)}) {
+      CollisionWorld shadow;
+      int attackerIdentity=0,insideIdentity=0,outsideIdentity=0;
+      auto* attacker=reinterpret_cast<Npc*>(&attackerIdentity);
+      auto* inside=reinterpret_cast<Npc*>(&insideIdentity);
+      auto* outside=reinterpret_cast<Npc*>(&outsideIdentity);
+      const float x=window.first==0 ? 5.f : window.first==240 ? 15.f : 10.f;
+      const float excluded=window.first==0 ? 15.f : 2.f;
+      shadow.updateShadowBody(inside,{{{x,95,0},{x,105,0},.01f,1,1}});
+      shadow.updateShadowBody(outside,{{{excluded,95,0},{excluded,105,0},.01f,1,1}});
+      shadow.updateShadowBlade(attacker,1,{{{0,90,0},{0,110,0},{0,0,1},.01f}},230,window.first,window.second);
+      shadow.tick(1);
+      shadow.updateShadowBlade(attacker,1,{{{20,90,0},{20,110,0},{0,0,1},.01f}},250,window.first,window.second);
+      shadow.tick(20);
+      const auto contacts=shadow.takeShadowBladeContacts(attacker);
+      require(contacts.size()==1 && contacts[0].npc==inside,
+              "shadow sweep must cover exactly the overlap with its active window");
+      requireNear(contacts[0].speedCmS,1000.f,.1f,"clipping must retain the published pose velocity");
+      }
+
+    // The 8 ms no-step frame already consumes its pose. The following 9 ms
+    // publication has the same velocity with or without an unrelated Jolt body.
+    for(bool native:{false,true}) {
+      CollisionWorld shadow;
+      auto falling=native ? shadow.addDynamicBody(new JPH::BoxShape({.1f,.1f,.1f}),at(10000,10000,0),.7f,1.f) : nullptr;
+      int attackerIdentity=0,targetIdentity=0;
+      auto* attacker=reinterpret_cast<Npc*>(&attackerIdentity);
+      auto* target=reinterpret_cast<Npc*>(&targetIdentity);
+      shadow.updateShadowBody(target,{{{1.25f,95,0},{1.25f,105,0},.01f,1,1}});
+      shadow.updateShadowBlade(attacker,1,{{{0,90,0},{0,110,0},{0,0,1},.01f}},0,0,100);
+      shadow.updateShadowBlade(attacker,1,{{{.8f,90,0},{.8f,110,0},{0,0,1},.01f}},8,0,100);
+      shadow.tick(8);
+      shadow.updateShadowBlade(attacker,1,{{{1.7f,90,0},{1.7f,110,0},{0,0,1},.01f}},17,0,100);
+      shadow.tick(9);
+      const auto contacts=shadow.takeShadowBladeContacts(attacker);
+      require(contacts.size()==1,"constant-speed shadow probe must cross its thin target");
+      requireNear(contacts[0].speedCmS,100.f,.01f,"contact speed must use published pose time, not the Jolt step");
+      // The frame budget caps a 50 ms interval at two native steps. Each query
+      // still advances its proportional share of animation time.
+      shadow.updateShadowBody(target,{{{5,95,0},{5,105,0},.01f,1,1}});
+      shadow.updateShadowBlade(attacker,2,{{{6.7f,90,0},{6.7f,110,0},{0,0,1},.01f}},67,0,100);
+      shadow.tick(50);
+      const auto capped=shadow.takeShadowBladeContacts(attacker);
+      require(capped.size()==1,"capped physics steps must cover the complete pose interval");
+      requireNear(capped[0].speedCmS,100.f,.01f,"capped steps must preserve animation velocity");
+      }
+
     // Shadow queries use the supplied HitZones even in a headless world with
     // no native living rig. A single animation step rotates through this thin
     // target; neither endpoint pose overlaps it.
@@ -4029,9 +4078,9 @@ namespace {
       shadow.updateShadowBody(attacker,{body});
       const MeleeBladeSegment before{{0,100,0},{100,100,0},{0,1,0},.1f};
       const MeleeBladeSegment after{{0,100,0},{0,100,100},{0,1,0},.1f};
-      shadow.updateShadowBlade(attacker,1,{before},false);
+      shadow.updateShadowBlade(attacker,1,{before},0,0,100);
       shadow.tick(17);
-      shadow.updateShadowBlade(attacker,1,{after},true);
+      shadow.updateShadowBlade(attacker,1,{after},17,0,100);
       shadow.tick(17);
       const auto contacts=shadow.takeShadowBladeContacts(attacker);
       require(contacts.size()==1 && contacts[0].npc==target && contacts[0].bone==7 && contacts[0].zone==2,
@@ -4041,11 +4090,11 @@ namespace {
       require(contacts[0].bladeFraction>.8f && contacts[0].bladeFraction<=1.f && contacts[0].speedCmS>100.f &&
               std::isfinite(contacts[0].surfaceAngleDeg) && contacts[0].surfaceAngleDeg>=0.f && contacts[0].surfaceAngleDeg<=90.f,
               "shadow contact must retain blade location, point speed and surface angle");
-      shadow.updateShadowBlade(attacker,1,{before},true);
+      shadow.updateShadowBlade(attacker,1,{before},34,0,100);
       shadow.tick(17);
       require(shadow.takeShadowBladeContacts(attacker).empty(),
               "draining shadow contacts must preserve one-hit-per-target swing state");
-      shadow.updateShadowBlade(attacker,2,{after},true);
+      shadow.updateShadowBlade(attacker,2,{after},51,0,100);
       shadow.tick(17);
       require(shadow.takeShadowBladeContacts(attacker).size()==1,
               "a new shadow swing must allow the same target again");
@@ -4070,15 +4119,15 @@ namespace {
       shadow.updateShadowBody(farTarget,{{{50,95,0},{50,105,0},.05f,4,1}});
       const MeleeBladeSegment before{{-100,80,0},{-100,120,0},{0,0,1},.1f};
       const MeleeBladeSegment after{{100,80,0},{100,120,0},{0,0,1},.1f};
-      shadow.updateShadowBlade(attacker,1,{before},false);
+      shadow.updateShadowBlade(attacker,1,{before},0,0,100);
       shadow.tick(17);
-      shadow.updateShadowBlade(attacker,1,{after},true);
+      shadow.updateShadowBlade(attacker,1,{after},17,0,100);
       shadow.tick(17);
       const auto contacts=shadow.takeShadowBladeContacts(attacker);
       require(contacts.size()==2 && contacts[0].npc==nearTarget && contacts[1].world,
               "shadow contacts must be ordered and the first wall must hide the later target");
       requireNear(contacts[1].point.x,-.1f,.02f,"shadow world contact must retain the wall surface point");
-      shadow.updateShadowBlade(attacker,1,{before},true);
+      shadow.updateShadowBlade(attacker,1,{before},34,0,100);
       shadow.tick(17);
       require(shadow.takeShadowBladeContacts(attacker).empty(),
               "a world contact must stop the entire shadow swing across later physics steps");

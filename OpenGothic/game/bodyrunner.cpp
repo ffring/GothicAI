@@ -301,6 +301,9 @@ public:
   }
   // A fork ending its episode: flush its own journals without tearing down the shared world.
   void flushForExit() {
+    if(auto* world=gothic.world())
+      for(uint32_t i=0;i<world->npcCount();++i)
+        world->npcById(i)->finishMeleeShadowSwing();
     saveSummary();
     observationFile.close(); timingFile.close(); controlFile.close(); arenaFile.close();
   }

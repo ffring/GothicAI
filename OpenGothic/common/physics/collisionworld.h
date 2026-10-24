@@ -176,8 +176,10 @@ class CollisionWorld final {
     void reportMeleeBench();
     void updateShadowBody(Npc* owner, const std::vector<MeleeBodyCapsule>& capsules);
     void removeShadowBody(const Npc* owner);
+    // Pose time and the half-open active window use absolute game milliseconds.
     void updateShadowBlade(const Npc* owner, uint64_t swingId,
-                           const std::vector<MeleeBladeSegment>& segments, bool active);
+                           const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
+                           double activeBeginMs, double activeEndMs);
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void setWaterSurfaceCallback(std::function<bool(const Tempest::Vec3&,float,float&)> callback);
@@ -285,7 +287,7 @@ class CollisionWorld final {
     void applyBuoyancyStep(float seconds);
     void finishBuoyancy(float seconds);
     void stepMeleeBlades(float seconds, float fraction);
-    void stepShadowBlades(float seconds, float fraction, bool bodiesLocked = false);
+    void stepShadowBlades(float fraction, bool bodiesLocked = false);
     void sampleMeleeBench();
     void fillMaterial(QueryResult& result, const JPH::Shape& shape, JPH::SubShapeID subShape) const;
     void fillRagdoll(QueryResult& result, JPH::BodyID body) const;

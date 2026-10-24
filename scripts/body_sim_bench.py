@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import configparser
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -66,6 +67,35 @@ def damage_rows(output: Path) -> list[dict]:
     with (output/"events.jsonl").open() as stream:
         return [{key: row[key] for key in keys} for line in stream
                 if (row := json.loads(line)).get("kind") == "body_combat" and row.get("phase") == "damage"]
+
+
+def shadow_coverage(path: Path, episodes: list[dict]) -> dict:
+    """Each fork starts at the same game time; account for its final hit too."""
+    groups = []
+    previous = -1
+    with path.open() as stream:
+        for line in stream:
+            row = json.loads(line)
+            if not groups or row["end_time_ms"] < previous:
+                groups.append([])
+            groups[-1].append(row)
+            previous = row["end_time_ms"]
+    differences = []
+    damage_count = hits = 0
+    for index, (episode, rows) in enumerate(zip(episodes, groups)):
+        expected = Counter((d["target"], d["actor"], max(0, d["hp_before"]-d["hp_after"]))
+                           for d in episode["damage"] if d["damage_kind"] == "melee" and d["has_hit"])
+        actual = Counter((r["attacker"]["name"], r["legacy"]["target"]["name"], r["legacy"]["damage"])
+                         for r in rows if r["legacy"]["hit"])
+        damage_count += expected.total()
+        hits += actual.total()
+        if actual != expected:
+            differences.append({"episode": index, "seed": episode["seed"],
+                                "missing": list((expected-actual).elements()),
+                                "extra": list((actual-expected).elements())})
+    return {"episodes": len(episodes), "journal_episodes": len(groups), "damage_hits": damage_count,
+            "journal_hits": hits, "differences": differences,
+            "equal": len(episodes) == len(groups) and not differences}
 
 
 def shadow_comparison(results: list[dict]) -> dict | None:
@@ -180,6 +210,11 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             "game_speed": sum(e["game_ms"] for e in episodes)/1000/max(wall, 1e-9)}
     if args.checkpoint is not None:
         result["policy"] = run_policy(variant, output)
+    if melee_shadow == 1:
+        result["shadow_coverage"] = {"native": shadow_coverage(output/"run/melee-blade-shadow.jsonl", episodes)}
+        if "policy" in result:
+            result["shadow_coverage"]["policy"] = shadow_coverage(
+                output/"policy/worker-00/run/melee-blade-shadow.jsonl", result["policy"]["episodes"])
     return result
 
 
@@ -236,11 +271,17 @@ def main() -> int:
             print(f"   policy: {policy['decisions_per_s']:.2f} decisions/s incl. resets, "
                   f"{policy['rollout_decisions_per_s']:.2f} rollout decisions/s, "
                   f"{policy['ms_per_tick']:.2f} ms/tick, fallbacks {policy['fallbacks']}", flush=True)
+    coverage_failed = False
+    for result in results:
+        for name, row in result.get("shadow_coverage", {}).items():
+            print(f"shadow journal {name}: {row['journal_hits']}/{row['damage_hits']} hits, "
+                  f"{row['journal_episodes']}/{row['episodes']} episodes", flush=True)
+            coverage_failed |= not row["equal"]
     if comparison is not None:
         for name, row in comparison.items():
             print(f"shadow {name}: {row['matched']}/{row['off_episodes']} identical outcomes and damage", flush=True)
-        return int(any(not row["equal"] for row in comparison.values()))
-    return 0
+        return int(coverage_failed or any(not row["equal"] for row in comparison.values()))
+    return int(coverage_failed)
 
 
 if __name__ == "__main__":

@@ -525,7 +525,8 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
   struct ShadowBlade {
     const Npc* owner = nullptr;
     uint64_t swing = 0;
-    bool active = false, blocked = false;
+    bool blocked = false;
+    double poseTimeMs = 0, targetTimeMs = 0, activeBeginMs = 0, activeEndMs = 0;
     std::vector<MeleeBladeSegment> pose, target;
     std::vector<Npc*> hit;
     std::vector<MeleeBladeContact> contacts;
@@ -2229,7 +2230,8 @@ void CollisionWorld::removeShadowBody(const Npc* owner) {
   }
 
 void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
-                                      const std::vector<MeleeBladeSegment>& segments, bool active) {
+                                      const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
+                                      double activeBeginMs, double activeEndMs) {
   if(owner==nullptr || segments.empty()) throw std::runtime_error("Melee shadow blade requires an owner and geometry");
   for(const auto& segment:segments) {
     const auto from=toMeters(segment.from),to=toMeters(segment.to),edge=toMeters(segment.edgeNormal);
@@ -2244,6 +2246,7 @@ void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
     blade.owner=owner;
     blade.swing=swingId;
     blade.pose=segments;
+    blade.poseTimeMs=double(timeMs);
     impl->shadowBlades.push_back(std::move(blade));
     it=impl->shadowBlades.end()-1;
     }
@@ -2253,9 +2256,15 @@ void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
     it->hit.clear();
     it->contacts.clear();
     }
-  if(it->pose.size()!=segments.size()) it->pose=segments;
+  if(it->pose.size()!=segments.size() || double(timeMs)<=it->poseTimeMs) {
+    // Same-timestamp transform updates are not motion through elapsed time.
+    it->pose=segments;
+    it->poseTimeMs=double(timeMs);
+    }
   it->target=segments;
-  it->active=active;
+  it->targetTimeMs=double(timeMs);
+  it->activeBeginMs=activeBeginMs;
+  it->activeEndMs=activeEndMs;
   impl->hasShadowBlades.store(true,std::memory_order_release);
   }
 
@@ -2276,7 +2285,7 @@ void CollisionWorld::removeShadowBlade(const Npc* owner) {
   impl->hasShadowBlades.store(!impl->shadowBlades.empty(),std::memory_order_release);
   }
 
-void CollisionWorld::stepShadowBlades(float seconds, float fraction, bool bodiesLocked) {
+void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
   if(!impl->hasShadowBlades.load(std::memory_order_acquire)) return;
   std::lock_guard<std::mutex> guard(impl->shadowMutex);
   constexpr uint32_t mask=(1u<<DynamicWorld::C_Landscape)|(1u<<DynamicWorld::C_Object)|
@@ -2315,10 +2324,18 @@ void CollisionWorld::stepShadowBlades(float seconds, float fraction, bool bodies
   for(auto& blade:impl->shadowBlades) {
     struct TimedContact { float time; MeleeBladeContact contact; };
     std::vector<TimedContact> contacts;
+    // Animation publications have their own clock. Native fixed steps divide
+    // that interval, but must not supply its duration (including no-step frames).
+    const double endTime=blade.poseTimeMs+(blade.targetTimeMs-blade.poseTimeMs)*fraction;
+    const double duration=endTime-blade.poseTimeMs;
+    const float first=duration>0 ? float(std::clamp((blade.activeBeginMs-blade.poseTimeMs)/duration,0.,1.)) : 0.f;
+    const float last=duration>0 ? float(std::clamp((blade.activeEndMs-blade.poseTimeMs)/duration,0.,1.)) : 0.f;
+    const float seconds=float(duration*.001)*(last-first);
     for(size_t capsule=0;capsule<blade.pose.size();++capsule) {
-      const auto start=pose(blade.pose[capsule]),target=pose(blade.target[capsule]);
-      const auto end=interpolate(start,target,fraction);
-      if(blade.active && !blade.blocked) {
+      const auto previous=pose(blade.pose[capsule]),target=pose(blade.target[capsule]);
+      const auto current=interpolate(previous,target,fraction);
+      const auto start=interpolate(previous,current,first),end=interpolate(previous,current,last);
+      if(last>first && !blade.blocked) {
         const float angle=2.f*std::acos(std::clamp(std::abs(start.rotation.Dot(end.rotation)),0.f,1.f));
         const int subdivisions=std::max(1,int(std::ceil(angle/(5.f*JPH::JPH_PI/180.f))));
         for(int sub=0;sub<subdivisions;++sub) {
@@ -2377,10 +2394,11 @@ void CollisionWorld::stepShadowBlades(float seconds, float fraction, bool bodies
             }
           }
         }
-      const auto axis=end.rotation*JPH::Vec3(0,end.halfLength,0);
-      blade.pose[capsule]={toCentimeters(end.center-axis),toCentimeters(end.center+axis),
-                          {end.edge.GetX(),end.edge.GetY(),end.edge.GetZ()},end.radius*100.f};
+      const auto axis=current.rotation*JPH::Vec3(0,current.halfLength,0);
+      blade.pose[capsule]={toCentimeters(current.center-axis),toCentimeters(current.center+axis),
+                          {current.edge.GetX(),current.edge.GetY(),current.edge.GetZ()},current.radius*100.f};
       }
+    blade.poseTimeMs=endTime;
     std::stable_sort(contacts.begin(),contacts.end(),[](const auto& a,const auto& b) {
       if(a.time!=b.time) return a.time<b.time;
       if(a.contact.world!=b.contact.world) return a.contact.world;
@@ -2528,7 +2546,7 @@ void CollisionWorld::tick(uint64_t dt) {
           for(auto* body:ragdolls) body->prepareKinematicStep(seconds,1.f/float(impl->meleeSubsteps-sub));
           stepMeleeBlades(seconds,1.f/float(impl->meleeSubsteps-sub));
           if(impl->hasShadowBlades.load(std::memory_order_acquire))
-            stepShadowBlades(seconds,1.f/float((count-i)*impl->meleeSubsteps-sub));
+            stepShadowBlades(1.f/float((count-i)*impl->meleeSubsteps-sub));
           impl->system.Update(seconds,1,&impl->allocator,&impl->jobs);
           finishBuoyancy(seconds);
           for(auto* body:ragdolls) body->finishKinematicStep();
@@ -2591,9 +2609,9 @@ void CollisionWorld::tick(uint64_t dt) {
       int shadowRemaining=(count-i)*collisionSteps;
       if(shadowSteps) {
         if(impl->system.GetNumActiveBodies(JPH::EBodyType::RigidBody)>0)
-          impl->shadowStep=[this,&shadowRemaining](float seconds) { stepShadowBlades(seconds,1.f/float(shadowRemaining--),true); };
+          impl->shadowStep=[this,&shadowRemaining](float) { stepShadowBlades(1.f/float(shadowRemaining--),true); };
         else
-          stepShadowBlades(step,1.f/float(count-i));
+          stepShadowBlades(1.f/float(count-i));
         }
       impl->waterSteps=waterSteps;
       const bool listener=waterSteps || bool(impl->shadowStep);
@@ -2615,7 +2633,7 @@ void CollisionWorld::tick(uint64_t dt) {
     impl->system.Update(0.f,1,&impl->allocator,&impl->jobs);
     // Headless worlds may have only static geometry and posed HitZones. Query
     // their animation frame without adding a native simulation update.
-    if(impl->hasShadowBlades.load(std::memory_order_acquire)) stepShadowBlades(float(dt)*.001f,1.f);
+    if(impl->hasShadowBlades.load(std::memory_order_acquire)) stepShadowBlades(1.f);
     }
   if(cloth!=nullptr) cloth->finishFrame();
 
