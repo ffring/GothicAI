@@ -94,7 +94,6 @@ def source_input(name: str, source: dict) -> str:
     return 'image_gen edit of the accepted remaster concept; no original texture pixels'
 
 
-
 def mask_outside(shape: tuple[int, int], exclude_uv) -> np.ndarray:
     h, w = shape
     mask = np.ones((h, w), dtype=bool)
