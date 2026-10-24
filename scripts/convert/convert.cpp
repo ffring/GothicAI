@@ -11,14 +11,19 @@
 //       level, as the engine uploads them); raw .TGA files copied as they are;
 //       textures.json lists them with the archives they came from.
 //   content-convert verify-textures <gothic dir> <dir>
+//   content-convert meshes|verify-meshes <gothic dir> <dir>
+//       Every static mesh (*.MRM) as <NAME>.glb (common/basemesh.h);
+//       meshes.json lists them with the source archives.
 //   content-convert --self-test
 //       Round trip of a synthetic mesh; no game files.
 //
 // The output is Gothic content: it never goes into git.
 
+#include "basemesh.h"
 #include "worldchunks.h"
 
 #include <zenkit/Logger.hh>
+#include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/Stream.hh>
 #include <zenkit/Vfs.hh>
 #include <zenkit/Texture.hh>
@@ -231,6 +236,14 @@ std::string jsonName(const std::string& s) {
   return "\""+s+"\"";
   }
 
+std::string archivesJson(const std::vector<Archive>& archives) {
+  std::string m = "[";
+  for(size_t i=0; i<archives.size(); ++i)
+    m += std::string(i==0 ? "\n    " : ",\n    ") + "{\"name\": " + jsonName(archives[i].name) +
+         ", \"size\": " + std::to_string(archives[i].size) + "}";
+  return m + "\n  ]";
+  }
+
 // Writes (or, with verifyOnly, re-reads and compares) every texture.
 int convertTextures(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
   const auto t0 = std::chrono::steady_clock::now();
@@ -308,11 +321,8 @@ int convertTextures(const fs::path& gothic, const fs::path& out, bool verifyOnly
     }
 
   if(!verifyOnly) {
-    std::string m = "{\n  \"format\": \"gothic-textures\",\n  \"version\": 1,\n  \"archives\": [";
-    for(size_t i=0; i<archives.size(); ++i)
-      m += std::string(i==0 ? "\n    " : ",\n    ") + "{\"name\": " + jsonName(archives[i].name) +
-           ", \"size\": " + std::to_string(archives[i].size) + "}";
-    m += "\n  ],\n  \"textures\": {";
+    std::string m = "{\n  \"format\": \"gothic-textures\",\n  \"version\": 1,\n  \"archives\": " + archivesJson(archives) +
+                    ",\n  \"textures\": {";
     bool first = true;
     for(const auto& [stem,file]:index) {
       m += std::string(first ? "\n    " : ",\n    ") + jsonName(stem) + ": " + jsonName(file);
@@ -324,6 +334,60 @@ int convertTextures(const fs::path& gothic, const fs::path& out, bool verifyOnly
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
   std::cout << (verifyOnly ? "verified " : "written ") << index.size() << " textures: " << dds << " dds, " << png
             << " png, " << tga << " tga; " << (bytes>>20) << " MiB; " << bad << " failed (" << ms << " ms)\n";
+  return bad==0 ? 0 : 1;
+  }
+
+int convertMeshes(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
+  const auto t0 = std::chrono::steady_clock::now();
+  zenkit::Vfs vfs;
+  const auto archives = mountArchives(vfs,gothic);
+  std::vector<const zenkit::VfsNode*> files;
+  collectFiles(vfs.root(),files);
+  std::map<std::string,const zenkit::VfsNode*> meshes;
+  for(const auto* f:files) {
+    const auto name = upper(f->name());
+    if(endsWith(name,".MRM"))
+      meshes[name.substr(0,name.size()-4)] = f;
+    }
+  if(!verifyOnly)
+    fs::create_directories(out);
+  std::map<std::string,std::string> index;
+  size_t bad = 0, triangles = 0;
+  uint64_t bytes = 0;
+  for(const auto& [stem,node]:meshes) {
+    try {
+      zenkit::MultiResolutionMesh mrm;
+      auto in = node->open_read();
+      mrm.load(in.get());
+      const auto file = stem+".glb";
+      if(!verifyOnly)
+        writeBaseMesh(mrm,stem,out/file);
+      const auto diff = compareBaseMeshes(mrm,readBaseMesh(out/file));
+      require(diff.empty(),diff);
+      for(const auto& sm:mrm.sub_meshes)
+        triangles += sm.triangles.size();
+      index[stem] = file;
+      bytes += fs::file_size(out/file);
+      }
+    catch(const std::exception& e) {
+      std::cerr << stem << ".MRM: " << e.what() << "\n";
+      ++bad;
+      }
+    }
+  if(!verifyOnly) {
+    std::string m = "{\n  \"format\": \"gothic-meshes\",\n  \"version\": 1,\n  \"archives\": " + archivesJson(archives) +
+                    ",\n  \"meshes\": {";
+    bool first = true;
+    for(const auto& [stem,file]:index) {
+      m += std::string(first ? "\n    " : ",\n    ") + jsonName(stem) + ": " + jsonName(file);
+      first = false;
+      }
+    m += "\n  }\n}\n";
+    writeHost(out/"meshes.json",m.data(),m.size());
+    }
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << (verifyOnly ? "verified " : "written ") << index.size() << " meshes, " << triangles << " triangles; "
+            << (bytes>>20) << " MiB; " << bad << " failed (" << ms << " ms)\n";
   return bad==0 ? 0 : 1;
   }
 
@@ -413,6 +477,21 @@ int selfTest() {
     }
   require(rejected,"duplicate triangle order must be rejected");
 
+  // A static mesh: an unused position, an empty submesh, a sector-like name.
+  zenkit::MultiResolutionMesh mrm;
+  mrm.positions = {{0,0,0},{100.5f,0,0},{0,-20.25f,3},{7,7,7}};
+  mrm.alpha_test = 1;
+  mrm.bbox.min = {0,-20.25f,0};
+  mrm.bbox.max = {100.5f,0,3};
+  mrm.sub_meshes.resize(2);
+  mrm.sub_meshes[0].mat = material("EMPTY","EMPTY.TGA",zenkit::MaterialGroup::WOOD);
+  mrm.sub_meshes[1].mat = material("BARREL_\xE4","BARREL.TGA",zenkit::MaterialGroup::WOOD);
+  mrm.sub_meshes[1].wedges = {{{0,1,0},{0,0},0},{{0,1,0},{1,0},1},{{0.6f,0.8f,-0.0f},{0.5f,1},2},{{0,1,0},{0,0},2}};
+  mrm.sub_meshes[1].triangles = {{{0,1,2}},{{2,1,3}}};
+  writeBaseMesh(mrm,"TEST_MESH",dir/"mesh.glb");
+  diff = compareBaseMeshes(mrm,readBaseMesh(dir/"mesh.glb"));
+  require(diff.empty(),"mesh round trip: "+diff);
+
   fs::remove_all(dir);
   std::cout << "self-test passed\n";
   return 0;
@@ -437,6 +516,8 @@ int main(int argc, char** argv) {
       std::cout << manifest.chunks.size() << " chunks written to " << args[3] << " (" << ms << " ms)\n";
       return verify(world.mesh,args[3],{});
       }
+    if(args.size()==3 && (args[0]=="meshes" || args[0]=="verify-meshes"))
+      return convertMeshes(args[1],args[2],args[0]=="verify-meshes");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
       return convertTextures(args[1],args[2],args[0]=="verify-textures");
     if((args.size()==4 || args.size()==5) && args[0]=="verify-world") {
@@ -444,7 +525,7 @@ int main(int argc, char** argv) {
       return verify(world.mesh,args[3],args.size()==5 ? fs::path(args[4]) : fs::path());
       }
     std::cerr << "usage: content-convert world|verify-world <gothic dir> <WORLD.ZEN> <dir> [override]\n"
-                 "       content-convert textures|verify-textures <gothic dir> <dir>\n"
+                 "       content-convert textures|verify-textures|meshes|verify-meshes <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";
     return 2;
     }
