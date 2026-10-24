@@ -155,6 +155,7 @@ include_directories(lib/TinySoundFont)
 
 # Rapidjson
 include_directories(lib/rapidjson/include)
+target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE lib/rapidjson/include)
 
 # Tempest
 if(WIN32)
@@ -393,6 +394,11 @@ if(NOT ANDROID AND NOT IOS)
   target_include_directories(gothic-clothgeometry-contract PRIVATE common)
   add_executable(gothic-worldcloth-contract EXCLUDE_FROM_ALL tests/worldcloth_contract.cpp)
   target_link_libraries(gothic-worldcloth-contract PRIVATE OpenGothic AiBridge)
+  add_executable(gothic-worldbase-contract EXCLUDE_FROM_ALL tests/worldbase_contract.cpp)
+  target_link_libraries(gothic-worldbase-contract PRIVATE OpenGothic AiBridge)
+  if(NOT MSVC)
+    target_compile_options(gothic-worldbase-contract PRIVATE -Wall -Wconversion -Werror)
+  endif()
   add_custom_target(check-cloth
     COMMAND $<TARGET_FILE:gothic-cloth-contract>
     COMMAND $<TARGET_FILE:gothic-clothgeometry-contract>

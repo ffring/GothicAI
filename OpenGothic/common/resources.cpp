@@ -64,6 +64,17 @@ using namespace Tempest;
 
 Resources* Resources::inst=nullptr;
 
+namespace {
+std::filesystem::path worldContentDir(const std::filesystem::path& root, std::string_view world) {
+  const auto separator = world.find_last_of("/\\");
+  std::string name(separator==std::string_view::npos ? world : world.substr(separator+1));
+  name = std::filesystem::path(name).stem().string();
+  for(auto& c:name)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
+  return root/"worlds"/name;
+  }
+}
+
 Resources::Resources() {
   inst=this;
   initCensus();
@@ -226,6 +237,12 @@ void Resources::censusFile(std::u16string_view path) {
     return;
   const auto source = TextCodec::toUtf8(path);
   inst->census->opened(source,source);
+  }
+
+void Resources::censusWorldBase(std::string_view world) {
+  if(inst==nullptr || inst->census==nullptr)
+    return;
+  inst->census->replaced(world,(worldContentDir({},world)/"world.json").generic_string());
   }
 
 bool Resources::writeCensus() {
@@ -527,6 +544,28 @@ void Resources::indexHdTextures() {
   if(ec)
     Log::e("textures: unable to read \"",dir,"\"");
   Log::i("textures: ",hdTextures.size()," of our own from \"",dir,"\"");
+  }
+
+std::filesystem::path Resources::worldBaseDir(std::string_view world) {
+  if(const char* dir = std::getenv("OPENGOTHIC_BASE")) {
+    if(dir[0]=='\0')
+      return {};
+    return worldContentDir(dir,world);
+    }
+  if(const char* home = std::getenv("HOME"))
+    return worldContentDir(std::filesystem::path(home)/".local/share/gothic-ai/base/v1",world);
+  return {};
+  }
+
+std::filesystem::path Resources::worldOverrideDir(std::string_view world) {
+  if(const char* dir = std::getenv("OPENGOTHIC_CONTENT")) {
+    if(dir[0]=='\0')
+      return {};
+    return worldContentDir(dir,world);
+    }
+  if(const char* home = std::getenv("HOME"))
+    return worldContentDir(std::filesystem::path(home)/".local/share/gothic-ai/content",world);
+  return {};
   }
 
 void Resources::indexMeshOverrides() {

@@ -8,7 +8,7 @@ import sys
 
 
 KINDS = (
-    "texture", "mesh", "model", "skeleton", "anim", "morph", "world",
+    "texture", "mesh", "model", "skeleton", "anim", "morph", "world", "worldmesh",
     "sound", "speech", "music", "script", "cutscene", "font", "video", "other",
 )
 

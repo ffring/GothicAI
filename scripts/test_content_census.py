@@ -79,6 +79,24 @@ def test_replacement_only_resources_count_once_and_kinds_follow_canonical_order(
     assert "| texture | 0 | 1 | 100.0% |" in census.render_markdown(summary)
 
 
+def test_world_mesh_replacement_has_own_row_while_zen_remains_original():
+    base = {"name": "NEWWORLD.ZEN", "kind": "worldmesh",
+            "replacement": "worlds/NEWWORLD/world.json", "opens": 1}
+    summary = census.summarize([
+        run([original("NEWWORLD.ZEN", "world", "Worlds.vdf")], [base]),
+        run([original("newworld.zen", "world", "worlds.VDF")],
+            [dict(base, name="newworld.zen")]),
+    ])
+    assert summary["counts"] == [
+        {"kind": "world", "original": 1, "own": 0},
+        {"kind": "worldmesh", "original": 0, "own": 1},
+    ]
+    markdown = census.render_markdown(summary)
+    assert "| world | 1 | 0 | 0.0% |" in markdown
+    assert "| worldmesh | 0 | 1 | 100.0% |" in markdown
+    assert "| NEWWORLD.ZEN | world | Worlds.vdf | 2 |" in markdown
+
+
 def test_top20_uses_summed_opens_and_stable_order_for_ties():
     files = [original(f"FILE{index:02d}.MRM", "mesh", "Meshes.vdf", index + 1)
              for index in range(22)]

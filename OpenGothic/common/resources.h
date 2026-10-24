@@ -189,7 +189,10 @@ class Resources final {
     static bool                      hasFile    (std::string_view fname);
 
     static const zenkit::Vfs&        vdfsIndex();
+    static std::filesystem::path      worldBaseDir(std::string_view world);
+    static std::filesystem::path      worldOverrideDir(std::string_view world);
     static void                      censusFile(std::u16string_view path);
+    static void                      censusWorldBase(std::string_view world);
     static bool                      writeCensus();
 
     static const Tempest::IndexBuffer<uint16_t>&   cubeIbo();
