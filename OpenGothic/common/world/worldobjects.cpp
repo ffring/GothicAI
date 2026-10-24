@@ -962,6 +962,11 @@ void WorldObjects::marchCsCameras(DbgPainter& p) const {
       }
   }
 
+void WorldObjects::drawMeleeShadow(DbgPainter& p) const {
+  for(auto& i:npcNear)
+    i->drawMeleeShadow(p,owner.tickCount());
+  }
+
 void WorldObjects::drawVobBoxNpcNear(DbgPainter& p) const {
   for(auto& i:npcNear)
     i->drawVobBox(p);

@@ -97,6 +97,8 @@ class Npc final {
 
     void       drawVobBox(DbgPainter& p) const;
     void       drawVobRay(DbgPainter& p, const Npc& npc) const;
+    // Debug overlay of the shadow melee blade: its pose during a swing and the latest contacts.
+    void       drawMeleeShadow(DbgPainter& p, uint64_t now) const;
 
     bool       setPosition (float x,float y,float z);
     bool       setPosition (const Tempest::Vec3& pos);
@@ -885,6 +887,16 @@ class Npc final {
     std::unique_ptr<MeleeShadow>   meleeShadow;
     bool                          meleeShadowBody = false;
     bool                          meleeShadowSuspended = false;
+    struct MeleeShadowMark final {
+      Tempest::Vec3 point;
+      uint64_t      time  = 0;
+      bool          world = false;
+      std::string   label;
+      };
+    std::vector<MeleeBladeSegment> meleeShadowDrawPose;
+    bool                          meleeShadowDrawActive = false;
+    std::vector<MeleeShadowMark>  meleeShadowMarks;
+    void          noteMeleeShadowMarks(const std::vector<MeleeBladeContact>& contacts);
     void syncMeleeShadowSwing();
     void updateMeleeShadow();
     void clearMeleeShadow();

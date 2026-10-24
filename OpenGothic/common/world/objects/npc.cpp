@@ -1563,12 +1563,54 @@ void Npc::updateMeleeShadow() {
     }
   // Publish the whole pose interval. Physics clips it to the authored window,
   // including frames whose endpoint is already past the end of that window.
-  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),
-                                   double(shadow.start)+double(window.beginMs)/shadow.speed,
-                                   double(shadow.start)+double(window.endMs)/shadow.speed);
+  const double activeBegin = double(shadow.start)+double(window.beginMs)/shadow.speed;
+  const double activeEnd   = double(shadow.start)+double(window.endMs)/shadow.speed;
+  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd);
+  if(Gothic::inst().doMeleeBladeDraw()) {
+    const double now = double(owner.tickCount());
+    meleeShadowDrawPose   = blade;
+    meleeShadowDrawActive = now>=activeBegin && now<activeEnd;
+    }
   auto contacts = owner.physic()->takeShadowBladeContacts(this);
+  noteMeleeShadowMarks(contacts);
   for(const auto& hit:contacts)
     shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
+  }
+
+void Npc::noteMeleeShadowMarks(const std::vector<MeleeBladeContact>& contacts) {
+  if(!Gothic::inst().doMeleeBladeDraw())
+    return;
+  const uint64_t now = owner.tickCount();
+  for(const auto& hit:contacts) {
+    std::string label = hit.world ? std::string("world") : std::string(HitZones::name(HitZones::Zone(hit.zone)));
+    if(!hit.world)
+      label += " " + std::to_string(int(hit.speedCmS)) + "cm/s";
+    meleeShadowMarks.push_back({hit.point,now,hit.world,std::move(label)});
+    }
+  constexpr size_t maxMarks = 16;
+  if(meleeShadowMarks.size()>maxMarks)
+    meleeShadowMarks.erase(meleeShadowMarks.begin(),meleeShadowMarks.end()-maxMarks);
+  }
+
+void Npc::drawMeleeShadow(DbgPainter& p, uint64_t now) const {
+  constexpr uint64_t markLifetime = 3000;
+  if(meleeShadow && meleeShadow->window) {
+    // Yellow while the blade can hit, grey before and after the active window.
+    p.setPen(meleeShadowDrawActive ? Tempest::Color(1,1,0) : Tempest::Color(0.6f,0.6f,0.6f));
+    for(const auto& segment:meleeShadowDrawPose) {
+      p.drawLine(segment.from,segment.to);
+      p.drawPoint(segment.to,3);
+      }
+    }
+  for(const auto& mark:meleeShadowMarks) {
+    if(now>mark.time+markLifetime)
+      continue;
+    // Red: a body part was hit; blue: the world stopped the swing.
+    p.setBrush(mark.world ? Tempest::Color(0.2f,0.4f,1) : Tempest::Color(1,0,0));
+    p.setPen(mark.world ? Tempest::Color(0.2f,0.4f,1) : Tempest::Color(1,0,0));
+    p.drawPoint(mark.point,6);
+    p.drawText(mark.point,mark.label);
+    }
   }
 
 void Npc::clearMeleeShadow() {
@@ -1584,6 +1626,9 @@ void Npc::finishMeleeShadowSwing(bool remove) {
     return;
   auto& shadow = *meleeShadow;
   auto contacts = owner.physic()->takeShadowBladeContacts(this);
+  noteMeleeShadowMarks(contacts);
+  meleeShadowDrawPose.clear();
+  meleeShadowDrawActive = false;
   for(const auto& hit:contacts)
     shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
   if(remove)
