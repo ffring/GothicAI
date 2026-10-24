@@ -38,6 +38,7 @@ class WayMatrix final {
     WayPath         wayTo(const WayPoint** begin, size_t beginSz, const Tempest::Vec3 exactBegin, const WayPoint& end) const;
 
   private:
+    friend struct WorldDataContract;
     struct WayEdge {
       size_t a = 0;
       size_t b = 0;

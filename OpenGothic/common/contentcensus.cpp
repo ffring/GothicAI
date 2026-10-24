@@ -121,6 +121,8 @@ bool ContentCensus::write() noexcept {
       json.Key("name"); string(key.first);
       json.Key("kind"); string(key.second.compare(0,14,"base/textures/")==0 ? "basetexture" :
                                key.second.compare(0,12,"base/meshes/")==0 ? "basemesh" :
+                               key.second.compare(0,12,"base/worlds/")==0 ? "baseworld" :
+                               key.second.compare(0,9,"base/zen/")==0 ? "basezen" :
                                key.second.compare(0,7,"meshes/")==0 ? "mesh" :
                                key.second.compare(0,7,"worlds/")==0 ? "worldmesh" : kind(key.first,{}));
       json.Key("replacement"); string(key.second);

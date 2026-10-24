@@ -1,4 +1,5 @@
 #include "resources.h"
+#include "commandline.h"
 
 #include <Tempest/MemReader>
 #include <Tempest/Pixmap>
@@ -17,6 +18,7 @@
 #include <zenkit/ModelScript.hh>
 #include <zenkit/Material.hh>
 #include <zenkit/Texture.hh>
+#include <zenkit/vobs/Camera.hh>
 #include <zenkit/addon/texcvt.hh>
 #include <zenkit/Texture.hh>
 #include <miniz.h>
@@ -55,6 +57,7 @@
 #include "contentcensus.h"
 #include "gltfmesh.h"
 #include "basemesh.h"
+#include "worldbase.h"
 #include "utils/string_frm.h"
 
 #include <dmusic.h>
@@ -164,6 +167,7 @@ Resources::Resources(Tempest::Device &device)
 void Resources::mountWork(const std::filesystem::path& path) {
   inst->gothicAssets.mkdir("/_work");
   inst->gothicAssets.mount_host(path, "/_work", zenkit::VfsOverwriteBehavior::NONE);
+  inst->baseZen.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
   }
 
 void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFilter) {
@@ -218,6 +222,8 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
   std::sort(mounted.begin(),mounted.end());
   inst->baseTextures.validate(mounted);
   inst->baseMeshes.validate(mounted);
+  inst->baseZen.validate(mounted);
+  inst->mountedArchives = std::move(mounted);
 
   //for(auto& i:inst->gothicAssets.getKnownFiles())
   //  Log::i(i);
@@ -251,10 +257,54 @@ void Resources::censusFile(std::u16string_view path) {
   inst->census->opened(source,source);
   }
 
-void Resources::censusWorldBase(std::string_view world) {
-  if(inst==nullptr || inst->census==nullptr)
+void Resources::loadWorld(zenkit::World& world, std::vector<WorldData::Room>& rooms, std::string_view name) {
+  const auto dir = worldBaseDir(name);
+  const auto result = tryWorldData(world,rooms,name,dir,worldOverrideDir(name),inst->mountedArchives);
+  if(result.replaced) {
+    if(inst->census)
+      inst->census->replaced(name,(worldContentDir("base",name)/"world.json").generic_string());
+    Log::i("world base: \"",dir.string(),"\", ",result.triangles," triangles, ",
+           result.chunks," chunks, ",result.readMs," ms");
     return;
-  inst->census->replaced(world,(worldContentDir({},world)/"world.json").generic_string());
+    }
+  Log::i("world base: ",name,": ",result.error,"; using ZEN");
+  const auto* entry = vdfsIndex().find(name);
+  if(!entry)
+    throw std::runtime_error("unable to open Zen-file: "+std::string(name));
+  auto reader = entry->open_read();
+  world.load(reader.get(),Gothic::inst().version().game==1 ? zenkit::GameVersion::GOTHIC_1
+                                                        : zenkit::GameVersion::GOTHIC_2);
+  rooms = WorldData::buildRoomVolumes(world.world_mesh,world.world_bsp_tree);
+  }
+
+bool Resources::loadBaseZen(std::string_view name, std::string_view kind, WorldData::ZenFile& out) {
+  const auto& index = inst->baseZen;
+  if(!index.enabled)
+    return false;
+  const auto separator = name.find_last_of("/\\");
+  std::string key(separator==std::string_view::npos ? name : name.substr(separator+1));
+  for(auto& c:key)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
+  const auto found = index.files.find(key);
+  if(found==index.files.end())
+    return false;
+  try {
+    auto data = WorldData::readZen(index.dir/found->second);
+    if(data.kind!=kind || data.source.world!=key)
+      throw std::runtime_error("ZEN kind or source name differs from index");
+    if(kind=="cameras")
+      for(const auto& camera:data.vobs)
+        if(!std::dynamic_pointer_cast<zenkit::VCutsceneCamera>(camera))
+          throw std::runtime_error("invalid dialog camera class");
+    out = std::move(data);
+    if(inst->census)
+      inst->census->replaced(key,"base/zen/"+found->second);
+    return true;
+    }
+  catch(const std::exception& error) {
+    Log::e("base: ",key,": ",error.what(),"; using ZEN");
+    return false;
+    }
   }
 
 bool Resources::writeCensus() {
@@ -578,12 +628,14 @@ void Resources::indexBaseContent() {
   const auto root = baseDir();
   baseTextures.load(root,"textures");
   baseMeshes.load(root,"meshes");
+  baseZen.load(root,"zen");
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {
   if(root.empty())
     return;
   const auto folder = root/kind;
+  const char* entries = std::string_view(kind)=="zen" ? "files" : kind;
   std::ifstream file(folder/(std::string(kind)+".json"),std::ios::binary);
   if(!file)
     return;
@@ -593,7 +645,7 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
     table.Parse<rapidjson::kParseValidateEncodingFlag>(text.data(),text.size());
     if(table.HasParseError() || !table.IsObject() ||
        !table.HasMember("archives") || !table["archives"].IsArray() ||
-       !table.HasMember(kind) || !table[kind].IsObject())
+       !table.HasMember(entries) || !table[entries].IsObject())
       throw std::runtime_error("invalid index");
     for(const auto& archive:table["archives"].GetArray()) {
       if(!archive.IsObject() || !archive.HasMember("name") || !archive["name"].IsString() ||
@@ -602,7 +654,22 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
       archives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
       }
     std::sort(archives.begin(),archives.end());
-    for(const auto& entry:table[kind].GetObject()) {
+    if(std::string_view(kind)=="zen" && table.HasMember("loose_files")) {
+      if(!table["loose_files"].IsArray())
+        throw std::runtime_error("invalid loose file list");
+      for(const auto& entry:table["loose_files"].GetArray()) {
+        if(!entry.IsObject() || !entry.HasMember("path") || !entry["path"].IsString() ||
+           !entry.HasMember("size") || !entry["size"].IsUint64())
+          throw std::runtime_error("invalid loose file identity");
+        const std::string name(entry["path"].GetString(),entry["path"].GetStringLength());
+        const std::filesystem::path path(name);
+        if(name.empty() || path.is_absolute() || name.find('\0')!=std::string::npos ||
+           std::any_of(path.begin(),path.end(),[](const auto& part) { return part==".."; }))
+          throw std::runtime_error("invalid loose file path");
+        looseFiles.emplace_back(name,entry["size"].GetUint64());
+        }
+      }
+    for(const auto& entry:table[entries].GetObject()) {
       if(!entry.value.IsString())
         throw std::runtime_error("invalid file entry");
       const std::string key(entry.name.GetString(),entry.name.GetStringLength());
@@ -618,6 +685,7 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
   catch(const std::exception& error) {
     files.clear();
     archives.clear();
+    looseFiles.clear();
     Log::e("base: ",kind," disabled: ",error.what()," in \"",folder.string(),"\"");
     }
   }
@@ -630,6 +698,20 @@ void Resources::BaseIndex::validate(const std::vector<std::pair<std::string,uint
     Log::i("base: ",files.size()," entries from \"",dir.string(),"\"");
   else
     Log::e("base: ",dir.filename().string()," disabled: mounted archives differ from index in \"",dir.string(),"\"");
+  }
+
+void Resources::BaseIndex::validateLoose(const std::filesystem::path& game) {
+  if(!enabled)
+    return;
+  for(const auto& [path,size]:looseFiles) {
+    std::error_code error;
+    const auto actual=std::filesystem::file_size(game/path,error);
+    if(error || actual!=size) {
+      enabled=false;
+      Log::e("base: zen disabled: loose file differs from index: ",path,"; using ZEN");
+      return;
+      }
+    }
   }
 
 std::filesystem::path Resources::worldOverrideDir(std::string_view world) {
@@ -1791,17 +1873,19 @@ const Resources::VobTree* Resources::implLoadVobBundle(std::string_view filename
 
   std::vector<std::shared_ptr<zenkit::VirtualObject>> bundle;
   try {
-    const auto* entry = Resources::vdfsIndex().find(cname);
-    if(entry == nullptr)
-      throw std::runtime_error("failed to open resource: " + cname);
-
-    zenkit::World wrld;
-
-    auto reader = entry->open_read();
-    wrld.load(reader.get(), Gothic::inst().version().game==1 ? zenkit::GameVersion::GOTHIC_1
-                                                             : zenkit::GameVersion::GOTHIC_2);
-
-    bundle = std::move(wrld.world_vobs);
+    WorldData::ZenFile base;
+    if(loadBaseZen(cname,"world",base)) {
+      bundle = std::move(base.vobs);
+      } else {
+      const auto* entry = Resources::vdfsIndex().find(cname);
+      if(entry == nullptr)
+        throw std::runtime_error("failed to open resource: " + cname);
+      zenkit::World wrld;
+      auto reader = entry->open_read();
+      wrld.load(reader.get(), Gothic::inst().version().game==1 ? zenkit::GameVersion::GOTHIC_1
+                                                            : zenkit::GameVersion::GOTHIC_2);
+      bundle = std::move(wrld.world_vobs);
+      }
     }
   catch(...) {
     Log::e("unable to load Zen-file: \"",cname,"\"");

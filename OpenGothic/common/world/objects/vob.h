@@ -64,6 +64,7 @@ class Vob {
     void          setPhysicsTransform(const Tempest::Matrix4x4& p);
 
   private:
+    friend struct WorldDataContract;
     std::vector<std::unique_ptr<Vob>> child;
 
     // Physics poses are transient: pos/local retain the authored save identity.

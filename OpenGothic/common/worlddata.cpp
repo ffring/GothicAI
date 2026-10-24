@@ -1587,14 +1587,17 @@ void write(const Data& data, const fs::path& dir) {
   writeRooms(d.rooms,dir/"rooms.bin");
   }
 
-Data read(const fs::path& dir) {
+Data read(const fs::path& dir, const fs::path& overrideDir) {
   Data d;
+  const auto editable=[&](const char* name) {
+    return !overrideDir.empty() && fs::exists(overrideDir/name) ? overrideDir/name : dir/name;
+    };
   {
-  auto doc=document(dir/"vobs.json"); ReadContext ctx; JsonReader r{ctx,doc};
+  auto doc=document(editable("vobs.json")); ReadContext ctx; JsonReader r{ctx,doc};
   r("source",d.source); r("vobs",d.vobs);
   }
   {
-  auto doc=document(dir/"waynet.json"); ReadContext ctx; JsonReader r{ctx,doc};
+  auto doc=document(editable("waynet.json")); ReadContext ctx; JsonReader r{ctx,doc};
   WorldChunkSource source; r("source",source); sameSource(d.source,source);
   r("waynet",d.waynet);
   }

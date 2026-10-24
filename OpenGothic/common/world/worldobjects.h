@@ -148,6 +148,7 @@ class WorldObjects final {
     void           resetPositionToTA();
 
   private:
+    friend struct WorldDataContract;
     void           saveItemPhysics(Serialize& fout) const;
     void           loadItemPhysics(Serialize& fin);
 

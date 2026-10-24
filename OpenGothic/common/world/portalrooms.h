@@ -15,8 +15,12 @@ namespace PortalRooms {
 class Volumes final {
   public:
     void reset(const zenkit::Mesh& mesh,const zenkit::BspTree& bsp) {
-      indoorWorld=bsp.mode==zenkit::BspTreeType::INDOOR;
-      rooms=WorldData::buildRoomVolumes(mesh,bsp);
+      reset(bsp.mode,WorldData::buildRoomVolumes(mesh,bsp));
+      }
+
+    void reset(zenkit::BspTreeType mode,std::vector<WorldData::Room> volumes) {
+      indoorWorld=mode==zenkit::BspTreeType::INDOOR;
+      rooms=std::move(volumes);
       }
 
     bool isIndoor(const Tempest::Vec3& point) const {

@@ -1,0 +1,17 @@
+# P6b: run with WORLD=NEWWORLD.ZEN, once with a base and once without it.
+# Reload session-world-data.sav with the opposite base setting and world-data-load.
+seed 73013
+cheat god
+set time 12 0
+world-data prepare
+own-mesh-chest setup 7654 126 1238 23109
+wait 1000
+rec world-data novideo
+own-mesh-chest open
+wait 6000
+own-mesh-chest take
+own-mesh-chest check
+world-data check
+own-mesh-chest save world-data
+stop
+census
