@@ -7,9 +7,11 @@
 #include "physics/fracture.h"
 
 #include <Tempest/Matrix4x4>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <limits>
+#include <vector>
 
 class PhysicMeshShape;
 class PhysicVbo;
@@ -30,6 +32,29 @@ class Serialize;
 
 class CollisionWorld;
 class Cloth;
+
+// Query-only melee geometry. Positions and radii are world centimetres.
+struct MeleeBladeSegment final {
+  Tempest::Vec3 from, to, edgeNormal;
+  float radiusCm = 2.f;
+  };
+
+struct MeleeBodyCapsule final {
+  Tempest::Vec3 from, to;
+  float radiusCm = 0;
+  size_t bone = size_t(-1);
+  uint8_t zone = 0;
+  };
+
+struct MeleeBladeContact final {
+  Npc* npc = nullptr;
+  size_t bone = size_t(-1);
+  uint8_t zone = 0;
+  Tempest::Vec3 point;
+  float bladeFraction = 0, speedCmS = 0, surfaceAngleDeg = 0;
+  bool world = false;
+  uint64_t step = 0;
+  };
 
 class DynamicWorld final {
   private:
@@ -456,6 +481,15 @@ class DynamicWorld final {
     void removeMeleeBlade(const Npc* owner);
     void measureMeleeBench(std::string path);
     void reportMeleeBench();
+    void updateShadowBody(Npc* owner, const std::vector<MeleeBodyCapsule>& capsules);
+    void removeShadowBody(const Npc* owner);
+    // Pose time and the half-open active window use absolute game milliseconds.
+    void updateShadowBlade(const Npc* owner, uint64_t swingId,
+                           const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
+                           double activeBeginMs, double activeEndMs);
+    std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
+    void removeShadowBlade(const Npc* owner);
+    void flushShadowBlades();
     struct RagdollSupport {
       size_t        bone = 0;
       uint32_t      partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);

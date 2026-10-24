@@ -301,11 +301,22 @@ public:
   }
   // A fork ending its episode: flush its own journals without tearing down the shared world.
   void flushForExit() {
+    finishMeleeShadowSwings();
     saveSummary();
     observationFile.close(); timingFile.close(); controlFile.close(); arenaFile.close();
   }
 
 private:
+  void finishMeleeShadowSwings() {
+    if(auto* world=gothic.world()) {
+      // finishStep publishes animation after World::tick has run physics. Query
+      // that final pose interval before any NPC drains/removes its shadow blade.
+      world->physic()->flushShadowBlades();
+      for(uint32_t i=0;i<world->npcCount();++i)
+        world->npcById(i)->finishMeleeShadowSwing();
+      }
+  }
+
   void teardown() {
     BodyArena::interrupt("reset_requested");
     BodyArena::disable();
@@ -935,6 +946,7 @@ public:
   }
 
   void close() {
+    finishMeleeShadowSwings();
     saveSummary();
     BodyArena::interrupt("close_requested"); BodyArena::disable();
     BodyTrajectory::reset("close");
@@ -1579,10 +1591,14 @@ int main(int argc, const char** argv) {
         auto response = runner.status();
         echoId(response,request);
         runner.compactReply(response,cmd);
+        // The caller may terminate the template as soon as it receives this
+        // acknowledgement. All episode journals must be complete first.
+        if(cmd=="close") {
+          if(forkPipe>=0) runner.flushForExit(); else runner.close();
+        }
         send(protocol,response);
         if(cmd=="close") {
-          if(forkPipe>=0) { runner.flushForExit(); _exit(0); }
-          runner.close();
+          if(forkPipe>=0) _exit(0);
           return 0;
         }
       } catch(const std::exception& e) {

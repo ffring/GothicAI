@@ -2313,6 +2313,15 @@ DynamicWorld::PhysicsStats DynamicWorld::physicsStats() const {
 void DynamicWorld::configureMeleeBench(int substeps) { world->configureMeleeBench(substeps); }
 void DynamicWorld::updateMeleeBlade(const Npc* owner,const Tempest::Matrix4x4& hand,float lengthCm) { world->updateMeleeBlade(owner,hand,lengthCm); }
 void DynamicWorld::removeMeleeBlade(const Npc* owner) { world->removeMeleeBlade(owner); }
+void DynamicWorld::updateShadowBody(Npc* owner,const std::vector<MeleeBodyCapsule>& capsules) { world->updateShadowBody(owner,capsules); }
+void DynamicWorld::removeShadowBody(const Npc* owner) { world->removeShadowBody(owner); }
+void DynamicWorld::updateShadowBlade(const Npc* owner,uint64_t swingId,const std::vector<MeleeBladeSegment>& segments,
+                                     uint64_t timeMs,double activeBeginMs,double activeEndMs) {
+  world->updateShadowBlade(owner,swingId,segments,timeMs,activeBeginMs,activeEndMs);
+  }
+std::vector<MeleeBladeContact> DynamicWorld::takeShadowBladeContacts(const Npc* owner) { return world->takeShadowBladeContacts(owner); }
+void DynamicWorld::removeShadowBlade(const Npc* owner) { world->removeShadowBlade(owner); }
+void DynamicWorld::flushShadowBlades() { world->flushShadowBlades(); }
 void DynamicWorld::measureMeleeBench(std::string path) { world->measureMeleeBench(std::move(path)); }
 void DynamicWorld::reportMeleeBench() { world->reportMeleeBench(); }
 

@@ -52,6 +52,7 @@ class HitZones final {
       Tempest::Vec3 a, b;
       float         r    = 0;
       Zone          zone = None;
+      size_t        bone = size_t(-1);
       };
     // the capsules as posed (the test bench draws them)
     void             posed(const Tempest::Matrix4x4* tr, size_t numBones, float scale, std::vector<Posed>& out) const;

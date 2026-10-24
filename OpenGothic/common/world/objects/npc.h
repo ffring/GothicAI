@@ -533,6 +533,7 @@ class Npc final {
     void      prepareLivingBody();
     void      syncRagdoll();
     void      suspendRagdoll();
+    void      finishMeleeShadowSwing(bool remove=true);
     bool      setRagdollDown(bool death);
     void      addRagdollImpulse(const Tempest::Vec3& impulse);
     float     physicsMass() const;
@@ -880,6 +881,13 @@ class Npc final {
     bool                          livingWasInteracting = false;
     MeleeBenchMode meleeBenchMode() const;
     void updateMeleeBenchBlade();
+    struct MeleeShadow;
+    std::unique_ptr<MeleeShadow>   meleeShadow;
+    bool                          meleeShadowBody = false;
+    bool                          meleeShadowSuspended = false;
+    void syncMeleeShadowSwing();
+    void updateMeleeShadow();
+    void clearMeleeShadow();
     ArrowPhysicsProbe             arrowPhysics;
     struct ArrowImpact {
       size_t bone;
