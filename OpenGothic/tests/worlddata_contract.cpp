@@ -168,6 +168,7 @@ struct WorldDataContract {
     for(const auto& name:worlds)
       convert("world "+quote(gothicDir)+" "+name+".ZEN "+quote(base/"worlds"/name));
     convert("zen "+quote(gothicDir)+" "+quote(base/"zen"));
+    convert("verify-zen "+quote(gothicDir)+" "+quote(base/"zen"));
     setenv("OPENGOTHIC_CONTENT","",1); setenv("OPENGOTHIC_TEXTURES","",1);
     setenv("OPENGOTHIC_FRACTURE","",1); setenv("OPENGOTHIC_PHYSICS_THREADS","0",1);
     Workers::setSerialExecution(true);
@@ -210,12 +211,13 @@ struct WorldDataContract {
         if(useBase) compare(expected,actual,file); else expected=actual;
         gothic.clearGame().reset();
         }
-      std::printf("%s: complete headless World / Vob::load / WorldObjects / WayMatrix equal (%zu fields)\n",file.c_str(),expected.size());
+      std::printf("%s: complete headless World / Vob::load / WorldObjects / WayMatrix equal (%zu fields); 0 engine ZEN opens with base\n",file.c_str(),expected.size());
       }
     // The actual selection function must open ZEN on a mismatched archive size,
     // and accept complete vob/waynet files from content ahead of the base.
     setenv("OPENGOTHIC_BASE",base.c_str(),1);
     setenv("OPENGOTHIC_CENSUS","",1);
+    {
     Resources resources; Gothic gothic;
     const auto dir=base/"worlds/NEWWORLD";
     auto index=json(dir/"world.json");
@@ -249,6 +251,24 @@ struct WorldDataContract {
       }
     std::printf("Selection: archive size %llu -> %llu returns ZEN; content vobs/waynet win; %zu base ZEN files equal\n",
                 static_cast<unsigned long long>(size),static_cast<unsigned long long>(size+1),zenCount);
+    }
+    // A stale loose-file identity disables the ZEN index just like stale archives.
+    auto zenIndex=json(base/"zen/zen.json");
+    require(zenIndex["loose_files"].Size()>0,"installation must include loose ZEN presets");
+    auto& loose=zenIndex["loose_files"][0];
+    const auto size=loose["size"].GetUint64();
+    loose["size"].SetUint64(size+1); write(base/"zen/zen.json",zenIndex);
+    const auto census=root/"loose-mismatch.json";
+    setenv("OPENGOTHIC_CENSUS",census.c_str(),1);
+    {
+    Resources resources; Gothic gothic;
+    WorldData::ZenFile camera;
+    require(!Resources::loadBaseZen("DIALOGCAMS.ZEN","cameras",camera),"loose size +1 must disable base ZEN");
+    gothic.setupGlobalScripts();
+    require(zenOpens(census)>0,"loose size +1 must load original dialog cameras");
+    }
+    std::printf("Selection: loose file %s size %llu -> %llu returns ZEN\n",loose["path"].GetString(),
+                static_cast<unsigned long long>(size),static_cast<unsigned long long>(size+1));
     }
   };
 

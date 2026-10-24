@@ -6,7 +6,7 @@
 //   content-convert verify-world <gothic dir> <WORLD.ZEN> <world dir> [override dir]
 //       Compare existing chunks and world data with the source .ZEN.
 //   content-convert zen|verify-zen <gothic dir> <dir>
-//       Every meshless .ZEN as <NAME>.json, with an archive index in zen.json.
+//       Engine-consumed meshless .ZEN files, including loose _work files.
 //   content-convert textures <gothic dir> <out dir>
 //       Every compiled texture (*-C.TEX) as <NAME>.dds (DXT blocks and mips
 //       copied as the engine builds them) or <NAME>.png (other formats, top
@@ -295,18 +295,31 @@ int verifyWorld(const SourceWorld& world, const fs::path& dir, const fs::path& o
 
 int convertZen(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
   const auto t0=std::chrono::steady_clock::now();
+  std::string openedSource;
   zenkit::Vfs vfs;
+  vfs.set_open_observer([&](std::string_view, std::string_view source) { openedSource=source; });
   const auto archives=mountArchives(vfs,gothic);
+  // Match Resources::mountWork, including its priority and VFS name lookup.
+  for(const auto& entry:fs::directory_iterator(gothic))
+    if(entry.is_directory() && upper(entry.path().filename().string())=="_WORK") {
+      vfs.mkdir("/_work");
+      vfs.mount_host(fs::absolute(entry.path()),"/_work",zenkit::VfsOverwriteBehavior::NONE);
+      break;
+      }
   std::vector<const zenkit::VfsNode*> files;
   collectFiles(vfs.root(),files);
   std::map<std::string,const zenkit::VfsNode*> zens;
   for(const auto* file:files)
-    if(endsWith(upper(file->name()),".ZEN")) zens[upper(file->name())]=file;
+    if(endsWith(upper(file->name()),".ZEN")) zens[upper(file->name())]=vfs.find(file->name());
   if(!verifyOnly) fs::create_directories(out);
-  std::string entries="{";
+  std::string entries="{", loose="[";
   uint64_t bytes=0;
-  size_t count=0, worlds=0;
+  size_t count=0, worlds=0, looseCount=0;
   for(const auto& [name,node]:zens) {
+    if(name=="LENSFLARE.ZEN") {
+      std::cout << "skipped LENSFLARE.ZEN: not consumed by the engine\n";
+      continue;
+      }
     const auto sourceBytes=readAll(*node);
     WorldData::ZenFile zen;
     const WorldChunkSource source{name,sourceBytes.size(),worldChunkCrc32(sourceBytes.data(),sourceBytes.size())};
@@ -318,15 +331,21 @@ int convertZen(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
       require(diff.empty(),diff);
       if(count++) entries+=",";
       entries+="\n    "+gothicglb::jsonString(name)+":"+gothicglb::jsonString(file);
+      if(fs::path(openedSource).is_absolute()) {
+        const auto path=fs::path(openedSource).lexically_relative(fs::absolute(gothic)).generic_string();
+        if(looseCount++) loose+=",";
+        loose+="\n    {\"path\":"+gothicglb::jsonString(path)+",\"size\":"+std::to_string(sourceBytes.size())+"}";
+        }
       bytes+=fs::file_size(out/file);
       }
     catch(const std::exception& e) { throw std::runtime_error(name+": "+e.what()); }
     }
-  const auto index="{\n  \"format\":1,\n  \"archives\":"+archivesJson(archives)+",\n  \"files\":"+entries+"\n  }\n}\n";
+  const auto index="{\n  \"format\":1,\n  \"archives\":"+archivesJson(archives)+
+                   ",\n  \"loose_files\":"+loose+"\n  ],\n  \"files\":"+entries+"\n  }\n}\n";
   if(!verifyOnly) writeHost(out/"zen.json",index.data(),index.size());
   const auto actual=parseJson(out/"zen.json");
   rapidjson::Document expected; expected.Parse(index.c_str());
-  require(actual==expected,"zen.json files or archives differ");
+  require(actual==expected,"zen.json files, archives or loose files differ");
   const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
   std::cout << (verifyOnly ? "verified " : "written and verified ") << count << " ZEN files, " << worlds
             << " mesh worlds excluded; " << bytes << " bytes; 0 failed (" << ms << " ms)\n";

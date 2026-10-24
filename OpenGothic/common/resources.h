@@ -210,11 +210,13 @@ class Resources final {
     struct BaseIndex {
       std::filesystem::path dir;
       std::vector<std::pair<std::string,uintmax_t>> archives;
+      std::vector<std::pair<std::string,uintmax_t>> looseFiles;
       std::map<std::string,std::string> files;
       bool enabled = false;
 
       void load(const std::filesystem::path& root, const char* kind);
       void validate(const std::vector<std::pair<std::string,uintmax_t>>& mounted);
+      void validateLoose(const std::filesystem::path& game);
       };
     BaseIndex baseTextures, baseMeshes, baseZen;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;

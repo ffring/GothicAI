@@ -1,4 +1,5 @@
 #include "resources.h"
+#include "commandline.h"
 
 #include <Tempest/MemReader>
 #include <Tempest/Pixmap>
@@ -166,6 +167,7 @@ Resources::Resources(Tempest::Device &device)
 void Resources::mountWork(const std::filesystem::path& path) {
   inst->gothicAssets.mkdir("/_work");
   inst->gothicAssets.mount_host(path, "/_work", zenkit::VfsOverwriteBehavior::NONE);
+  inst->baseZen.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
   }
 
 void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFilter) {
@@ -652,6 +654,21 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
       archives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
       }
     std::sort(archives.begin(),archives.end());
+    if(std::string_view(kind)=="zen" && table.HasMember("loose_files")) {
+      if(!table["loose_files"].IsArray())
+        throw std::runtime_error("invalid loose file list");
+      for(const auto& entry:table["loose_files"].GetArray()) {
+        if(!entry.IsObject() || !entry.HasMember("path") || !entry["path"].IsString() ||
+           !entry.HasMember("size") || !entry["size"].IsUint64())
+          throw std::runtime_error("invalid loose file identity");
+        const std::string name(entry["path"].GetString(),entry["path"].GetStringLength());
+        const std::filesystem::path path(name);
+        if(name.empty() || path.is_absolute() || name.find('\0')!=std::string::npos ||
+           std::any_of(path.begin(),path.end(),[](const auto& part) { return part==".."; }))
+          throw std::runtime_error("invalid loose file path");
+        looseFiles.emplace_back(name,entry["size"].GetUint64());
+        }
+      }
     for(const auto& entry:table[entries].GetObject()) {
       if(!entry.value.IsString())
         throw std::runtime_error("invalid file entry");
@@ -668,6 +685,7 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
   catch(const std::exception& error) {
     files.clear();
     archives.clear();
+    looseFiles.clear();
     Log::e("base: ",kind," disabled: ",error.what()," in \"",folder.string(),"\"");
     }
   }
@@ -680,6 +698,20 @@ void Resources::BaseIndex::validate(const std::vector<std::pair<std::string,uint
     Log::i("base: ",files.size()," entries from \"",dir.string(),"\"");
   else
     Log::e("base: ",dir.filename().string()," disabled: mounted archives differ from index in \"",dir.string(),"\"");
+  }
+
+void Resources::BaseIndex::validateLoose(const std::filesystem::path& game) {
+  if(!enabled)
+    return;
+  for(const auto& [path,size]:looseFiles) {
+    std::error_code error;
+    const auto actual=std::filesystem::file_size(game/path,error);
+    if(error || actual!=size) {
+      enabled=false;
+      Log::e("base: zen disabled: loose file differs from index: ",path,"; using ZEN");
+      return;
+      }
+    }
   }
 
 std::filesystem::path Resources::worldOverrideDir(std::string_view world) {
