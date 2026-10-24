@@ -51,8 +51,8 @@ inline void comparePacked(const PackedMesh& zen, const PackedMesh& base) {
     require(a.iboOffset==b.iboOffset && a.iboLength==b.iboLength,where+"index range differs");
     }
   require(zen.indices.size()==base.indices.size(),"packPhysics index count differs");
-  // The canonical base omits unused source vertices. Compare the positions
-  // addressed by each packed triangle, preserving its order and winding.
+  // Compare the positions addressed by each packed triangle, preserving its
+  // order and winding in the stream passed to Jolt.
   for(size_t triangle=0;triangle<zen.indices.size()/3;++triangle)
     require(packedTriangle(zen,triangle)==packedTriangle(base,triangle),
             "packPhysics dereferenced triangle "+std::to_string(triangle)+" differs");
@@ -240,40 +240,17 @@ void visualContract(const zenkit::Mesh& zen, const zenkit::Mesh& base, const std
   require(expected.vertices.size()==meshlets*PackedMesh::MaxVert &&
           expected.indices.size()==meshlets*PackedMesh::MaxInd &&
           expected.indices8.size()==meshlets*PackedMesh::MaxPrim*4,label+": incomplete GPU meshlet arrays");
-  const size_t unused=size_t(-1);
-  std::vector<size_t> vertexMap(expected.vertices.size(),unused),reverseMap(actual.vertices.size(),unused);
-  for(size_t meshlet=0;meshlet<meshlets;++meshlet) {
-    const auto tail=(meshlet+1)*PackedMesh::MaxPrim*4-4;
-    // The final byte-index slot records the used counts in a partial meshlet.
-    require(expected.indices8[tail+3]==actual.indices8[tail+3],
-            label+": GPU meshlet "+std::to_string(meshlet)+" used vertex counts differ");
-    const size_t triangles=expected.indices8[tail+3]==0 ? PackedMesh::MaxPrim : expected.indices8[tail+2];
-    const size_t actualTriangles=actual.indices8[tail+3]==0 ? PackedMesh::MaxPrim : actual.indices8[tail+2];
-    require(triangles==actualTriangles,label+": GPU meshlet "+std::to_string(meshlet)+" used triangle counts differ");
-    for(size_t triangle=0;triangle<triangles;++triangle)
-      for(size_t corner=0;corner<3;++corner) {
-        const auto index=meshlet*PackedMesh::MaxInd+triangle*3+corner;
-        const auto a=expected.indices[index],b=actual.indices[index];
-        const auto where=label+": GPU meshlet "+std::to_string(meshlet)+" triangle "+std::to_string(triangle)+
-                         " corner "+std::to_string(corner);
-        require(a<expected.vertices.size() && b<actual.vertices.size(),where+" has an invalid vertex index");
-        require(a/PackedMesh::MaxVert==meshlet && b/PackedMesh::MaxVert==meshlet,where+" addresses another meshlet");
-        require(sameVertex(expected.vertices[a],actual.vertices[b]),where+" dereferenced vertex differs");
-        require((vertexMap[a]==unused || vertexMap[a]==b) && (reverseMap[b]==unused || reverseMap[b]==a),
-                where+" vertex numbering is not a bijection");
-        vertexMap[a]=b;
-        reverseMap[b]=a;
-        const auto byteIndex=meshlet*PackedMesh::MaxPrim*4+triangle*4+corner;
-        require(meshlet*PackedMesh::MaxVert+expected.indices8[byteIndex]==a &&
-                meshlet*PackedMesh::MaxVert+actual.indices8[byteIndex]==b,where+" byte indices disagree with GPU indices");
-        }
-    }
-  // Permit only vertex renumbering within each meshlet. Triangle order,
-  // attributes, used counts, materials, ranges and bounds remain exact.
-  for(size_t i=0;i<vertexMap.size();++i)
-    if(vertexMap[i]==unused)
-      require(reverseMap[i]==unused && sameVertex(expected.vertices[i],actual.vertices[i]),
-              label+": GPU unused vertex "+std::to_string(i)+" differs");
+  for(size_t i=0;i<expected.vertices.size();++i)
+    require(sameVertex(expected.vertices[i],actual.vertices[i]),label+": GPU meshlet "+
+            std::to_string(i/PackedMesh::MaxVert)+" vertex "+std::to_string(i%PackedMesh::MaxVert)+" differs");
+  for(size_t i=0;i<expected.indices.size();++i)
+    require(expected.indices[i]==actual.indices[i],label+": GPU meshlet "+std::to_string(i/PackedMesh::MaxInd)+
+            " triangle "+std::to_string(i%PackedMesh::MaxInd/3)+" corner "+std::to_string(i%3)+
+            " index "+std::to_string(expected.indices[i])+" vs "+std::to_string(actual.indices[i]));
+  for(size_t i=0;i<expected.indices8.size();++i)
+    require(expected.indices8[i]==actual.indices8[i],label+": GPU meshlet "+std::to_string(i/(PackedMesh::MaxPrim*4))+
+            " triangle slot "+std::to_string(i%(PackedMesh::MaxPrim*4)/4)+" byte "+std::to_string(i%4)+
+            " index or count "+std::to_string(expected.indices8[i])+" vs "+std::to_string(actual.indices8[i]));
   const auto a=expected.bbox(),b=actual.bbox();
   require(sameVector(a.first,b.first) && sameVector(a.second,b.second),label+": GPU bounding box differs");
   std::printf("%s GPU: %zu submeshes, %zu vertices, %zu indices, %zu meshlets equal\n",label.c_str(),
