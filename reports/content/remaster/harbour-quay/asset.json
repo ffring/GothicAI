@@ -1,0 +1,380 @@
+{
+  "asset": "harbour-quay",
+  "title": "Набережная порта",
+  "kind": "building",
+  "created": "2026-10-24",
+  "goal": "the same Gothic, better made",
+  "namespaces": [
+    "harbour-quay",
+    "harbour-quay-edits"
+  ],
+  "sources": [
+    {
+      "file": "harbour-quay-edits/reference-attempt-1.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 1,
+      "sha256": "94cbd8c744c8e89102ecc9d6b1c3ad2a3c4de51cf14dc429147c16540cf52994",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "codex-scout-hq-nw-city-hafenkai-mauer-01-2",
+      "parent": null
+    },
+    {
+      "file": "harbour-quay/NW_CITY_HAFENKAI_MAUER_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFENKAI_MAUER_01.TGA",
+      "attempt": 1,
+      "sha256": "042517832725b87858d95f65a20625fd79d9fd76f94fc63b494507908b0d734a",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "none",
+      "parent": "harbour-quay-edits/reference-attempt-1.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-quay/NW_CITY_HAFENKAI_MAUER_01-attempt-1.normal.png",
+          "sha256": "91dddf677f40634afa2e200f051cf238fd8f010b9a68ea1f691abe08a624cfba"
+        },
+        "roughness": {
+          "file": "harbour-quay/NW_CITY_HAFENKAI_MAUER_01-attempt-1.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "harbour-quay-edits/reference-attempt-2.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 2,
+      "sha256": "cd0393bffcf0525ceabf3fa1732f1e07a57ae7864a0e05d30935a43de81be67b",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "codex-scout-hq-nw-city-hafenkai-boden-01-2",
+      "parent": null
+    },
+    {
+      "file": "harbour-quay/NW_CITY_HAFENKAI_BODEN_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFENKAI_BODEN_01.TGA",
+      "attempt": 1,
+      "sha256": "e109aca5c9424e3a0cb19560eb0923c6eff23ac87dcb8d1fca5be90514832982",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "none",
+      "parent": "harbour-quay-edits/reference-attempt-2.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-quay/NW_CITY_HAFENKAI_BODEN_01-attempt-1.normal.png",
+          "sha256": "cb50fc2854be6a63badf8c84739a95a63ac6eec89945b09de190949e84c8e7c4"
+        },
+        "roughness": {
+          "file": "harbour-quay/NW_CITY_HAFENKAI_BODEN_01-attempt-1.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "harbour-quay-edits/reference-attempt-3.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 3,
+      "sha256": "0e48250bf63d403e6b1b86efae25fcd20791b3e125a48a51ce9604656296f246",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "codex-scout-hq-nw-city-hafenkai-boden-trans-01-2",
+      "parent": null
+    },
+    {
+      "file": "harbour-quay/NW_CITY_HAFENKAI_BODEN_TRANS_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA",
+      "attempt": 1,
+      "sha256": "481d2053ad20d0c31c86c4f5d05f6ccec530f17deabf18fd42d109fba37ecee2",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "none",
+      "parent": "harbour-quay-edits/reference-attempt-3.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-quay/NW_CITY_HAFENKAI_BODEN_TRANS_01-attempt-1.normal.png",
+          "sha256": "5f8f3a292cb80649c47cb93792bcb9ff06c8286ecab90724abb06f988bd1ad14"
+        },
+        "roughness": {
+          "file": "harbour-quay/NW_CITY_HAFENKAI_BODEN_TRANS_01-attempt-1.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "harbour-quay-edits/reference-attempt-4.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 4,
+      "sha256": "1d508e1337c22900ccc29f45ca8af48e217d4ccfaa17b7ed2b86f421c269ba8e",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "codex-scout-hq-nw-city-hafenrandstein-01-2",
+      "parent": null
+    },
+    {
+      "file": "harbour-quay/NW_CITY_HAFENRANDSTEIN_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_CITY_HAFENRANDSTEIN_01.TGA",
+      "attempt": 1,
+      "sha256": "931d667f0c236718f362abcde16f83ffa0fcab143a4edf0fe387016108a84fdc",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "none",
+      "parent": "harbour-quay-edits/reference-attempt-4.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-quay/NW_CITY_HAFENRANDSTEIN_01-attempt-1.normal.png",
+          "sha256": "5905351be9a5c401e56772f9bb497aa98a3de4a2898f5d510a323eb7546f1667"
+        },
+        "roughness": {
+          "file": "harbour-quay/NW_CITY_HAFENRANDSTEIN_01-attempt-1.roughness.png",
+          "sha256": "0a85ee5731c6f3b6c8275f3d89bf6d910150a57d3db66bb279d3e515f3f5d9d7"
+        }
+      }
+    },
+    {
+      "file": "harbour-quay-edits/reference-attempt-5.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 5,
+      "sha256": "369640e88805f62fb92893179ff7854dc32e963144f965ed670d9c351cbd08c8",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "codex-scout-hq-nw-harbour-stairs-01-2",
+      "parent": null
+    },
+    {
+      "file": "harbour-quay/NW_HARBOUR_STAIRS_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_HARBOUR_STAIRS_01.TGA",
+      "attempt": 1,
+      "sha256": "aa644d1563607a9ca20eae50b7b8f76c92228c8e2a4172990df364362258e10d",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "none",
+      "parent": "harbour-quay-edits/reference-attempt-5.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-quay/NW_HARBOUR_STAIRS_01-attempt-1.normal.png",
+          "sha256": "8ee219b4b79f90324628d342a702135aa1e0a5d3ba607795c0233955f23f609a"
+        },
+        "roughness": {
+          "file": "harbour-quay/NW_HARBOUR_STAIRS_01-attempt-1.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "harbour-quay-edits/reference-attempt-6.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 6,
+      "sha256": "947c2c74697a2a4f9949e41e59bab68a9e25d1cddde3cbdfd231c0569e055378",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "codex-scout-hq-nw-harbour-stairs-03-2",
+      "parent": null
+    },
+    {
+      "file": "harbour-quay/NW_HARBOUR_STAIRS_03-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_HARBOUR_STAIRS_03.TGA",
+      "attempt": 1,
+      "sha256": "f1bc637c00151ba6e7b6b839b8d177d7152e8c48a02f441a7a68344fd0c06011",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "none",
+      "parent": "harbour-quay-edits/reference-attempt-6.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-quay/NW_HARBOUR_STAIRS_03-attempt-1.normal.png",
+          "sha256": "4ad2bc386ea4dff5729dda867aaa30be9af79bb69b96651a3b2adff7fd242bd8"
+        },
+        "roughness": {
+          "file": "harbour-quay/NW_HARBOUR_STAIRS_03-attempt-1.roughness.png",
+          "sha256": "cc6e949e584d7934aa9ee4f243dec9a7c43e676ab04e6a5f8e0481aec6ba855c"
+        }
+      }
+    },
+    {
+      "file": "harbour-quay-edits/reference-attempt-7.png",
+      "role": "reference",
+      "texture": null,
+      "attempt": 7,
+      "sha256": "195253e8ce0404bfd461e9eaa4d4c3825bbd2893a507458e241748c6845b4ab3",
+      "c2pa": {
+        "agent": "ChatGPT",
+        "version": "gpt-image"
+      },
+      "model": "ChatGPT gpt-image",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "codex-scout-hq-nw-harbour-wood-iron-01-2",
+      "parent": null
+    },
+    {
+      "file": "harbour-quay/NW_HARBOUR_WOOD_IRON_01-attempt-1.png",
+      "role": "texture",
+      "texture": "NW_HARBOUR_WOOD_IRON_01.TGA",
+      "attempt": 1,
+      "sha256": "81582acca823801212ea13a9de05f9835df0f0b330f5e12a441a3285dc74f206",
+      "c2pa": null,
+      "model": "derived: scripts/content/edit_texture.py",
+      "utc": "2026-10-24T08:23:54Z",
+      "thread": "none",
+      "parent": "harbour-quay-edits/reference-attempt-7.png",
+      "tool": "scripts/content/edit_texture.py",
+      "maps": {
+        "normal": {
+          "file": "harbour-quay/NW_HARBOUR_WOOD_IRON_01-attempt-1.normal.png",
+          "sha256": "d485e97043291a15bfe0e4e3495633ac6c93976498fbbb110b75f69102dfae53"
+        },
+        "roughness": {
+          "file": "harbour-quay/NW_HARBOUR_WOOD_IRON_01-attempt-1.roughness.png",
+          "sha256": "33cf91c5683b8910d8b6e6a87a044b247600d39d2e29361d5905fa4f4e243b35"
+        }
+      }
+    }
+  ],
+  "selected": {
+    "NW_CITY_HAFENKAI_MAUER_01.TGA": {
+      "file": "harbour-quay/NW_CITY_HAFENKAI_MAUER_01-attempt-1.png",
+      "reason": "quay-1: Texture Only, edit v2",
+      "date": "2026-10-24"
+    },
+    "NW_CITY_HAFENKAI_BODEN_01.TGA": {
+      "file": "harbour-quay/NW_CITY_HAFENKAI_BODEN_01-attempt-1.png",
+      "reason": "quay-1: Texture Only, edit v2",
+      "date": "2026-10-24"
+    },
+    "NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA": {
+      "file": "harbour-quay/NW_CITY_HAFENKAI_BODEN_TRANS_01-attempt-1.png",
+      "reason": "quay-1: Texture Only, edit v2",
+      "date": "2026-10-24"
+    },
+    "NW_CITY_HAFENRANDSTEIN_01.TGA": {
+      "file": "harbour-quay/NW_CITY_HAFENRANDSTEIN_01-attempt-1.png",
+      "reason": "quay-1: Texture Only, edit v2",
+      "date": "2026-10-24"
+    },
+    "NW_HARBOUR_STAIRS_01.TGA": {
+      "file": "harbour-quay/NW_HARBOUR_STAIRS_01-attempt-1.png",
+      "reason": "quay-1: Texture Only, edit v2",
+      "date": "2026-10-24"
+    },
+    "NW_HARBOUR_STAIRS_03.TGA": {
+      "file": "harbour-quay/NW_HARBOUR_STAIRS_03-attempt-1.png",
+      "reason": "quay-1: Texture Only, edit v2",
+      "date": "2026-10-24"
+    },
+    "NW_HARBOUR_WOOD_IRON_01.TGA": {
+      "file": "harbour-quay/NW_HARBOUR_WOOD_IRON_01-attempt-1.png",
+      "reason": "quay-1: Texture Only, edit v2",
+      "date": "2026-10-24"
+    }
+  },
+  "reviews": [
+    {
+      "id": "r3-q1-city_hafenkai_boden_01",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-24"
+    },
+    {
+      "id": "r3-q1-city_hafenrandstein_01",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-24"
+    },
+    {
+      "id": "r3-q1-city_hafenkai_boden_trans_01",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-24"
+    },
+    {
+      "id": "r3-q1-harbour_stairs_01",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-24"
+    },
+    {
+      "id": "r3-q1-harbour_wood_iron_01",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-24"
+    }
+  ],
+  "gates": [],
+  "build": {
+    "set": "quay-1",
+    "base": "original",
+    "date": "2026-10-24",
+    "albedo_sha256": {
+      "NW_CITY_HAFENKAI_MAUER_01.TGA": "5ac461dbe7cd8bfd7426e86fdd51b548aa8a375208321fc0338c6097064d6ca4",
+      "NW_CITY_HAFENKAI_BODEN_01.TGA": "3a67200b55a0ed193987512a0d3abedf823a606426dec076bb61924908a2637d",
+      "NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA": "c5ef768081607bf3720a81e7c4c994bbd915d2fee5785034e73eeaf0987edd55",
+      "NW_CITY_HAFENRANDSTEIN_01.TGA": "92e7a3ebefa665d310981cae13bcf0ca338a8b4a7e7ce3d4111286441358a2a6",
+      "NW_HARBOUR_STAIRS_01.TGA": "251da2bb3b2cd29532cf8d0754ed5acd6da1f30e29387e5317a3c68bc27507ff",
+      "NW_HARBOUR_STAIRS_03.TGA": "dcbd3e09c5960a37ff53445ab369feab4788cc09206b8d2a752a1a7b3b5caa1b",
+      "NW_HARBOUR_WOOD_IRON_01.TGA": "9a080ec621ca872149fc25ae074b22e5001390b0c5077ec28135c9225b2917f8"
+    },
+    "entries": 7,
+    "replaced": [
+      "NW_CITY_HAFENKAI_BODEN_01.TGA",
+      "NW_CITY_HAFENKAI_BODEN_TRANS_01.TGA",
+      "NW_CITY_HAFENKAI_MAUER_01.TGA",
+      "NW_CITY_HAFENRANDSTEIN_01.TGA",
+      "NW_HARBOUR_STAIRS_01.TGA",
+      "NW_HARBOUR_STAIRS_03.TGA",
+      "NW_HARBOUR_WOOD_IRON_01.TGA"
+    ],
+    "unchanged_entries": 0
+  },
+  "backup": null
+}

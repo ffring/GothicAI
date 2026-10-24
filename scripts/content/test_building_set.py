@@ -214,3 +214,9 @@ def test_model_maps_line_up_with_the_albedo(tmp_path, monkeypatch):
     Image.fromarray(np.full((512, 512), 78, np.uint8)).save(folder / 'S-attempt-1.roughness.png')
     with pytest.raises(ValueError, match='SHA-256'):
         building_set.load_model_maps(source, {'axes': ''})
+
+
+def test_an_edit_of_the_original_says_so():
+    derived = building_set.source_input('NW_X.TGA', {'tool': 'scripts/content/edit_texture.py'})
+    assert 'original texture NW_X.TGA' in derived and 'derivative' in derived
+    assert 'no original texture pixels' in building_set.source_input('NW_X.TGA', {'tool': 'scripts/content/slate_bake.py'})
