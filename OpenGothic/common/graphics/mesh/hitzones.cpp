@@ -384,7 +384,7 @@ void HitZones::posed(const Matrix4x4* tr, size_t numBones, float scale, std::vec
   for(auto& c:caps) {
     if(c.a.bone>=numBones || c.b.bone>=numBones)
       continue;
-    out.push_back({point(tr,c.a),point(tr,c.b),c.r*scale,c.zone});
+    out.push_back({point(tr,c.a),point(tr,c.b),c.r*scale,c.zone,c.owner});
     }
   }
 

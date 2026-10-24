@@ -4013,6 +4013,77 @@ namespace {
       require(triangleHit.sector!=nullptr && sectors[i]==triangleHit.sector,
               "mesh hit must retain its sector beyond 32 segments");
       }
+
+    // Shadow queries use the supplied HitZones even in a headless world with
+    // no native living rig. A single animation step rotates through this thin
+    // target; neither endpoint pose overlaps it.
+    {
+      CollisionWorld shadow;
+      int attackerIdentity=0,targetIdentity=0;
+      auto* attacker=reinterpret_cast<Npc*>(&attackerIdentity);
+      auto* target=reinterpret_cast<Npc*>(&targetIdentity);
+      const float diagonal=100.f*std::sqrt(.5f);
+      const MeleeBodyCapsule body{{diagonal,95,diagonal},{diagonal,105,diagonal},.05f,7,2};
+      shadow.updateShadowBody(target,{body,body});
+      // An identical capsule owned by the attacker must never be a target.
+      shadow.updateShadowBody(attacker,{body});
+      const MeleeBladeSegment before{{0,100,0},{100,100,0},{0,1,0},.1f};
+      const MeleeBladeSegment after{{0,100,0},{0,100,100},{0,1,0},.1f};
+      shadow.updateShadowBlade(attacker,1,{before},false);
+      shadow.tick(17);
+      shadow.updateShadowBlade(attacker,1,{after},true);
+      shadow.tick(17);
+      const auto contacts=shadow.takeShadowBladeContacts(attacker);
+      require(contacts.size()==1 && contacts[0].npc==target && contacts[0].bone==7 && contacts[0].zone==2,
+              "fast rotating blade must cross thin HitZones exactly once per target");
+      require((contacts[0].point-Tempest::Vec3(diagonal,100,diagonal)).length()<6.f,
+              "shadow contact must report the target surface in world centimetres");
+      require(contacts[0].bladeFraction>.8f && contacts[0].bladeFraction<=1.f && contacts[0].speedCmS>100.f &&
+              std::isfinite(contacts[0].surfaceAngleDeg) && contacts[0].surfaceAngleDeg>=0.f && contacts[0].surfaceAngleDeg<=90.f,
+              "shadow contact must retain blade location, point speed and surface angle");
+      shadow.updateShadowBlade(attacker,1,{before},true);
+      shadow.tick(17);
+      require(shadow.takeShadowBladeContacts(attacker).empty(),
+              "draining shadow contacts must preserve one-hit-per-target swing state");
+      shadow.updateShadowBlade(attacker,2,{after},true);
+      shadow.tick(17);
+      require(shadow.takeShadowBladeContacts(attacker).size()==1,
+              "a new shadow swing must allow the same target again");
+      require(shadow.bodyCount()==0 && shadow.simulationStep()==0,
+              "shadow queries must not create bodies or add a native simulation step");
+      shadow.removeShadowBlade(attacker);
+      shadow.removeShadowBody(attacker);
+      shadow.removeShadowBody(target);
+      }
+
+    {
+      CollisionWorld shadow;
+      int attackerIdentity=0,nearIdentity=0,farIdentity=0;
+      auto* attacker=reinterpret_cast<Npc*>(&attackerIdentity);
+      auto* nearTarget=reinterpret_cast<Npc*>(&nearIdentity);
+      auto* farTarget=reinterpret_cast<Npc*>(&farIdentity);
+      auto wall=shadow.addCollisionBody(new JPH::BoxShape({.001f,1,1},.0001f),at(0,100,0),.7f,DynamicWorld::C_Object);
+      // Keep an unrelated native body active so this exercises the existing
+      // physics step listener as well as the headless path above.
+      auto falling=shadow.addDynamicBody(new JPH::BoxShape({.1f,.1f,.1f}),at(10000,10000,0),.7f,1.f);
+      shadow.updateShadowBody(nearTarget,{{{-50,95,0},{-50,105,0},.05f,3,1}});
+      shadow.updateShadowBody(farTarget,{{{50,95,0},{50,105,0},.05f,4,1}});
+      const MeleeBladeSegment before{{-100,80,0},{-100,120,0},{0,0,1},.1f};
+      const MeleeBladeSegment after{{100,80,0},{100,120,0},{0,0,1},.1f};
+      shadow.updateShadowBlade(attacker,1,{before},false);
+      shadow.tick(17);
+      shadow.updateShadowBlade(attacker,1,{after},true);
+      shadow.tick(17);
+      const auto contacts=shadow.takeShadowBladeContacts(attacker);
+      require(contacts.size()==2 && contacts[0].npc==nearTarget && contacts[1].world,
+              "shadow contacts must be ordered and the first wall must hide the later target");
+      requireNear(contacts[1].point.x,-.1f,.02f,"shadow world contact must retain the wall surface point");
+      shadow.updateShadowBlade(attacker,1,{before},true);
+      shadow.tick(17);
+      require(shadow.takeShadowBladeContacts(attacker).empty(),
+              "a world contact must stop the entire shadow swing across later physics steps");
+      require(shadow.bodyCount()==2,"shadow stepping must not add a sensor body");
+      }
     }
   }
 

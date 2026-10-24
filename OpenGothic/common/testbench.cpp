@@ -680,6 +680,10 @@ struct Bench {
   bool meleeFixture=false,meleeMeasuring=false;
   std::string meleeMode,meleePelvis;
   uint64_t meleeMotionFrom=0;
+  std::vector<Npc*> meleeShadowActors;
+  std::vector<Vec3> meleeShadowPlaces;
+  Vec3 meleeShadowWall,meleeShadowForward;
+  std::string meleeShadowWeapon;
   // Test-only props use the body API directly; the map allowlist contains only
   // visuals actually authored in the stock worlds, not these Item mesh copies.
   struct MovableFixture { ObjVisual visual; DynamicWorld::Item body; };
@@ -11666,6 +11670,113 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.seatNpc->setPosition(bench.seatNpc->position()+Vec3(80,0,0));bench.seatNpc->updateTransform();
     bench.seatPhase="shift";
     event("living_seat_shift","\"distance_cm\":80");
+    }
+  else if(c=="melee-shadow") {
+    // The fixture prepares stock actors and geometry; all attacks use ordinary player input/AI.
+    const auto equip=[&](std::string_view weapon) {
+      if(weapon!="1h" && weapon!="2h" && weapon!="fist") {arenaAbort("melee shadow expects 1h, 2h or fist");return false;}
+      pl.clearAiQueue();pl.clearState(false);pl.clearGoTo();pl.stopWalking();pl.closeWeapon(true);
+      pl.handle().attribute[ATR_STRENGTH]=100;
+      pl.setTalentSkill(TALENT_1H,2);pl.setTalentSkill(TALENT_2H,2);
+      if(weapon=="fist") pl.setToFistMode();
+      else {
+        const auto symbol=w.script().findSymbolIndex(weapon=="1h"?"ITMW_1H_COMMON_01":"ITMW_2H_BAU_AXE");
+        if(symbol==size_t(-1)) {arenaAbort("melee shadow stock weapon is absent");return false;}
+        pl.setToFightMode(symbol);
+        if(!pl.currentMeleeWeapon() || pl.currentMeleeWeapon()->clsId()!=symbol) {
+          arenaAbort("melee shadow weapon did not equip");return false;
+          }
+        }
+      bench.meleeShadowWeapon=weapon;
+      return true;
+      };
+    if(a.size()==3 && a[1]=="setup") {
+      Gothic::settingsSetI("GAME","USEGOTHIC1CONTROLS",1);
+      const Vec3 forward=facing(pl),side(-forward.z,0,forward.x);
+      const auto wall=w.physic()->ray(pl.position()+Vec3(0,148,0),pl.position()+Vec3(0,148,0)+forward*450.f);
+      if(!wall.hasCol || std::abs(wall.n.y)>.35f) {arenaAbort("melee shadow needs a real wall ahead (corner right go 0)");return;}
+      for(auto* npc:bench.meleeShadowActors) if(w.npcId(npc)!=uint32_t(-1)) w.removeNpc(*npc);
+      bench.meleeShadowActors.clear();bench.meleeShadowPlaces.clear();
+      bench.meleeShadowWall=wall.v;bench.meleeShadowForward=forward;
+      const char* symbols[]={"WOLF","WOLF","BDT_1013_BANDIT_L"};
+      const Vec3 center=Vec3(wall.v.x,pl.position().y,wall.v.z)-forward*75.f;
+      const Vec3 places[]={center-side*125.f-forward*30.f,center+side*125.f-forward*30.f,center};
+      for(size_t i=0;i<std::size(symbols);++i) {
+        Vec3 pos=places[i];
+        const auto floor=w.physic()->landRay(pos+Vec3(0,200,0),500.f);
+        const auto path=w.physic()->ray(pl.position()+Vec3(0,90,0),pos+Vec3(0,90,0));
+        const auto symbol=w.script().findSymbolIndex(symbols[i]);
+        if(!floor.hasCol || floor.n.y<.8f || path.hasCol || symbol==size_t(-1)) {
+          arenaAbort("melee shadow target lacks supported unobstructed real ground");return;
+          }
+        pos.y=floor.v.y;
+        auto* npc=w.addNpc(symbol,pos);
+        if(!npc) {arenaAbort("melee shadow target insertion failed");return;}
+        npc->clearAiQueue();npc->clearState(true);npc->clearGoTo();npc->stopWalking();npc->setExternalControl(true);
+        npc->handle().attribute[ATR_HITPOINTSMAX]=100000;
+        npc->handle().attribute[ATR_HITPOINTS]=100000;
+        npc->setDirection(forward*-1.f);npc->updateTransform();
+        if(i==2) {
+          const auto sword=w.script().findSymbolIndex("ITMW_1H_COMMON_01");
+          if(sword==size_t(-1)) {arenaAbort("melee shadow bandit weapon is absent");return;}
+          npc->setToFightMode(sword);
+          }
+        bench.meleeShadowActors.push_back(npc);bench.meleeShadowPlaces.push_back(pos);
+        event("melee_shadow_actor","\"index\":"+std::to_string(i)+",\"npc\":"+jsonStr(TestBench::who(npc))+
+          ",\"npc_id\":"+std::to_string(w.npcId(npc))+
+          ",\"position_cm\":"+ragdollVector(pos)+",\"wall_cm\":"+ragdollVector(wall.v));
+        }
+      if(!equip(a[2])) return;
+      event("melee_shadow_setup","\"world\":"+jsonStr(w.name())+",\"weapon\":"+jsonStr(a[2])+
+        ",\"wall_cm\":"+ragdollVector(wall.v)+",\"wall_normal\":"+ragdollVector(wall.n));
+      }
+    else if(a.size()==3 && a[1]=="weapon") equip(a[2]);
+    else if(a.size()==3 && a[1]=="target") {
+      const int index=int(num(a,2,-1));
+      if(index<0 || size_t(index)>=bench.meleeShadowActors.size()) {arenaAbort("melee shadow target is absent");return;}
+      for(size_t i=0;i<bench.meleeShadowActors.size();++i) {
+        auto& npc=*bench.meleeShadowActors[i];
+        npc.clearAiQueue();npc.clearState(true);npc.clearGoTo();npc.stopWalking();npc.setExternalControl(true);
+        npc.setPosition(bench.meleeShadowPlaces[i]);npc.setDirection(bench.meleeShadowForward*-1.f);npc.updateTransform();
+        }
+      auto* target=bench.meleeShadowActors[size_t(index)];
+      const float distance=bench.meleeShadowWeapon=="fist"?90.f:bench.meleeShadowWeapon=="2h"?180.f:140.f;
+      Vec3 at=target->position()-bench.meleeShadowForward*distance;
+      const auto floor=w.physic()->landRay(at+Vec3(0,200,0),500.f);
+      if(!floor.hasCol || floor.n.y<.8f) {arenaAbort("melee shadow attacker has no supported ground");return;}
+      at.y=floor.v.y;
+      pl.clearGoTo();pl.stopWalking();pl.setPosition(at);pl.setDirection(bench.meleeShadowForward);pl.setTarget(target);pl.updateTransform();
+      event("melee_shadow_target","\"index\":"+std::to_string(index)+",\"weapon\":"+jsonStr(bench.meleeShadowWeapon)+
+        ",\"attacker_cm\":"+ragdollVector(at)+",\"target_cm\":"+ragdollVector(target->position()));
+      }
+    else if(a.size()==2 && a[1]=="wall") {
+      if(bench.meleeShadowActors.size()!=3) {arenaAbort("melee shadow setup is required");return;}
+      const auto forward=bench.meleeShadowForward;
+      const auto at=Vec3(bench.meleeShadowWall.x,pl.position().y,bench.meleeShadowWall.z)-forward*65.f;
+      const auto floor=w.physic()->landRay(at+Vec3(0,200,0),500.f);
+      if(!floor.hasCol || floor.n.y<.8f) {arenaAbort("melee shadow wall stance lacks supported ground");return;}
+      pl.setPosition(Vec3(at.x,floor.v.y,at.z));pl.setDirection(forward);pl.setTarget(nullptr);pl.updateTransform();
+      for(auto* npc:bench.meleeShadowActors) {
+        npc->setExternalControl(true);npc->clearAiQueue();npc->clearState(true);npc->clearGoTo();npc->stopWalking();
+        auto away=npc->position()-forward*450.f;
+        const auto ground=w.physic()->landRay(away+Vec3(0,200,0),500.f);
+        if(!ground.hasCol) {arenaAbort("melee shadow wall target relocation lacks ground");return;}
+        away.y=ground.v.y;npc->setPosition(away);npc->updateTransform();
+        }
+      event("melee_shadow_wall","\"weapon\":"+jsonStr(bench.meleeShadowWeapon)+",\"attacker_cm\":"+
+        ragdollVector(pl.position())+",\"wall_cm\":"+ragdollVector(bench.meleeShadowWall));
+      }
+    else if(a.size()==2 && a[1]=="live") {
+      if(bench.meleeShadowActors.size()!=3) {arenaAbort("melee shadow setup is required");return;}
+      for(auto* npc:bench.meleeShadowActors) exec("fight id:"+std::to_string(w.npcId(npc))+" player",w,pl,ctrl);
+      event("melee_shadow_live","\"weapon\":"+jsonStr(bench.meleeShadowWeapon)+",\"attacker_cm\":"+ragdollVector(pl.position()));
+      }
+    else if(a.size()==2 && a[1]=="clear") {
+      pl.setTarget(nullptr);
+      for(auto* npc:bench.meleeShadowActors) if(w.npcId(npc)!=uint32_t(-1)) w.removeNpc(*npc);
+      bench.meleeShadowActors.clear();bench.meleeShadowPlaces.clear();
+      }
+    else {arenaAbort("melee shadow expects setup/weapon <1h|2h|fist>, target <0|1|2>, wall, live or clear");return;}
     }
   else if(c=="melee-physics" && a.size()==6 && a[1]=="setup") {
     const auto* enabled=std::getenv("OPENGOTHIC_MELEE_BENCH");

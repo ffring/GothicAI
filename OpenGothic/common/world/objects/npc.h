@@ -880,6 +880,12 @@ class Npc final {
     bool                          livingWasInteracting = false;
     MeleeBenchMode meleeBenchMode() const;
     void updateMeleeBenchBlade();
+    struct MeleeShadow;
+    std::unique_ptr<MeleeShadow>   meleeShadow;
+    bool                          meleeShadowBody = false;
+    void syncMeleeShadowSwing();
+    void updateMeleeShadow();
+    void finishMeleeShadowSwing(bool remove=true);
     ArrowPhysicsProbe             arrowPhysics;
     struct ArrowImpact {
       size_t bone;
