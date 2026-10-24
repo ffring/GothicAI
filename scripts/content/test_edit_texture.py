@@ -28,3 +28,20 @@ def test_relief_reaches_the_asked_tilt():
     for tilt in (8., 14.):
         normal = et.remaster(edit, original, (1., 1.), tilt)['normal']
         assert abs(et._median_tilt(normal) - tilt) < 1.
+
+
+def test_a_dark_original_pixel_gives_no_coloured_rim():
+    edit, original = _pair(2)
+    original[100:104, :, :] = np.array([.004, .0005, .0005])     # a dark joint whose hue is all red noise
+    edit[100:104, :, :] = .3                                     # the edit puts light stone there
+    albedo = et.remaster(edit, original, (1., 1.))['albedo']
+    rim = albedo[100:104]
+    assert (rim[..., 0] / np.maximum(rim[..., 1], 1e-6)).mean() < 2.     # not pushed to red
+
+
+def test_relief_blur_smooths_the_finest_band():
+    edit, original = _pair(3)
+    sharp = et.remaster(edit, original, (1., 1.))['normal']
+    soft = et.remaster(edit, original, (1., 1.), relief_blur=.02)['normal']
+    step = lambda n: np.abs(np.diff(n[..., 0], axis=1)).mean()
+    assert step(soft) < step(sharp) * .7
