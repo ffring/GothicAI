@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the converted base (docs/asset-migration.md): four world meshes, every texture and
+# Builds the converted base (docs/asset-migration.md): four worlds, meshless .ZEN files, every texture and
 # every static mesh of the installed Gothic II, each checked against its source.
 #
 #   scripts/content/build-base.sh [out dir]      # default ~/.local/share/gothic-ai/base/v1
@@ -21,7 +21,8 @@ for world in NEWWORLD OLDWORLD ADDONWORLD DRAGONISLAND; do
   rm -rf "$OUT/worlds/$world"
   "$tool" world "$GOTHIC_DIR" "$world.ZEN" "$OUT/worlds/$world"
 done
-rm -rf "$OUT/textures" "$OUT/meshes"
+rm -rf "$OUT/textures" "$OUT/meshes" "$OUT/zen"
+"$tool" zen "$GOTHIC_DIR" "$OUT/zen"
 "$tool" textures "$GOTHIC_DIR" "$OUT/textures"
 "$tool" meshes "$GOTHIC_DIR" "$OUT/meshes"
 du -sh "$OUT"
