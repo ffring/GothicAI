@@ -1,5 +1,5 @@
 {
- "set": "quay-3",
+ "set": "quay-4",
  "base": "original",
  "registry": "data/content/remaster/harbour-quay.jsonl",
  "textures": {
