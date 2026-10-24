@@ -119,7 +119,9 @@ bool ContentCensus::write() noexcept {
     for(auto& [key,count]:replacements) {
       json.StartObject();
       json.Key("name"); string(key.first);
-      json.Key("kind"); string(key.second.compare(0,7,"meshes/")==0 ? "mesh" :
+      json.Key("kind"); string(key.second.compare(0,14,"base/textures/")==0 ? "basetexture" :
+                               key.second.compare(0,12,"base/meshes/")==0 ? "basemesh" :
+                               key.second.compare(0,7,"meshes/")==0 ? "mesh" :
                                key.second.compare(0,7,"worlds/")==0 ? "worldmesh" : kind(key.first,{}));
       json.Key("replacement"); string(key.second);
       json.Key("opens"); json.Uint64(count);
