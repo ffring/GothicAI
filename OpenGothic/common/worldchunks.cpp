@@ -155,7 +155,6 @@ class ChunkReader {
 
   private:
     size_t  chunk = 0;
-    int64_t nextLocal = 0;
     std::map<int64_t,size_t>     byIndex;
     std::map<std::string,size_t> byRecord;
 
@@ -228,8 +227,6 @@ class ChunkReader {
         const auto* order = extrasAccessor(d,extras.get(),"order",tris);
         const auto* flags = extrasAccessor(d,extras.get(),"flags",tris);
         const auto* light = extrasAccessor(d,extras.get(),"lightmap",tris);
-        const int64_t local = nextLocal;
-        nextLocal += int64_t(pos->count);
 
         auto corner = [&](size_t i) {
           Corner r {};
@@ -278,14 +275,18 @@ class ChunkReader {
             }
           auto sourceId = [&](const cgltf_accessor* a) -> int64_t {
             if(a==nullptr)
-              return -1 - (local + int64_t(i));
+              return -1;
             float id;
-            if(!cgltf_accessor_read_float(a,i,&id,1) || !(id>=0) || id>=float(exactIndexLimit) || id!=std::floor(id))
+            if(!cgltf_accessor_read_float(a,i,&id,1) || !std::isfinite(id) || id>=float(exactIndexLimit) || id!=std::floor(id))
               fail("invalid _VERTEX/_FEATURE value");
+            // A negative id marks geometry an edit added (Blender scripts write -1).
+            if(id<0)
+              return -1;
             return int64_t(id);
             };
-          // Edited geometry without source ids gets negative ids unique per
-          // chunk vertex, so it never merges with source vertices.
+          // Edited geometry has no source id (-1): it never merges with a source
+          // vertex, and copies the exporter split by normal or UV merge again
+          // by their exact values.
           r.vertex  = {sourceId(vid),bits(r.position.x),bits(r.position.y),bits(r.position.z)};
           r.feature = {sourceId(fid),bits(r.value.texture.x),bits(r.value.texture.y),r.value.light,
                        bits(r.value.normal.x),bits(r.value.normal.y),bits(r.value.normal.z)};
