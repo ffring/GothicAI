@@ -21,6 +21,8 @@
 
 #include "basemesh.h"
 #include "worldchunks.h"
+#include "worlddata.h"
+#include "gothicglb.h"
 
 #include <zenkit/Logger.hh>
 #include <zenkit/MultiResolutionMesh.hh>
@@ -62,14 +64,16 @@ std::string upper(std::string s) {
   return s;
   }
 
-struct SourceWorld {
-  WorldChunkSource source;
-  zenkit::Mesh     mesh;
-  };
-
 struct Archive {
   std::string name; // upper case file name
   uint64_t    size;
+  };
+
+struct SourceWorld {
+  WorldChunkSource source;
+  zenkit::Mesh     mesh;
+  WorldData::Data  data;
+  std::vector<Archive> archives;
   };
 
 // Every Data/*.vdf with OLDER, as the engine mounts them (resources.cpp):
@@ -104,7 +108,7 @@ std::vector<std::byte> readAll(const zenkit::VfsNode& file) {
 // The engine checks size and CRC32 of the .ZEN it opened against world.json.
 SourceWorld loadWorld(const fs::path& gothic, const std::string& name) {
   zenkit::Vfs vfs;
-  mountArchives(vfs,gothic);
+  const auto archives = mountArchives(vfs,gothic);
   const auto* file = vfs.find(name);
   require(file!=nullptr,"missing world "+name);
 
@@ -117,6 +121,8 @@ SourceWorld loadWorld(const fs::path& gothic, const std::string& name) {
   zenkit::World world;
   auto in = zenkit::Read::from(&bytes);
   world.load(in.get(),zenkit::GameVersion::GOTHIC_2);
+  r.data = WorldData::fromWorld(world,r.source);
+  r.archives = archives;
   r.mesh = std::move(world.world_mesh);
   return r;
   }
@@ -242,6 +248,87 @@ std::string archivesJson(const std::vector<Archive>& archives) {
     m += std::string(i==0 ? "\n    " : ",\n    ") + "{\"name\": " + jsonName(archives[i].name) +
          ", \"size\": " + std::to_string(archives[i].size) + "}";
   return m + "\n  ]";
+  }
+
+void addWorldArchives(const fs::path& dir, const std::vector<Archive>& archives) {
+  const auto bytes=readHost(dir/"world.json");
+  std::string text(reinterpret_cast<const char*>(bytes.data()),bytes.size());
+  require(!text.empty() && text[0]=='{',"invalid world.json");
+  text.insert(1,"\n  \"archives\": "+archivesJson(archives)+",");
+  writeHost(dir/"world.json",text.data(),text.size());
+  }
+
+rapidjson::Document parseJson(const fs::path& file) {
+  const auto bytes=readHost(file);
+  rapidjson::Document doc;
+  doc.Parse<rapidjson::kParseFullPrecisionFlag>(reinterpret_cast<const char*>(bytes.data()),bytes.size());
+  require(!doc.HasParseError() && doc.IsObject(),"invalid JSON: "+file.string());
+  return doc;
+  }
+
+int verifyWorld(const SourceWorld& world, const fs::path& dir, const fs::path& overrideDir) {
+  const auto t0=std::chrono::steady_clock::now();
+  if(verify(world.mesh,dir,overrideDir)!=0) return 1;
+  const auto manifest=readWorldChunkManifest(dir);
+  require(manifest.source.world==world.source.world && manifest.source.size==world.source.size &&
+          manifest.source.crc32==world.source.crc32,"world.json source differs");
+  const auto json=parseJson(dir/"world.json");
+  rapidjson::Document archives;
+  archives.Parse(archivesJson(world.archives).c_str());
+  require(json.HasMember("archives") && json["archives"]==archives,"world.json archives differ");
+  const auto data=WorldData::read(dir);
+  const auto diff=WorldData::compare(world.data,data);
+  require(diff.empty(),world.source.world+": "+diff);
+  uint64_t bytes=0;
+  for(const auto* file:{"vobs.json","waynet.json","sectors.json","bsp.bin"}) bytes+=fs::file_size(dir/file);
+  const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << world.source.world << ": vobs " << WorldData::vobCount(data.vobs)
+            << ", points " << (data.waynet ? data.waynet->points.size() : 0)
+            << ", edges " << (data.waynet ? data.waynet->edges.size() : 0)
+            << ", sectors " << data.bsp.sectors.size() << ", nodes " << data.bsp.nodes.size()
+            << ", leaves " << data.bsp.leaf_node_indices.size() << "; data " << bytes
+            << " bytes; ZenKit ASCII, BSP and rooms equal (" << ms << " ms)\n";
+  return 0;
+  }
+
+int convertZen(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
+  const auto t0=std::chrono::steady_clock::now();
+  zenkit::Vfs vfs;
+  const auto archives=mountArchives(vfs,gothic);
+  std::vector<const zenkit::VfsNode*> files;
+  collectFiles(vfs.root(),files);
+  std::map<std::string,const zenkit::VfsNode*> zens;
+  for(const auto* file:files)
+    if(endsWith(upper(file->name()),".ZEN")) zens[upper(file->name())]=file;
+  if(!verifyOnly) fs::create_directories(out);
+  std::string entries="{";
+  uint64_t bytes=0;
+  size_t count=0, worlds=0;
+  for(const auto& [name,node]:zens) {
+    const auto sourceBytes=readAll(*node);
+    WorldData::ZenFile zen;
+    const WorldChunkSource source{name,sourceBytes.size(),worldChunkCrc32(sourceBytes.data(),sourceBytes.size())};
+    try {
+      if(!WorldData::loadZen(sourceBytes,source,zen)) { ++worlds; continue; }
+      const auto file=name.substr(0,name.size()-4)+".json";
+      if(!verifyOnly) WorldData::writeZen(zen,out/file);
+      const auto diff=WorldData::compareZen(zen,WorldData::readZen(out/file));
+      require(diff.empty(),diff);
+      if(count++) entries+=",";
+      entries+="\n    "+gothicglb::jsonString(name)+":"+gothicglb::jsonString(file);
+      bytes+=fs::file_size(out/file);
+      }
+    catch(const std::exception& e) { throw std::runtime_error(name+": "+e.what()); }
+    }
+  const auto index="{\n  \"format\":1,\n  \"archives\":"+archivesJson(archives)+",\n  \"files\":"+entries+"\n  }\n}\n";
+  if(!verifyOnly) writeHost(out/"zen.json",index.data(),index.size());
+  const auto actual=parseJson(out/"zen.json");
+  rapidjson::Document expected; expected.Parse(index.c_str());
+  require(actual==expected,"zen.json files or archives differ");
+  const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << (verifyOnly ? "verified " : "written and verified ") << count << " ZEN files, " << worlds
+            << " mesh worlds excluded; " << bytes << " bytes; 0 failed (" << ms << " ms)\n";
+  return 0;
   }
 
 // Writes (or, with verifyOnly, re-reads and compares) every texture.
@@ -493,6 +580,7 @@ int selfTest() {
   diff = compareBaseMeshes(mrm,readBaseMesh(dir/"mesh.glb"));
   require(diff.empty(),"mesh round trip: "+diff);
 
+  WorldData::selfTest(dir/"world-data");
   fs::remove_all(dir);
   std::cout << "self-test passed\n";
   return 0;
@@ -504,6 +592,8 @@ int main(int argc, char** argv) {
   try {
     zenkit::Logger::set(zenkit::LogLevel::ERROR,[](auto,const char* component,const char* message) {
       std::cerr << "ZenKit " << component << ": " << message << '\n';
+      if(std::string_view(message).find("Unknown object type")!=std::string_view::npos)
+        throw std::runtime_error(message);
       });
     const std::vector<std::string> args(argv+1,argv+argc);
     if(args.size()==1 && args[0]=="--self-test")
@@ -513,21 +603,25 @@ int main(int argc, char** argv) {
       std::cout << world.source.world << ": " << world.source.size << " bytes, crc32 " << world.source.crc32 << "\n";
       const auto t0 = std::chrono::steady_clock::now();
       const auto manifest = writeWorldChunks(world.mesh,world.source,args[3]);
+      WorldData::write(world.data,args[3]);
+      addWorldArchives(args[3],world.archives);
       const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
       std::cout << manifest.chunks.size() << " chunks written to " << args[3] << " (" << ms << " ms); unreferenced: "
                 << manifest.unreferencedVertices << " vertices, " << manifest.unreferencedFeatures << " features\n";
-      return verify(world.mesh,args[3],{});
+      return verifyWorld(world,args[3],{});
       }
+    if(args.size()==3 && (args[0]=="zen" || args[0]=="verify-zen"))
+      return convertZen(args[1],args[2],args[0]=="verify-zen");
     if(args.size()==3 && (args[0]=="meshes" || args[0]=="verify-meshes"))
       return convertMeshes(args[1],args[2],args[0]=="verify-meshes");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
       return convertTextures(args[1],args[2],args[0]=="verify-textures");
     if((args.size()==4 || args.size()==5) && args[0]=="verify-world") {
       const auto world = loadWorld(args[1],args[2]);
-      return verify(world.mesh,args[3],args.size()==5 ? fs::path(args[4]) : fs::path());
+      return verifyWorld(world,args[3],args.size()==5 ? fs::path(args[4]) : fs::path());
       }
     std::cerr << "usage: content-convert world|verify-world <gothic dir> <WORLD.ZEN> <dir> [override]\n"
-                 "       content-convert textures|verify-textures|meshes|verify-meshes <gothic dir> <dir>\n"
+                 "       content-convert textures|verify-textures|meshes|verify-meshes|zen|verify-zen <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";
     return 2;
     }

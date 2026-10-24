@@ -8,6 +8,8 @@
 #include "resources.h"
 #include "worldbase.h"
 #include "worldchunks.h"
+#include "worlddata.h"
+#include "world/portalrooms.h"
 
 #include <zenkit/Stream.hh>
 #include <zenkit/World.hh>
@@ -301,6 +303,32 @@ zenkit::Mesh selectionMesh() {
   return mesh;
   }
 
+void worldDataContract(const zenkit::World& world, const WorldChunkSource& source, const fs::path& dir) {
+  const auto original=WorldData::fromWorld(world,source);
+  WorldData::write(original,dir);
+  const auto restored=WorldData::read(dir);
+  const auto diff=WorldData::compare(original,restored);
+  require(diff.empty(),"world data: "+diff);
+  PortalRooms::Volumes rooms;
+  rooms.reset(world.world_mesh,world.world_bsp_tree);
+  const auto& bounds=world.world_mesh.bbox;
+  const auto nx=uint64_t(std::ceil(double(bounds.max.x-bounds.min.x)/400.));
+  const auto nz=uint64_t(std::ceil(double(bounds.max.z-bounds.min.z)/400.));
+  size_t samples=0, indoor=0;
+  for(uint64_t x=0;x<=nx;++x) for(uint64_t z=0;z<=nz;++z) for(unsigned h=0;h<3;++h) {
+    const zenkit::Vec3 p{bounds.min.x+(bounds.max.x-bounds.min.x)*float(double(x)/double(std::max(uint64_t(1),nx))),
+                         bounds.min.y+(bounds.max.y-bounds.min.y)*float(h+1)/4.f,
+                         bounds.min.z+(bounds.max.z-bounds.min.z)*float(double(z)/double(std::max(uint64_t(1),nz)))};
+    const auto expected=rooms.isIndoor({p.x,p.y,p.z});
+    const auto actual=WorldData::isIndoor(restored.bsp.mode,restored.rooms,p);
+    require(expected==actual,"PortalRooms isIndoor differs at "+std::to_string(p.x)+","+
+            std::to_string(p.y)+","+std::to_string(p.z));
+    ++samples; indoor+=expected;
+    }
+  std::printf("World data: %zu vobs, %zu sectors; PortalRooms %zu grid samples (%zu indoor) equal\n",
+              WorldData::vobCount(restored.vobs),restored.bsp.sectors.size(),samples,indoor);
+  }
+
 void selectionContract(const fs::path& root) {
   const std::vector<std::byte> bytes={std::byte{1},std::byte{2},std::byte{3}};
   const WorldChunkSource source={"NEWWORLD.ZEN",bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())};
@@ -357,8 +385,9 @@ int main() {
     auto buffer=zenkit::Read::from(&bytes);
     zenkit::World world;
     world.load(buffer.get(),zenkit::GameVersion::GOTHIC_2);
-    auto zen=std::move(world.world_mesh);
     const WorldChunkSource source={"NEWWORLD.ZEN",bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())};
+    worldDataContract(world,source,temporary.path/"world-data");
+    auto zen=std::move(world.world_mesh);
     const auto dir=temporary.path/"NEWWORLD";
     const auto manifest=writeWorldChunks(zen,source,dir);
     auto base=readWorldChunks(dir);
