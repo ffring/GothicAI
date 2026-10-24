@@ -739,7 +739,25 @@
       "path": "reviews/r3-q4-kerb/merged.json"
     }
   ],
-  "gates": [],
+  "gates": [
+    {
+      "gate": "ingame",
+      "verdict": "approved",
+      "by": "user",
+      "date": "2026-10-24",
+      "quote": "Включаем quay-4 в рабочий контент? — да",
+      "note": null
+    },
+    {
+      "gate": "enable",
+      "verdict": "approved",
+      "by": "user",
+      "date": "2026-10-24",
+      "quote": "Включаем quay-4 в рабочий контент? — да",
+      "note": null,
+      "set": "quay-4"
+    }
+  ],
   "build": {
     "set": "quay-4",
     "base": "original",
@@ -765,5 +783,10 @@
     ],
     "unchanged_entries": 0
   },
-  "backup": null
+  "backup": {
+    "date": "2026-10-24",
+    "host": "dev-ubuntu",
+    "matched": 104,
+    "mismatched": []
+  }
 }
