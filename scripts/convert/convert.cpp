@@ -456,7 +456,8 @@ int selfTest() {
   require(back.triangles==6,"manifest triangles");
 
   const auto expected = canonicalWorldMesh(mesh);
-  require(expected.materials.size()==2 && expected.vertices.size()==11,"canonical form drops unused entries");
+  require(expected.materials.size()==3 && expected.vertices.size()==13,"canonical form keeps every source entry");
+  require(back.vertices==13 && back.features==14 && back.materials.size()==3,"manifest counts");
   auto diff = compareWorldMeshes(expected,readWorldChunks(dir));
   require(diff.empty(),"round trip: "+diff);
 
@@ -513,7 +514,8 @@ int main(int argc, char** argv) {
       const auto t0 = std::chrono::steady_clock::now();
       const auto manifest = writeWorldChunks(world.mesh,world.source,args[3]);
       const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
-      std::cout << manifest.chunks.size() << " chunks written to " << args[3] << " (" << ms << " ms)\n";
+      std::cout << manifest.chunks.size() << " chunks written to " << args[3] << " (" << ms << " ms); unreferenced: "
+                << manifest.unreferencedVertices << " vertices, " << manifest.unreferencedFeatures << " features\n";
       return verify(world.mesh,args[3],{});
       }
     if(args.size()==3 && (args[0]=="meshes" || args[0]=="verify-meshes"))

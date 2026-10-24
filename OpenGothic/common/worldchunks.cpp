@@ -25,10 +25,12 @@ using namespace gothicglb;
   throw std::runtime_error("world chunks: " + reason);
   }
 
-constexpr int         formatVersion = 1;
+constexpr int         formatVersion = 2;
 constexpr const char* manifestName  = "world.json";
 constexpr const char* chunkFormat   = "gothic-world-chunk";
 constexpr const char* worldFormat   = "gothic-world";
+constexpr const char* unreferencedName  = "unreferenced.bin";
+constexpr char        unreferencedMagic[4] = {'G','W','U','R'};
 // Float attributes carry source indices; floats are exact up to 2^24.
 constexpr uint32_t    exactIndexLimit = 1u << 24;
 constexpr float       baseScale = 0.01f;
@@ -349,44 +351,11 @@ uint32_t worldChunkCrc32(const void* data, size_t size, uint32_t crc) {
 
 zenkit::Mesh canonicalWorldMesh(const zenkit::Mesh& mesh) {
   checkPolygons(mesh);
-  const auto& p = mesh.polygons;
-  const size_t n = p.material_indices.size();
-
-  std::vector<uint32_t> used(mesh.materials.size(),0);
-  for(const auto m:p.material_indices)
-    used[m] = 1;
-  std::vector<uint32_t> materialMap(mesh.materials.size(),0);
   zenkit::Mesh out;
-  for(size_t i=0; i<mesh.materials.size(); ++i)
-    if(used[i]) {
-      materialMap[i] = uint32_t(out.materials.size());
-      out.materials.push_back(mesh.materials[i]);
-      }
-
-  std::vector<uint32_t> vertexMap(mesh.vertices.size(),UINT32_MAX), featureMap(mesh.features.size(),UINT32_MAX);
-  auto& q = out.polygons;
-  q.material_indices.reserve(n);
-  q.lightmap_indices = p.lightmap_indices;
-  q.flags            = p.flags;
-  q.vertex_indices.reserve(n*3);
-  q.feature_indices.reserve(n*3);
-  for(size_t i=0; i<n; ++i) {
-    q.material_indices.push_back(materialMap[p.material_indices[i]]);
-    for(unsigned c=0; c<3; ++c) {
-      auto& v = vertexMap[p.vertex_indices[i*3+c]];
-      if(v==UINT32_MAX) {
-        v = uint32_t(out.vertices.size());
-        out.vertices.push_back(mesh.vertices[p.vertex_indices[i*3+c]]);
-        }
-      q.vertex_indices.push_back(v);
-      auto& f = featureMap[p.feature_indices[i*3+c]];
-      if(f==UINT32_MAX) {
-        f = uint32_t(out.features.size());
-        out.features.push_back(mesh.features[p.feature_indices[i*3+c]]);
-        }
-      q.feature_indices.push_back(f);
-      }
-    }
+  out.materials = mesh.materials;
+  out.vertices  = mesh.vertices;
+  out.features  = mesh.features;
+  out.polygons  = mesh.polygons;
   return out;
   }
 
@@ -417,6 +386,9 @@ WorldChunkManifest writeWorldChunks(const zenkit::Mesh& mesh, const WorldChunkSo
   manifest.source    = source;
   manifest.chunkSize = chunkSize;
   manifest.triangles = n;
+  manifest.vertices  = mesh.vertices.size();
+  manifest.features  = mesh.features.size();
+  manifest.materials = mesh.materials;
 
   for(const auto& [coord,tris]:chunks) {
     // Chunk vertex = (source vertex, source feature) pair, first use order.
@@ -527,12 +499,67 @@ WorldChunkManifest writeWorldChunks(const zenkit::Mesh& mesh, const WorldChunkSo
     manifest.chunks.push_back(file);
     }
 
+  // Vertices and features no triangle uses (portal and outdoor polygons):
+  // kept so every source index is restored as it was.
+  {
+  std::vector<char> usedV(mesh.vertices.size(),0), usedF(mesh.features.size(),0);
+  for(const auto v:p.vertex_indices)
+    usedV[v] = 1;
+  for(const auto f:p.feature_indices)
+    usedF[f] = 1;
+  std::vector<uint8_t> bin;
+  auto put = [&bin](const void* v, size_t n) {
+    const auto* b = static_cast<const uint8_t*>(v);
+    bin.insert(bin.end(),b,b+n);
+    };
+  auto u32 = [&put](uint32_t v) {
+    const uint8_t b[4] = {uint8_t(v),uint8_t(v>>8),uint8_t(v>>16),uint8_t(v>>24)};
+    put(b,4);
+    };
+  auto f32 = [&u32](float v) { u32(bits(v)); };
+  uint32_t nv = 0, nf = 0;
+  for(const auto u:usedV)
+    nv += u ? 0u : 1u;
+  for(const auto u:usedF)
+    nf += u ? 0u : 1u;
+  put(unreferencedMagic,4);
+  u32(uint32_t(formatVersion));
+  u32(nv);
+  u32(nf);
+  for(size_t i=0; i<mesh.vertices.size(); ++i)
+    if(!usedV[i]) {
+      u32(uint32_t(i));
+      f32(mesh.vertices[i].x);
+      f32(mesh.vertices[i].y);
+      f32(mesh.vertices[i].z);
+      }
+  for(size_t i=0; i<mesh.features.size(); ++i)
+    if(!usedF[i]) {
+      const auto& f = mesh.features[i];
+      u32(uint32_t(i));
+      f32(f.texture.x);
+      f32(f.texture.y);
+      u32(f.light);
+      f32(f.normal.x);
+      f32(f.normal.y);
+      f32(f.normal.z);
+      }
+  writeFile(dir/unreferencedName,bin.data(),bin.size());
+  manifest.unreferencedVertices = nv;
+  manifest.unreferencedFeatures = nf;
+  }
+
   std::string m = "{\n  \"format\": \"" + std::string(worldFormat) + "\",\n  \"version\": " + std::to_string(formatVersion) +
                   ",\n  \"source\": {\"world\": " + jsonString(source.world) + ", \"size\": " + std::to_string(source.size) +
                   ", \"crc32\": " + std::to_string(source.crc32) + "},\n  \"chunk_size_cm\": " + std::to_string(chunkSize) +
-                  ",\n  \"triangles\": " + std::to_string(n) + ",\n  \"chunks\": [";
+                  ",\n  \"triangles\": " + std::to_string(n) + ",\n  \"vertices\": " + std::to_string(mesh.vertices.size()) +
+                  ",\n  \"features\": " + std::to_string(mesh.features.size()) +
+                  ",\n  \"unreferenced\": \"" + unreferencedName + "\",\n  \"chunks\": [";
   for(size_t i=0; i<manifest.chunks.size(); ++i)
     m += std::string(i==0 ? "\n    " : ",\n    ") + jsonString(manifest.chunks[i]);
+  m += "\n  ],\n  \"materials\": [";
+  for(size_t i=0; i<mesh.materials.size(); ++i)
+    m += std::string(i==0 ? "\n    " : ",\n    ") + materialJson(mesh.materials[i],i);
   m += "\n  ]\n}\n";
   writeFile(dir/manifestName,m.data(),m.size());
   return manifest;
@@ -568,6 +595,18 @@ WorldChunkManifest readWorldChunkManifest(const std::filesystem::path& dir) {
         fail("chunk path must stay inside the world directory: " + name);
     m.chunks.push_back(std::move(name));
     }
+  m.vertices = uint64_t(jsonToInt(member(doc,"vertices"),"vertices"));
+  m.features = uint64_t(jsonToInt(member(doc,"features"),"features"));
+  if(jsonToString(member(doc,"unreferenced"),"unreferenced")!=unreferencedName)
+    fail("unexpected unreferenced file name");
+  const auto& mats = member(doc,"materials");
+  if(!mats.IsArray())
+    fail("materials must be an array");
+  for(rapidjson::SizeType i=0; i<mats.Size(); ++i) {
+    if(jsonToInt(member(mats[i],"index"),"index")!=int64_t(i))
+      fail("materials must be listed in source order");
+    m.materials.push_back(materialFromJson(mats[i]));
+    }
   return m;
   }
 
@@ -599,29 +638,116 @@ zenkit::Mesh readWorldChunks(const std::filesystem::path& dir, const std::filesy
     });
   ordered.insert(ordered.end(),edited.begin(),edited.end());
 
-  // Source materials keep their relative order, new ones follow.
-  std::vector<size_t> matOrder(reader.materials.size());
-  for(size_t i=0; i<matOrder.size(); ++i)
-    matOrder[i] = i;
-  std::stable_sort(matOrder.begin(),matOrder.end(),[&](size_t a, size_t b) {
-    const auto ia = reader.materials[a].index, ib = reader.materials[b].index;
-    if((ia<0)!=(ib<0))
-      return ia>=0;
-    return ia>=0 && ia<ib;
-    });
-  std::vector<uint32_t> usedMat(reader.materials.size(),0);
-  for(const auto t:ordered)
-    usedMat[reader.triangles[t].material] = 1;
-  std::vector<uint32_t> matMap(reader.materials.size(),UINT32_MAX);
   zenkit::Mesh out;
-  for(const auto i:matOrder)
-    if(usedMat[i]) {
-      matMap[i] = uint32_t(out.materials.size());
-      out.materials.push_back(reader.materials[i].material);
-      }
+  out.materials = manifest.materials;
+  out.vertices.resize(manifest.vertices);
+  out.features.resize(manifest.features);
+  std::vector<char> vertexSet(out.vertices.size(),0), featureSet(out.features.size(),0);
 
-  std::map<VertexKey,uint32_t>  vertices;
-  std::map<FeatureKey,uint32_t> features;
+  // Vertices and features no triangle uses come from unreferenced.bin.
+  {
+  const auto bin = readFile(dir/unreferencedName);
+  size_t o = 0;
+  auto u32 = [&]() {
+    if(o+4>bin.size())
+      fail("unreferenced.bin is truncated");
+    const uint32_t v = uint32_t(bin[o]) | (uint32_t(bin[o+1])<<8) | (uint32_t(bin[o+2])<<16) | (uint32_t(bin[o+3])<<24);
+    o += 4;
+    return v;
+    };
+  auto f32 = [&]() {
+    const uint32_t v = u32();
+    float f;
+    std::memcpy(&f,&v,sizeof(f));
+    return f;
+    };
+  if(bin.size()<4 || std::memcmp(bin.data(),unreferencedMagic,4)!=0)
+    fail("unreferenced.bin has a wrong header");
+  o = 4;
+  if(u32()!=uint32_t(formatVersion))
+    fail("unreferenced.bin has another version");
+  const uint32_t nv = u32(), nf = u32();
+  for(uint32_t i=0; i<nv; ++i) {
+    const auto id = u32();
+    if(id>=out.vertices.size())
+      fail("unreferenced vertex out of range");
+    const float x = f32(), y = f32(), z = f32();
+    out.vertices[id] = {x,y,z};
+    vertexSet[id] = 1;
+    }
+  for(uint32_t i=0; i<nf; ++i) {
+    const auto id = u32();
+    if(id>=out.features.size())
+      fail("unreferenced feature out of range");
+    zenkit::VertexFeature f;
+    f.texture.x = f32();
+    f.texture.y = f32();
+    f.light     = u32();
+    f.normal.x  = f32();
+    f.normal.y  = f32();
+    f.normal.z  = f32();
+    out.features[id] = f;
+    featureSet[id] = 1;
+    }
+  if(o!=bin.size())
+    fail("unreferenced.bin has trailing bytes");
+  }
+
+  // A source material comes back at its index when the chunk still carries
+  // the same record; a changed or new one is appended.
+  std::vector<uint32_t> matMap(reader.materials.size());
+  std::map<std::string,uint32_t> added;
+  for(size_t i=0; i<reader.materials.size(); ++i) {
+    const auto& rm = reader.materials[i];
+    if(rm.index>=0 && size_t(rm.index)<out.materials.size() && sameMaterial(out.materials[size_t(rm.index)],rm.material)) {
+      matMap[i] = uint32_t(rm.index);
+      continue;
+      }
+    const auto key = materialJson(rm.material,0);
+    auto [it,inserted] = added.emplace(key,uint32_t(out.materials.size()));
+    if(inserted)
+      out.materials.push_back(rm.material);
+    matMap[i] = it->second;
+    }
+
+  std::map<VertexKey,uint32_t>  newVertices;
+  std::map<FeatureKey,uint32_t> newFeatures;
+  auto vertexIndex = [&](const Corner& c) {
+    const auto id = c.vertex.id;
+    if(id>=0 && size_t(id)<out.vertices.size()) {
+      auto& v = out.vertices[size_t(id)];
+      if(!vertexSet[size_t(id)]) {
+        v = c.position;
+        vertexSet[size_t(id)] = 1;
+        return uint32_t(id);
+        }
+      if(bits(v.x)==c.vertex.x && bits(v.y)==c.vertex.y && bits(v.z)==c.vertex.z)
+        return uint32_t(id);
+      }
+    auto [it,inserted] = newVertices.emplace(c.vertex,uint32_t(out.vertices.size()));
+    if(inserted)
+      out.vertices.push_back(c.position);
+    return it->second;
+    };
+  auto featureIndex = [&](const Corner& c) {
+    const auto id = c.feature.id;
+    if(id>=0 && size_t(id)<out.features.size()) {
+      auto& f = out.features[size_t(id)];
+      if(!featureSet[size_t(id)]) {
+        f = c.value;
+        featureSet[size_t(id)] = 1;
+        return uint32_t(id);
+        }
+      if(bits(f.texture.x)==c.feature.u && bits(f.texture.y)==c.feature.v && f.light==c.feature.light &&
+         bits(f.normal.x)==c.feature.nx && bits(f.normal.y)==c.feature.ny && bits(f.normal.z)==c.feature.nz)
+        return uint32_t(id);
+      }
+    auto [it,inserted] = newFeatures.emplace(c.feature,uint32_t(out.features.size()));
+    if(inserted)
+      out.features.push_back(c.value);
+    return it->second;
+    };
+
   auto& q = out.polygons;
   q.material_indices.reserve(ordered.size());
   q.lightmap_indices.reserve(ordered.size());
@@ -634,14 +760,8 @@ zenkit::Mesh readWorldChunks(const std::filesystem::path& dir, const std::filesy
     q.lightmap_indices.push_back(tri.lightmap);
     q.flags.push_back(tri.flags);
     for(const auto& c:tri.corners) {
-      auto [v,newVertex] = vertices.emplace(c.vertex,uint32_t(out.vertices.size()));
-      if(newVertex)
-        out.vertices.push_back(c.position);
-      q.vertex_indices.push_back(v->second);
-      auto [f,newFeature] = features.emplace(c.feature,uint32_t(out.features.size()));
-      if(newFeature)
-        out.features.push_back(c.value);
-      q.feature_indices.push_back(f->second);
+      q.vertex_indices.push_back(vertexIndex(c));
+      q.feature_indices.push_back(featureIndex(c));
       }
     }
   return out;
