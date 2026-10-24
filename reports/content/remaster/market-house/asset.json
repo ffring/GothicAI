@@ -3307,6 +3307,11 @@
     ],
     "unchanged_entries": 0
   },
-  "backup": null,
+  "backup": {
+    "date": "2026-10-24",
+    "host": "dev-ubuntu",
+    "matched": 480,
+    "mismatched": []
+  },
   "legacy": "built before the pipeline (PRs #348, #350, set house-2 from pilot-3b by market_house.py); its reviews are reviewer calibration only"
 }
