@@ -1671,12 +1671,14 @@ std::string compare(const Data& a, const Data& b) {
         for(unsigned p=0;p<3;++p)
           equalVec(r.triangles[t].point[p],s.triangles[t].point[p],where+"triangle "+std::to_string(t)+" point "+std::to_string(p));
       }
-    const auto nx=uint64_t(std::ceil(double(a.bbox.max.x-a.bbox.min.x)/400.));
-    const auto nz=uint64_t(std::ceil(double(a.bbox.max.z-a.bbox.min.z)/400.));
+    // Compiled world meshes can carry a zero bbox; the BSP root bounds the world.
+    const auto& bounds=a.bsp.nodes.empty() ? a.bbox : a.bsp.nodes.front().bbox;
+    const auto nx=uint64_t(std::ceil(double(bounds.max.x-bounds.min.x)/400.));
+    const auto nz=uint64_t(std::ceil(double(bounds.max.z-bounds.min.z)/400.));
     for(uint64_t x=0;x<=nx;++x) for(uint64_t z=0;z<=nz;++z) for(unsigned h=0;h<3;++h) {
-      const Vec3 p{a.bbox.min.x+(a.bbox.max.x-a.bbox.min.x)*float(double(x)/double(std::max(uint64_t(1),nx))),
-                   a.bbox.min.y+(a.bbox.max.y-a.bbox.min.y)*float(h+1)/4.f,
-                   a.bbox.min.z+(a.bbox.max.z-a.bbox.min.z)*float(double(z)/double(std::max(uint64_t(1),nz)))};
+      const Vec3 p{bounds.min.x+(bounds.max.x-bounds.min.x)*float(double(x)/double(std::max(uint64_t(1),nx))),
+                   bounds.min.y+(bounds.max.y-bounds.min.y)*float(h+1)/4.f,
+                   bounds.min.z+(bounds.max.z-bounds.min.z)*float(double(z)/double(std::max(uint64_t(1),nz)))};
       const auto expected=isIndoor(a.bsp.mode,a.rooms,p),actual=isIndoor(b.bsp.mode,b.rooms,p);
       require(expected==actual,"isIndoor at "+floatJson(p.x)+","+floatJson(p.y)+","+floatJson(p.z)+
               ": expected "+std::to_string(expected)+", actual "+std::to_string(actual));

@@ -311,7 +311,7 @@ void worldDataContract(const zenkit::World& world, const WorldChunkSource& sourc
   require(diff.empty(),"world data: "+diff);
   PortalRooms::Volumes rooms;
   rooms.reset(world.world_mesh,world.world_bsp_tree);
-  const auto& bounds=world.world_mesh.bbox;
+  const auto& bounds=world.world_bsp_tree.nodes.empty() ? world.world_mesh.bbox : world.world_bsp_tree.nodes.front().bbox;
   const auto nx=uint64_t(std::ceil(double(bounds.max.x-bounds.min.x)/400.));
   const auto nz=uint64_t(std::ceil(double(bounds.max.z-bounds.min.z)/400.));
   size_t samples=0, indoor=0;

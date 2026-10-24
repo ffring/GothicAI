@@ -1,10 +1,12 @@
 // Converts Gothic resources into our own formats (docs/asset-migration.md).
 //
 //   content-convert world <gothic dir> <WORLD.ZEN> <out dir>
-//       Cut the world mesh into chunks/<x>_<z>.glb + world.json, read them
-//       back and compare with the source mesh bit for bit.
+//       Write chunks/<x>_<z>.glb, world.json and non-mesh world data;
+//       read everything back and compare with the source.
 //   content-convert verify-world <gothic dir> <WORLD.ZEN> <world dir> [override dir]
-//       Compare existing chunks with the source mesh.
+//       Compare existing chunks and world data with the source .ZEN.
+//   content-convert zen|verify-zen <gothic dir> <dir>
+//       Every meshless .ZEN as <NAME>.json, with an archive index in zen.json.
 //   content-convert textures <gothic dir> <out dir>
 //       Every compiled texture (*-C.TEX) as <NAME>.dds (DXT blocks and mips
 //       copied as the engine builds them) or <NAME>.png (other formats, top
@@ -15,7 +17,7 @@
 //       Every static mesh (*.MRM) as <NAME>.glb (common/basemesh.h);
 //       meshes.json lists them with the source archives.
 //   content-convert --self-test
-//       Round trip of a synthetic mesh; no game files.
+//       Round trips of synthetic meshes, world data and presets; no game files.
 //
 // The output is Gothic content: it never goes into git.
 
