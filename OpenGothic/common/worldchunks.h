@@ -24,6 +24,11 @@ struct WorldChunkManifest {
   int32_t                  chunkSize = 6400; // centimetres
   std::vector<std::string> chunks;           // file names, relative to the world directory
   uint64_t                 triangles = 0;
+  uint64_t                 vertices  = 0;    // size of the source arrays
+  uint64_t                 features  = 0;
+  uint64_t                 unreferencedVertices = 0;
+  uint64_t                 unreferencedFeatures = 0;
+  std::vector<zenkit::Material> materials;  // the full source table
   };
 
 // Writes world.json and chunks/<x>_<z>.glb into dir (created if needed).
@@ -35,13 +40,14 @@ WorldChunkManifest readWorldChunkManifest(const std::filesystem::path& dir);
 
 // Reads the chunks listed in dir/world.json. A chunk with the same file name
 // under overrideDir (if not empty) replaces the base one. Fills materials,
-// vertices, features and polygons of a fresh mesh in canonical form.
+// vertices, features and polygons of a fresh mesh. Unedited chunks restore
+// the source arrays exactly, with every source index (the engine's meshlet
+// packing keys on them); geometry an edit added or moved goes after them.
 zenkit::Mesh readWorldChunks(const std::filesystem::path& dir, const std::filesystem::path& overrideDir = {});
 
-// The canonical form of a mesh's triangle set: polygons kept in order,
-// vertices and features renumbered by first use, only referenced materials
-// kept in their original relative order. readWorldChunks of unedited chunks
-// equals canonicalWorldMesh of the source mesh bit for bit.
+// The fields readWorldChunks fills, copied from a source mesh: materials,
+// vertices, features and polygons. readWorldChunks of unedited chunks equals
+// canonicalWorldMesh of the source mesh bit for bit.
 zenkit::Mesh canonicalWorldMesh(const zenkit::Mesh& mesh);
 
 // Empty when equal; otherwise the first difference, for logs and tests.
