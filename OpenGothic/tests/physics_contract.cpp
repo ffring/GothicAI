@@ -4063,6 +4063,33 @@ namespace {
       requireNear(capped[0].speedCmS,100.f,.01f,"capped steps must preserve animation velocity");
       }
 
+    // The runner publishes its last animation pose after the physics tick,
+    // then exits without another tick. Flushing queries must consume that
+    // interval without simulating bodies or producing the contact twice.
+    for(bool native:{false,true}) {
+      CollisionWorld shadow;
+      auto falling=native ? shadow.addDynamicBody(new JPH::BoxShape({.1f,.1f,.1f}),at(10000,10000,0),.7f,1.f) : nullptr;
+      int attackerIdentity=0,targetIdentity=0;
+      auto* attacker=reinterpret_cast<Npc*>(&attackerIdentity);
+      auto* target=reinterpret_cast<Npc*>(&targetIdentity);
+      shadow.updateShadowBody(target,{{{10,95,0},{10,105,0},.01f,1,1}});
+      shadow.updateShadowBlade(attacker,1,{{{0,90,0},{0,110,0},{0,0,1},.01f}},0,0,100);
+      shadow.tick(33);
+      const auto steps=shadow.simulationStep();
+      const auto bodyPosition=falling ? falling->position() : Tempest::Vec3();
+      shadow.updateShadowBlade(attacker,1,{{{20,90,0},{20,110,0},{0,0,1},.01f}},33,0,100);
+      require(shadow.takeShadowBladeContacts(attacker).empty(),"last published pose must still await its query");
+      shadow.flushShadowBlades();
+      const auto contacts=shadow.takeShadowBladeContacts(attacker);
+      require(contacts.size()==1 && contacts[0].npc==target,"episode flush must retain the last physical blade contact");
+      requireNear(contacts[0].speedCmS,20.f/.033f,.01f,"episode flush must retain the pose interval velocity");
+      shadow.flushShadowBlades();
+      require(shadow.takeShadowBladeContacts(attacker).empty(),"flushing the same final pose must not repeat contacts");
+      require(shadow.simulationStep()==steps,"episode flush must not advance the native simulation clock");
+      if(falling)
+        require((falling->position()-bodyPosition).quadLength()==0.f,"episode flush must not move native bodies");
+      }
+
     // Shadow queries use the supplied HitZones even in a headless world with
     // no native living rig. A single animation step rotates through this thin
     // target; neither endpoint pose overlaps it.

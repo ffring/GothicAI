@@ -2321,6 +2321,7 @@ void DynamicWorld::updateShadowBlade(const Npc* owner,uint64_t swingId,const std
   }
 std::vector<MeleeBladeContact> DynamicWorld::takeShadowBladeContacts(const Npc* owner) { return world->takeShadowBladeContacts(owner); }
 void DynamicWorld::removeShadowBlade(const Npc* owner) { world->removeShadowBlade(owner); }
+void DynamicWorld::flushShadowBlades() { world->flushShadowBlades(); }
 void DynamicWorld::measureMeleeBench(std::string path) { world->measureMeleeBench(std::move(path)); }
 void DynamicWorld::reportMeleeBench() { world->reportMeleeBench(); }
 

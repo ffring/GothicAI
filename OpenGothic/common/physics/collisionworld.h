@@ -182,6 +182,7 @@ class CollisionWorld final {
                            double activeBeginMs, double activeEndMs);
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
+    void flushShadowBlades();
     void setWaterSurfaceCallback(std::function<bool(const Tempest::Vec3&,float,float&)> callback);
     void setBuoyancyEnabled(bool enabled);
     bool buoyancyEnabled() const;

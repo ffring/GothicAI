@@ -489,6 +489,7 @@ class DynamicWorld final {
                            double activeBeginMs, double activeEndMs);
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
+    void flushShadowBlades();
     struct RagdollSupport {
       size_t        bone = 0;
       uint32_t      partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);

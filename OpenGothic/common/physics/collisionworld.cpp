@@ -2285,6 +2285,12 @@ void CollisionWorld::removeShadowBlade(const Npc* owner) {
   impl->hasShadowBlades.store(!impl->shadowBlades.empty(),std::memory_order_release);
   }
 
+void CollisionWorld::flushShadowBlades() {
+  // Consume poses published after the last physics tick without advancing any
+  // native bodies, animation, game clocks or physics side effects.
+  stepShadowBlades(1.f);
+  }
+
 void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
   if(!impl->hasShadowBlades.load(std::memory_order_acquire)) return;
   std::lock_guard<std::mutex> guard(impl->shadowMutex);
