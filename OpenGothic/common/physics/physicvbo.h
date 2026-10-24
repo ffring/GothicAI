@@ -44,6 +44,7 @@ class PhysicVbo final {
     std::string_view        validateSectorName(std::string_view name) const;
 
   private:
+    friend struct BaseContentContract;
     PhysicVbo(const std::vector<Vertex>& v);
 
     void addSegment(size_t indexSize,size_t offset, zenkit::MaterialGroup material, const char* sector);

@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.20)
+project(gothic_content_convert LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(ZK_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ZK_ENABLE_ASAN OFF CACHE BOOL "" FORCE)
+set(ZK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+set(ZK_ENABLE_DEPRECATION OFF CACHE BOOL "" FORCE)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64)$")
+  set(BUILD_SQUISH_WITH_SSE2 OFF CACHE BOOL "" FORCE)
+endif()
+add_subdirectory(../../OpenGothic/lib/ZenKit zenkit EXCLUDE_FROM_ALL)
+# gltfmesh.cpp carries the cgltf implementation; worldchunks.cpp is the engine's own reader and writer.
+add_executable(content-convert convert.cpp
+  ../../OpenGothic/common/worldchunks.cpp ../../OpenGothic/common/gothicglb.cpp ../../OpenGothic/common/basemesh.cpp
+  ../../OpenGothic/common/gltfmesh.cpp
+  ../../OpenGothic/lib/miniz/miniz.c)
+target_include_directories(content-convert PRIVATE ../../OpenGothic/common)
+target_include_directories(content-convert SYSTEM PRIVATE ../../OpenGothic/lib/rapidjson/include ../../OpenGothic/lib/miniz)
+target_compile_options(content-convert PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wconversion>)
+target_link_libraries(content-convert PRIVATE zenkit)

@@ -46,8 +46,8 @@ def test_texture_aliases_and_partial_replacement_never_hide_an_original():
     ])
     assert summary["counts"] == [{"kind": "texture", "original": 2, "own": 1}]
     markdown = census.render_markdown(summary)
-    assert "| texture | 2 | 1 | 33.3% |" in markdown
-    assert "| **Всего** | **2** | **1** | **33.3%** |" in markdown
+    assert "| texture | 2 | 1 | 0 | 33.3% |" in markdown
+    assert "| **Всего** | **2** | **1** | **0** | **33.3%** |" in markdown
 
 
 def test_opened_texture_source_and_compiled_file_keep_individual_counts():
@@ -62,7 +62,7 @@ def test_opened_texture_source_and_compiled_file_keep_individual_counts():
     markdown = census.render_markdown(summary)
     assert "| A-C.TEX | texture | Textures.vdf | 5 |" in markdown
     assert "| A.TGA | texture | Textures.vdf | 2 |" in markdown
-    assert "| texture | 2 | 0 | 0.0% |" in markdown
+    assert "| texture | 2 | 0 | 0 | 0.0% |" in markdown
 
 
 def test_replacement_only_resources_count_once_and_kinds_follow_canonical_order():
@@ -76,7 +76,46 @@ def test_replacement_only_resources_count_once_and_kinds_follow_canonical_order(
         {"kind": "speech", "original": 0, "own": 1},
         {"kind": "script", "original": 1, "own": 0},
     ]
-    assert "| texture | 0 | 1 | 100.0% |" in census.render_markdown(summary)
+    assert "| texture | 0 | 1 | 0 | 100.0% |" in census.render_markdown(summary)
+
+
+def test_world_mesh_replacement_has_own_row_while_zen_remains_original():
+    base = {"name": "NEWWORLD.ZEN", "kind": "worldmesh",
+            "replacement": "worlds/NEWWORLD/world.json", "opens": 1}
+    summary = census.summarize([
+        run([original("NEWWORLD.ZEN", "world", "Worlds.vdf")], [base]),
+        run([original("newworld.zen", "world", "worlds.VDF")],
+            [dict(base, name="newworld.zen")]),
+    ])
+    assert summary["counts"] == [
+        {"kind": "world", "original": 1, "own": 0},
+        {"kind": "worldmesh", "original": 0, "own": 1},
+    ]
+    markdown = census.render_markdown(summary)
+    assert "| world | 1 | 0 | 0 | 0.0% |" in markdown
+    assert "| worldmesh | 0 | 1 | 0 | 100.0% |" in markdown
+    assert "| NEWWORLD.ZEN | world | Worlds.vdf | 2 |" in markdown
+
+
+def test_base_resources_are_separate_from_own_replacements():
+    texture = {"name": "STONE.TGA", "kind": "basetexture",
+               "replacement": "base/textures/STONE.dds", "opens": 2}
+    mesh = {"name": "BARREL.MRM", "kind": "basemesh",
+            "replacement": "base/meshes/BARREL.glb", "opens": 1}
+    summary = census.summarize([
+        run([original("STONE-C.TEX")], [texture, mesh, replacement("OWN.TGA")]),
+        run(replacements=[dict(texture, name="stone.tga"), mesh,
+                          replacement("STONE.TGA"), replacement("BARREL.MRM", "mesh")]),
+    ])
+    assert summary["counts"] == [
+        {"kind": "texture", "original": 1, "own": 1},
+        {"kind": "basetexture", "original": 0, "own": 0, "base": 1},
+        {"kind": "basemesh", "original": 0, "own": 0, "base": 1},
+    ]
+    markdown = census.render_markdown(summary)
+    assert "| basetexture | 0 | 0 | 1 | 0.0% |" in markdown
+    assert "| basemesh | 0 | 0 | 1 | 0.0% |" in markdown
+    assert "| **Всего** | **1** | **1** | **2** | **25.0%** |" in markdown
 
 
 def test_top20_uses_summed_opens_and_stable_order_for_ties():
@@ -97,7 +136,7 @@ def test_top20_uses_summed_opens_and_stable_order_for_ties():
 
 def test_empty_census_has_zero_totals_without_division_error():
     markdown = census.render_markdown(census.summarize([run()]))
-    assert "| **Всего** | **0** | **0** | **0.0%** |" in markdown
+    assert "| **Всего** | **0** | **0** | **0** | **0.0%** |" in markdown
     assert "Оригинальные файлы не открывались." in markdown
 
 
@@ -132,7 +171,7 @@ def test_cli_accepts_multiple_json_files_and_reports_path_on_invalid_input(tmp_p
     result = subprocess.run([sys.executable, str(SCRIPT), str(first), str(second)],
                             text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
-    assert "| world | 1 | 0 | 0.0% |" in result.stdout
+    assert "| world | 1 | 0 | 0 | 0.0% |" in result.stdout
     assert "| WORLD.ZEN | world | Worlds.vdf | 5 |" in result.stdout
     second.write_text("{invalid")
     result = subprocess.run([sys.executable, str(SCRIPT), str(second)],

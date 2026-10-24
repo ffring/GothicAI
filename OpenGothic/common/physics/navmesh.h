@@ -154,6 +154,7 @@ class NavMesh final {
 
     void buildOrLoad(const Geometry& geometry, const Params& params,
                      const std::filesystem::path& cacheDirectory, const std::string& worldName);
+    static uint64_t cacheKey(const Geometry& geometry, const Params& params, const std::string& worldName);
     Path findPath(const Point& start, const Point& end, bool allowTransitions=true) const;
     // A ground ray must reach the end's actual polygon. Detour's raycast alone ignores
     // end height; checking its final polygon also rejects a balcony above the ray.

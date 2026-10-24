@@ -3,6 +3,7 @@
 #include <Tempest/Font>
 #include <Tempest/Texture2d>
 #include <Tempest/Device>
+#include <Tempest/Pixmap>
 #include <Tempest/SoundDevice>
 
 #include <zenkit/Vfs.hh>
@@ -30,6 +31,7 @@ class ContentCensus;
 
 namespace zenkit {
 class ModelMesh;
+class Texture;
 }
 
 namespace Dx8 {
@@ -189,14 +191,39 @@ class Resources final {
     static bool                      hasFile    (std::string_view fname);
 
     static const zenkit::Vfs&        vdfsIndex();
+    static std::filesystem::path      worldBaseDir(std::string_view world);
+    static std::filesystem::path      worldOverrideDir(std::string_view world);
     static void                      censusFile(std::u16string_view path);
+    static void                      censusWorldBase(std::string_view world);
     static bool                      writeCensus();
 
     static const Tempest::IndexBuffer<uint16_t>&   cubeIbo();
 
   private:
+    friend struct BaseContentContract;
     static Resources* inst;
     void initCensus();
+
+    struct BaseIndex {
+      std::filesystem::path dir;
+      std::vector<std::pair<std::string,uintmax_t>> archives;
+      std::map<std::string,std::string> files;
+      bool enabled = false;
+
+      void load(const std::filesystem::path& root, const char* kind);
+      void validate(const std::vector<std::pair<std::string,uintmax_t>>& mounted);
+      };
+    BaseIndex baseTextures, baseMeshes;
+    static std::filesystem::path baseDir();
+    void indexBaseContent();
+
+    struct TextureData {
+      Tempest::Pixmap pixmap;
+      bool useMipmap = false;
+      };
+    static TextureData decodeTexture(zenkit::Read& data, bool forceMips);
+    static TextureData decodeTexture(const zenkit::Texture& texture, bool forceMips);
+    static TextureData decodeBaseTexture(const std::filesystem::path& path, bool forceMips);
 
     struct Archive {
       std::u16string name;

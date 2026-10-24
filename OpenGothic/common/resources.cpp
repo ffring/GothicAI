@@ -54,6 +54,7 @@
 #include "gothic.h"
 #include "contentcensus.h"
 #include "gltfmesh.h"
+#include "basemesh.h"
 #include "utils/string_frm.h"
 
 #include <dmusic.h>
@@ -64,9 +65,21 @@ using namespace Tempest;
 
 Resources* Resources::inst=nullptr;
 
+namespace {
+std::filesystem::path worldContentDir(const std::filesystem::path& root, std::string_view world) {
+  const auto separator = world.find_last_of("/\\");
+  std::string name(separator==std::string_view::npos ? world : world.substr(separator+1));
+  name = std::filesystem::path(name).stem().string();
+  for(auto& c:name)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
+  return root/"worlds"/name;
+  }
+}
+
 Resources::Resources() {
   inst=this;
   initCensus();
+  indexBaseContent();
   indexMeshOverrides();
   // Sound buffers remain CPU data: native sound selection consumes RNG and
   // dialogue uses their durations even when playback is disabled.
@@ -77,6 +90,7 @@ Resources::Resources(Tempest::Device &device)
   : dev(&device), sound(std::make_unique<Tempest::SoundDevice>()) {
   inst=this;
   initCensus();
+  indexBaseContent();
 
   static const uint16_t index[] = {
       0, 1, 2, 0, 2, 3,
@@ -179,6 +193,7 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
            std::make_tuple(bIsMod,b.time,int(b.ord));
     });
 
+  std::vector<std::pair<std::string,uintmax_t>> mounted;
   for(auto& i:archives) {
     try {
 #ifdef __IOS__
@@ -187,6 +202,10 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
         continue;
 #endif
       inst->gothicAssets.mount_disk(i.name, zenkit::VfsOverwriteBehavior::OLDER);
+      auto name = std::filesystem::path(i.name).filename().string();
+      for(auto& c:name)
+        c = char(std::toupper(static_cast<unsigned char>(c)));
+      mounted.emplace_back(std::move(name),std::filesystem::file_size(i.name));
       }
     catch(const zenkit::VfsBrokenDiskError& err) {
       Log::e("unable to load archive: \"", TextCodec::toUtf8(i.name), "\", reason: ", err.what());
@@ -195,6 +214,10 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
       Log::e("unable to load archive: \"", TextCodec::toUtf8(i.name), "\", reason: ", err.what());
       }
     }
+
+  std::sort(mounted.begin(),mounted.end());
+  inst->baseTextures.validate(mounted);
+  inst->baseMeshes.validate(mounted);
 
   //for(auto& i:inst->gothicAssets.getKnownFiles())
   //  Log::i(i);
@@ -226,6 +249,12 @@ void Resources::censusFile(std::u16string_view path) {
     return;
   const auto source = TextCodec::toUtf8(path);
   inst->census->opened(source,source);
+  }
+
+void Resources::censusWorldBase(std::string_view world) {
+  if(inst==nullptr || inst->census==nullptr)
+    return;
+  inst->census->replaced(world,(worldContentDir({},world)/"world.json").generic_string());
   }
 
 bool Resources::writeCensus() {
@@ -529,6 +558,91 @@ void Resources::indexHdTextures() {
   Log::i("textures: ",hdTextures.size()," of our own from \"",dir,"\"");
   }
 
+std::filesystem::path Resources::baseDir() {
+  if(const char* dir = std::getenv("OPENGOTHIC_BASE")) {
+    if(dir[0]=='\0')
+      return {};
+    return dir;
+    }
+  if(const char* home = std::getenv("HOME"))
+    return std::filesystem::path(home)/".local/share/gothic-ai/base/v1";
+  return {};
+  }
+
+std::filesystem::path Resources::worldBaseDir(std::string_view world) {
+  const auto root = baseDir();
+  return root.empty() ? root : worldContentDir(root,world);
+  }
+
+void Resources::indexBaseContent() {
+  const auto root = baseDir();
+  baseTextures.load(root,"textures");
+  baseMeshes.load(root,"meshes");
+  }
+
+void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {
+  if(root.empty())
+    return;
+  const auto folder = root/kind;
+  std::ifstream file(folder/(std::string(kind)+".json"),std::ios::binary);
+  if(!file)
+    return;
+  try {
+    const std::string text{std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};
+    rapidjson::Document table;
+    table.Parse<rapidjson::kParseValidateEncodingFlag>(text.data(),text.size());
+    if(table.HasParseError() || !table.IsObject() ||
+       !table.HasMember("archives") || !table["archives"].IsArray() ||
+       !table.HasMember(kind) || !table[kind].IsObject())
+      throw std::runtime_error("invalid index");
+    for(const auto& archive:table["archives"].GetArray()) {
+      if(!archive.IsObject() || !archive.HasMember("name") || !archive["name"].IsString() ||
+         !archive.HasMember("size") || !archive["size"].IsUint64())
+        throw std::runtime_error("invalid archive identity");
+      archives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
+      }
+    std::sort(archives.begin(),archives.end());
+    for(const auto& entry:table[kind].GetObject()) {
+      if(!entry.value.IsString())
+        throw std::runtime_error("invalid file entry");
+      const std::string key(entry.name.GetString(),entry.name.GetStringLength());
+      const std::string name(entry.value.GetString(),entry.value.GetStringLength());
+      if(key.empty() || name.empty() || key.find_first_of("/\\")!=std::string::npos ||
+         name.find_first_of("/\\")!=std::string::npos || key.find('\0')!=std::string::npos ||
+         name.find('\0')!=std::string::npos || name=="." || name=="..")
+        throw std::runtime_error("invalid file name");
+      files.emplace(key,name);
+      }
+    dir = folder;
+    }
+  catch(const std::exception& error) {
+    files.clear();
+    archives.clear();
+    Log::e("base: ",kind," disabled: ",error.what()," in \"",folder.string(),"\"");
+    }
+  }
+
+void Resources::BaseIndex::validate(const std::vector<std::pair<std::string,uintmax_t>>& mounted) {
+  if(dir.empty())
+    return;
+  enabled = archives==mounted;
+  if(enabled)
+    Log::i("base: ",files.size()," entries from \"",dir.string(),"\"");
+  else
+    Log::e("base: ",dir.filename().string()," disabled: mounted archives differ from index in \"",dir.string(),"\"");
+  }
+
+std::filesystem::path Resources::worldOverrideDir(std::string_view world) {
+  if(const char* dir = std::getenv("OPENGOTHIC_CONTENT")) {
+    if(dir[0]=='\0')
+      return {};
+    return worldContentDir(dir,world);
+    }
+  if(const char* home = std::getenv("HOME"))
+    return worldContentDir(std::filesystem::path(home)/".local/share/gothic-ai/content",world);
+  return {};
+  }
+
 void Resources::indexMeshOverrides() {
   std::filesystem::path root;
   if(const char* dir = std::getenv("OPENGOTHIC_CONTENT")) {
@@ -628,6 +742,19 @@ zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, boo
         }
       catch(const std::exception& error) {
         Log::e("meshes: unable to replace \"",original,"\" with \"",it->second.file.string(),"\": ",error.what());
+        }
+      }
+    if(inst->baseMeshes.enabled) {
+      if(const auto it = inst->baseMeshes.files.find(key); it!=inst->baseMeshes.files.end()) {
+        try {
+          auto mesh = readBaseMesh(inst->baseMeshes.dir/it->second);
+          if(inst->census)
+            inst->census->replaced(key+".MRM","base/meshes/"+it->second);
+          return mesh;
+          }
+        catch(const std::exception& error) {
+          Log::e("base: unable to load mesh \"",it->second,"\": ",error.what());
+          }
         }
       }
     }
@@ -787,6 +914,34 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
       }
     }
 
+  if(baseTextures.enabled && FileExt::hasExt(name,"TGA")) {
+    std::string key(name.substr(0,name.size()-4));
+    for(auto& c:key)
+      c = char(std::toupper(static_cast<unsigned char>(c)));
+    if(const auto it = baseTextures.files.find(key); it!=baseTextures.files.end()) {
+      try {
+        const auto path = baseTextures.dir/it->second;
+        Texture2d texture;
+        if(FileExt::hasExt(it->second,"PNG")) {
+          auto decoded = decodeBaseTexture(path,forceMips);
+          texture = device().texture(decoded.pixmap,decoded.useMipmap);
+          } else {
+          auto reader = zenkit::Read::from(path);
+          texture = implLoadTextureUncached(name,*reader,forceMips);
+          }
+        if(!texture.isEmpty()) {
+          if(census)
+            census->replaced(name,"base/textures/"+it->second);
+          return texture;
+          }
+        Log::e("base: unable to load texture \"",it->second,"\"");
+        }
+      catch(const std::exception& error) {
+        Log::e("base: unable to load texture \"",it->second,"\": ",error.what());
+        }
+      }
+    }
+
   if(FileExt::hasExt(name,"TGA")) {
     auto nameAlt = std::string(name);
     nameAlt.resize(nameAlt.size() + 2);
@@ -798,25 +953,11 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
       auto reader = entry->open_read();
       tex.load(reader.get());
 
-      if(tex.format() == zenkit::TextureFormat::DXT1 ||
-         tex.format() == zenkit::TextureFormat::DXT2 ||
-         tex.format() == zenkit::TextureFormat::DXT3 ||
-         tex.format() == zenkit::TextureFormat::DXT4 ||
-         tex.format() == zenkit::TextureFormat::DXT5) {
-        auto dds = zenkit::to_dds(tex);
-        auto ddsRead = zenkit::Read::from(dds);
-
-        return implLoadTextureUncached(name, *ddsRead, forceMips);
-        } else {
-        auto rgba = tex.as_rgba8(0);
-
-        try {
-          Tempest::Pixmap    pm(tex.width(), tex.height(), TextureFormat::RGBA8);
-          std::memcpy(pm.data(), rgba.data(), rgba.size());
-          return device().texture(pm);
-          }
-        catch (...) {
-          }
+      try {
+        auto decoded = decodeTexture(tex,forceMips);
+        return device().texture(decoded.pixmap,decoded.useMipmap);
+        }
+      catch(...) {
         }
       }
     }
@@ -832,21 +973,46 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, zenkit::Read
   if(isHeadless())
     return Texture2d();
   try {
-    std::vector<uint8_t> raw;
-    data.seek(0, zenkit::Whence::END);
-    raw.resize(data.tell());
-    data.seek(0, zenkit::Whence::BEG);
-    data.read(raw.data(), raw.size());
-
-    Tempest::MemReader rd((uint8_t*)raw.data(), raw.size());
-    Tempest::Pixmap    pm(rd);
-
-    const bool useMipmap = forceMips || (pm.mipCount()>1); // do not generate mips, if original texture has has none
-    return device().texture(pm, useMipmap);
+    auto decoded = decodeTexture(data,forceMips);
+    return device().texture(decoded.pixmap,decoded.useMipmap);
     }
   catch(...){
     return Texture2d();
     }
+  }
+
+Resources::TextureData Resources::decodeTexture(zenkit::Read& data, bool forceMips) {
+  data.seek(0,zenkit::Whence::END);
+  std::vector<uint8_t> raw(data.tell());
+  data.seek(0,zenkit::Whence::BEG);
+  if(data.read(raw.data(),raw.size())!=raw.size())
+    throw std::runtime_error("Unable to read complete texture");
+  Tempest::MemReader reader(raw.data(),raw.size());
+  TextureData decoded{Tempest::Pixmap(reader)};
+  // Preserve the archive path's mip policy, including textures with no mip chain.
+  decoded.useMipmap = forceMips || decoded.pixmap.mipCount()>1;
+  return decoded;
+  }
+
+Resources::TextureData Resources::decodeTexture(const zenkit::Texture& tex, bool forceMips) {
+  if(tex.format()==zenkit::TextureFormat::DXT1 || tex.format()==zenkit::TextureFormat::DXT2 ||
+     tex.format()==zenkit::TextureFormat::DXT3 || tex.format()==zenkit::TextureFormat::DXT4 ||
+     tex.format()==zenkit::TextureFormat::DXT5) {
+    auto dds = zenkit::to_dds(tex);
+    auto reader = zenkit::Read::from(dds);
+    return decodeTexture(*reader,forceMips);
+    }
+  const auto rgba = tex.as_rgba8(0);
+  TextureData decoded{Tempest::Pixmap(tex.width(),tex.height(),TextureFormat::RGBA8),true};
+  std::memcpy(decoded.pixmap.data(),rgba.data(),rgba.size());
+  return decoded;
+  }
+
+Resources::TextureData Resources::decodeBaseTexture(const std::filesystem::path& path, bool forceMips) {
+  if(FileExt::hasExt(path.string(),"PNG"))
+    return {Tempest::Pixmap(path.string()),true}; // device.texture(pm) generates mips for non-DXT originals.
+  auto reader = zenkit::Read::from(path);
+  return decodeTexture(*reader,forceMips);
   }
 
 ProtoMesh* Resources::implLoadMesh(std::string_view name) {

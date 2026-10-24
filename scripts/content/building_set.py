@@ -83,6 +83,17 @@ def load_spec(asset: str) -> dict:
     return spec
 
 
+EDIT_OF_ORIGINAL = 'scripts/content/edit_texture.py'
+
+
+def source_input(name: str, source: dict) -> str:
+    """What the texture was made from, for the registry: an edit of the original is a derivative (the user's
+    decision of 2026-10-23, docs/own-content.md, «Граница с оригиналом»)."""
+    if source.get('tool') == EDIT_OF_ORIGINAL:
+        return f'original texture {name}: image_gen edit of it, colour taken back from it ({EDIT_OF_ORIGINAL}); derivative'
+    return 'image_gen edit of the accepted remaster concept; no original texture pixels'
+
+
 def mask_outside(shape: tuple[int, int], exclude_uv) -> np.ndarray:
     h, w = shape
     mask = np.ones((h, w), dtype=bool)
@@ -245,7 +256,7 @@ def prepare(asset: str, spec: dict) -> tuple[list[dict], dict]:
         record['prompt'] = json.loads(path.with_suffix('.json').read_text())['prompt']
         record['parameters'].update(set=spec['set'], material=record['id'], scale=1., tiling_axes=axes,
             tileable=bool(axes), antitile='off', source_attempt=source['attempt'],
-            input='image_gen edit of the accepted remaster concept; no original texture pixels',
+            input=source_input(name, source),
             colour_policy=f"remaster building_set: {spec['textures'][name]['colour']['mode']}", source_band=band,
             luminance_policy='guard rail only: ratio to the original target is recorded, not enforced',
             source_size_policy=f'one Lanczos resize to {size} square, then narrow permitted-axis seam cuts')
