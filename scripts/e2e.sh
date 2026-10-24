@@ -93,7 +93,8 @@
 #       is asked at their next meeting: the answer is a fact, no model call
 #   places: not a check: dumps the world's waypoints and its people's routines into $LOG_DIR/world_points.json
 #       for the book of places (gothic-ai places <dump>, server/src/gothic_ai/places.py)
-#   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud
+#   tts: npc lines reach the game with audio from the TTS service (TTS=fake|voxcpm|inworld) and play aloud;
+#       TTS=inworld is paid, so it also needs PAID_TTS=1
 #       GOTHIC_TTS_RECORD=1 also records the reply and its bench events for check-voice-stem.sh
 #   lie: the hero lies to a quest giver (Xardas: two sheep to kill) and is paid; a sheep he did not kill
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
@@ -415,6 +416,11 @@ PORT="${PORT:-47827}"
 ASR_PORT="${ASR_PORT:-47829}"
 TTS_PORT="${TTS_PORT:-47840}"
 TTS="${TTS:-fake}"
+# Inworld bills every line. Tests check our code, not its voices: fake or voxcpm does that for free.
+if [[ ( "$TTS" == inworld || "$TTS" == inworld:* ) && "${PAID_TTS:-0}" != 1 ]]; then
+  echo "TTS=$TTS is paid Inworld; use TTS=fake or TTS=voxcpm, or set PAID_TTS=1 when a step needs its voices" >&2
+  exit 2
+fi
 # Inworld writes its voice cache through one fixed .tmp file. Keep that write
 # inside this Ryzen run too; HOME still supplies credentials and read-only data.
 if [[ "${GQ_PROFILE:-}" == ryzen && ( "$TTS" == inworld || "$TTS" == inworld:* ) &&
