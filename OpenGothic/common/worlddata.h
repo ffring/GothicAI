@@ -6,7 +6,7 @@
 #include <zenkit/World.hh>
 #include <zenkit/vobs/Light.hh>
 
-// Non-mesh .ZEN data, shared by the converter and the future base loader.
+// Non-mesh .ZEN data, shared by the converter and the engine base loader.
 // Coordinates are Gothic centimetres. See docs/asset-migration.md.
 namespace WorldData {
 
@@ -33,7 +33,7 @@ struct Data {
 
 Data fromWorld(const zenkit::World& world, const WorldChunkSource& source);
 void write(const Data& data, const std::filesystem::path& dir);
-Data read(const std::filesystem::path& dir);
+Data read(const std::filesystem::path& dir, const std::filesystem::path& overrideDir = {});
 // ZenKit ASCII plus vob IDs/runtime fields and ordered waypoint/edge comparison.
 // Individual retained BSP fields and room floats.
 // Also samples isIndoor on a grid of at most 400 cm spacing at three heights.

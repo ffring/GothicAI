@@ -27,7 +27,6 @@
 #include "gothic.h"
 #include "focus.h"
 #include "resources.h"
-#include "worldbase.h"
 #include "frameprofile.h"
 #include "testbench.h"
 #include "physics/physicsnoise.h"
@@ -117,33 +116,13 @@ const char* materialTag(zenkit::MaterialGroup src) {
 World::World(GameSession& game, std::string_view file, bool startup, std::function<void(int)> loadProgress)
   :wname(std::move(file)), game(game), wsound(game,*this), wobj(*this) {
   const auto loadStarted = std::chrono::steady_clock::now();
-  const auto* entry = Resources::vdfsIndex().find(wname);
-
-  if(entry == nullptr) {
-    Tempest::Log::e("unable to open Zen-file: \"",wname,"\"");
-    return;
-    }
-
   try {
-    auto          source = entry->open_read();
-    const auto    bytes = readWorldBytes(*source);
-    auto          buf = zenkit::Read::from(&bytes);
     zenkit::World world;
-    world.load(buf.get(), version().game == 1 ? zenkit::GameVersion::GOTHIC_1
-                                              : zenkit::GameVersion::GOTHIC_2);
-
+    std::vector<WorldData::Room> rooms;
+    Resources::loadWorld(world,rooms,wname);
     loadProgress(20);
     auto& worldMesh = world.world_mesh;
-    windRooms.reset(worldMesh,world.world_bsp_tree);
-    const auto baseDir = Resources::worldBaseDir(wname);
-    const auto base = tryWorldBase(worldMesh,wname,bytes,baseDir,Resources::worldOverrideDir(wname));
-    if(base.replaced) {
-      Resources::censusWorldBase(wname);
-      Tempest::Log::i("world base: \"",baseDir.string(),"\", ",base.triangles," triangles, ",
-                      base.chunks," chunks, ",base.readMs," ms");
-      } else if(!base.error.empty()) {
-      Tempest::Log::e("world base: unable to read \"",baseDir.string(),"\": ",base.error,"; using ZEN mesh");
-      }
+    windRooms.reset(world.world_bsp_tree.mode,std::move(rooms));
     auto worldCloth=WorldCloth::extract(worldMesh);
 
     auto wdynamicFut = std::async(std::launch::async, [&]() {

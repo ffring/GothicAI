@@ -11120,6 +11120,24 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     noiseDropItems(w,1);
     }
   else if(c=="noise" && a.size()==2 && a[1]=="checkpoint") noiseCheckpoint(w);
+  else if(c=="world-data" && a.size()==2 && (a[1]=="prepare" || a[1]=="check")) {
+    Interactive* door=nullptr;
+    for(uint32_t id=0;auto* mob=w.mobsiById(id);++id)
+      if(mob->isDoor() && mob->stateCount()>0 && (!door || mob->zenId()<door->zenId()))
+        door=mob;
+    if(!door) {arenaAbort("world-data needs an authored door with an open state");return;}
+    if(a[1]=="prepare") {
+      door->setAsCracked(true);
+      door->resetPositionToTA(1);
+      }
+    const bool pass=door->stateId()==1 && door->isCracked() && !door->isLocked();
+    event("world_data_door","\"operation\":"+jsonStr(a[1])+",\"pass\":"+(pass?"true":"false")+
+      ",\"zen_id\":"+std::to_string(door->zenId())+",\"mob_id\":"+std::to_string(w.mobsiId(door))+
+      ",\"state\":"+std::to_string(door->stateId())+",\"cracked\":"+(door->isCracked()?"true":"false")+
+      ",\"locked\":"+(door->isLocked()?"true":"false")+
+      ",\"world_load_ms\":"+ragdollNumber(float(w.loadMilliseconds())));
+    if(!pass)arenaAbort("world-data door lost its open or cracked state");
+    }
   else if(c=="own-mesh-chest" && a.size()==6 && (a[1]=="setup" || a[1]=="reload"))
     ownMeshChestSetup(w,pl,Vec3(num(a,2,0),num(a,3,0),num(a,4,0)),uint32_t(std::stoul(a[5])),a[1]=="reload");
   else if(c=="own-mesh-chest" && a.size()==2 && a[1]=="open") {

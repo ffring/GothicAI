@@ -60,8 +60,6 @@ const std::vector<Rule>& rules() {
 zenkit::Mesh subset(const zenkit::Mesh& source,const std::vector<uint32_t>& faces) {
   zenkit::Mesh mesh;
   mesh.name=source.name;
-  mesh.date=source.date;
-  mesh.lightmaps=source.lightmaps;
   std::unordered_map<uint32_t,uint32_t> vertices,features,materials;
   for(auto face:faces) {
     const auto material=source.polygons.material_indices[face];

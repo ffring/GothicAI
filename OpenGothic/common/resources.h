@@ -32,7 +32,9 @@ class ContentCensus;
 namespace zenkit {
 class ModelMesh;
 class Texture;
+class World;
 }
+namespace WorldData { struct Room; struct ZenFile; }
 
 namespace Dx8 {
 class DirectMusic;
@@ -194,7 +196,8 @@ class Resources final {
     static std::filesystem::path      worldBaseDir(std::string_view world);
     static std::filesystem::path      worldOverrideDir(std::string_view world);
     static void                      censusFile(std::u16string_view path);
-    static void                      censusWorldBase(std::string_view world);
+    static void                      loadWorld(zenkit::World& world, std::vector<WorldData::Room>& rooms, std::string_view name);
+    static bool                      loadBaseZen(std::string_view name, std::string_view kind, WorldData::ZenFile& out);
     static bool                      writeCensus();
 
     static const Tempest::IndexBuffer<uint16_t>&   cubeIbo();
@@ -213,7 +216,8 @@ class Resources final {
       void load(const std::filesystem::path& root, const char* kind);
       void validate(const std::vector<std::pair<std::string,uintmax_t>>& mounted);
       };
-    BaseIndex baseTextures, baseMeshes;
+    BaseIndex baseTextures, baseMeshes, baseZen;
+    std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     static std::filesystem::path baseDir();
     void indexBaseContent();
 

@@ -4,6 +4,7 @@
 #include <zenkit/vobs/Camera.hh>
 
 #include "gothic.h"
+#include "worlddata.h"
 #include "utils/string_frm.h"
 
 using namespace Tempest;
@@ -37,6 +38,12 @@ CameraDefinitions::CameraDefinitions() {
   // dialog presets: unused yet
   std::vector<zenkit::VCutsceneCamera> cameras;
   try {
+    WorldData::ZenFile base;
+    if(Resources::loadBaseZen("DialogCams.ZEN","cameras",base)) {
+      for(const auto& camera:base.vobs)
+        cameras.push_back(*std::dynamic_pointer_cast<zenkit::VCutsceneCamera>(camera));
+      return;
+      }
     std::unique_ptr<zenkit::Read> read;
     auto zen = Resources::openReader("DialogCams.ZEN", read);
 

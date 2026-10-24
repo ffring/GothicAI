@@ -11,6 +11,7 @@
 #include "world/world.h"
 #include "utils/dbgpainter.h"
 #include "gothic.h"
+#include "worlddata.h"
 
 using namespace Tempest;
 
@@ -116,6 +117,11 @@ uint64_t LightGroup::Light::effectPrefferedTime() const {
 
 LightGroup::LightGroup(const SceneGlobals& scene) {
   try {
+    WorldData::ZenFile base;
+    if(Resources::loadBaseZen("LIGHTPRESETS.ZEN","light_presets",base)) {
+      presets = std::move(base.light_presets);
+      return;
+      }
     std::unique_ptr<zenkit::Read> read;
     auto zen = Resources::openReader("LIGHTPRESETS.ZEN", read);
 

@@ -230,6 +230,7 @@ class World final {
     std::vector<Vob::AttachmentSnapshot> vobAttachmentSnapshot(uint32_t zenId) const { return wobj.vobAttachmentSnapshot(zenId); }
 
   private:
+    friend struct WorldDataContract;
     double               worldLoadMs = 0;
     const zenkit::IFocus& searchPolicy(const Npc& pl, TargetCollect& collAlgo, TargetType& collType, WorldObjects::SearchFlg& opt) const;
     std::string                           wname;

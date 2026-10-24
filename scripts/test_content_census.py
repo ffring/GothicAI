@@ -79,7 +79,7 @@ def test_replacement_only_resources_count_once_and_kinds_follow_canonical_order(
     assert "| texture | 0 | 1 | 0 | 100.0% |" in census.render_markdown(summary)
 
 
-def test_world_mesh_replacement_has_own_row_while_zen_remains_original():
+def test_legacy_world_mesh_counts_as_base_while_zen_remains_original():
     base = {"name": "NEWWORLD.ZEN", "kind": "worldmesh",
             "replacement": "worlds/NEWWORLD/world.json", "opens": 1}
     summary = census.summarize([
@@ -89,11 +89,11 @@ def test_world_mesh_replacement_has_own_row_while_zen_remains_original():
     ])
     assert summary["counts"] == [
         {"kind": "world", "original": 1, "own": 0},
-        {"kind": "worldmesh", "original": 0, "own": 1},
+        {"kind": "worldmesh", "original": 0, "own": 0, "base": 1},
     ]
     markdown = census.render_markdown(summary)
     assert "| world | 1 | 0 | 0 | 0.0% |" in markdown
-    assert "| worldmesh | 0 | 1 | 0 | 100.0% |" in markdown
+    assert "| worldmesh | 0 | 0 | 1 | 0.0% |" in markdown
     assert "| NEWWORLD.ZEN | world | Worlds.vdf | 2 |" in markdown
 
 
@@ -102,20 +102,29 @@ def test_base_resources_are_separate_from_own_replacements():
                "replacement": "base/textures/STONE.dds", "opens": 2}
     mesh = {"name": "BARREL.MRM", "kind": "basemesh",
             "replacement": "base/meshes/BARREL.glb", "opens": 1}
+    world = {"name": "NEWWORLD.ZEN", "kind": "baseworld",
+             "replacement": "base/worlds/NEWWORLD/world.json", "opens": 1}
+    zen = {"name": "FIRE.ZEN", "kind": "basezen",
+           "replacement": "base/zen/FIRE.json", "opens": 1}
     summary = census.summarize([
-        run([original("STONE-C.TEX")], [texture, mesh, replacement("OWN.TGA")]),
+        run([original("STONE-C.TEX")], [texture, mesh, world, zen, replacement("OWN.TGA")]),
         run(replacements=[dict(texture, name="stone.tga"), mesh,
-                          replacement("STONE.TGA"), replacement("BARREL.MRM", "mesh")]),
+                          replacement("STONE.TGA"), replacement("BARREL.MRM", "mesh"),
+                          world, zen, replacement("FIRE.ZEN", "world")]),
     ])
     assert summary["counts"] == [
         {"kind": "texture", "original": 1, "own": 1},
         {"kind": "basetexture", "original": 0, "own": 0, "base": 1},
         {"kind": "basemesh", "original": 0, "own": 0, "base": 1},
+        {"kind": "baseworld", "original": 0, "own": 0, "base": 1},
+        {"kind": "basezen", "original": 0, "own": 0, "base": 1},
     ]
     markdown = census.render_markdown(summary)
     assert "| basetexture | 0 | 0 | 1 | 0.0% |" in markdown
     assert "| basemesh | 0 | 0 | 1 | 0.0% |" in markdown
-    assert "| **Всего** | **1** | **1** | **2** | **25.0%** |" in markdown
+    assert "| baseworld | 0 | 0 | 1 | 0.0% |" in markdown
+    assert "| basezen | 0 | 0 | 1 | 0.0% |" in markdown
+    assert "| **Всего** | **1** | **1** | **4** | **16.7%** |" in markdown
 
 
 def test_top20_uses_summed_opens_and_stable_order_for_ties():
