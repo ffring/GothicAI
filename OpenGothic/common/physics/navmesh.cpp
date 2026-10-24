@@ -536,6 +536,10 @@ struct NavMesh::Impl {
   };
 
 NavMesh::NavMesh():impl(std::make_unique<Impl>()){}
+
+uint64_t NavMesh::cacheKey(const Geometry& geometry, const Params& params, const std::string& worldName) {
+  return geometryHash(geometry,params,worldName);
+  }
 NavMesh::~NavMesh() = default;
 NavMesh::NavMesh(NavMesh&&) noexcept = default;
 NavMesh& NavMesh::operator=(NavMesh&&) noexcept = default;
@@ -567,7 +571,7 @@ void NavMesh::buildOrLoad(const Geometry& geometry, const Params& parameters,
   impl->stats.triangles = uint64_t(geometry.triangles.size()/3);
   impl->stats.waterTriangles = uint64_t(geometry.waterTriangles.size()/3);
   const auto hashStart = Clock::now();
-  const uint64_t hash = geometryHash(geometry,parameters,worldName);
+  const uint64_t hash = cacheKey(geometry,parameters,worldName);
   const double hashSeconds = elapsed(hashStart);
   std::ostringstream key;
   key << std::hex << std::setfill('0') << std::setw(16) << hash;

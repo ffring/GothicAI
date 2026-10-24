@@ -1,0 +1,415 @@
+#include "commandline.h"
+#include "graphics/mesh/submesh/packedmesh.h"
+#include "physics/collisionworld.h"
+#include "physics/dynamicworld.h"
+#include "physics/navmesh.h"
+#include "physics/physicvbo.h"
+#include "physics/worldcloth.h"
+#include "resources.h"
+#include "worldbase.h"
+#include "worldchunks.h"
+
+#include <zenkit/Stream.hh>
+#include <zenkit/World.hh>
+
+#include <array>
+#include <bit>
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+
+namespace WorldBasePhysicsContract {
+
+inline void require(bool condition, const std::string& message) {
+  if(!condition)
+    throw std::runtime_error(message);
+  }
+
+inline std::array<float,9> packedTriangle(const PackedMesh& mesh, size_t triangle) {
+  std::array<float,9> result;
+  for(size_t vertex=0;vertex<3;++vertex) {
+    const auto& point=mesh.vertices.at(mesh.indices.at(triangle*3+vertex));
+    for(size_t axis=0;axis<3;++axis)
+      result[vertex*3+axis]=point.pos[axis];
+    }
+  return result;
+  }
+
+inline void comparePacked(const PackedMesh& zen, const PackedMesh& base) {
+  require(zen.subMeshes.size()==base.subMeshes.size(),"packPhysics submesh count differs");
+  for(size_t sub=0;sub<zen.subMeshes.size();++sub) {
+    const auto& a=zen.subMeshes[sub];
+    const auto& b=base.subMeshes[sub];
+    const auto where="packPhysics submesh "+std::to_string(sub)+" material '"+a.material.name+"': ";
+    require(a.material.name==b.material.name && a.material.group==b.material.group &&
+            a.material.disable_collision==b.material.disable_collision,where+"material differs");
+    require(a.iboOffset==b.iboOffset && a.iboLength==b.iboLength,where+"index range differs");
+    }
+  require(zen.indices.size()==base.indices.size(),"packPhysics index count differs");
+  // The canonical base omits unused source vertices. Compare the positions
+  // addressed by each packed triangle, preserving its order and winding.
+  for(size_t triangle=0;triangle<zen.indices.size()/3;++triangle)
+    require(packedTriangle(zen,triangle)==packedTriangle(base,triangle),
+            "packPhysics dereferenced triangle "+std::to_string(triangle)+" differs");
+  }
+
+struct SplitPhysics {
+  std::vector<JPH::Vec3> vertices;
+  std::vector<std::string> sectors;
+  PhysicVbo land{&vertices};
+  PhysicVbo water{&vertices};
+
+  explicit SplitPhysics(const PackedMesh& packed) {
+    vertices.reserve(packed.vertices.size());
+    for(const auto& vertex:packed.vertices)
+      vertices.push_back(CollisionWorld::toMeters(Tempest::Vec3(vertex.pos[0],vertex.pos[1],vertex.pos[2])));
+    sectors.reserve(packed.subMeshes.size());
+    for(const auto& sub:packed.subMeshes)
+      sectors.push_back(sub.material.name);
+    // Keep the same collision filter, water split and sector lifetime as
+    // DynamicWorld's landscape construction.
+    for(size_t sub=0;sub<packed.subMeshes.size();++sub) {
+      const auto& mesh=packed.subMeshes[sub];
+      if(mesh.material.disable_collision || mesh.iboLength==0)
+        continue;
+      if(mesh.material.group==zenkit::MaterialGroup::WATER)
+        water.addIndex(packed.indices,mesh.iboOffset,mesh.iboLength,mesh.material.group);
+      else
+        land.addIndex(packed.indices,mesh.iboOffset,mesh.iboLength,mesh.material.group,sectors[sub].c_str());
+      }
+    }
+  };
+
+inline void compareInput(const PhysicVbo& zen, const PhysicVbo& base, const std::string& kind) {
+  require(zen.triangleCount()==base.triangleCount(),kind+" Jolt input triangle count differs");
+  for(size_t triangle=0;triangle<zen.triangleCount();++triangle) {
+    const auto sector=[](const PhysicVbo& mesh, size_t index) {
+      const auto* name=mesh.sectorName(index);
+      return std::string(name==nullptr ? "" : name);
+      };
+    const auto material=zen.materialId(triangle);
+    const auto name=sector(zen,triangle);
+    const auto where=kind+" Jolt input triangle "+std::to_string(triangle)+
+                     " material "+std::to_string(static_cast<unsigned int>(material))+" sector '"+name+"': ";
+    require(material==base.materialId(triangle),where+"material differs");
+    require(name==sector(base,triangle),where+"sector differs");
+    JPH::Vec3 a[3], b[3];
+    require(zen.triangleVertices(static_cast<uint32_t>(triangle),a) &&
+            base.triangleVertices(static_cast<uint32_t>(triangle),b),where+"invalid source triangle");
+    for(size_t vertex=0;vertex<3;++vertex)
+      require(a[vertex]==b[vertex],where+"vertex "+std::to_string(vertex)+" differs");
+    }
+  }
+
+inline NavMesh::Geometry nativeGeometry(const SplitPhysics& mesh) {
+  CollisionWorld world;
+  Tempest::Matrix4x4 identity;
+  identity.identity();
+  std::unique_ptr<CollisionWorld::CollisionBody> land, water;
+  if(!mesh.land.isEmpty())
+    land=world.addCollisionBody(mesh.land.shape(),identity,0.f,DynamicWorld::C_Landscape,false,false,&mesh.land);
+  if(!mesh.water.isEmpty())
+    water=world.addCollisionBody(mesh.water.shape(),identity,0.f,DynamicWorld::C_Water,false,true,&mesh.water);
+  NavMesh::Geometry result;
+  // This is the exact native, quantized triangle stream consumed by
+  // DynamicWorld::navigationGeometry(), including compound child transforms.
+  world.staticTriangles([&](const CollisionWorld::StaticTriangle& triangle) {
+    auto& vertices=triangle.water ? result.waterVertices : result.vertices;
+    auto& indices=triangle.water ? result.waterTriangles : result.triangles;
+    const auto first=static_cast<int>(vertices.size()/3);
+    for(const auto& vertex:triangle.vertices) {
+      vertices.push_back(vertex.x);
+      vertices.push_back(vertex.y);
+      vertices.push_back(vertex.z);
+      }
+    indices.insert(indices.end(),{first,first+1,first+2});
+    });
+  return result;
+  }
+
+inline void compareNative(const std::vector<float>& zen, const std::vector<float>& base, const std::string& kind) {
+  require(zen.size()==base.size(),kind+" native Jolt triangle coordinate count differs: "+
+          std::to_string(zen.size())+" vs "+std::to_string(base.size()));
+  for(size_t coordinate=0;coordinate<zen.size();++coordinate)
+    require(zen[coordinate]==base[coordinate],kind+" native Jolt triangle "+std::to_string(coordinate/9)+
+            " vertex "+std::to_string(coordinate%9/3)+" axis "+std::to_string(coordinate%3)+" differs");
+  }
+
+inline void compare(const zenkit::Mesh& zen, const zenkit::Mesh& base) {
+  Physics::initialize();
+  PackedMesh zenPacked(zen,PackedMesh::PK_Physic), basePacked(base,PackedMesh::PK_Physic);
+  comparePacked(zenPacked,basePacked);
+  SplitPhysics zenInput(zenPacked), baseInput(basePacked);
+  compareInput(zenInput.land,baseInput.land,"land");
+  compareInput(zenInput.water,baseInput.water,"water");
+  const auto zenNative=nativeGeometry(zenInput);
+  const auto baseNative=nativeGeometry(baseInput);
+  compareNative(zenNative.vertices,baseNative.vertices,"land");
+  compareNative(zenNative.waterVertices,baseNative.waterVertices,"water");
+  require(zenNative.triangles==baseNative.triangles && zenNative.waterTriangles==baseNative.waterTriangles,
+          "native Jolt navigation triangle indices differ");
+  require(!zenNative.triangles.empty(),"native Jolt navigation geometry is empty");
+  const NavMesh::Params params;
+  const auto zenKey=NavMesh::cacheKey(zenNative,params,"NEWWORLD.ZEN");
+  const auto baseKey=NavMesh::cacheKey(baseNative,params,"NEWWORLD.ZEN");
+  require(zenKey==baseKey,"native Jolt navigation cache key differs: "+
+          std::to_string(zenKey)+" vs "+std::to_string(baseKey));
+  std::printf("world base physics contract: packed=%zu land=%zu water=%zu native_land=%zu native_water=%zu nav_key=%llu\n",
+              zenPacked.indices.size()/3,zenInput.land.triangleCount(),zenInput.water.triangleCount(),
+              zenNative.triangles.size()/3,zenNative.waterTriangles.size()/3,
+              static_cast<unsigned long long>(zenKey));
+  }
+
+} // namespace WorldBasePhysicsContract
+
+inline void worldbasePhysicsContract(const zenkit::Mesh& zen, const zenkit::Mesh& base) {
+  WorldBasePhysicsContract::compare(zen,base);
+  }
+
+namespace {
+namespace fs = std::filesystem;
+
+void require(bool condition, const std::string& message) {
+  if(!condition)
+    throw std::runtime_error(message);
+  }
+
+struct TemporaryDirectory {
+  fs::path path = fs::temp_directory_path()/
+    ("gothic-worldbase-contract-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  ~TemporaryDirectory() {
+    std::error_code error;
+    fs::remove_all(path,error);
+    }
+  };
+
+bool sameFloat(float a, float b) {
+  return std::bit_cast<uint32_t>(a)==std::bit_cast<uint32_t>(b);
+  }
+
+bool sameVector(const Tempest::Vec3& a, const Tempest::Vec3& b) {
+  return sameFloat(a.x,b.x) && sameFloat(a.y,b.y) && sameFloat(a.z,b.z);
+  }
+
+bool sameVertex(const Resources::Vertex& a, const Resources::Vertex& b) {
+  for(size_t axis=0;axis<3;++axis)
+    if(!sameFloat(a.pos[axis],b.pos[axis]) || !sameFloat(a.norm[axis],b.norm[axis]))
+      return false;
+  return sameFloat(a.uv[0],b.uv[0]) && sameFloat(a.uv[1],b.uv[1]) && a.color==b.color;
+  }
+
+bool sameMaterial(const zenkit::Material& a, const zenkit::Material& b) {
+  zenkit::Mesh left,right;
+  left.materials.push_back(a);
+  right.materials.push_back(b);
+  return compareWorldMeshes(left,right).empty();
+  }
+
+void visualContract(const zenkit::Mesh& zen, const zenkit::Mesh& base, const std::string& label) {
+  const PackedMesh expected(zen,PackedMesh::PK_VisualLnd),actual(base,PackedMesh::PK_VisualLnd);
+  require(expected.subMeshes.size()==actual.subMeshes.size(),label+": GPU submesh count "+
+          std::to_string(expected.subMeshes.size())+" vs "+std::to_string(actual.subMeshes.size()));
+  for(size_t i=0;i<expected.subMeshes.size();++i) {
+    const auto& a=expected.subMeshes[i];
+    const auto& b=actual.subMeshes[i];
+    const auto where=label+": GPU submesh "+std::to_string(i)+" ("+a.material.name+")";
+    require(sameMaterial(a.material,b.material),where+" material differs");
+    require(a.iboOffset==b.iboOffset && a.iboLength==b.iboLength,where+" ranges "+
+            std::to_string(a.iboOffset)+"/"+std::to_string(a.iboLength)+" vs "+
+            std::to_string(b.iboOffset)+"/"+std::to_string(b.iboLength)+
+            "; meshlets "+std::to_string(a.iboLength/PackedMesh::MaxInd)+" vs "+
+            std::to_string(b.iboLength/PackedMesh::MaxInd)+"; actual material '"+b.material.name+"'");
+    require(a.alphaTest==b.alphaTest && a.alphaTestRequired==b.alphaTestRequired,where+" alpha flags differ");
+    }
+  require(expected.meshletBounds.size()==actual.meshletBounds.size(),label+": GPU meshlet count differs");
+  for(size_t i=0;i<expected.meshletBounds.size();++i) {
+    const auto& a=expected.meshletBounds[i];
+    const auto& b=actual.meshletBounds[i];
+    require(sameVector(a.pos,b.pos) && sameFloat(a.r,b.r),label+": GPU meshlet "+std::to_string(i)+" bounds differ");
+    }
+  require(expected.vertices.size()==actual.vertices.size(),label+": GPU vertex count "+
+          std::to_string(expected.vertices.size())+" vs "+std::to_string(actual.vertices.size()));
+  require(expected.indices.size()==actual.indices.size(),label+": GPU index count differs");
+  require(expected.indices8.size()==actual.indices8.size(),label+": GPU byte index count differs");
+  const auto meshlets=expected.meshletBounds.size();
+  require(expected.vertices.size()==meshlets*PackedMesh::MaxVert &&
+          expected.indices.size()==meshlets*PackedMesh::MaxInd &&
+          expected.indices8.size()==meshlets*PackedMesh::MaxPrim*4,label+": incomplete GPU meshlet arrays");
+  const size_t unused=size_t(-1);
+  std::vector<size_t> vertexMap(expected.vertices.size(),unused),reverseMap(actual.vertices.size(),unused);
+  for(size_t meshlet=0;meshlet<meshlets;++meshlet) {
+    const auto tail=(meshlet+1)*PackedMesh::MaxPrim*4-4;
+    // The final byte-index slot records the used counts in a partial meshlet.
+    require(expected.indices8[tail+3]==actual.indices8[tail+3],
+            label+": GPU meshlet "+std::to_string(meshlet)+" used vertex counts differ");
+    const size_t triangles=expected.indices8[tail+3]==0 ? PackedMesh::MaxPrim : expected.indices8[tail+2];
+    const size_t actualTriangles=actual.indices8[tail+3]==0 ? PackedMesh::MaxPrim : actual.indices8[tail+2];
+    require(triangles==actualTriangles,label+": GPU meshlet "+std::to_string(meshlet)+" used triangle counts differ");
+    for(size_t triangle=0;triangle<triangles;++triangle)
+      for(size_t corner=0;corner<3;++corner) {
+        const auto index=meshlet*PackedMesh::MaxInd+triangle*3+corner;
+        const auto a=expected.indices[index],b=actual.indices[index];
+        const auto where=label+": GPU meshlet "+std::to_string(meshlet)+" triangle "+std::to_string(triangle)+
+                         " corner "+std::to_string(corner);
+        require(a<expected.vertices.size() && b<actual.vertices.size(),where+" has an invalid vertex index");
+        require(a/PackedMesh::MaxVert==meshlet && b/PackedMesh::MaxVert==meshlet,where+" addresses another meshlet");
+        require(sameVertex(expected.vertices[a],actual.vertices[b]),where+" dereferenced vertex differs");
+        require((vertexMap[a]==unused || vertexMap[a]==b) && (reverseMap[b]==unused || reverseMap[b]==a),
+                where+" vertex numbering is not a bijection");
+        vertexMap[a]=b;
+        reverseMap[b]=a;
+        const auto byteIndex=meshlet*PackedMesh::MaxPrim*4+triangle*4+corner;
+        require(meshlet*PackedMesh::MaxVert+expected.indices8[byteIndex]==a &&
+                meshlet*PackedMesh::MaxVert+actual.indices8[byteIndex]==b,where+" byte indices disagree with GPU indices");
+        }
+    }
+  // Permit only vertex renumbering within each meshlet. Triangle order,
+  // attributes, used counts, materials, ranges and bounds remain exact.
+  for(size_t i=0;i<vertexMap.size();++i)
+    if(vertexMap[i]==unused)
+      require(reverseMap[i]==unused && sameVertex(expected.vertices[i],actual.vertices[i]),
+              label+": GPU unused vertex "+std::to_string(i)+" differs");
+  const auto a=expected.bbox(),b=actual.bbox();
+  require(sameVector(a.first,b.first) && sameVector(a.second,b.second),label+": GPU bounding box differs");
+  std::printf("%s GPU: %zu submeshes, %zu vertices, %zu indices, %zu meshlets equal\n",label.c_str(),
+              expected.subMeshes.size(),expected.vertices.size(),expected.indices.size(),expected.meshletBounds.size());
+  }
+
+void clothContract(const WorldCloth::Extracted& zen, const WorldCloth::Extracted& base) {
+  require(zen.surfaces.size()==base.surfaces.size(),"cloth surface count differs");
+  for(size_t i=0;i<zen.surfaces.size();++i) {
+    const auto& a=zen.surfaces[i];
+    const auto& b=base.surfaces[i];
+    const auto where="cloth surface "+std::to_string(i)+" ("+a.visual+")";
+    require(a.id==b.id && a.visual==b.visual,where+" id or name differs");
+    require(a.pins==b.pins && sameFloat(a.stiffness,b.stiffness) && sameFloat(a.linearDamping,b.linearDamping),
+            where+" attachment or physics parameters differ");
+    const auto difference=compareWorldMeshes(canonicalWorldMesh(a.mesh),canonicalWorldMesh(b.mesh));
+    require(difference.empty(),where+": "+difference);
+    }
+  const auto difference=compareWorldMeshes(canonicalWorldMesh(zen.original),canonicalWorldMesh(base.original));
+  require(difference.empty(),"original cloth triangles: "+difference);
+  std::printf("Cloth: %zu surfaces with identical id, names, pins and triangles\n",zen.surfaces.size());
+  }
+
+std::string readText(const fs::path& path) {
+  std::ifstream in(path,std::ios::binary);
+  require(bool(in),"cannot read "+path.string());
+  return {std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>()};
+  }
+
+void writeText(const fs::path& path, const std::string& text) {
+  std::ofstream out(path,std::ios::binary|std::ios::trunc);
+  out << text;
+  require(bool(out),"cannot write "+path.string());
+  }
+
+zenkit::Mesh selectionMesh() {
+  zenkit::Mesh mesh;
+  mesh.materials.resize(1);
+  mesh.materials[0].name="CONTRACT";
+  mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+  mesh.vertices={{100,100,100},{100,200,100},{200,100,100}};
+  mesh.features={{{0,0},0xffffffffu,{0,0,1}},{{0,1},0xffffffffu,{0,0,1}},{{1,0},0xffffffffu,{0,0,1}}};
+  mesh.polygons.vertex_indices={0,1,2};
+  mesh.polygons.feature_indices={0,1,2};
+  mesh.polygons.material_indices={0};
+  mesh.polygons.lightmap_indices={-1};
+  mesh.polygons.flags.resize(1);
+  return mesh;
+  }
+
+void selectionContract(const fs::path& root) {
+  const std::vector<std::byte> bytes={std::byte{1},std::byte{2},std::byte{3}};
+  const WorldChunkSource source={"NEWWORLD.ZEN",bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())};
+  const auto original=selectionMesh();
+  const auto dir=root/"selection";
+  const auto manifest=writeWorldChunks(original,source,dir);
+  const auto text=readText(dir/"world.json");
+  for(const auto& field:{std::pair<std::string,uint64_t>{"size",source.size},
+                         std::pair<std::string,uint64_t>{"crc32",source.crc32}}) {
+    auto invalid=text;
+    const auto value='"'+field.first+"\": "+std::to_string(field.second);
+    const auto at=invalid.find(value);
+    require(at!=std::string::npos,"cannot find source "+field.first+" in manifest");
+    invalid.replace(at,value.size(),'"'+field.first+"\": "+std::to_string(field.second+1));
+    writeText(dir/"world.json",invalid);
+    auto mesh=original;
+    const auto result=tryWorldBase(mesh,"NEWWORLD.ZEN",bytes,dir);
+    require(!result.replaced && !result.error.empty(),"wrong "+field.first+" must reject base");
+    require(compareWorldMeshes(original,mesh).empty(),"wrong "+field.first+" must retain .ZEN mesh");
+    }
+  writeText(dir/"world.json",text);
+  auto changed=original;
+  changed.vertices[0].x+=1.f;
+  const auto replacement=root/"replacement";
+  const auto replacementManifest=writeWorldChunks(changed,source,replacement);
+  require(manifest.chunks.size()==1 && replacementManifest.chunks==manifest.chunks,"override fixture must occupy one unchanged chunk");
+  const auto overrideDir=root/"override";
+  const auto chunk=fs::path(manifest.chunks.front());
+  fs::create_directories((overrideDir/chunk).parent_path());
+  fs::copy_file(replacement/chunk,overrideDir/chunk);
+  auto mesh=original;
+  const auto result=tryWorldBase(mesh,"NEWWORLD.ZEN",bytes,dir,overrideDir);
+  require(result.replaced && result.error.empty(),"override fixture must load: "+result.error);
+  const auto difference=compareWorldMeshes(canonicalWorldMesh(changed),mesh);
+  require(difference.empty(),"override must replace base chunk: "+difference);
+  require(!compareWorldMeshes(canonicalWorldMesh(original),mesh).empty(),"override fixture must change a vertex");
+  std::puts("Selection: wrong CRC32 and size retain .ZEN; matching override chunk replaces base");
+  }
+}
+
+int main() {
+  TemporaryDirectory temporary;
+  try {
+    const auto* gothic=std::getenv("GOTHIC_DIR");
+    require(gothic!=nullptr && *gothic!='\0',"GOTHIC_DIR must point to a Gothic II installation");
+    const char* args[]={"gothic-worldbase-contract","-g",gothic};
+    CommandLine commandLine(3,args);
+    Resources resources;
+    Resources::loadVdfs({},true);
+    const auto* entry=Resources::vdfsIndex().find("NEWWORLD.ZEN");
+    require(entry!=nullptr,"NEWWORLD.ZEN is missing from the engine VFS");
+    auto input=entry->open_read();
+    const auto bytes=readWorldBytes(*input);
+    auto buffer=zenkit::Read::from(&bytes);
+    zenkit::World world;
+    world.load(buffer.get(),zenkit::GameVersion::GOTHIC_2);
+    auto zen=std::move(world.world_mesh);
+    const WorldChunkSource source={"NEWWORLD.ZEN",bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())};
+    const auto dir=temporary.path/"NEWWORLD";
+    const auto manifest=writeWorldChunks(zen,source,dir);
+    auto base=readWorldChunks(dir);
+    const auto difference=compareWorldMeshes(canonicalWorldMesh(zen),base);
+    require(difference.empty(),"canonical round trip: "+difference);
+    std::printf("NEWWORLD.ZEN: %zu bytes, CRC32 %08x, %zu triangles, %zu chunks; canonical round trip equal\n",
+                bytes.size(),source.crc32,zen.polygons.material_indices.size(),manifest.chunks.size());
+    // The actual engine retains the source name, bounds and BSP geometry.
+    base=zen;
+    const auto result=tryWorldBase(base,"NEWWORLD.ZEN",bytes,dir);
+    require(result.replaced && result.error.empty(),"matching base must replace world mesh: "+result.error);
+    require(result.triangles==manifest.triangles && result.chunks==manifest.chunks.size(),"base load statistics differ");
+    require(base.name==zen.name && base.bbox.min==zen.bbox.min && base.bbox.max==zen.bbox.max &&
+            base.geometry.size()==zen.geometry.size() && base.polygon_vertex_indices==zen.polygon_vertex_indices &&
+            base.polygon_feature_indices==zen.polygon_feature_indices,"base load must preserve source geometry and bounds");
+    const auto zenCloth=WorldCloth::extract(zen);
+    const auto baseCloth=WorldCloth::extract(base);
+    clothContract(zenCloth,baseCloth);
+    selectionContract(temporary.path);
+    worldbasePhysicsContract(zen,base);
+    if(!zenCloth.original.polygons.material_indices.empty())
+      visualContract(zenCloth.original,baseCloth.original,"Original cloth");
+    visualContract(zen,base,"Landscape");
+    std::puts("World base contract passed");
+    return EXIT_SUCCESS;
+    }
+  catch(const std::exception& error) {
+    std::fprintf(stderr,"FAIL: %s\n",error.what());
+    return EXIT_FAILURE;
+    }
+  }
