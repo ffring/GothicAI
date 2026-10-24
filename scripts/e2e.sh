@@ -28,7 +28,8 @@
 #       WebSocket reuse, tool continuation, HTTP fallback and --no-websocket; SAVE=save_slot_1.sav; LLM=fake
 #   m2: npc actions (give_item, follow/stop, gestures)
 #   m3: memory survives save/load and follows the save; push-to-talk from a wav file (streamed at
-#       speaking pace) through the ASR service (ASR=fake|inworld|voxtral|chatgpt)
+#       speaking pace) through the ASR service (ASR=fake|inworld|voxtral|chatgpt); ASR=inworld is paid,
+#       so it also needs PAID_ASR=1
 #   m4: what the npc planner needs from the bridge: npc roster, soft actions (npc_act) and their end
 #       (npc_idle); with DECIDER_URL the planner runs against that decision service too
 #   m5: the turn loop (a rejected commitment corrected in the same turn, a real give after the line),
@@ -411,6 +412,11 @@ if [[ "$SCENARIO" == neural-soak && "$LLM" != fake ]]; then
   exit 2
 fi
 ASR="${ASR:-fake}"
+# Inworld bills every recognized line, the same as its TTS below.
+if [[ ( "$ASR" == inworld || "$ASR" == inworld:* ) && "${PAID_ASR:-0}" != 1 ]]; then
+  echo "ASR=$ASR is paid Inworld; use ASR=fake or ASR=voxtral, or set PAID_ASR=1 when a step needs its recognition" >&2
+  exit 2
+fi
 # own ports, so a server / ASR service running for a play session is left alone
 PORT="${PORT:-47827}"
 ASR_PORT="${ASR_PORT:-47829}"
