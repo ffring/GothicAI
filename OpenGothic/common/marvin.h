@@ -30,6 +30,7 @@ class Marvin {
       C_ToggleFrame,
       C_ToggleShowRay,
       C_ToggleVobBox,
+      C_ToggleMeleeBladeDraw,
 
       // game
       C_ToggleDesktop,

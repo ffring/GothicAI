@@ -171,6 +171,7 @@ class World final {
     void                 marchPoints      (DbgPainter& p) const;
     void                 marchCsCameras   (DbgPainter& p) const;
     void                 drawVobBoxNpcNear(DbgPainter& p) const;
+    void                 drawMeleeShadow  (DbgPainter& p) const;
 
     AiOuputPipe*         openDlgOuput(Npc &player, Npc &npc);
     void                 aiOutputSound(Npc &player, std::string_view msg);

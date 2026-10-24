@@ -135,6 +135,7 @@ class WorldObjects final {
     void           marchInteractives(DbgPainter& p) const;
     void           marchCsCameras   (DbgPainter& p) const;
     void           drawVobBoxNpcNear(DbgPainter& p) const;
+    void           drawMeleeShadow  (DbgPainter& p) const;
 
     Interactive*   availableMob(const Npc& pl, std::string_view name);
     void           setMobRoutine(gtime time, std::string_view scheme, int32_t state);

@@ -162,6 +162,9 @@ class Gothic final {
     bool         doVobRays() const { return vobRays; }
     void         setVobRays(bool v) { vobRays = v; }
 
+    bool         doMeleeBladeDraw() const { return meleeBladeDraw; }
+    void         setMeleeBladeDraw(bool v) { meleeBladeDraw = v; }
+
     bool         isBenchmarkMode() const;
     bool         isBenchmarkModeCi() const;
     void         setBenchmarkMode(Benchmark b);
@@ -296,6 +299,7 @@ class Gothic final {
     bool                                    showTime       = false;
     bool                                    vobBox         = false;
     bool                                    vobRays        = false;
+    bool                                    meleeBladeDraw = false;
     Benchmark                               isBenchmark    = Benchmark::None;
 
     std::string                             wrldDef, plDef, gameDatDef, ouDef;

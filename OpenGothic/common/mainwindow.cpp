@@ -294,6 +294,11 @@ void MainWindow::paintEvent(PaintEvent& event) {
       DbgPainter dbg(p,c->viewProj(),w(),h());
       player.drawVobRay(dbg);
       }
+
+    if(Gothic::inst().doMeleeBladeDraw() && c!=nullptr) {
+      DbgPainter dbg(p,c->viewProj(),w(),h());
+      world->drawMeleeShadow(dbg);
+      }
     }
 
   if(auto wx = Gothic::inst().worldView()) {
