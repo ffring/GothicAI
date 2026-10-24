@@ -187,6 +187,7 @@ Marvin::Marvin() {
     {"toggle character_virtual",  C_ToggleCharacterVirtual},
     {"toggle npc_character_virtual",C_ToggleNpcCharacterVirtual},
     {"toggle monster_character_virtual",C_ToggleMonsterCharacterVirtual},
+    {"toggle melee_blade_shadow", C_ToggleMeleeBladeShadow},
     };
   }
 
@@ -609,6 +610,12 @@ bool Marvin::exec(std::string_view v) {
       const bool enabled = !Gothic::physicsFlags().monsterCharacterVirtual;
       Gothic::settingsSetI("GAME","monster_character_virtual",enabled ? 1 : 0);
       print(enabled ? "CharacterVirtual: ON (nearby ground monsters)" : "CharacterVirtual: OFF (monsters)");
+      return true;
+      }
+    case C_ToggleMeleeBladeShadow: {
+      const bool enabled = !Gothic::physicsFlags().meleeBladeShadow;
+      Gothic::settingsSetI("GAME","melee_blade_shadow",enabled ? 1 : 0);
+      print(enabled ? "Melee blade shadow: ON" : "Melee blade shadow: OFF");
       return true;
       }
     }
