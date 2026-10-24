@@ -501,3 +501,53 @@ stop
 rec npc-native-seed43 novideo
 bodyduel 43 60000
 stop
+
+# Same real location as basics.m5b_bridge; blade data supplements the unmodified m5b e2e.
+release all
+goto pos 23472 1032 -10816
+wait 500
+watch player
+clear 3000
+face -45
+melee-shadow weapon 1h
+arc BDT_1013_BANDIT_L 1 145 0
+npcequip nearest ITMW_1H_COMMON_01
+stats npc nearest hpmax 100000 hp 100000
+rec m5b-blade-probes novideo
+pos
+fight all player
+press action
+tap forward
+wait 1100
+tap forward
+wait 1100
+tap left
+wait 1100
+tap forward
+wait 1100
+tap right
+wait 1100
+tap forward
+wait 1100
+tap forward
+wait 1100
+tap left
+wait 1100
+tap forward
+wait 1100
+tap right
+wait 1100
+tap forward
+wait 1100
+tap forward
+wait 1100
+tap left
+wait 1100
+tap forward
+wait 1100
+tap right
+wait 1100
+release all
+wait 1200
+pos
+stop

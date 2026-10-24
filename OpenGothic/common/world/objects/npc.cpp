@@ -59,9 +59,11 @@ std::string meleeShadowPoint(const Vec3& p) {
 std::string meleeShadowWho(const Npc* npc) {
   if(npc==nullptr)
     return "null";
+  const auto* symbol = npc->world().script().findSymbol(npc->instanceSymbol());
   return "{\"id\":" + std::to_string(npc->world().npcId(npc)) +
          ",\"instance\":" + std::to_string(npc->instanceSymbol()) + ",\"name\":" +
-         TestBench::bodyJson(npc->displayName()) + ",\"position_cm\":" + meleeShadowPoint(npc->position()) + "}";
+         TestBench::bodyJson(symbol!=nullptr ? std::string_view(symbol->name()) : std::string_view("npc")) +
+         ",\"position_cm\":" + meleeShadowPoint(npc->position()) + "}";
   }
 
 std::string meleeShadowBone(const MeleeBladeContact& hit) {
@@ -1499,9 +1501,10 @@ void Npc::syncMeleeShadowSwing() {
   shadow.speed = attack->speed;
   shadow.attacker = meleeShadowWho(this);
   shadow.animation = seq->name;
+  const auto* weaponSymbol = item!=nullptr ? owner.script().findSymbol(item->clsId()) : nullptr;
   shadow.weapon = "{\"mode\":" + TestBench::bodyJson(mode==WeaponState::Fist ? "fist" :
                                                    (mode==WeaponState::W1H ? "1h" : "2h")) +
-                  ",\"name\":" + TestBench::bodyJson(item==nullptr ? "unarmed" : item->displayName()) +
+                  ",\"name\":" + TestBench::bodyJson(weaponSymbol!=nullptr ? std::string_view(weaponSymbol->name()) : std::string_view("unarmed")) +
                   ",\"visual\":" + TestBench::bodyJson(item==nullptr ? "" : item->handle().visual) +
                   ",\"length_cm\":" + std::to_string(length) + "}";
   shadow.legacyTarget = "null";

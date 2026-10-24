@@ -11752,16 +11752,14 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     else if(a.size()==2 && a[1]=="wall") {
       if(bench.meleeShadowActors.size()!=3) {arenaAbort("melee shadow setup is required");return;}
       const auto forward=bench.meleeShadowForward;
+      const auto parking=pl.position(); // The preceding target command verified this stance's ground.
       const auto at=Vec3(bench.meleeShadowWall.x,pl.position().y,bench.meleeShadowWall.z)-forward*65.f;
       const auto floor=w.physic()->landRay(at+Vec3(0,200,0),500.f);
       if(!floor.hasCol || floor.n.y<.8f) {arenaAbort("melee shadow wall stance lacks supported ground");return;}
       pl.setPosition(Vec3(at.x,floor.v.y,at.z));pl.setDirection(forward);pl.setTarget(nullptr);pl.updateTransform();
       for(auto* npc:bench.meleeShadowActors) {
         npc->setExternalControl(true);npc->clearAiQueue();npc->clearState(true);npc->clearGoTo();npc->stopWalking();
-        auto away=npc->position()-forward*450.f;
-        const auto ground=w.physic()->landRay(away+Vec3(0,200,0),500.f);
-        if(!ground.hasCol) {arenaAbort("melee shadow wall target relocation lacks ground");return;}
-        away.y=ground.v.y;npc->setPosition(away);npc->updateTransform();
+        npc->setPosition(parking);npc->updateTransform();
         }
       event("melee_shadow_wall","\"weapon\":"+jsonStr(bench.meleeShadowWeapon)+",\"attacker_cm\":"+
         ragdollVector(pl.position())+",\"wall_cm\":"+ragdollVector(bench.meleeShadowWall));
