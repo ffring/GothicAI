@@ -34,7 +34,8 @@ struct Data {
 Data fromWorld(const zenkit::World& world, const WorldChunkSource& source);
 void write(const Data& data, const std::filesystem::path& dir);
 Data read(const std::filesystem::path& dir);
-// ZenKit ASCII for vobs/waynet; individual retained BSP fields and room floats.
+// ZenKit ASCII plus vob IDs/runtime fields and ordered waypoint/edge comparison.
+// Individual retained BSP fields and room floats.
 // Also samples isIndoor on a grid of at most 400 cm spacing at three heights.
 // Empty on equality, otherwise includes the first differing field and values.
 std::string compare(const Data& expected, const Data& actual);

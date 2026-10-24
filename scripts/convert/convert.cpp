@@ -282,7 +282,7 @@ int verifyWorld(const SourceWorld& world, const fs::path& dir, const fs::path& o
   const auto diff=WorldData::compare(world.data,data);
   require(diff.empty(),world.source.world+": "+diff);
   uint64_t bytes=0;
-  for(const auto* file:{"vobs.json","waynet.json","sectors.json","bsp.bin"}) bytes+=fs::file_size(dir/file);
+  for(const auto* file:{"vobs.json","waynet.json","sectors.json","bsp.bin","rooms.bin"}) bytes+=fs::file_size(dir/file);
   const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
   std::cout << world.source.world << ": vobs " << WorldData::vobCount(data.vobs)
             << ", points " << (data.waynet ? data.waynet->points.size() : 0)

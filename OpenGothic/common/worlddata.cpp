@@ -1009,12 +1009,6 @@ template<class IO> void fields(IO& io, WorldChunkSource& v) {
   io("crc32",v.crc32);
   }
 
-template<class IO> void fields(IO& io, Room& v) {
-  io("min",v.min);
-  io("max",v.max);
-  io("triangles",v.triangles);
-  }
-
 template<class IO> void fields(IO& io, BspSector& v) {
   io("name",v.name);
   io("node_indices",v.node_indices);
@@ -1195,7 +1189,6 @@ struct JsonWriter {
   std::string value(Vec3& v) { float a[]={v.x,v.y,v.z}; return sequence(a); }
   std::string value(Quat& v) { float a[]={v.x,v.y,v.z,v.w}; return sequence(a); }
   std::string value(Color& v) { uint8_t a[]={v.r,v.g,v.b,v.a}; return sequence(a); }
-  std::string value(Triangle& v) { return sequence(v.point); }
   std::string value(Mat3& v) {
     float rows[3][3];
     for(unsigned r=0;r<3;++r) for(unsigned c=0;c<3;++c) rows[r][c]=v[c][r];
@@ -1299,7 +1292,6 @@ struct JsonReader {
   void value(const Json& j, Vec3& v) { array(j,3); value(j[0],v.x); value(j[1],v.y); value(j[2],v.z); }
   void value(const Json& j, Quat& v) { array(j,4); value(j[0],v.x); value(j[1],v.y); value(j[2],v.z); value(j[3],v.w); }
   void value(const Json& j, Color& v) { array(j,4); value(j[0],v.r); value(j[1],v.g); value(j[2],v.b); value(j[3],v.a); }
-  void value(const Json& j, Triangle& v) { value(j,v.point); }
   void value(const Json& j, Mat3& v) {
     float rows[3][3]; value(j,rows);
     for(unsigned r=0;r<3;++r) for(unsigned c=0;c<3;++c) v[c][r]=rows[r][c];
@@ -1446,6 +1438,55 @@ bool isIndoor(zenkit::BspTreeType mode, const std::vector<Room>& rooms, const ze
   }
 
 namespace {
+void writeRooms(const std::vector<Room>& rooms, const fs::path& file) {
+  std::vector<uint8_t> bytes{'G','W','R','M'};
+  auto u32=[&](uint64_t v) {
+    require(v<=UINT32_MAX,"rooms.bin: count exceeds u32");
+    for(unsigned i=0;i<4;++i) bytes.push_back(uint8_t(v>>(8*i)));
+    };
+  auto vec=[&](const Vec3& v) {
+    for(unsigned i=0;i<3;++i) u32(std::bit_cast<uint32_t>(v[i]));
+    };
+  u32(1); u32(rooms.size());
+  for(const auto& room:rooms) {
+    vec(room.min); vec(room.max); u32(room.triangles.size());
+    for(const auto& triangle:room.triangles)
+      for(const auto& point:triangle.point) vec(point);
+    }
+  gothicglb::writeFile(file,bytes.data(),bytes.size());
+  }
+std::vector<Room> readRooms(const fs::path& file, size_t sectorCount) {
+  const auto bytes=gothicglb::readFile(file);
+  require(bytes.size()>=12 && std::equal(bytes.begin(),bytes.begin()+4,"GWRM"),"rooms.bin: invalid GWRM header");
+  size_t at=4;
+  auto u32=[&]() {
+    require(at+4<=bytes.size(),"rooms.bin: truncated u32");
+    uint32_t v=0;
+    for(unsigned i=0;i<4;++i) v|=uint32_t(bytes[at++])<<(8*i);
+    return v;
+    };
+  auto vec=[&](Vec3& v) {
+    for(unsigned i=0;i<3;++i) {
+      v[i]=std::bit_cast<float>(u32());
+      require(std::isfinite(v[i]),"rooms.bin: non-finite coordinate");
+      }
+    };
+  require(u32()==1,"rooms.bin: unsupported version");
+  const auto count=u32();
+  require(count==sectorCount,"rooms.bin: room/sector count differs");
+  require(count<=(bytes.size()-at)/28,"rooms.bin: truncated rooms");
+  std::vector<Room> rooms(count);
+  for(auto& room:rooms) {
+    vec(room.min); vec(room.max);
+    const auto triangles=u32();
+    require(triangles<=(bytes.size()-at)/36,"rooms.bin: truncated triangles");
+    room.triangles.resize(triangles);
+    for(auto& triangle:room.triangles)
+      for(auto& point:triangle.point) vec(point);
+    }
+  require(at==bytes.size(),"rooms.bin: trailing bytes");
+  return rooms;
+  }
 void writeBsp(const BspTree& bsp, const fs::path& file) {
   std::vector<uint8_t> bytes{'G','W','B','S'};
   auto u32=[&](uint64_t v) {
@@ -1535,7 +1576,7 @@ void write(const Data& data, const fs::path& dir) {
   std::string sectors="[";
   for(size_t i=0;i<d.rooms.size();++i) {
     JsonWriter sector{ctx,{}}; fields(sector,d.bsp.sectors[i]);
-    sector("volume",d.rooms[i]);
+    sector("room",i);
     if(i) sectors+=",";
     sectors+="\n{"+sector.out+"}";
     }
@@ -1543,6 +1584,7 @@ void write(const Data& data, const fs::path& dir) {
   writeJson(dir/"sectors.json","{"+w.out+"}\n");
   }
   writeBsp(d.bsp,dir/"bsp.bin");
+  writeRooms(d.rooms,dir/"rooms.bin");
   }
 
 Data read(const fs::path& dir) {
@@ -1564,10 +1606,12 @@ Data read(const fs::path& dir) {
   for(const auto& j:sectors.GetArray()) {
     JsonReader sector{ctx,j};
     fields(sector,d.bsp.sectors.emplace_back());
-    sector("volume",d.rooms.emplace_back());
+    size_t room; sector("room",room);
+    require(room==d.bsp.sectors.size()-1,"sector room index differs from sector order");
     }
   }
   readBsp(d.bsp,dir/"bsp.bin");
+  d.rooms=readRooms(dir/"rooms.bin",d.bsp.sectors.size());
   for(const auto& sector:d.bsp.sectors)
     for(const auto leaf:sector.node_indices)
       require(leaf<d.bsp.leaf_node_indices.size(),"sector "+sector.name+": leaf index out of range");
@@ -1604,8 +1648,79 @@ std::string textDifference(const std::string& expected, const std::string& actua
          (object==std::string::npos ? "" : expected.substr(object,objectEnd-object))+
          ", expected '"+line(expected)+"', actual '"+line(actual)+"'";
   }
+void equalFloat(float a, float b, const std::string& where) {
+  require(std::bit_cast<uint32_t>(a)==std::bit_cast<uint32_t>(b),where+": expected "+
+          std::to_string(a)+" (bits "+std::to_string(std::bit_cast<uint32_t>(a))+"), actual "+
+          std::to_string(b)+" (bits "+std::to_string(std::bit_cast<uint32_t>(b))+")");
+  }
+void equalVec(const Vec3& a, const Vec3& b, const std::string& where) {
+  for(unsigned i=0;i<3;++i) equalFloat(a[i],b[i],where+"["+std::to_string(i)+"]");
+  }
+template<class T> void equalInt(T a, T b, const std::string& where) {
+  require(a==b,where+": expected "+std::to_string(a)+", actual "+std::to_string(b));
+  }
+void equalString(const std::string& a, const std::string& b, const std::string& where) {
+  require(a==b,where+": expected '"+a+"', actual '"+b+"'");
+  }
+void compareLight(const LightPreset& a, const LightPreset& b, const std::string& where) {
+  // Static presets omit their animation/on fields from ZenKit's archive.
+  equalInt(a.on,b.on,where+"on");
+  equalInt(a.can_move,b.can_move,where+"can_move");
+  equalInt(a.range_animation_scale.size(),b.range_animation_scale.size(),where+"range_animation_scale.size");
+  for(size_t i=0;i<a.range_animation_scale.size();++i)
+    equalFloat(a.range_animation_scale[i],b.range_animation_scale[i],where+"range_animation_scale["+std::to_string(i)+"]");
+  equalFloat(a.range_animation_fps,b.range_animation_fps,where+"range_animation_fps");
+  equalInt(a.range_animation_smooth,b.range_animation_smooth,where+"range_animation_smooth");
+  equalInt(a.color_animation_list.size(),b.color_animation_list.size(),where+"color_animation_list.size");
+  for(size_t i=0;i<a.color_animation_list.size();++i) {
+    const auto& x=a.color_animation_list[i]; const auto& y=b.color_animation_list[i];
+    const auto field=where+"color_animation_list["+std::to_string(i)+"]";
+    equalInt(x.r,y.r,field+".r"); equalInt(x.g,y.g,field+".g");
+    equalInt(x.b,y.b,field+".b"); equalInt(x.a,y.a,field+".a");
+    }
+  equalFloat(a.color_animation_fps,b.color_animation_fps,where+"color_animation_fps");
+  equalInt(a.color_animation_smooth,b.color_animation_smooth,where+"color_animation_smooth");
+  }
+void compareVobTree(const std::vector<std::shared_ptr<VirtualObject>>& a,
+                    const std::vector<std::shared_ptr<VirtualObject>>& b, const std::string& path) {
+  equalInt(a.size(),b.size(),path+" count");
+  for(size_t i=0;i<a.size();++i) {
+    const auto node=path+"["+std::to_string(i)+"]";
+    require(a[i]!=nullptr && b[i]!=nullptr,node+": null vob");
+    const auto& x=*a[i]; const auto& y=*b[i];
+    const auto where=node+" "+className(*a[i])+" '"+x.vob_name+"' ";
+    equalString(className(*a[i]),className(*b[i]),where+"class");
+    // Vob dispatch and save entry keys use these members, not archive-assigned IDs.
+    equalInt(int(x.type),int(y.type),where+"type");
+    equalInt(x.id,y.id,where+"id");
+    // Packed ZenKit output masks these fields or derives them from other members.
+    equalInt(int(x.anim_mode),int(y.anim_mode),where+"anim_mode");
+    equalInt(x.bias,y.bias,where+"bias");
+    equalInt(int(x.sprite_camera_facing_mode),int(y.sprite_camera_facing_mode),where+"sprite_camera_facing_mode");
+    equalInt(int(x.dynamic_shadows),int(y.dynamic_shadows),where+"dynamic_shadows");
+    equalInt(x.physics_enabled,y.physics_enabled,where+"physics_enabled");
+    equalInt(bool(x.visual),bool(y.visual),where+"visual present");
+    if(x.visual) equalInt(int(x.visual->type),int(y.visual->type),where+"visual.type");
+    if(const auto* trigger=dynamic_cast<const VTrigger*>(&x)) {
+      const auto& other=dynamic_cast<const VTrigger&>(y);
+      // The engine reads these bools; ZenKit writes only flags/filter_flags.
+      equalInt(trigger->start_enabled,other.start_enabled,where+"start_enabled");
+      equalInt(trigger->send_untrigger,other.send_untrigger,where+"send_untrigger");
+      equalInt(trigger->react_to_on_trigger,other.react_to_on_trigger,where+"react_to_on_trigger");
+      equalInt(trigger->react_to_on_touch,other.react_to_on_touch,where+"react_to_on_touch");
+      equalInt(trigger->react_to_on_damage,other.react_to_on_damage,where+"react_to_on_damage");
+      equalInt(trigger->respond_to_object,other.respond_to_object,where+"respond_to_object");
+      equalInt(trigger->respond_to_pc,other.respond_to_pc,where+"respond_to_pc");
+      equalInt(trigger->respond_to_npc,other.respond_to_npc,where+"respond_to_npc");
+      }
+    if(const auto* light=dynamic_cast<const VLight*>(&x))
+      compareLight(*light,dynamic_cast<const VLight&>(y),where);
+    compareVobTree(x.children,y.children,where+"children");
+    }
+  }
 std::string compareVobs(const std::vector<std::shared_ptr<VirtualObject>>& a,
                         const std::vector<std::shared_ptr<VirtualObject>>& b) {
+  compareVobTree(a,b,"vobs");
   const auto serialize=[](const auto& vobs) {
     return ascii([&](WriteArchive& w) {
       require(vobs.size()<=INT32_MAX,"too many root vobs");
@@ -1619,19 +1734,34 @@ std::string compareVobs(const std::vector<std::shared_ptr<VirtualObject>>& a,
   return textDifference(serialize(a),serialize(b),"vobs");
   }
 std::string compareWaynet(const std::shared_ptr<WayNet>& a, const std::shared_ptr<WayNet>& b) {
+  equalInt(bool(a),bool(b),"waynet present");
+  if(a) {
+    equalInt(a->points.size(),b->points.size(),"waynet points count");
+    std::unordered_map<const WayPoint*,size_t> aIndices,bIndices;
+    for(size_t i=0;i<a->points.size();++i) {
+      const auto where="waynet points["+std::to_string(i)+"] ";
+      require(a->points[i]!=nullptr && b->points[i]!=nullptr,where+"null waypoint");
+      const auto& x=*a->points[i]; const auto& y=*b->points[i];
+      aIndices.emplace(&x,i); bIndices.emplace(&y,i);
+      equalString(x.name,y.name,where+"name");
+      equalInt(x.water_depth,y.water_depth,where+"water_depth");
+      equalInt(x.under_water,y.under_water,where+"under_water");
+      equalVec(x.position,y.position,where+"position");
+      equalVec(x.direction,y.direction,where+"direction");
+      equalInt(x.free_point,y.free_point,where+"free_point");
+      }
+    equalInt(a->edges.size(),b->edges.size(),"waynet edges count");
+    for(size_t i=0;i<a->edges.size();++i) {
+      const auto where="waynet edges["+std::to_string(i)+"]";
+      const auto& x=a->edges[i]; const auto& y=b->edges[i];
+      require(aIndices.count(x.first.get()) && aIndices.count(x.second.get()) &&
+              bIndices.count(y.first.get()) && bIndices.count(y.second.get()),where+": endpoint outside points");
+      equalInt(aIndices.at(x.first.get()),bIndices.at(y.first.get()),where+"[0]");
+      equalInt(aIndices.at(x.second.get()),bIndices.at(y.second.get()),where+"[1]");
+      }
+    }
   auto serialize=[](const auto& p) { return ascii([&](WriteArchive& w){ w.write_object(p,GameVersion::GOTHIC_2); }); };
   return textDifference(serialize(a),serialize(b),"waynet");
-  }
-void equalFloat(float a, float b, const std::string& where) {
-  require(std::bit_cast<uint32_t>(a)==std::bit_cast<uint32_t>(b),where+": expected "+
-          std::to_string(a)+" (bits "+std::to_string(std::bit_cast<uint32_t>(a))+"), actual "+
-          std::to_string(b)+" (bits "+std::to_string(std::bit_cast<uint32_t>(b))+")");
-  }
-void equalVec(const Vec3& a, const Vec3& b, const std::string& where) {
-  for(unsigned i=0;i<3;++i) equalFloat(a[i],b[i],where+"["+std::to_string(i)+"]");
-  }
-template<class T> void equalInt(T a, T b, const std::string& where) {
-  require(a==b,where+": expected "+std::to_string(a)+", actual "+std::to_string(b));
   }
 } // namespace
 
@@ -1699,6 +1829,15 @@ bool loadZen(const std::vector<std::byte>& bytes, const WorldChunkSource& source
   auto stream=Read::from(&bytes);
   auto archive=ReadArchive::from(stream.get());
   require(!archive->is_save_game(),source.world+": save-game archive is not a content .ZEN");
+  // BIN_SAFE stores its key table after the objects, before physical EOF.
+  size_t objectsEnd=bytes.size();
+  if(archive->get_header().format==ArchiveFormat::BINSAFE) {
+    const auto start=stream->tell();
+    stream->seek(-4,Whence::CUR); // Last u32 of the BIN_SAFE header: key table offset.
+    objectsEnd=stream->read_uint();
+    stream->seek(static_cast<ssize_t>(start),Whence::BEG);
+    require(objectsEnd>=start && objectsEnd<=bytes.size(),"invalid BIN_SAFE key table offset");
+    }
   if(source.world=="LIGHTPRESETS.ZEN") {
     out.kind="light_presets";
     const auto count=archive->read_int();
@@ -1713,7 +1852,7 @@ bool loadZen(const std::vector<std::byte>& bytes, const WorldChunkSource& source
     }
   if(source.world=="DIALOGCAMS.ZEN") {
     out.kind="cameras";
-    while(!stream->eof()) {
+    while(stream->tell()<objectsEnd && !stream->eof()) {
       // As in CameraDefinitions: these archives contain consecutive camera presets.
       ArchiveObject obj;
       if(!archive->read_object_begin(obj)) {
@@ -1725,6 +1864,7 @@ bool loadZen(const std::vector<std::byte>& bytes, const WorldChunkSource& source
       camera->type=VirtualObjectType::zCCSCamera; camera->id=obj.index;
       camera->load(*archive,GameVersion::GOTHIC_2);
       require(archive->read_object_end(),"unread camera fields");
+      require(stream->tell()<=objectsEnd,"camera overlaps BIN_SAFE key table");
       out.vobs.push_back(camera);
       }
     return true;
@@ -1769,6 +1909,9 @@ std::string compareZen(const ZenFile& a, const ZenFile& b) {
     require(a.kind==b.kind,"ZEN kind differs");
     auto diff=compareVobs(a.vobs,b.vobs); if(!diff.empty()) return a.source.world+": "+diff;
     diff=compareWaynet(a.waynet,b.waynet); if(!diff.empty()) return a.source.world+": "+diff;
+    equalInt(a.light_presets.size(),b.light_presets.size(),"light preset count");
+    for(size_t i=0;i<a.light_presets.size();++i)
+      compareLight(a.light_presets[i],b.light_presets[i],"light_presets["+std::to_string(i)+"] ");
     auto lights=[](const auto& presets) {
       return ascii([&](WriteArchive& w) {
         w.write_int("count",int32_t(presets.size()));
@@ -1871,10 +2014,10 @@ void selfTest(const fs::path& dir) {
     }
   // The installed archives may not contain camera/light presets. Exercise their
   // original .ZEN reader with ZenKit-produced archives as well as our JSON files.
-  for(bool lights:{false,true}) {
+  for(const auto format:{ArchiveFormat::BINARY,ArchiveFormat::BINSAFE}) for(bool lights:{false,true}) {
     std::vector<std::byte> bytes;
     auto stream=Write::to(&bytes);
-    auto archive=WriteArchive::to(stream.get(),ArchiveFormat::BINARY);
+    auto archive=WriteArchive::to(stream.get(),format);
     if(lights) {
       archive->write_int("count",1);
       archive->write_object_begin("preset","zCLightPreset",0);
