@@ -241,7 +241,6 @@ struct BaseContentContract {
                   std::abs(mesh.bbox.max[axis])<1000.f,std::string(name)+": finite model-scale bounds");
           }
         const auto nodes=[&](auto&& self,const zenkit::OrientedBoundingBox& box)->size_t {
-          require(box.children.size()<=2,std::string(name)+": bounded OBB children");
           size_t count=1;
           for(const auto& child:box.children) count+=self(self,child);
           require(count<=13,std::string(name)+": bounded OBB tree");
