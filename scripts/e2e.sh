@@ -25,7 +25,7 @@
 #   hero_yield: new game, LLM=fake; the hero surrenders via player_text during a native fight;
 #       accept_surrender stops attacks within 3 s, transfers all real gold and sets victory AIV
 #   humiliate: hero_yield with humiliate:true; checks native S_PRAY/S_PEE, distance, said bark,
-#       held kneeling and native exit after hero movement; records positions and game/wall times
+#       held kneeling and native exit after real Back input; records positions and game/wall times
 #   svm_lines: new game, no SAVE, LLM=fake; QUICK_URL supplies ten live Gemma SVM lines, their native
 #       text and voice delays, then Cavalorn kills a beast and speaks its native script SVM.
 #       An unavailable QUICK_URL falls back after three errors; TTS=fake|inworld.
@@ -622,6 +622,17 @@ if [ "$(uname -s)" = Darwin ]; then
   until ! LC_ALL=C pgrep -f '^[^ ]*python[0-9.]* [^ ]*bin/pytest|^[^ ]*Gothic2Notr -g' >/dev/null; do sleep 5; done
 fi
 GAME_ENV=("GOTHIC_AI_URL=ws://127.0.0.1:$PORT" "OPENGOTHIC_FPS_LOG=${OPENGOTHIC_FPS_LOG:-1}")
+if [[ "$SCENARIO" == humiliate ]]; then
+  # Reuse the bench's file wait and real PlayerControl input after the scene has ended.
+  rm -f "$LOG_DIR/humiliate-move"
+  cat > "$LOG_DIR/humiliate-input.bench" <<EOF
+bodylive wait $LOG_DIR/humiliate-move 120000
+hold back 3500
+wait 120000
+EOF
+  GAME_ENV+=("OPENGOTHIC_BENCH=$LOG_DIR/humiliate-input.bench" "OPENGOTHIC_BENCH_OUT=$LOG_DIR"
+    "OPENGOTHIC_BENCH_REALTIME=1" "OPENGOTHIC_BENCH_KEEP=1")
+fi
 if [[ "$SCENARIO" == neural-soak ]]; then
   # Refuse a fixed-step recording: the soak must keep the ordinary game clock.
   SOAK_BUILD="$(dirname "$GAME_BIN")"

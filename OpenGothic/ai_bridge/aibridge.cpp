@@ -1595,7 +1595,6 @@ void AiBridge::Impl::runWorldDebug(const rapidjson::Value& msg) {
     return;
     }
   if(cmd=="player_goto") {
-    pl->setPlayerPose(false);
     // the hero steps to a waypoint (walking away from a conversation): a named one, the nearest one at
     // least `distance` cm away from an npc (`near`), or one next to an npc (`to`, `distance` cm off)
     const WayPoint* wp = nullptr;

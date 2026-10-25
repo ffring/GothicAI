@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from typing import Any
 
@@ -257,13 +258,16 @@ async def hero_yield(
             said = any(r.get("outcome") == "said" for r in traces)
             results["humiliate_said"] = f"{'done' if said else 'failed'} ({traces})"
             if snap.player:
-                x, y, z = snap.player.pos
-                await link.debug("player_goto", pos=(x + 200, y, z))
+                if dialogue.trace is None:
+                    raise GameError("humiliate requires the e2e.sh input bench and trace directory")
+                x, _, z = snap.player.pos
+                (dialogue.trace.directory.parent / "humiliate-move").touch()
                 released = await _until_async(
                     lambda: link.snapshot(LOBART, fresh=True),
                     lambda state: state.player is not None and not state.player.kneeling
                     and "S_PRAY" not in state.player.animations
-                    and "T_PRAY_2_STAND" not in state.player.animations, 8,
+                    and "T_PRAY_2_STAND" not in state.player.animations
+                    and math.hypot(state.player.pos[0] - x, state.player.pos[2] - z) > 50, 8,
                 )
                 results["pose_released"] = f"{'done' if released else 'failed'}"
             else:
