@@ -18,7 +18,7 @@
 #       then drawing a weapon breaks the truce and Brago attacks
 #   bandit_hold: new game, no SAVE, LLM=fake; ranger bandits and a scripted party member stay quiet
 #       on renewable 5 s parley leases for 30 s, then releasing to scripts starts a native attack
-#   combat_barks: new game, LLM=fake; hero hits a human, checks combat_hit and overlay voice;
+#   combat_barks: new game, LLM=fake; first hit warms the fighter, next checks combat_hit and overlay voice;
 #       QUICK_URL uses live Gemma and reports phrase/voice delays; TTS=fake|inworld
 #   svm_lines: new game, no SAVE, LLM=fake; QUICK_URL supplies ten live Gemma SVM lines, their native
 #       text and voice delays, then Cavalorn kills a beast and speaks its native script SVM.

@@ -887,6 +887,8 @@ async def serve(args: argparse.Namespace) -> int:
             state.interject = interject
             state.incidents.speaks_up_there = interject.covers
         state.incidents.companion = state.talk.orders.companion
+        if state.combat_barks is not None:
+            state.combat_barks.companion = state.talk.orders.companion
         if args.beasts or args.scenario in {"wolf", "wolf_load"}:
             # wolves hear the tone of his words: they let him pass, run or bite (docs/beasts.md)
             state.beasts = BeastDesk(link, quick=tone_quick, journal=journal, trace=trace)

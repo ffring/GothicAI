@@ -49,6 +49,7 @@ class CombatBarks:
         self.dialogue = dialogue
         self.link = dialogue.link
         self.rng = rng
+        self.companion: Callable[[str], bool] = lambda npc: False
         self.roster: dict[str, RosterEntry] = {}
         self.views: dict[str, NpcView] = {}
         self.fighters: dict[str, Fighter] = {}
@@ -113,18 +114,38 @@ class CombatBarks:
     def _hit(self, hit: CombatHit) -> None:
         now = time.monotonic()
         victim, attacker = hit.npc.upper(), hit.by.upper()
+        new_fighters = []
         for npc in {victim, attacker}:
             fighter = self.fighters.setdefault(npc, Fighter())
             if now - fighter.hit_at >= FIGHT_S:
                 fighter.first, fighter.low_hp = True, False
+                if self._eligible(npc) and not (npc == victim and (hit.down or hit.dead)):
+                    new_fighters.append(npc)
             fighter.hit_at = now
+        if new_fighters and hasattr(self.dialogue.quick, "prewarm"):
+            # A raw hit need not be an IncidentDesk incident: warm both human participants here.
+            candidates = [*self.dialogue._prewarms, *new_fighters]
+            for npc in sorted(new_fighters):
+                conv = self.dialogue.open(npc, self._name(npc), warm=False)
+                if self.dialogue._prewarm_history.get(npc) != conv.history:
+                    self.dialogue._start_prewarm(conv, candidates)
         if hit.down or hit.dead:
             self.dialogue._svm_down[victim] = True
             # In a victim's view `att` is how the seen person treats that victim.
             view = self.views.get(victim)
             entry = self.roster.get(victim)
             allies = []
-            if view is not None:
+            if victim in {"PLAYER", "PC_HERO"}:
+                friendly = {
+                    seen.id.upper() for v in self.views.values() for seen in v.sees
+                    if seen.att_hero == "friendly"
+                }
+                allies = [
+                    (entry.distance, npc) for npc, entry in self.roster.items()
+                    if entry.distance <= 1500 and self._eligible(npc)
+                    and (npc in friendly or self.companion(npc) or self.link.party.get(npc, (0, 0))[1])
+                ]
+            elif view is not None:
                 for seen in view.sees:
                     npc = seen.id.upper()
                     if (npc != victim and self._eligible(npc)
@@ -133,7 +154,7 @@ class CombatBarks:
                         allies.append((seen.distance, npc))
             if allies:
                 self._attempt(min(allies)[1], "ally_down", hit,
-                              f"{self._name(victim)} упал — его сразил {self._name(attacker)}")
+                              f"{self._name(victim)} упал — его сразил {self._name(attacker)}", now)
             return
         fighter = self.fighters[victim]
         low = hit.hp_max > 0 and hit.hp < hit.hp_max * 0.3 and not fighter.low_hp
@@ -141,9 +162,9 @@ class CombatBarks:
         if self._eligible(victim):
             event = (f"ты тяжело ранен, сил почти не осталось — бьёт {self._name(attacker)}" if low
                      else f"тебе больно досталось — {self._name(attacker)}")
-            self._attempt(victim, "low_hp" if low else "hurt", hit, event)
+            self._attempt(victim, "low_hp" if low else "hurt", hit, event, now)
         if self._eligible(attacker):
-            self._attempt(attacker, "landed", hit, f"ты попал по {self._name(victim)}")
+            self._attempt(attacker, "landed", hit, f"ты попал по {self._name(victim)}", now)
 
     def _busy(self, npc: str) -> bool:
         conv = self.dialogue.conversations.get(npc)
@@ -171,8 +192,7 @@ class CombatBarks:
                     or self.dialogue._to_hear(conv, line, time.monotonic()))
         return False
 
-    def _attempt(self, npc: str, reason: str, hit: CombatHit, event: str) -> None:
-        received = time.monotonic()
+    def _attempt(self, npc: str, reason: str, hit: CombatHit, event: str, received: float) -> None:
         fighter = self.fighters.setdefault(npc, Fighter())
         attempt: dict[str, Any] = {
             "type": "combat_bark", "npc": npc, "reason": reason,
@@ -215,21 +235,24 @@ class CombatBarks:
         assert quick is not None
         text = ""
         try:
-            async with (
-                asyncio.timeout_at(received + REPLY_S),
-                aclosing(quick.stream(
+            async with asyncio.timeout_at(received + REPLY_S):
+                if warm := self.dialogue._prewarms.get(conv.npc):
+                    await asyncio.shield(warm)
+                async with aclosing(quick.stream(
                     instructions=conv.persona.instructions,
                     messages=[Message(
                         "developer", f"{self.dialogue._brief(conv)}\n{HINT.format(event=event)}",
                     )],
                     tools=[], temperature=0.7,
-                )) as events,
-            ):
-                async for delta in events:
-                    if isinstance(delta, TextDelta):
-                        text += delta.text
-                        if _FIRST_SENTENCE.search(text) or paragraph_end(text) is not None:
-                            break
+                )) as events:
+                    async for delta in events:
+                        if isinstance(delta, TextDelta):
+                            attempt.setdefault(
+                                "first_token_ms", round((time.monotonic() - received) * 1000, 1),
+                            )
+                            text += delta.text
+                            if _FIRST_SENTENCE.search(text) or paragraph_end(text) is not None:
+                                break
             words, mood = first_words(svm_text(text))
             words = to_game_text(words)
             attempt["text"] = words

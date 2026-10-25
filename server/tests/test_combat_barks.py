@@ -46,7 +46,8 @@ async def finish(rig):
 def age(rig, seconds=6):
     """Finish the fake speech and move only its cooldown timestamps into the past."""
     for conv in rig.dialogue.conversations.values():
-        conv.said_at = time.monotonic() - seconds
+        if conv.said_at != float("-inf"):
+            conv.said_at = time.monotonic() - seconds
         conv.overlay_free_at = 0
     for line, (text, _) in rig.dialogue._lines.items():
         rig.dialogue._lines[line] = (text, time.monotonic() - 10)
@@ -92,6 +93,39 @@ async def test_ally_down_chooses_nearest_living_same_guild_person(rig):
     hit(rig, down=True)
     await finish(rig)
     assert rig.rows[0]["npc"] == "G"
+
+
+@pytest.mark.parametrize(("distance", "speaker"), [(200, "F"), (1501, "G")])
+async def test_player_down_chooses_nearest_friend_or_companion(rig, distance, speaker):
+    rig.barks.companion = lambda npc: npc == "G"
+    entries = [{**e, "distance": distance if e["id"] == "F" else 500} for e in rig.entries]
+    rig.link._dispatch(NpcRoster(type="npc_roster", t=0, npcs=entries))
+    rig.link._dispatch(NpcViews(type="npc_views", t=0, views=[dict(
+        npc="V", name="Раненый", hp=100, sees=[
+            dict(id="F", name="Друг", distance=100, att_hero="friendly"),
+        ],
+    )]))
+    hit(rig, npc="PLAYER", by="A", hp=0, down=True)
+    await finish(rig)
+    [row] = rig.rows
+    assert (row["npc"], row["reason"], row["outcome"]) == (speaker, "ally_down", "said")
+    assert "герой упал — его сразил Враг" in rig.quick.calls[0][1][0].content
+
+
+async def test_first_hit_warms_both_people_once_and_reuses_the_persona_prefix(rig):
+    hit(rig, by="A")
+    await finish(rig)
+    await asyncio.gather(*list(rig.dialogue._prewarms.values()))
+    assert {instructions for instructions, _ in rig.quick.prewarms} == {
+        rig.dialogue.conversations[npc].persona.instructions for npc in ("V", "A")
+    }
+    assert all(not messages for _, messages in rig.quick.prewarms)
+    assert rig.quick.calls[0][0] in {instructions for instructions, _ in rig.quick.prewarms}
+    before = len(rig.quick.prewarms)
+    age(rig)
+    hit(rig, by="A")
+    await finish(rig)
+    assert len(rig.quick.prewarms) == before
 
 
 async def test_low_hp_once_per_fight_replaces_hurt(rig):
