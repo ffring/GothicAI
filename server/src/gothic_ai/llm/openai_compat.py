@@ -89,6 +89,7 @@ class OpenAICompatBackend:
             kwargs["temperature"] = temperature
         text = ""
         calls: dict[int, dict[str, str]] = {}
+        stream = None
         try:
             stream = await self._client.chat.completions.create(
                 model=self.model, messages=chat, stream=True, **kwargs
@@ -110,6 +111,9 @@ class OpenAICompatBackend:
             raise LLMError(f"{self.name}: HTTP {err.status_code}: {err.message}") from err
         except openai.APIConnectionError as err:
             raise LLMError(f"{self.name}: cannot reach {self._client.base_url}", retryable=True) from err
+        finally:
+            if stream is not None:
+                await stream.aclose()  # release the model slot when a short line is cut or yields priority
         items: list[Item] = [Message("assistant", text)] if text else []
         for acc in calls.values():
             try:
