@@ -8,6 +8,7 @@
 
 #include <zenkit/Vfs.hh>
 #include "asset/staticmesh.h"
+#include "basestore.h"
 #include <zenkit/world/VobTree.hh>
 
 #include <tuple>
@@ -222,7 +223,7 @@ class Resources final {
       };
     BaseIndex baseTextures, baseMeshes, baseZen;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
-    std::filesystem::path automaticBase;
+    BaseStore::Selection automaticBase;
     static std::filesystem::path baseDir();
     void indexBaseContent();
 

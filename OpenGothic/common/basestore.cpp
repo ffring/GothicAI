@@ -15,21 +15,25 @@
 
 namespace fs = std::filesystem;
 
-namespace {
-class Lock {
+class BaseStore::Lock {
   public:
-    explicit Lock(const fs::path& path) {
+    enum Mode { Exclusive, Shared, TryExclusive };
+    explicit Lock(const fs::path& path, Mode mode=Exclusive) {
 #ifndef _WIN32
       fd=::open(path.c_str(),O_CREAT|O_RDWR|O_CLOEXEC,0600);
       if(fd<0) throw std::system_error(errno,std::generic_category(),"open base lock");
-      while(::flock(fd,LOCK_EX)!=0) {
+      const int operation=mode==Shared ? LOCK_SH : (mode==TryExclusive ? LOCK_EX|LOCK_NB : LOCK_EX);
+      while(::flock(fd,operation)!=0) {
         const int error=errno;
         if(error==EINTR) continue;
         ::close(fd);
+        fd=-1;
+        if(mode==TryExclusive && (error==EWOULDBLOCK || error==EAGAIN || error==EACCES)) return;
         throw std::system_error(error,std::generic_category(),"lock base");
         }
 #else
       (void)path;
+      (void)mode;
       throw std::runtime_error("automatic base import requires Unix file locks");
 #endif
       }
@@ -40,9 +44,28 @@ class Lock {
       }
     Lock(const Lock&)=delete;
     Lock& operator=(const Lock&)=delete;
+    bool acquired() const { return fd>=0; }
   private:
     int fd=-1;
   };
+
+namespace {
+using BaseStore::Lock;
+
+bool fingerprintName(std::string_view name) {
+  return name.size()==64 && name.find_first_not_of("0123456789abcdef")==std::string_view::npos;
+  }
+
+// Called only while holding the cache lock or this store fingerprint's lock.
+void removeInterrupted(const fs::path& root, const std::string& fingerprint={}) {
+  for(const auto& entry:fs::directory_iterator(root)) {
+    const auto name=entry.path().filename().string();
+    if(name.size()>69 && fingerprintName(std::string_view(name).substr(0,64)) &&
+       name.compare(64,5,".tmp-")==0 && name.find_first_not_of("0123456789",69)==std::string::npos &&
+       (fingerprint.empty() || name.compare(0,64,fingerprint)==0) && entry.is_directory())
+      fs::remove_all(entry.path());
+    }
+  }
 
 struct Temporary {
   fs::path path;
@@ -74,17 +97,19 @@ void prune(const fs::path& cache, const fs::path& current) {
   std::vector<fs::directory_entry> older;
   for(const auto& entry:fs::directory_iterator(cache)) {
     const auto name=entry.path().filename().string();
-    if(entry.path()==current || !entry.is_directory() || name.size()!=64 ||
-       name.find_first_not_of("0123456789abcdef")!=std::string::npos) continue;
+    if(entry.path()==current || !entry.is_directory() || !fingerprintName(name)) continue;
     older.push_back(entry);
     }
   std::sort(older.begin(),older.end(),[](const auto& a,const auto& b) { return a.last_write_time()>b.last_write_time(); });
-  for(size_t i=2;i<older.size();++i) fs::remove_all(older[i].path());
+  for(size_t i=2;i<older.size();++i) {
+    Lock unused(cache/(older[i].path().filename().string()+".use"),Lock::TryExclusive);
+    if(unused.acquired()) fs::remove_all(older[i].path());
+    }
   }
 }
 
-fs::path BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mounted, const BaseImport::Progress& log) {
-  if(const auto* explicitBase=std::getenv("OPENGOTHIC_BASE")) return explicitBase;
+BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mounted, const BaseImport::Progress& log) {
+  if(const auto* explicitBase=std::getenv("OPENGOTHIC_BASE")) return {explicitBase,{}};
   const auto start=std::chrono::steady_clock::now();
   const auto identity=BaseImport::identify(gothic,mounted);
   fs::path cache;
@@ -93,13 +118,15 @@ fs::path BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mou
   if(cache.empty()) throw std::runtime_error("base cache path is empty");
   fs::create_directories(cache);
   Lock cacheLock(cache/".lock");
+  removeInterrupted(cache);
   const auto destination=cache/identity.fingerprint;
   const auto finish=[&](const char* source) {
+    Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared)};
     try { prune(cache,destination); }
     catch(const std::exception& e) { log(std::string("base cache cleanup: ")+e.what()); }
     const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
     log(std::string("base: ")+source+" "+destination.string()+" ("+std::to_string(ms)+" ms)");
-    return destination;
+    return selected;
     };
   if(BaseImport::matches(destination,identity)) return finish("cache");
   if(fs::exists(destination)) log("base: rejected cache directory: base.json mismatch");
@@ -120,14 +147,17 @@ fs::path BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mou
   if(!store.empty()) {
     stored=store/"base"/identity.fingerprint;
     try {
-      if(BaseImport::matches(stored,identity)) {
-        copy(stored,destination,identity);
-        return finish("store");
-        }
       fs::create_directories(store/"base");
       log("base: waiting for store lock");
       storeLock=std::make_unique<Lock>(store/"base"/(identity.fingerprint+".lock"));
-      // Another machine may have published while this process waited.
+      removeInterrupted(store/"base",identity.fingerprint);
+      }
+    catch(const std::exception& e) {
+      log(std::string("base: store unavailable: ")+e.what());
+      storeLock.reset();
+      }
+    // Also allow copying from a read-only store when opening its lock failed.
+    try {
       if(BaseImport::matches(stored,identity)) {
         copy(stored,destination,identity);
         return finish("store");
@@ -145,13 +175,15 @@ fs::path BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mou
   Temporary temporary(destination);
   log("base: importing installation");
   BaseImport::build(gothic,temporary.path,log);
-  publish(temporary.path,destination,identity);
   if(storeLock) {
     try {
-      copy(destination,stored,identity);
+      copy(temporary.path,stored,identity);
       log("base: published to store "+stored.string());
       }
     catch(const std::exception& e) { log(std::string("base: store publication failed: ")+e.what()); }
     }
+  // If publication is interrupted, the next launch must revisit the store lock
+  // and clean its partial copy instead of returning early from a cache hit.
+  publish(temporary.path,destination,identity);
   return finish("import");
   }

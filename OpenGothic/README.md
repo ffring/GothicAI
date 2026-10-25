@@ -103,17 +103,17 @@ sudo apt update
 sudo apt install vulkan-sdk
 
 # distro-provided packages
-sudo apt install git cmake g++ glslang-tools libvulkan-dev libasound2-dev libx11-dev libxcursor-dev
+sudo apt install git cmake g++ glslang-tools libvulkan-dev libasound2-dev libssl-dev libx11-dev libxcursor-dev
 ```
 
 * Arch
 ```bash
-sudo pacman -S git cmake gcc glslang vulkan-devel alsa-lib libx11 libxcursor vulkan-icd-loader libglvnd
+sudo pacman -S git cmake gcc glslang vulkan-devel alsa-lib openssl libx11 libxcursor vulkan-icd-loader libglvnd
 ```
 
 * Fedora
 ```bash
-sudo dnf install git cmake gcc-c++ glslang vulkan-loader-devel alsa-lib-devel libX11-devel libXcursor-devel vulkan-validation-layers-devel libglvnd-devel
+sudo dnf install git cmake gcc-c++ glslang vulkan-loader-devel alsa-lib-devel openssl-devel libX11-devel libXcursor-devel vulkan-validation-layers-devel libglvnd-devel
 ```
 
 * NixOS

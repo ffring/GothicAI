@@ -625,7 +625,7 @@ std::filesystem::path Resources::baseDir() {
       return {};
     return dir;
     }
-  return inst->automaticBase;
+  return inst->automaticBase.path;
   }
 
 std::filesystem::path Resources::worldBaseDir(std::string_view world) {
