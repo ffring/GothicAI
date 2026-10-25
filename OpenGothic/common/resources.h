@@ -7,7 +7,7 @@
 #include <Tempest/SoundDevice>
 
 #include <zenkit/Vfs.hh>
-#include <zenkit/MultiResolutionMesh.hh>
+#include "asset/staticmesh.h"
 #include <zenkit/world/VobTree.hh>
 
 #include <tuple>
@@ -29,8 +29,9 @@ class PfxEmitterMesh;
 class GthFont;
 class ContentCensus;
 
+namespace asset { struct WorldMesh; }
+
 namespace zenkit {
-class ModelMesh;
 class Texture;
 class World;
 }
@@ -118,7 +119,7 @@ class Resources final {
     static const Tempest::Texture2d* loadTexture(std::string_view name, int32_t v, int32_t c);
     static       Tempest::Texture2d  loadTexturePm(const Tempest::Pixmap& pm);
     static auto                      loadTextureAnim(std::string_view name) -> std::vector<const Tempest::Texture2d*>;
-    static       Material            loadMaterial(const zenkit::Material& src, bool enableAlphaTest,
+    static       Material            loadMaterial(const asset::Material& src, bool enableAlphaTest,
                                                    bool requireAlphaTest = false);
 
     struct MaterialMaps {
@@ -139,7 +140,7 @@ class Resources final {
     static const AttachBinder*       bindMesh       (const ProtoMesh& anim, const Skeleton& s);
     static const ProtoMesh*          loadMesh       (std::string_view name);
     // All static visual readers share the same indexed GLB/original MRM path.
-    static zenkit::MultiResolutionMesh loadVisualMesh(std::string_view name, bool* replaced = nullptr);
+    static asset::StaticMesh loadVisualMesh(std::string_view name, bool* replaced = nullptr);
     struct MeshReplacementSource {
       std::filesystem::path file;
       size_t size = 0;
@@ -196,7 +197,7 @@ class Resources final {
     static std::filesystem::path      worldBaseDir(std::string_view world);
     static std::filesystem::path      worldOverrideDir(std::string_view world);
     static void                      censusFile(std::u16string_view path);
-    static void                      loadWorld(zenkit::World& world, std::vector<WorldData::Room>& rooms, std::string_view name);
+    static void                      loadWorld(zenkit::World& world, asset::WorldMesh& worldMesh, std::vector<WorldData::Room>& rooms, std::string_view name);
     static bool                      loadBaseZen(std::string_view name, std::string_view kind, WorldData::ZenFile& out);
     static bool                      writeCensus();
 
@@ -204,6 +205,7 @@ class Resources final {
 
   private:
     friend struct BaseContentContract;
+    friend struct AssetDigest;
     static Resources* inst;
     void initCensus();
 
@@ -265,7 +267,7 @@ class Resources final {
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, zenkit::Read& data, bool forceMips);
     ProtoMesh*            implLoadMesh(std::string_view name);
     std::unique_ptr<ProtoMesh> implLoadMeshMain(std::string name);
-    bool                  replaceModelMesh(zenkit::ModelMesh& mesh, std::unique_ptr<Skeleton>& skeleton,
+    bool                  replaceModelMesh(asset::ModelMesh& mesh, std::unique_ptr<Skeleton>& skeleton,
                                            std::string_view visual, std::string_view meshFile);
     std::unique_ptr<Animation> implLoadAnimation(std::string name);
     ProtoMesh*            implDecalMesh(const zenkit::VisualDecal& decal);

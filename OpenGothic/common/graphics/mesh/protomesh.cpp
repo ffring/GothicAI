@@ -115,10 +115,10 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<zenkit::MorphAnimation>&
     }
   }
 
-ProtoMesh::ProtoMesh(const zenkit::Model& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest)
+ProtoMesh::ProtoMesh(const zenkit::ModelHierarchy& hierarchy, const asset::ModelMesh& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest)
   :skeleton(std::move(sk)), fname(fname) {
   std::vector<std::vector<Tempest::Vec3>> attachPoints;
-  for(auto& m:library.mesh.attachments) {
+  for(auto& m:library.attachments) {
     PackedMesh pack(m.second,PackedMesh::PK_Visual,explicitAlphaTest);
     attachPoints.push_back(pointsOf(pack));
     attach.emplace_back(pack);
@@ -176,8 +176,8 @@ ProtoMesh::ProtoMesh(const zenkit::Model& library, std::unique_ptr<Skeleton>&& s
   submeshId.resize(subCount);
 
   shapeOfAttach(attachPoints);
-  for(size_t i=0;i<library.mesh.meshes.size();++i){
-    auto& mesh = library.mesh.meshes[i];
+  for(size_t i=0;i<library.meshes.size();++i){
+    auto& mesh = library.meshes[i];
     PackedMesh pkg(mesh);
     shapeOfSkin(pkg);
     skined.emplace_back(pkg);
@@ -236,7 +236,7 @@ ProtoMesh::ProtoMesh(const zenkit::ModelHierarchy& library, std::unique_ptr<Skel
   setupScheme(fname);
   }
 
-ProtoMesh::ProtoMesh(const zenkit::ModelMesh& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest)
+ProtoMesh::ProtoMesh(const asset::ModelMesh& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest)
   :skeleton(std::move(sk)), fname(fname){
   std::vector<std::vector<Tempest::Vec3>> attachPoints;
   for(auto& m:library.attachments) {

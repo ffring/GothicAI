@@ -220,11 +220,11 @@ PhysicVbo::PhysicVbo(const std::vector<JPH::Vec3>* v)
   :vert(*v) {
   }
 
-void PhysicVbo::addIndex(const std::vector<uint32_t>& index, size_t iboOff, size_t iboLen, zenkit::MaterialGroup material) {
+void PhysicVbo::addIndex(const std::vector<uint32_t>& index, size_t iboOff, size_t iboLen, asset::MaterialGroup material) {
   addIndex(index,iboOff,iboLen,material,nullptr);
   }
 
-void PhysicVbo::addIndex(const std::vector<uint32_t>& index, size_t iboOff, size_t iboLen, zenkit::MaterialGroup material,
+void PhysicVbo::addIndex(const std::vector<uint32_t>& index, size_t iboOff, size_t iboLen, asset::MaterialGroup material,
                          const char* sector) {
   if(iboLen==0)
     return;
@@ -241,7 +241,7 @@ void PhysicVbo::addIndex(const std::vector<uint32_t>& index, size_t iboOff, size
   addSegment(iboLen,off,material,sector);
   }
 
-void PhysicVbo::addSegment(size_t indexSize, size_t offset, zenkit::MaterialGroup material, const char* sector) {
+void PhysicVbo::addSegment(size_t indexSize, size_t offset, asset::MaterialGroup material, const char* sector) {
   Segment sgm;
   sgm.off    = offset;
   sgm.size   = indexSize/3;
@@ -297,11 +297,11 @@ void PhysicVbo::prepareTriangleData() const {
   triangleDataReady = true;
   }
 
-zenkit::MaterialGroup PhysicVbo::materialId(size_t triangle) const {
+asset::MaterialGroup PhysicVbo::materialId(size_t triangle) const {
   prepareTriangleData();
   if(triangle<triangleSegments.size() && triangleSegments[triangle]<segments.size())
     return segments[triangleSegments[triangle]].mat;
-  return zenkit::MaterialGroup::UNDEFINED;
+  return asset::MaterialGroup::UNDEFINED;
   }
 
 const char* PhysicVbo::sectorName(size_t triangle) const {

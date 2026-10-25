@@ -1,4 +1,5 @@
 #include "resources.h"
+#include "asset/fromzenkit.h"
 #include "commandline.h"
 
 #include <Tempest/MemReader>
@@ -16,7 +17,7 @@
 #include <zenkit/ModelHierarchy.hh>
 #include <zenkit/Model.hh>
 #include <zenkit/ModelScript.hh>
-#include <zenkit/Material.hh>
+#include "asset/material.h"
 #include <zenkit/Texture.hh>
 #include <zenkit/vobs/Camera.hh>
 #include <zenkit/addon/texcvt.hh>
@@ -257,9 +258,9 @@ void Resources::censusFile(std::u16string_view path) {
   inst->census->opened(source,source);
   }
 
-void Resources::loadWorld(zenkit::World& world, std::vector<WorldData::Room>& rooms, std::string_view name) {
+void Resources::loadWorld(zenkit::World& world, asset::WorldMesh& worldMesh, std::vector<WorldData::Room>& rooms, std::string_view name) {
   const auto dir = worldBaseDir(name);
-  const auto result = tryWorldData(world,rooms,name,dir,worldOverrideDir(name),inst->mountedArchives);
+  const auto result = tryWorldData(world,worldMesh,rooms,name,dir,worldOverrideDir(name),inst->mountedArchives);
   if(result.replaced) {
     if(inst->census)
       inst->census->replaced(name,(worldContentDir("base",name)/"world.json").generic_string());
@@ -274,7 +275,8 @@ void Resources::loadWorld(zenkit::World& world, std::vector<WorldData::Room>& ro
   auto reader = entry->open_read();
   world.load(reader.get(),Gothic::inst().version().game==1 ? zenkit::GameVersion::GOTHIC_1
                                                         : zenkit::GameVersion::GOTHIC_2);
-  rooms = WorldData::buildRoomVolumes(world.world_mesh,world.world_bsp_tree);
+  rooms = asset::roomVolumesFromZenKit(world.world_mesh,world.world_bsp_tree);
+  worldMesh = asset::fromZenKit(world.world_mesh);
   }
 
 bool Resources::loadBaseZen(std::string_view name, std::string_view kind, WorldData::ZenFile& out) {
@@ -798,7 +800,7 @@ bool Resources::meshReplacementLoaded(std::string_view name, MeshReplacementSour
   return true;
   }
 
-zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, bool* replaced) {
+asset::StaticMesh Resources::loadVisualMesh(std::string_view name, bool* replaced) {
   std::lock_guard<std::recursive_mutex> guard(inst->sync);
   if(replaced!=nullptr)
     *replaced = false;
@@ -847,7 +849,7 @@ zenkit::MultiResolutionMesh Resources::loadVisualMesh(std::string_view name, boo
   zenkit::MultiResolutionMesh mesh;
   auto reader = entry->open_read();
   mesh.load(reader.get());
-  return mesh;
+  return asset::fromZenKit(mesh);
   }
 
 void Resources::indexMaterialMaps() {
@@ -1114,7 +1116,7 @@ ProtoMesh* Resources::implLoadMesh(std::string_view name) {
   return ret;
   }
 
-bool Resources::replaceModelMesh(zenkit::ModelMesh& model, std::unique_ptr<Skeleton>& skeleton,
+bool Resources::replaceModelMesh(asset::ModelMesh& model, std::unique_ptr<Skeleton>& skeleton,
                                  std::string_view visual, std::string_view meshFile) {
   auto key = std::string(visual.substr(0,visual.find_last_of('.')));
   for(auto& c:key)
@@ -1133,7 +1135,7 @@ bool Resources::replaceModelMesh(zenkit::ModelMesh& model, std::unique_ptr<Skele
     // Stage every attachment before touching the original geometry. A model
     // with one attachment retains the whole-scene, name-independent path.
     std::vector<uint8_t> bytes;
-    decltype(model.attachments) replacements;
+    std::unordered_map<std::string,asset::StaticMesh> replacements;
     if(model.attachments.size()==1)
       replacements.emplace(model.attachments.begin()->first,loadGltfMesh(it->second.file,&bytes));
     else {
@@ -1141,7 +1143,8 @@ bool Resources::replaceModelMesh(zenkit::ModelMesh& model, std::unique_ptr<Skele
       for(auto& node:nodes) {
         if(node.name.empty())
           throw std::runtime_error("mesh node has an empty attachment name");
-        if(model.attachments.find(node.name)==model.attachments.end())
+        if(std::none_of(model.attachments.begin(),model.attachments.end(),
+                        [&](const auto& attachment) { return attachment.first==node.name; }))
           throw std::runtime_error("unknown mesh node attachment name: " + node.name);
         if(!replacements.emplace(node.name,std::move(node.mesh)).second)
           throw std::runtime_error("duplicate mesh node attachment name: " + node.name);
@@ -1272,7 +1275,7 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
       return nullptr;
     straightenString(zmm);
 
-    PackedMesh packed(zmm.mesh,PackedMesh::PK_VisualMorph);
+    PackedMesh packed(asset::fromZenKit(zmm.mesh),PackedMesh::PK_VisualMorph);
     std::unique_ptr<ProtoMesh> ret{new ProtoMesh(std::move(packed),zmm.animations,name)};
     // the vertex each morph moves the most, where it rests: the string's middle of a bow
     for(size_t i=0; i<ret->morph.size() && i<zmm.animations.size(); ++i) {
@@ -1324,8 +1327,9 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
 
         zenkit::ModelMesh mdm {};
         mdm.load(reader.get());
-        const bool replaced = replaceModelMesh(mdm,sk,name,mesh);
-        t.reset(new ProtoMesh(mdm,std::move(sk),name,replaced));
+        auto own = asset::fromZenKit(mdm);
+        const bool replaced = replaceModelMesh(own,sk,name,mesh);
+        t.reset(new ProtoMesh(own,std::move(sk),name,replaced));
         }
       else
         t.reset(new ProtoMesh(mdh,std::move(sk),name));
@@ -1344,8 +1348,9 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
       mdm.load(reader.get());
 
       std::unique_ptr<Skeleton> sk{new Skeleton(mdm.hierarchy,anim,name)};
-      const bool replaced = replaceModelMesh(mdm.mesh,sk,name,mdhName);
-      std::unique_ptr<ProtoMesh> t{new ProtoMesh(mdm,std::move(sk),name,replaced)};
+      auto own = asset::fromZenKit(mdm.mesh);
+      const bool replaced = replaceModelMesh(own,sk,name,mdhName);
+      std::unique_ptr<ProtoMesh> t{new ProtoMesh(mdm.hierarchy,own,std::move(sk),name,replaced)};
       return t;
       }
     }
@@ -1365,8 +1370,9 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
     mdm.load(reader.get());
 
     std::unique_ptr<Skeleton> sk;
-    const bool replaced = replaceModelMesh(mdm,sk,name,name);
-    std::unique_ptr<ProtoMesh> t{new ProtoMesh(mdm,std::move(sk),name,replaced)};
+    auto own = asset::fromZenKit(mdm);
+    const bool replaced = replaceModelMesh(own,sk,name,name);
+    std::unique_ptr<ProtoMesh> t{new ProtoMesh(own,std::move(sk),name,replaced)};
     return t;
     }
 
@@ -1382,8 +1388,9 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
     mdm.load(reader.get());
 
     std::unique_ptr<Skeleton> sk{new Skeleton(mdm.hierarchy,nullptr,name)};
-    const bool replaced = replaceModelMesh(mdm.mesh,sk,name,name);
-    std::unique_ptr<ProtoMesh> t{new ProtoMesh(mdm,std::move(sk),name,replaced)};
+    auto own = asset::fromZenKit(mdm.mesh);
+    const bool replaced = replaceModelMesh(own,sk,name,name);
+    std::unique_ptr<ProtoMesh> t{new ProtoMesh(mdm.hierarchy,own,std::move(sk),name,replaced)};
     return t;
     }
 
@@ -1428,7 +1435,7 @@ PfxEmitterMesh* Resources::implLoadEmiterMesh(std::string_view name) {
     auto reader = entry->open_read();
     mdm.load(reader.get());
 
-    ret = std::unique_ptr<PfxEmitterMesh>(new PfxEmitterMesh(std::move(mdm)));
+    ret = std::unique_ptr<PfxEmitterMesh>(new PfxEmitterMesh(asset::fromZenKit(mdm)));
     return ret.get();
     }
 
@@ -1696,7 +1703,7 @@ Texture2d Resources::loadTexturePm(const Pixmap &pm) {
   return device().texture(pm);
   }
 
-Material Resources::loadMaterial(const zenkit::Material& src, bool enableAlphaTest, bool requireAlphaTest) {
+Material Resources::loadMaterial(const asset::Material& src, bool enableAlphaTest, bool requireAlphaTest) {
   return Material(src,enableAlphaTest,requireAlphaTest);
   }
 

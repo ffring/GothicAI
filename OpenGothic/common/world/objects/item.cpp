@@ -17,16 +17,16 @@ using namespace Tempest;
 
 namespace {
 
-zenkit::MaterialGroup physicsMaterial(int32_t material) {
+asset::MaterialGroup physicsMaterial(int32_t material) {
   // Script ItemMaterial values do not match the world mesh MaterialGroup enum.
   switch(material) {
-    case MAT_WOOD:    return zenkit::MaterialGroup::WOOD;
-    case MAT_STONE:   return zenkit::MaterialGroup::STONE;
-    case MAT_METAL:   return zenkit::MaterialGroup::METAL;
-    case MAT_LEATHER: return zenkit::MaterialGroup::WOOD;
-    case MAT_CLAY:    return zenkit::MaterialGroup::EARTH;
-    case MAT_GLAS:    return zenkit::MaterialGroup::STONE;
-    default:         return zenkit::MaterialGroup::UNDEFINED;
+    case MAT_WOOD:    return asset::MaterialGroup::WOOD;
+    case MAT_STONE:   return asset::MaterialGroup::STONE;
+    case MAT_METAL:   return asset::MaterialGroup::METAL;
+    case MAT_LEATHER: return asset::MaterialGroup::WOOD;
+    case MAT_CLAY:    return asset::MaterialGroup::EARTH;
+    case MAT_GLAS:    return asset::MaterialGroup::STONE;
+    default:         return asset::MaterialGroup::UNDEFINED;
     }
   }
 

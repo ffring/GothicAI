@@ -91,7 +91,7 @@ std::string jsonVec2(const zenkit::Vec2& v) {
   return "[" + jsonFloat(v.x) + "," + jsonFloat(v.y) + "]";
   }
 
-std::string materialJson(const zenkit::Material& m, size_t index) {
+std::string materialJson(const asset::Material& m, size_t index) {
   std::string s = "{";
   s += "\"index\":" + std::to_string(index);
   s += ",\"name\":" + jsonString(m.name);
@@ -161,10 +161,10 @@ zenkit::Vec2 jsonToVec2(const Json& v, const char* name) {
   }
 
 
-zenkit::Material materialFromJson(const Json& g) {
-  zenkit::Material m;
+asset::Material materialFromJson(const Json& g) {
+  asset::Material m;
   m.name  = jsonToString(member(g,"name"),"name");
-  m.group = jsonToEnum<zenkit::MaterialGroup>(g,"group");
+  m.group = jsonToEnum<asset::MaterialGroup>(g,"group");
   const auto& c = member(g,"color");
   if(!c.IsArray() || c.Size()!=4)
     reject("color must be [r,g,b,a]");
@@ -178,7 +178,7 @@ zenkit::Material materialFromJson(const Json& g) {
   m.texture                      = jsonToString(member(g,"texture"),"texture");
   m.texture_scale                = jsonToVec2(member(g,"texture_scale"),"texture_scale");
   m.texture_anim_fps             = jsonToFloat(member(g,"texture_anim_fps"),"texture_anim_fps");
-  m.texture_anim_map_mode        = jsonToEnum<zenkit::AnimationMapping>(g,"texture_anim_map_mode");
+  m.texture_anim_map_mode        = jsonToEnum<asset::AnimationMapping>(g,"texture_anim_map_mode");
   m.texture_anim_map_dir         = jsonToVec2(member(g,"texture_anim_map_dir"),"texture_anim_map_dir");
   m.disable_collision            = jsonToBool(member(g,"disable_collision"),"disable_collision");
   m.disable_lightmap             = jsonToBool(member(g,"disable_lightmap"),"disable_lightmap");
@@ -188,17 +188,17 @@ zenkit::Material materialFromJson(const Json& g) {
   m.force_occluder               = jsonToBool(member(g,"force_occluder"),"force_occluder");
   m.environment_mapping          = jsonToBool(member(g,"environment_mapping"),"environment_mapping");
   m.environment_mapping_strength = jsonToFloat(member(g,"environment_mapping_strength"),"environment_mapping_strength");
-  m.wave_mode                    = jsonToEnum<zenkit::WaveMode>(g,"wave_mode");
-  m.wave_speed                   = jsonToEnum<zenkit::WaveSpeed>(g,"wave_speed");
+  m.wave_mode                    = jsonToEnum<asset::WaveMode>(g,"wave_mode");
+  m.wave_speed                   = jsonToEnum<asset::WaveSpeed>(g,"wave_speed");
   m.wave_max_amplitude           = jsonToFloat(member(g,"wave_max_amplitude"),"wave_max_amplitude");
   m.wave_grid_size               = jsonToFloat(member(g,"wave_grid_size"),"wave_grid_size");
   m.ignore_sun                   = jsonToBool(member(g,"ignore_sun"),"ignore_sun");
-  m.alpha_func                   = jsonToEnum<zenkit::AlphaFunction>(g,"alpha_func");
+  m.alpha_func                   = jsonToEnum<asset::AlphaFunction>(g,"alpha_func");
   m.default_mapping              = jsonToVec2(member(g,"default_mapping"),"default_mapping");
   return m;
   }
 
-bool sameMaterial(const zenkit::Material& a, const zenkit::Material& b) {
+bool sameMaterial(const asset::Material& a, const asset::Material& b) {
   auto eq2 = [](const zenkit::Vec2& x, const zenkit::Vec2& y) {
     return bits(x.x)==bits(y.x) && bits(x.y)==bits(y.y);
     };

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <zenkit/Mesh.hh>
+#include "asset/worldmesh.h"
 #include "physics/physicsnoise.h"
 #include "physics/charactervirtualdiagnostics.h"
 #include "physics/navmesh.h"
@@ -74,7 +74,7 @@ class DynamicWorld final {
     static constexpr float spellSpeed  = 1; // centimeters per milliseconds
     static constexpr float characterItemRange = 300.f; // centimetres around the opt-in hero
 
-    DynamicWorld(World *world, const zenkit::Mesh& mesh, const zenkit::Mesh* originalCloth = nullptr);
+    DynamicWorld(World *world, const asset::WorldMesh& mesh, const asset::WorldMesh* originalCloth = nullptr);
     DynamicWorld(const DynamicWorld&)=delete;
     ~DynamicWorld();
 
@@ -240,7 +240,7 @@ class DynamicWorld final {
     struct RayLandResult {
       Tempest::Vec3           v={};
       Tempest::Vec3           n={};
-      zenkit::MaterialGroup   mat    = zenkit::MaterialGroup::UNDEFINED;
+      asset::MaterialGroup   mat    = asset::MaterialGroup::UNDEFINED;
       bool                    hasCol = false;
       float                   hitFraction = 0;
 
@@ -280,7 +280,7 @@ class DynamicWorld final {
       Tempest::Vec3          point = {}; // world centimetres
       Tempest::Vec3          normal = {}; // unit world normal, unchanged winding
       Tempest::Vec3          incoming = {}; // original flight segment, before any reflection
-      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
+      asset::MaterialGroup material = asset::MaterialGroup::UNDEFINED;
       // Borrowed only for onWorldHit; game code owns the attachment lifetime.
       Ragdoll*              ragdoll = nullptr;
       size_t                bone = size_t(-1);
@@ -293,7 +293,7 @@ class DynamicWorld final {
       virtual Npc* origin() const { return nullptr; }
       virtual void onStop(){}
       virtual void onMove(){}
-      virtual void onCollide(zenkit::MaterialGroup matId){(void)matId;}
+      virtual void onCollide(asset::MaterialGroup matId){(void)matId;}
       virtual bool onCollide(Npc& other){(void)other; return true; }
       // Requests an attachment after a legacy world stop; never changes flight.
       virtual bool stopsAtWorldHit() const { return false; }
@@ -396,7 +396,7 @@ class DynamicWorld final {
     NpcItem        addGhostObj  (const Skeleton* src);
     Item           addStaticObj (const PhysicMeshShape *src, const Tempest::Matrix4x4& m, std::string_view label = {});
     Item           addMovableObj(const PhysicMeshShape *src, const Tempest::Matrix4x4& m, std::string_view label = {});
-    Item           addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bbox, zenkit::MaterialGroup mat);
+    Item           addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bbox, asset::MaterialGroup mat);
     Item           addMovableVob(const ProtoMesh& mesh, std::string_view visual, const Tempest::Matrix4x4& matrix,
                                  float massMultiplier, bool blocksWalking, std::string_view className = {},
                                  bool legacyCollision = true, uint32_t zenId = uint32_t(-1));
@@ -437,7 +437,7 @@ class DynamicWorld final {
       bool               blocksWalking = false, legacyCollision = true, enabled = false, sleeping = true, touchedByNpc = false;
       float              mass = 0;
       float              hullVolume = 0, density = 0, massMultiplier = 1;
-      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
+      asset::MaterialGroup material = asset::MaterialGroup::UNDEFINED;
       bool               destructible = false, broken = false;
       float              health = 0, maxHealth = 0, impactThreshold = 0;
       Tempest::Matrix4x4 transform, origin;
@@ -569,8 +569,8 @@ class DynamicWorld final {
 
     void           deleteObj(BulletBody* obj);
 
-    static float   materialFriction(zenkit::MaterialGroup mat);
-    static float   materialDensity (zenkit::MaterialGroup mat);
+    static float   materialFriction(asset::MaterialGroup mat);
+    static float   materialDensity (asset::MaterialGroup mat);
 
     static float   rayBox(const Tempest::Vec3& orig, const Tempest::Vec3& dir, const float TMax,
                           const Tempest::Matrix4x4& obj, const Tempest::Vec3& min, const Tempest::Vec3& max,

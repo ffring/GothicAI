@@ -17,7 +17,7 @@ class PhysicMeshShape final {
     PhysicVbo                      mesh;
     JPH::ShapeRefC                  shape;
     float                          frict = 0;
-    zenkit::MaterialGroup           material = zenkit::MaterialGroup::UNDEFINED;
+    asset::MaterialGroup           material = asset::MaterialGroup::UNDEFINED;
 
   friend class DynamicWorld;
   };

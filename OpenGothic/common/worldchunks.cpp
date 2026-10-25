@@ -36,7 +36,7 @@ constexpr uint32_t    exactIndexLimit = 1u << 24;
 constexpr float       baseScale = 0.01f;
 
 // Polygon flags packed into two 16-bit words: bit fields, then sector index.
-std::array<uint16_t,2> packFlags(const zenkit::PolygonFlagSet& f) {
+std::array<uint16_t,2> packFlags(const asset::PolygonFlagSet& f) {
   const unsigned lo = (unsigned(f.is_portal)&3u) | (unsigned(f.is_occluder)<<2) | (unsigned(f.is_sector)<<3) |
                       (unsigned(f.should_relight)<<4) | (unsigned(f.is_outdoor)<<5) |
                       (unsigned(f.is_ghost_occluder)<<6) | (unsigned(f.is_dynamically_lit)<<7) |
@@ -44,8 +44,8 @@ std::array<uint16_t,2> packFlags(const zenkit::PolygonFlagSet& f) {
   return {uint16_t(lo),uint16_t(int16_t(f.sector_index))};
   }
 
-zenkit::PolygonFlagSet unpackFlags(uint16_t lo, uint16_t hi) {
-  zenkit::PolygonFlagSet f {};
+asset::PolygonFlagSet unpackFlags(uint16_t lo, uint16_t hi) {
+  asset::PolygonFlagSet f {};
   f.is_portal          = uint8_t(lo&3u);
   f.is_occluder        = uint8_t((lo>>2)&1u);
   f.is_sector          = uint8_t((lo>>3)&1u);
@@ -76,7 +76,7 @@ int32_t chunkCoord(float v, int32_t size) {
   return int32_t(std::floor(double(v)/double(size)));
   }
 
-void checkPolygons(const zenkit::Mesh& mesh) {
+void checkPolygons(const asset::WorldMesh& mesh) {
   const auto& p = mesh.polygons;
   const size_t n = p.material_indices.size();
   if(p.vertex_indices.size()!=n*3 || p.feature_indices.size()!=n*3 ||
@@ -115,7 +115,7 @@ struct Corner {
   VertexKey         vertex;
   zenkit::Vec3      position;
   FeatureKey        feature;
-  zenkit::VertexFeature value;
+  asset::VertexFeature value;
   };
 
 struct Triangle {
@@ -123,12 +123,12 @@ struct Triangle {
   size_t                  material;  // index into the reader's material list
   std::array<Corner,3>    corners;
   int32_t                 lightmap;
-  zenkit::PolygonFlagSet  flags;
+  asset::PolygonFlagSet  flags;
   };
 
 struct ReadMaterial {
   int64_t          index; // source material index, or -1
-  zenkit::Material material;
+  asset::Material material;
   };
 
 class ChunkReader {
@@ -350,9 +350,9 @@ uint32_t worldChunkCrc32(const void* data, size_t size, uint32_t crc) {
   return ~crc;
   }
 
-zenkit::Mesh canonicalWorldMesh(const zenkit::Mesh& mesh) {
+asset::WorldMesh canonicalWorldMesh(const asset::WorldMesh& mesh) {
   checkPolygons(mesh);
-  zenkit::Mesh out;
+  asset::WorldMesh out;
   out.materials = mesh.materials;
   out.vertices  = mesh.vertices;
   out.features  = mesh.features;
@@ -360,7 +360,7 @@ zenkit::Mesh canonicalWorldMesh(const zenkit::Mesh& mesh) {
   return out;
   }
 
-WorldChunkManifest writeWorldChunks(const zenkit::Mesh& mesh, const WorldChunkSource& source,
+WorldChunkManifest writeWorldChunks(const asset::WorldMesh& mesh, const WorldChunkSource& source,
                                     const std::filesystem::path& dir, int32_t chunkSize) {
   checkPolygons(mesh);
   if(chunkSize<=0)
@@ -611,7 +611,7 @@ WorldChunkManifest readWorldChunkManifest(const std::filesystem::path& dir) {
   return m;
   }
 
-zenkit::Mesh readWorldChunks(const std::filesystem::path& dir, const std::filesystem::path& overrideDir) {
+asset::WorldMesh readWorldChunks(const std::filesystem::path& dir, const std::filesystem::path& overrideDir) {
   const auto manifest = readWorldChunkManifest(dir);
   ChunkReader reader;
   for(const auto& chunk:manifest.chunks) {
@@ -639,7 +639,7 @@ zenkit::Mesh readWorldChunks(const std::filesystem::path& dir, const std::filesy
     });
   ordered.insert(ordered.end(),edited.begin(),edited.end());
 
-  zenkit::Mesh out;
+  asset::WorldMesh out;
   out.materials = manifest.materials;
   out.vertices.resize(manifest.vertices);
   out.features.resize(manifest.features);
@@ -680,7 +680,7 @@ zenkit::Mesh readWorldChunks(const std::filesystem::path& dir, const std::filesy
     const auto id = u32();
     if(id>=out.features.size())
       fail("unreferenced feature out of range");
-    zenkit::VertexFeature f;
+    asset::VertexFeature f;
     f.texture.x = f32();
     f.texture.y = f32();
     f.light     = u32();
@@ -768,7 +768,7 @@ zenkit::Mesh readWorldChunks(const std::filesystem::path& dir, const std::filesy
   return out;
   }
 
-std::string compareWorldMeshes(const zenkit::Mesh& e, const zenkit::Mesh& a) {
+std::string compareWorldMeshes(const asset::WorldMesh& e, const asset::WorldMesh& a) {
   if(e.materials.size()!=a.materials.size())
     return "materials: " + std::to_string(e.materials.size()) + " vs " + std::to_string(a.materials.size());
   for(size_t i=0; i<e.materials.size(); ++i)

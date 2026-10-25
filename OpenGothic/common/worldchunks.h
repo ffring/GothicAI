@@ -5,11 +5,11 @@
 #include <string>
 #include <vector>
 
-#include <zenkit/Mesh.hh>
+#include "asset/worldmesh.h"
 
 // The converted world mesh: one .glb per 64 x 64 m chunk plus world.json.
 // Format: docs/asset-migration.md#мир. Only the triangle set the engine uses
-// is carried (zenkit::Mesh::polygons after the BSP filter): materials,
+// is carried (asset::WorldMesh::polygons after the BSP filter): materials,
 // vertices, features and polygons. BSP, sectors, portals and raw polygons
 // still come from the .ZEN.
 
@@ -28,12 +28,12 @@ struct WorldChunkManifest {
   uint64_t                 features  = 0;
   uint64_t                 unreferencedVertices = 0;
   uint64_t                 unreferencedFeatures = 0;
-  std::vector<zenkit::Material> materials;  // the full source table
+  std::vector<asset::Material> materials;  // the full source table
   };
 
 // Writes world.json and chunks/<x>_<z>.glb into dir (created if needed).
 // Throws std::runtime_error on invalid input or I/O failure.
-WorldChunkManifest writeWorldChunks(const zenkit::Mesh& mesh, const WorldChunkSource& source,
+WorldChunkManifest writeWorldChunks(const asset::WorldMesh& mesh, const WorldChunkSource& source,
                                     const std::filesystem::path& dir, int32_t chunkSize = 6400);
 
 WorldChunkManifest readWorldChunkManifest(const std::filesystem::path& dir);
@@ -43,14 +43,14 @@ WorldChunkManifest readWorldChunkManifest(const std::filesystem::path& dir);
 // vertices, features and polygons of a fresh mesh. Unedited chunks restore
 // the source arrays exactly, with every source index (the engine's meshlet
 // packing keys on them); geometry an edit added or moved goes after them.
-zenkit::Mesh readWorldChunks(const std::filesystem::path& dir, const std::filesystem::path& overrideDir = {});
+asset::WorldMesh readWorldChunks(const std::filesystem::path& dir, const std::filesystem::path& overrideDir = {});
 
 // The fields readWorldChunks fills, copied from a source mesh: materials,
 // vertices, features and polygons. readWorldChunks of unedited chunks equals
 // canonicalWorldMesh of the source mesh bit for bit.
-zenkit::Mesh canonicalWorldMesh(const zenkit::Mesh& mesh);
+asset::WorldMesh canonicalWorldMesh(const asset::WorldMesh& mesh);
 
 // Empty when equal; otherwise the first difference, for logs and tests.
-std::string compareWorldMeshes(const zenkit::Mesh& expected, const zenkit::Mesh& actual);
+std::string compareWorldMeshes(const asset::WorldMesh& expected, const asset::WorldMesh& actual);
 
 uint32_t worldChunkCrc32(const void* data, size_t size, uint32_t crc = 0);

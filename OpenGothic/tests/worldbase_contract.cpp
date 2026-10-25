@@ -1,3 +1,4 @@
+#include "asset/fromzenkit.h"
 #include "commandline.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "physics/collisionworld.h"
@@ -79,7 +80,7 @@ struct SplitPhysics {
       const auto& mesh=packed.subMeshes[sub];
       if(mesh.material.disable_collision || mesh.iboLength==0)
         continue;
-      if(mesh.material.group==zenkit::MaterialGroup::WATER)
+      if(mesh.material.group==asset::MaterialGroup::WATER)
         water.addIndex(packed.indices,mesh.iboOffset,mesh.iboLength,mesh.material.group);
       else
         land.addIndex(packed.indices,mesh.iboOffset,mesh.iboLength,mesh.material.group,sectors[sub].c_str());
@@ -142,7 +143,7 @@ inline void compareNative(const std::vector<float>& zen, const std::vector<float
             " vertex "+std::to_string(coordinate%9/3)+" axis "+std::to_string(coordinate%3)+" differs");
   }
 
-inline void compare(const zenkit::Mesh& zen, const zenkit::Mesh& base) {
+inline void compare(const asset::WorldMesh& zen, const asset::WorldMesh& base) {
   Physics::initialize();
   PackedMesh zenPacked(zen,PackedMesh::PK_Physic), basePacked(base,PackedMesh::PK_Physic);
   comparePacked(zenPacked,basePacked);
@@ -169,7 +170,7 @@ inline void compare(const zenkit::Mesh& zen, const zenkit::Mesh& base) {
 
 } // namespace WorldBasePhysicsContract
 
-inline void worldbasePhysicsContract(const zenkit::Mesh& zen, const zenkit::Mesh& base) {
+inline void worldbasePhysicsContract(const asset::WorldMesh& zen, const asset::WorldMesh& base) {
   WorldBasePhysicsContract::compare(zen,base);
   }
 
@@ -205,14 +206,14 @@ bool sameVertex(const Resources::Vertex& a, const Resources::Vertex& b) {
   return sameFloat(a.uv[0],b.uv[0]) && sameFloat(a.uv[1],b.uv[1]) && a.color==b.color;
   }
 
-bool sameMaterial(const zenkit::Material& a, const zenkit::Material& b) {
-  zenkit::Mesh left,right;
+bool sameMaterial(const asset::Material& a, const asset::Material& b) {
+  asset::WorldMesh left,right;
   left.materials.push_back(a);
   right.materials.push_back(b);
   return compareWorldMeshes(left,right).empty();
   }
 
-void visualContract(const zenkit::Mesh& zen, const zenkit::Mesh& base, const std::string& label) {
+void visualContract(const asset::WorldMesh& zen, const asset::WorldMesh& base, const std::string& label) {
   const PackedMesh expected(zen,PackedMesh::PK_VisualLnd),actual(base,PackedMesh::PK_VisualLnd);
   require(expected.subMeshes.size()==actual.subMeshes.size(),label+": GPU submesh count "+
           std::to_string(expected.subMeshes.size())+" vs "+std::to_string(actual.subMeshes.size()));
@@ -288,11 +289,11 @@ void writeText(const fs::path& path, const std::string& text) {
   require(bool(out),"cannot write "+path.string());
   }
 
-zenkit::Mesh selectionMesh() {
-  zenkit::Mesh mesh;
+asset::WorldMesh selectionMesh() {
+  asset::WorldMesh mesh;
   mesh.materials.resize(1);
   mesh.materials[0].name="CONTRACT";
-  mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+  mesh.materials[0].group=asset::MaterialGroup::STONE;
   mesh.vertices={{100,100,100},{100,200,100},{200,100,100}};
   mesh.features={{{0,0},0xffffffffu,{0,0,1}},{{0,1},0xffffffffu,{0,0,1}},{{1,0},0xffffffffu,{0,0,1}}};
   mesh.polygons.vertex_indices={0,1,2};
@@ -310,7 +311,7 @@ void worldDataContract(const zenkit::World& world, const WorldChunkSource& sourc
   const auto diff=WorldData::compare(original,restored);
   require(diff.empty(),"world data: "+diff);
   PortalRooms::Volumes rooms;
-  rooms.reset(world.world_mesh,world.world_bsp_tree);
+  rooms.reset(world.world_bsp_tree.mode,asset::roomVolumesFromZenKit(world.world_mesh,world.world_bsp_tree));
   const auto& bounds=world.world_bsp_tree.nodes.empty() ? world.world_mesh.bbox : world.world_bsp_tree.nodes.front().bbox;
   const auto nx=uint64_t(std::ceil(double(bounds.max.x-bounds.min.x)/400.));
   const auto nz=uint64_t(std::ceil(double(bounds.max.z-bounds.min.z)/400.));
@@ -387,7 +388,10 @@ int main() {
     world.load(buffer.get(),zenkit::GameVersion::GOTHIC_2);
     const WorldChunkSource source={"NEWWORLD.ZEN",bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())};
     worldDataContract(world,source,temporary.path/"world-data");
-    auto zen=std::move(world.world_mesh);
+    const auto rawPolygons=world.world_mesh.geometry.size();
+    const auto rawVertices=world.world_mesh.polygon_vertex_indices;
+    const auto rawFeatures=world.world_mesh.polygon_feature_indices;
+    auto zen=asset::fromZenKit(world.world_mesh);
     const auto dir=temporary.path/"NEWWORLD";
     const auto manifest=writeWorldChunks(zen,source,dir);
     auto base=readWorldChunks(dir);
@@ -400,9 +404,9 @@ int main() {
     const auto result=tryWorldBase(base,"NEWWORLD.ZEN",bytes,dir);
     require(result.replaced && result.error.empty(),"matching base must replace world mesh: "+result.error);
     require(result.triangles==manifest.triangles && result.chunks==manifest.chunks.size(),"base load statistics differ");
-    require(base.name==zen.name && base.bbox.min==zen.bbox.min && base.bbox.max==zen.bbox.max &&
-            base.geometry.size()==zen.geometry.size() && base.polygon_vertex_indices==zen.polygon_vertex_indices &&
-            base.polygon_feature_indices==zen.polygon_feature_indices,"base load must preserve source geometry and bounds");
+    require(base.name==zen.name && base.bbox.min==zen.bbox.min && base.bbox.max==zen.bbox.max,"base load must preserve source name and bounds");
+    require(world.world_mesh.geometry.size()==rawPolygons && world.world_mesh.polygon_vertex_indices==rawVertices &&
+            world.world_mesh.polygon_feature_indices==rawFeatures,"mesh conversion must preserve raw BSP geometry");
     const auto zenCloth=WorldCloth::extract(zen);
     const auto baseCloth=WorldCloth::extract(base);
     clothContract(zenCloth,baseCloth);

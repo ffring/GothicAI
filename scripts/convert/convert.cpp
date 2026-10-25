@@ -21,6 +21,7 @@
 //
 // The output is Gothic content: it never goes into git.
 
+#include "asset/fromzenkit.h"
 #include "basemesh.h"
 #include "worldchunks.h"
 #include "worlddata.h"
@@ -73,7 +74,7 @@ struct Archive {
 
 struct SourceWorld {
   WorldChunkSource source;
-  zenkit::Mesh     mesh;
+  asset::WorldMesh mesh;
   WorldData::Data  data;
   std::vector<Archive> archives;
   };
@@ -125,11 +126,11 @@ SourceWorld loadWorld(const fs::path& gothic, const std::string& name) {
   world.load(in.get(),zenkit::GameVersion::GOTHIC_2);
   r.data = WorldData::fromWorld(world,r.source);
   r.archives = archives;
-  r.mesh = std::move(world.world_mesh);
+  r.mesh = asset::fromZenKit(world.world_mesh);
   return r;
   }
 
-int verify(const zenkit::Mesh& source, const fs::path& dir, const fs::path& overrideDir) {
+int verify(const asset::WorldMesh& source, const fs::path& dir, const fs::path& overrideDir) {
   const auto t0 = std::chrono::steady_clock::now();
   const auto expected = canonicalWorldMesh(source);
   const auto actual   = readWorldChunks(dir,overrideDir);
@@ -464,9 +465,10 @@ int convertMeshes(const fs::path& gothic, const fs::path& out, bool verifyOnly) 
   uint64_t bytes = 0;
   for(const auto& [stem,node]:meshes) {
     try {
-      zenkit::MultiResolutionMesh mrm;
+      zenkit::MultiResolutionMesh archiveMesh;
       auto in = node->open_read();
-      mrm.load(in.get());
+      archiveMesh.load(in.get());
+      const auto mrm = asset::fromZenKit(archiveMesh);
       const auto file = stem+".glb";
       if(!verifyOnly)
         writeBaseMesh(mrm,stem,out/file);
@@ -499,29 +501,29 @@ int convertMeshes(const fs::path& gothic, const fs::path& out, bool verifyOnly) 
   return bad==0 ? 0 : 1;
   }
 
-zenkit::Material material(const std::string& name, const std::string& texture, zenkit::MaterialGroup group) {
-  zenkit::Material m;
+asset::Material material(const std::string& name, const std::string& texture, asset::MaterialGroup group) {
+  asset::Material m;
   m.name    = name;
   m.texture = texture;
   m.group   = group;
   m.color   = {200,180,160,255};
   m.texture_scale = {0.25f,0.125f};
-  m.alpha_func = zenkit::AlphaFunction::NONE;
+  m.alpha_func = asset::AlphaFunction::NONE;
   return m;
   }
 
 int selfTest() {
-  zenkit::Mesh mesh;
-  mesh.materials.push_back(material("UNUSED","UNUSED.TGA",zenkit::MaterialGroup::STONE));
+  asset::WorldMesh mesh;
+  mesh.materials.push_back(material("UNUSED","UNUSED.TGA",asset::MaterialGroup::STONE));
   // Sector name with a byte above 0x7F: must survive byte for byte.
-  mesh.materials.push_back(material("C:HAFEN_\xE4","NW_HARBOUR_STAIRS_01.TGA",zenkit::MaterialGroup::STONE));
-  auto water = material("WATER","NW_WATER.TGA",zenkit::MaterialGroup::WATER);
+  mesh.materials.push_back(material("C:HAFEN_\xE4","NW_HARBOUR_STAIRS_01.TGA",asset::MaterialGroup::STONE));
+  auto water = material("WATER","NW_WATER.TGA",asset::MaterialGroup::WATER);
   water.texture_anim_fps = 0.1f;
-  water.wave_mode = zenkit::WaveMode::GROUND;
+  water.wave_mode = asset::WaveMode::GROUND;
   water.wave_max_amplitude = 33.3f;
   water.disable_collision = true;
   water.color.a = 128;
-  water.alpha_func = zenkit::AlphaFunction::BLEND;
+  water.alpha_func = asset::AlphaFunction::BLEND;
   mesh.materials.push_back(water);
 
   // A strip crossing three 64 m chunks; vertex 2 and 3 are shared across chunks.
@@ -542,7 +544,7 @@ int selfTest() {
       p.vertex_indices.push_back(v[c]);
       p.feature_indices.push_back(f[c]);
       }
-    zenkit::PolygonFlagSet flags {};
+    asset::PolygonFlagSet flags {};
     flags.is_sector = 1;
     flags.normal_axis = 2;
     flags.sector_index = sector;
@@ -587,14 +589,14 @@ int selfTest() {
   require(rejected,"duplicate triangle order must be rejected");
 
   // A static mesh: an unused position, an empty submesh, a sector-like name.
-  zenkit::MultiResolutionMesh mrm;
+  asset::StaticMesh mrm;
   mrm.positions = {{0,0,0},{100.5f,0,0},{0,-20.25f,3},{7,7,7}};
   mrm.alpha_test = 1;
   mrm.bbox.min = {0,-20.25f,0};
   mrm.bbox.max = {100.5f,0,3};
   mrm.sub_meshes.resize(2);
-  mrm.sub_meshes[0].mat = material("EMPTY","EMPTY.TGA",zenkit::MaterialGroup::WOOD);
-  mrm.sub_meshes[1].mat = material("BARREL_\xE4","BARREL.TGA",zenkit::MaterialGroup::WOOD);
+  mrm.sub_meshes[0].mat = material("EMPTY","EMPTY.TGA",asset::MaterialGroup::WOOD);
+  mrm.sub_meshes[1].mat = material("BARREL_\xE4","BARREL.TGA",asset::MaterialGroup::WOOD);
   mrm.sub_meshes[1].wedges = {{{0,1,0},{0,0},0},{{0,1,0},{1,0},1},{{0.6f,0.8f,-0.0f},{0.5f,1},2},{{0,1,0},{0,0},2}};
   mrm.sub_meshes[1].triangles = {{{0,1,2}},{{2,1,3}}};
   writeBaseMesh(mrm,"TEST_MESH",dir/"mesh.glb");

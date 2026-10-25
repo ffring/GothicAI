@@ -77,14 +77,14 @@ namespace {
         requireNear(actual.at(c,r),expected.at(c,r),c==3 ? .001f : .00001f,message);
     }
 
-  zenkit::MultiResolutionMesh movableCube() {
-    zenkit::MultiResolutionMesh mesh;
+  asset::StaticMesh movableCube() {
+    asset::StaticMesh mesh;
     mesh.positions = {{-10,-10,-10},{10,-10,-10},{10,10,-10},{-10,10,-10},
                       {-10,-10,10},{10,-10,10},{10,10,10},{-10,10,10}};
     mesh.bbox = {{-10,-10,-10},{10,10,10}};
     mesh.sub_meshes.resize(1);
     auto& part = mesh.sub_meshes[0];
-    part.mat.group = zenkit::MaterialGroup::WOOD;
+    part.mat.group = asset::MaterialGroup::WOOD;
     for(size_t i=0;i<mesh.positions.size();++i)
       part.wedges.push_back({{0,1,0},{0,0},uint16_t(i)});
     part.triangles = {{{0,2,1}},{{0,3,2}},{{4,5,6}},{{4,6,7}},
@@ -93,7 +93,7 @@ namespace {
     return mesh;
     }
 
-  zenkit::MultiResolutionMesh movableBox(const Tempest::Vec3& dimensionsCm) {
+  asset::StaticMesh movableBox(const Tempest::Vec3& dimensionsCm) {
     auto mesh=movableCube();
     for(auto& vertex:mesh.positions) {
       vertex.x*=dimensionsCm.x/20.f;
@@ -105,7 +105,7 @@ namespace {
     return mesh;
     }
 
-  zenkit::MultiResolutionMesh movableCollisionBox(const Tempest::Vec3& dimensionsCm) {
+  asset::StaticMesh movableCollisionBox(const Tempest::Vec3& dimensionsCm) {
     auto mesh=movableBox(dimensionsCm);
     // movableCube's winding is suitable for its hull-only fixtures. Static
     // Gothic source meshes need clockwise faces: PhysicVbo reverses them.
@@ -114,11 +114,11 @@ namespace {
     return mesh;
     }
 
-  zenkit::Mesh movableFloor() {
-    zenkit::Mesh mesh;
+  asset::WorldMesh movableFloor() {
+    asset::WorldMesh mesh;
     mesh.vertices={{-2000,0,-2000},{-2000,0,2000},{2000,0,2000},{2000,0,-2000}};
     mesh.materials.resize(1);
-    mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+    mesh.materials[0].group=asset::MaterialGroup::STONE;
     // Gothic source faces are reversed by PhysicVbo::addIndex.
     mesh.polygons.vertex_indices={0,2,1,0,3,2};
     mesh.polygons.material_indices={0,0};
@@ -139,7 +139,7 @@ namespace {
 
   ImpulseResponse movableImpulseResponse(const ProtoMesh& proto, const Tempest::Vec3& dimensionsCm,
                                          float massMultiplier, const Tempest::Vec3* sameImpulse=nullptr) {
-    DynamicWorld world(nullptr,zenkit::Mesh{});
+    DynamicWorld world(nullptr,asset::WorldMesh{});
     const Tempest::Vec3 center(123,10000,-257);
     const auto origin=at(center.x,center.y,center.z);
     auto object=world.addMovableVob(proto,"CONTRACT_IMPULSE.MRM",origin,massMultiplier,true,"table",true,44);
@@ -202,7 +202,7 @@ namespace {
     // NW_CITY_TABLE_PEASANT_01's source bounds are 200 x 90 x 120 cm.
     const Tempest::Vec3 dimensions(200,90,120);
     constexpr float tableMass=51.81584f;
-    const float multiplier=tableMass/(2.f*.9f*1.2f*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD));
+    const float multiplier=tableMass/(2.f*.9f*1.2f*DynamicWorld::materialDensity(asset::MaterialGroup::WOOD));
     ProtoMesh proto(PackedMesh(movableBox(dimensions),PackedMesh::PK_Visual),"CONTRACT_TABLE.MRM");
     const auto origin=at(0,45,0);
     DynamicWorld world(nullptr,movableFloor());
@@ -260,11 +260,11 @@ namespace {
     world.loadMovableVobs(input);
     }
 
-  zenkit::Mesh waterBasin(float floorY=-400.f, bool cave=false) {
-    zenkit::Mesh mesh;
+  asset::WorldMesh waterBasin(float floorY=-400.f, bool cave=false) {
+    asset::WorldMesh mesh;
     mesh.materials.resize(2);
-    mesh.materials[0].group=zenkit::MaterialGroup::STONE;
-    mesh.materials[1].group=zenkit::MaterialGroup::WATER;
+    mesh.materials[0].group=asset::MaterialGroup::STONE;
+    mesh.materials[1].group=asset::MaterialGroup::WATER;
     const auto plane=[&](float y,uint32_t material,bool twoSided) {
       const auto first=uint32_t(mesh.vertices.size());
       mesh.vertices.insert(mesh.vertices.end(),{{-2000,y,-2000},{-2000,y,2000},
@@ -317,7 +317,7 @@ namespace {
     auto heavyBarrel=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-550,110,0),.8f,true,"barrel",true,605);
     auto cupboard=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-950,110,0),.8f,true,"cupboard",true,606);
     auto otherWood=world.addMovableVob(proto,"CONTRACT_FLOAT.MRM",at(-1150,110,0),.8f,true,"other",true,607);
-    const float solidMass=.8f*.8f*.8f*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD);
+    const float solidMass=.8f*.8f*.8f*DynamicWorld::materialDensity(asset::MaterialGroup::WOOD);
     requireNear(barrel.mass(),solidMass*.2f,.001f,"barrel buoyancy must preserve its hull density and authored mass multiplier");
     requireNear(heavyBarrel.mass(),solidMass*.8f,.001f,"a heavier barrel must preserve its distinct authored physical mass");
     requireNear(heavyBarrel.mass(),barrel.mass()*4.f,.001f,"barrel physical mass must still scale exactly with its mass multiplier");
@@ -326,11 +326,11 @@ namespace {
     cube.assign(std::pair(Tempest::Vec3(-20,-20,-20),Tempest::Vec3(20,20,20)));
     Bounds arrow;
     arrow.assign(std::pair(Tempest::Vec3(-1,-1,-30),Tempest::Vec3(1,1,30)));
-    auto wood=world.addDynamicObj(at(100,110,0),cube,zenkit::MaterialGroup::WOOD);
-    auto metal=world.addDynamicObj(at(300,110,0),cube,zenkit::MaterialGroup::METAL);
-    auto stone=world.addDynamicObj(at(500,110,0),cube,zenkit::MaterialGroup::STONE);
-    auto woodenArrow=world.addDynamicObj(at(700,110,0),arrow,zenkit::MaterialGroup::WOOD);
-    auto metalBlade=world.addDynamicObj(at(900,110,0),arrow,zenkit::MaterialGroup::METAL);
+    auto wood=world.addDynamicObj(at(100,110,0),cube,asset::MaterialGroup::WOOD);
+    auto metal=world.addDynamicObj(at(300,110,0),cube,asset::MaterialGroup::METAL);
+    auto stone=world.addDynamicObj(at(500,110,0),cube,asset::MaterialGroup::STONE);
+    auto woodenArrow=world.addDynamicObj(at(700,110,0),arrow,asset::MaterialGroup::WOOD);
+    auto metalBlade=world.addDynamicObj(at(900,110,0),arrow,asset::MaterialGroup::METAL);
     const std::array<DynamicWorld::Item*,11> objects={&barrel,&heavyBarrel,&table,&crate,&cupboard,&otherWood,
                                                     &wood,&metal,&stone,&woodenArrow,&metalBlade};
     const std::array<const char*,11> names={"barrel","heavier barrel","wooden table","wooden crate","wooden cupboard",
@@ -343,7 +343,7 @@ namespace {
               "water fixtures must wake genuine native dynamic bodies");
     std::vector<PhysicsNoise> splashes;
     world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) {
-      if(noise.surface==zenkit::MaterialGroup::WATER) splashes.push_back(noise);
+      if(noise.surface==asset::MaterialGroup::WATER) splashes.push_back(noise);
       });
     for(int frame=0;frame<1800;++frame) {
       world.tick(frame%3==2 ? 16 : 17);
@@ -457,15 +457,15 @@ namespace {
   void testWaterDenseVobs() {
     Resources resources;
     auto metalMesh=movableBox({80,80,80}),stoneMesh=movableBox({80,80,80});
-    metalMesh.sub_meshes[0].mat.group=zenkit::MaterialGroup::METAL;
-    stoneMesh.sub_meshes[0].mat.group=zenkit::MaterialGroup::STONE;
+    metalMesh.sub_meshes[0].mat.group=asset::MaterialGroup::METAL;
+    stoneMesh.sub_meshes[0].mat.group=asset::MaterialGroup::STONE;
     ProtoMesh metalProto(PackedMesh(metalMesh,PackedMesh::PK_Visual),"CONTRACT_METAL_WATER.MRM");
     ProtoMesh stoneProto(PackedMesh(stoneMesh,PackedMesh::PK_Visual),"CONTRACT_STONE_WATER.MRM");
     DynamicWorld world(nullptr,waterBasin());
     auto metal=world.addMovableVob(metalProto,"CONTRACT_METAL_WATER.MRM",at(-200,110,0),.03f,true,"barrel",true,608);
     auto stone=world.addMovableVob(stoneProto,"CONTRACT_STONE_WATER.MRM",at(200,110,0),.03f,true,"barrel",true,609);
     const std::array<DynamicWorld::Item*,2> objects={&metal,&stone};
-    const std::array<zenkit::MaterialGroup,2> materials={zenkit::MaterialGroup::METAL,zenkit::MaterialGroup::STONE};
+    const std::array<asset::MaterialGroup,2> materials={asset::MaterialGroup::METAL,asset::MaterialGroup::STONE};
     const std::array<float,2> masses={metal.mass(),stone.mass()};
     for(size_t i=0;i<objects.size();++i) {
       const float expected=.8f*.8f*.8f*DynamicWorld::materialDensity(materials[i])*.03f;
@@ -732,7 +732,7 @@ namespace {
         });
       };
     const auto saved=savedRecord("_",zenId,"CONTRACT_CUBE.MRM",origin);
-    DynamicWorld first(nullptr,zenkit::Mesh{});
+    DynamicWorld first(nullptr,asset::WorldMesh{});
     auto firstObject=first.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
     require(!firstObject.isEmpty(),"movable save fixture must have a physical body");
     loadMovables(first,saved);
@@ -743,7 +743,7 @@ namespace {
     requireMatrix(firstState[0].transform,moved,"restore must retain moved translation and rotation");
     const auto roundtrip=saveArchive([&](Serialize& output) { first.saveMovableVobs(output); });
 
-    DynamicWorld second(nullptr,zenkit::Mesh{});
+    DynamicWorld second(nullptr,asset::WorldMesh{});
     auto secondObject=second.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
     loadMovables(second,roundtrip);
     require(secondObject.isSleeping(),"a sleeping saved vob must remain asleep after a save roundtrip");
@@ -772,14 +772,14 @@ namespace {
       saveArchive([](Serialize& output) { output.setEntry("old-save"); output.write(uint8_t(1)); })
       };
     for(const auto& bytes:rejected) {
-      DynamicWorld other(nullptr,zenkit::Mesh{});
+      DynamicWorld other(nullptr,asset::WorldMesh{});
       auto object=other.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
       loadMovables(other,bytes);
       requireMatrix(other.movableVobSnapshot()[0].transform,origin,
                     "old saves and mismatched world, ZEN id, visual or origin must retain the ZEN pose");
       require(object.isSleeping(),"ignoring an optional record must not wake furniture");
       }
-    DynamicWorld disabled(nullptr,zenkit::Mesh{});
+    DynamicWorld disabled(nullptr,asset::WorldMesh{});
     disabled.setMovableVobsEnabled(false);
     auto disabledObject=disabled.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
     loadMovables(disabled,saved);
@@ -792,7 +792,7 @@ namespace {
     ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
     constexpr uint32_t zenId=43;
     const auto origin=at(0,100,0);
-    DynamicWorld world(nullptr,zenkit::Mesh{});
+    DynamicWorld world(nullptr,asset::WorldMesh{});
     auto object=world.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
     require(!object.isEmpty(),"trace fixture must have a movable body");
     world.setTraceTime(1500);
@@ -812,7 +812,7 @@ namespace {
             "later furniture movement must retain the first trace appearance time");
 
     const auto roundtrip=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
-    DynamicWorld restored(nullptr,zenkit::Mesh{});
+    DynamicWorld restored(nullptr,asset::WorldMesh{});
     auto restoredObject=restored.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
     restored.setTraceTime(2000);
     loadMovables(restored,roundtrip);
@@ -844,7 +844,7 @@ namespace {
         if(schema>=2)
           output.write(true,uint64_t(1501),std::string_view("PLAYER"));
         });
-      DynamicWorld loaded(nullptr,zenkit::Mesh{});
+      DynamicWorld loaded(nullptr,asset::WorldMesh{});
       auto loadedObject=loaded.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
       loaded.setTraceTime(2200);
       loadMovables(loaded,saved);
@@ -859,7 +859,7 @@ namespace {
       require(afterImpulse.trace && afterImpulse.traceTime==state.traceTime && afterImpulse.traceCulprit==state.traceCulprit,
               "a later unattributed impulse must not rewrite an existing trace's first time or culprit");
       const auto savedAgain=saveArchive([&](Serialize& output) { loaded.saveMovableVobs(output); });
-      DynamicWorld reloaded(nullptr,zenkit::Mesh{});
+      DynamicWorld reloaded(nullptr,asset::WorldMesh{});
       auto reloadedObject=reloaded.addMovableVob(proto,"CONTRACT_CUBE.MRM",origin,.25f,true,"table",true,zenId);
       reloaded.setTraceTime(2300);
       loadMovables(reloaded,savedAgain);
@@ -881,16 +881,16 @@ namespace {
     auto floor=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),.7f,
                                       DynamicWorld::C_Landscape);
     auto cup=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(0,100,0),.7f,.15f);
-    cup->setNoiseProfile(MAT_CLAY,zenkit::MaterialGroup::STONE,"cup");
+    cup->setNoiseProfile(MAT_CLAY,asset::MaterialGroup::STONE,"cup");
     auto table=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.35f)),at(300,100,0),.7f,50.f,
                                     DynamicWorld::C_MovableVob);
-    table->setNoiseProfile(MAT_WOOD,zenkit::MaterialGroup::WOOD,"table");
+    table->setNoiseProfile(MAT_WOOD,asset::MaterialGroup::WOOD,"table");
     auto soft=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(-300,5.1f,0),.7f,.15f);
-    soft->setNoiseProfile(MAT_CLAY,zenkit::MaterialGroup::STONE,"soft");
+    soft->setNoiseProfile(MAT_CLAY,asset::MaterialGroup::STONE,"soft");
     auto wood=world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(.3f,.1f,.3f)),at(600,40,0),.7f,DynamicWorld::C_Object);
-    wood->setNoiseProfile(MAT_WOOD,zenkit::MaterialGroup::WOOD,"wood");
+    wood->setNoiseProfile(MAT_WOOD,asset::MaterialGroup::WOOD,"wood");
     auto metal=world.addDynamicBody(new JPH::BoxShape(JPH::Vec3::sReplicate(.05f)),at(600,100,0),.7f,1.f);
-    metal->setNoiseProfile(MAT_METAL,zenkit::MaterialGroup::METAL,"metal");
+    metal->setNoiseProfile(MAT_METAL,asset::MaterialGroup::METAL,"metal");
     for(int i=0;i<120;++i) world.tick(17);
     const auto find=[&](std::string_view what) -> const PhysicsNoise* {
       for(const auto& noise:noises) if(noise.what==what) return &noise;
@@ -906,7 +906,7 @@ namespace {
             "a small fallen cup must retain clay material, local radius and unknown culprit");
     require(tableNoise->material==MAT_WOOD && tableNoise->radius>=600.f && tableNoise->volume>cupNoise->volume,
             "a heavy table must be louder and audible at six metres");
-    require(metalNoise->surface==zenkit::MaterialGroup::WOOD && metalNoise->material==MAT_METAL,
+    require(metalNoise->surface==asset::MaterialGroup::WOOD && metalNoise->material==MAT_METAL,
             "noise must retain both source and struck surface materials");
     requireNear(cupNoise->position.y,0.f,2.f,"noise position must be the contact in world centimetres");
     for(size_t i=0;i<noises.size();++i)
@@ -988,7 +988,7 @@ namespace {
   void testMovableVobArrowIdentity() {
     Resources resources;
     ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
-    DynamicWorld world(nullptr,zenkit::Mesh{});
+    DynamicWorld world(nullptr,asset::WorldMesh{});
     auto object=world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,true,"table",true,42);
     struct ArrowContact final : DynamicWorld::BulletCallback {
       bool stopsAtWorldHit() const override { return true; }
@@ -1016,20 +1016,19 @@ namespace {
   void testSkinnedMeshMinimum() {
     Resources resources;
     require(!Resources::hasGraphicsDevice(),"skinned minimum geometry contracts must run without a GPU device");
-    zenkit::ModelMesh model;
+    asset::ModelMesh model;
     model.meshes.resize(1);
     auto& skin=model.meshes[0];
     skin.mesh.positions={{0,10,0},{10,-10,0},{0,20,10},{0,-10000,0}};
     skin.mesh.bbox={{0,-10000,0},{10,20,10}};
     skin.mesh.sub_meshes.resize(1);
     auto& surface=skin.mesh.sub_meshes[0];
-    surface.mat.group=zenkit::MaterialGroup::WOOD;
+    surface.mat.group=asset::MaterialGroup::WOOD;
     for(uint16_t i=0;i<skin.mesh.positions.size();++i)
       surface.wedges.push_back({{.6f,-.48f,.64f},{0,0},i});
     surface.triangles={{{0,1,2}}};
     skin.weights={{{.4f,{0,10,0},0},{.3f,{0,10,0},1},{.2f,{0,10,0},2},{.1f,{0,10,0},3}},
                   {{1.f,{10,-10,0},0}},{{1.f,{0,20,10},0}},{{1.f,{0,-10000,0},0}}};
-    skin.nodes={0,1,2,3};
     const PackedMesh packed(skin);
     require(packed.verticesA.size()>3,"the skin fixture must contain actual meshlet vertex padding");
     ProtoMesh mesh(model,nullptr,"CONTRACT_SKIN.MDM");
@@ -1067,7 +1066,7 @@ namespace {
     require(!mesh.minSkinnedVertex(worldBones.data(),3,object,4,minimum),
             "a missing weighted bone must reject the palette instead of approximating the mesh");
     requireNear((minimum-sentinel).length(),0,0,"a rejected minimum query must leave its output unchanged");
-    ProtoMesh empty(zenkit::ModelMesh{},nullptr,"CONTRACT_EMPTY_SKIN.MDM");
+    ProtoMesh empty(asset::ModelMesh{},nullptr,"CONTRACT_EMPTY_SKIN.MDM");
     require(!empty.minSkinnedVertex(worldBones.data(),worldBones.size(),object,4,minimum),
             "a model without rendered skin geometry must have no skinned minimum");
     requireNear((minimum-sentinel).length(),0,0,"an absent skin must leave the minimum output unchanged");
@@ -1125,7 +1124,7 @@ namespace {
                   "one-handed damage must combine weapon damage and strength");
       requireNear(rule.meleeDamage(FractureRule::Melee::TwoHand,40,100),91.f,.001f,
                   "two-handed strikes must use their own CSV multiplier");
-      DynamicWorld world(nullptr,zenkit::Mesh{});
+      DynamicWorld world(nullptr,asset::WorldMesh{});
       auto object=make(world,at(100,1000,0));
       const auto swing=[&](const Tempest::Vec3& from,const Tempest::Vec3& facing,float range) {
         return world.meleeMovableVobs(from,facing,range,40,100,FractureRule::Melee::OneHand);
@@ -1151,7 +1150,7 @@ namespace {
               "destruction=0 must ignore otherwise valid melee strikes");
       }
     {
-      DynamicWorld world(nullptr,zenkit::Mesh{});
+      DynamicWorld world(nullptr,asset::WorldMesh{});
       world.setTraceTime(1500);
       auto object=make(world,at(0,1000,0));
       require(world.destructionEnabled() && object.fractureMesh()!=nullptr && object.fractureMesh()->pieces.size()==8,
@@ -1196,7 +1195,7 @@ namespace {
       require(!world.landRay({0,1100,0},300).hasCol,
               "fragments must never become walking or floor query obstacles");
       const auto saved=saveArchive([&](Serialize& output) { world.saveMovableVobs(output); });
-      DynamicWorld restored(nullptr,zenkit::Mesh{});
+      DynamicWorld restored(nullptr,asset::WorldMesh{});
       restored.setTraceTime(9000);
       auto restoredObject=make(restored,at(0,1000,0));
       loadMovables(restored,saved);
@@ -1226,7 +1225,7 @@ namespace {
             output.write(true,piece.permanent,uint64_t(piece.asleepSince)+1,
                          piece.transform,piece.velocity,piece.angularVelocity,piece.sleeping);
           });
-        DynamicWorld loaded(nullptr,zenkit::Mesh{});
+        DynamicWorld loaded(nullptr,asset::WorldMesh{});
         loaded.setTraceTime(9000);
         auto loadedObject=make(loaded,at(0,1000,0));
         loadMovables(loaded,versioned);
@@ -1235,7 +1234,7 @@ namespace {
                 metadata.traceCulprit==(schema==1 ? "" : "NPC_DESTRUCTION_TEST"),
                 "legacy debris must have unknown age and actor; v2 must retain engine truth");
         const auto savedAgain=saveArchive([&](Serialize& output) { loaded.saveMovableVobs(output); });
-        DynamicWorld reloaded(nullptr,zenkit::Mesh{});
+        DynamicWorld reloaded(nullptr,asset::WorldMesh{});
         auto reloadedObject=make(reloaded,at(0,1000,0));
         loadMovables(reloaded,savedAgain);
         const auto repeated=reloaded.movableVobSnapshot()[0];
@@ -1243,7 +1242,7 @@ namespace {
                 repeated.traceCulprit==metadata.traceCulprit,
                 "saving loaded debris again must preserve both unknown and recorded break metadata");
         }
-      DynamicWorld movementOff(nullptr,zenkit::Mesh{});
+      DynamicWorld movementOff(nullptr,asset::WorldMesh{});
       movementOff.setMovableVobsEnabled(false);
       auto offObject=make(movementOff,at(0,1000,0));
       loadMovables(movementOff,saved);
@@ -1257,7 +1256,7 @@ namespace {
                     "movement OFF loads must preserve awake debris velocity");
         }
       const auto offSave=saveArchive([&](Serialize& output) { movementOff.saveMovableVobs(output); });
-      DynamicWorld offReloaded(nullptr,zenkit::Mesh{});
+      DynamicWorld offReloaded(nullptr,asset::WorldMesh{});
       auto offReloadedObject=make(offReloaded,at(0,1000,0));
       loadMovables(offReloaded,offSave);
       require(offReloadedObject.isBroken() && offReloaded.fragmentSnapshot().size()==pieces.size(),
@@ -1270,7 +1269,7 @@ namespace {
               "awake debris must continue native integration with intact prop movement disabled");
       restored.setMovableVobsEnabled(true);
       require(restoredObject.isBroken(),"enabling movable-vobs must not resurrect broken props either");
-      DynamicWorld disabled(nullptr,zenkit::Mesh{});
+      DynamicWorld disabled(nullptr,asset::WorldMesh{});
       disabled.setDestructionEnabled(false);
       auto disabledObject=make(disabled,at(0,1000,0));
       loadMovables(disabled,saved);
@@ -1285,18 +1284,18 @@ namespace {
       }
     {
       auto source=movableCollisionBox({100,100,100});
-      source.sub_meshes[0].mat.group=zenkit::MaterialGroup::STONE;
+      source.sub_meshes[0].mat.group=asset::MaterialGroup::STONE;
       ProtoMesh barrel(PackedMesh(source,PackedMesh::PK_Visual),"NW_HARBOUR_BARREL_01.MRM");
-      DynamicWorld world(nullptr,zenkit::Mesh{});
+      DynamicWorld world(nullptr,asset::WorldMesh{});
       auto object=world.addMovableVob(barrel,"NW_HARBOUR_BARREL_01.MRM",at(0,1000,0),.03f,true,"barrel");
       std::vector<PhysicsNoise> noises;
       world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { noises.push_back(noise); });
-      requireNear(object.mass(),DynamicWorld::materialDensity(zenkit::MaterialGroup::STONE)*.03f,.01f,
+      requireNear(object.mass(),DynamicWorld::materialDensity(asset::MaterialGroup::STONE)*.03f,.01f,
                   "destructible class must not change the authored mesh density");
       object.addImpulse({object.mass()*10.f,0,0});
       world.tick(17);
       require(object.isBroken() && !noises.empty() && noises.back().material==MAT_WOOD &&
-              noises.back().surface==zenkit::MaterialGroup::WOOD,
+              noises.back().surface==asset::MaterialGroup::WOOD,
               "a wooden barrel mislabeled as stone must still emit a wooden break sound");
       }
     for(const bool tilted:{false,true}) for(const float height:{100.f,500.f}) {
@@ -1518,7 +1517,7 @@ namespace {
       passage(cleaned,false);
       }
     {
-      DynamicWorld world(nullptr,zenkit::Mesh{});
+      DynamicWorld world(nullptr,asset::WorldMesh{});
       auto object=make(world,at(0,1000,0));
       int arrows=0;
       for(;arrows<8 && !object.isBroken();++arrows) {
@@ -1645,7 +1644,7 @@ namespace {
       }
     {
       setenv("OPENGOTHIC_FRACTURE","",1);
-      DynamicWorld world(nullptr,zenkit::Mesh{});
+      DynamicWorld world(nullptr,asset::WorldMesh{});
       auto object=make(world,at(0,1000,0));
       require(object.fractureMesh()==nullptr,"an explicitly empty cache path must disable cache lookup");
       object.addImpulse({object.mass()*20.f,0,0});
@@ -1752,7 +1751,7 @@ namespace {
     Skeleton walkerShape(hierarchy,nullptr,"CONTRACT_WALKER");
     for(const bool blocksWalking:{false,true}) {
       for(const bool legacyCollision:{false,true}) {
-        DynamicWorld world(nullptr,zenkit::Mesh{});
+        DynamicWorld world(nullptr,asset::WorldMesh{});
         world.setMovableVobsEnabled(false);
         auto object = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,
                                           blocksWalking,blocksWalking ? "table" : "utensil",legacyCollision);
@@ -1790,7 +1789,7 @@ namespace {
           }
         }
 
-      DynamicWorld world(nullptr,zenkit::Mesh{});
+      DynamicWorld world(nullptr,asset::WorldMesh{});
       auto moving = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(0,100,0),.25f,
                                         blocksWalking,"impactor",false);
       auto target = world.addMovableVob(proto,"CONTRACT_CUBE.MRM",at(30,100,0),.25f,
@@ -1815,7 +1814,7 @@ namespace {
       };
     const auto hull = JPH::ConvexHullShapeSettings(points,8,0.f).Create();
     require(!hull.HasError(),"movable vob convex hull must be constructible");
-    const float mass = hull.Get()->GetVolume()*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD)*.25f;
+    const float mass = hull.Get()->GetVolume()*DynamicWorld::materialDensity(asset::MaterialGroup::WOOD)*.25f;
     requireNear(mass,.008f*700.f*.25f,.00001f,"mass must use convex hull volume and class multiplier");
     auto floor = world.addCollisionBody(new JPH::BoxShape({10,.1f,10}),at(0,-10,0),.65f,DynamicWorld::C_Landscape);
     auto movable = world.addDynamicBody(hull.Get(),at(0,100,0),.5f,mass,DynamicWorld::C_MovableVob,true);
@@ -1854,7 +1853,7 @@ namespace {
     // Source vertices keep attachment-local transforms before hull creation.
     std::vector<JPH::Vec3> source = {{1,2,3},{2,2,3},{1,3,3}};
     PhysicVbo sourceMesh(&source);
-    sourceMesh.addIndex({0,1,2},0,3,zenkit::MaterialGroup::WOOD);
+    sourceMesh.addIndex({0,1,2},0,3,asset::MaterialGroup::WOOD);
     auto local = at(100,200,300);
     local.scale(2,3,4);
     std::vector<JPH::Vec3> transformed;
@@ -2037,7 +2036,7 @@ namespace {
     for(const auto& fixture:fixtures) {
       const std::vector<JPH::Vec3> vertices(fixture.vertices,fixture.vertices+3);
       PhysicVbo mesh(&vertices);
-      mesh.addIndex(indices,0,3,zenkit::MaterialGroup::STONE);
+      mesh.addIndex(indices,0,3,asset::MaterialGroup::STONE);
       JPH::Vec3 normal;
       require(mesh.rayTriangleNormal(0,normal),"source terrain normal must be finite and nonzero");
       for(JPH::uint axis=0;axis<3;++axis)
@@ -2058,7 +2057,7 @@ namespace {
       };
     for(const auto& vertices:invalid) {
       PhysicVbo mesh(&vertices);
-      mesh.addIndex(indices,0,3,zenkit::MaterialGroup::STONE);
+      mesh.addIndex(indices,0,3,asset::MaterialGroup::STONE);
       JPH::Vec3 normal(7,8,9);
       require(!mesh.rayTriangleNormal(0,normal),"unusable source planes must retain native output");
       require(normal==JPH::Vec3(7,8,9),"invalid source normal must not overwrite native output");
@@ -2073,7 +2072,7 @@ namespace {
       };
     const std::vector<uint32_t> indices = {0,2,1};
     PhysicVbo mesh(&vertices);
-    mesh.addIndex(indices,0,3,zenkit::MaterialGroup::STONE);
+    mesh.addIndex(indices,0,3,asset::MaterialGroup::STONE);
     CollisionWorld world;
     auto landscape = world.addCollisionBody(mesh.shape(),at(0,0,0),.75f,
                                             DynamicWorld::C_Landscape,false,false,&mesh);
@@ -2164,8 +2163,8 @@ namespace {
     const std::vector<uint32_t> wood = {2,1,0,5,4,3};
     const std::vector<uint32_t> stone = {0,2,1,3,5,4};
     PhysicVbo mesh(&vertices);
-    mesh.addIndex(wood,0,wood.size(),zenkit::MaterialGroup::WOOD,"wood-face");
-    mesh.addIndex(stone,0,stone.size(),zenkit::MaterialGroup::STONE,"stone-face");
+    mesh.addIndex(wood,0,wood.size(),asset::MaterialGroup::WOOD,"wood-face");
+    mesh.addIndex(stone,0,stone.size(),asset::MaterialGroup::STONE,"stone-face");
     auto body = world.addCollisionBody(mesh.shape(),at(0,0,0),.75f,
                                        DynamicWorld::C_Landscape,false,false,&mesh);
     const Tempest::Vec3 from[] = {{6477.52686f,1279.26453f,7595.64355f},
@@ -2186,7 +2185,7 @@ namespace {
       require(hit.sector!=nullptr && std::string(hit.sector)==mesh.sectorName(expected[i]),
               "game rays must resolve coincident face sectors with their materials");
       }
-    require(mesh.materialId(0)==zenkit::MaterialGroup::WOOD && mesh.materialId(2)==zenkit::MaterialGroup::STONE,
+    require(mesh.materialId(0)==asset::MaterialGroup::WOOD && mesh.materialId(2)==asset::MaterialGroup::STONE,
             "non-ray callers must retain each original triangle's material");
     }
 
@@ -2201,8 +2200,8 @@ namespace {
       {648.160217f,48.0254517f,146.484192f},
       };
     PhysicVbo mesh(&vertices);
-    mesh.addIndex({0,2,1},0,3,zenkit::MaterialGroup::WOOD,"first-native-face");
-    mesh.addIndex({2,0,3},0,3,zenkit::MaterialGroup::STONE,"first-original-face");
+    mesh.addIndex({0,2,1},0,3,asset::MaterialGroup::WOOD,"first-native-face");
+    mesh.addIndex({2,0,3},0,3,asset::MaterialGroup::STONE,"first-original-face");
     auto body = world.addCollisionBody(mesh.shape(),at(0,0,0),.75f,
                                        DynamicWorld::C_Landscape,false,false,&mesh);
     const Tempest::Vec3 from(64818.9414f,4486.26904f,15276.9766f);
@@ -2210,11 +2209,11 @@ namespace {
     std::vector<CollisionWorld::QueryResult> all;
     const auto first = world.rayCast(from,to,landscapeMask,false,&all);
     require(all.size()==2 && first.body==body.get(),"shared-edge ray must retain both native face hits");
-    require(all[0].material==zenkit::MaterialGroup::WOOD && all[1].material==zenkit::MaterialGroup::STONE &&
+    require(all[0].material==asset::MaterialGroup::WOOD && all[1].material==asset::MaterialGroup::STONE &&
             all[0].fraction<all[1].fraction && first.fraction==all[0].fraction,
             "all-hit queries must preserve native fraction ordering at shared edges");
     const auto closest = world.rayCast(from,to,landscapeMask);
-    require(closest.hasHit && closest.body==body.get() && closest.material==zenkit::MaterialGroup::STONE,
+    require(closest.hasHit && closest.body==body.get() && closest.material==asset::MaterialGroup::STONE,
             "closest shared-edge ray must choose the valid nearest original plane");
     require(std::string(closest.sector)=="first-original-face",
             "shared-edge correction must keep the chosen native face's metadata");
@@ -2232,7 +2231,7 @@ namespace {
     const auto normal = (vertices[1]-vertices[0]).Cross(vertices[2]-vertices[0]).Normalized();
     const auto interior = world.rayCast(CollisionWorld::toCentimeters(center+normal),
                                        CollisionWorld::toCentimeters(center-normal),landscapeMask);
-    require(interior.hasHit && interior.material==zenkit::MaterialGroup::WOOD,
+    require(interior.hasHit && interior.material==asset::MaterialGroup::WOOD,
             "interior mesh rays must retain their closest native face");
     }
 
@@ -2247,7 +2246,7 @@ namespace {
       };
     const std::vector<uint32_t> indices = {0,2,1,3,5,4,6,8,7};
     PhysicVbo mesh(&vertices);
-    mesh.addIndex(indices,0,indices.size(),zenkit::MaterialGroup::STONE,"original-floor");
+    mesh.addIndex(indices,0,indices.size(),asset::MaterialGroup::STONE,"original-floor");
     auto body = world.addCollisionBody(mesh.shape(),at(0,0,0),.75f,
                                        DynamicWorld::C_Landscape,false,false,&mesh);
     const Tempest::Vec3 from(25,5000,25), to(25,-5000,25);
@@ -2257,7 +2256,7 @@ namespace {
     require(std::abs(native.point.y-height*100.f)>.001f,
             "floor fixture must expose the compressed native height through the all-hit API");
     const auto closest = world.rayCast(from,to,landscapeMask);
-    require(closest.hasHit && closest.body==body.get() && closest.material==zenkit::MaterialGroup::STONE,
+    require(closest.hasHit && closest.body==body.get() && closest.material==asset::MaterialGroup::STONE,
             "source-plane projection must preserve the selected native body and material");
     requireNear(closest.point.y,height*100.f,.0005f,
                 "interior floor rays must recover their original geometric height");
@@ -2296,7 +2295,7 @@ namespace {
         };
       PhysicVbo mesh(&vertices);
       const std::vector<uint32_t> indices = {0,1,2,3,4,5};
-      mesh.addIndex(indices,0,indices.size(),zenkit::MaterialGroup::STONE,"contact-test");
+      mesh.addIndex(indices,0,indices.size(),asset::MaterialGroup::STONE,"contact-test");
       auto matrix = at(0,0,0);
       if(rotated)
         matrix.rotateOY(45);
@@ -2327,7 +2326,7 @@ namespace {
       };
     PhysicVbo mesh(&vertices);
     const std::vector<uint32_t> indices = {0,1,2,3,4,5};
-    mesh.addIndex(indices,0,indices.size(),zenkit::MaterialGroup::STONE,"bounded-contact-test");
+    mesh.addIndex(indices,0,indices.size(),asset::MaterialGroup::STONE,"bounded-contact-test");
     auto body = world.addCollisionBody(mesh.shape(),at(0,0,0),.75f,DynamicWorld::C_Landscape,false,false,&mesh);
     JPH::CapsuleShape capsule(.3f,.08f);
     Tempest::Vec3 normal;
@@ -2350,7 +2349,7 @@ namespace {
       {368.358978f,43.3533669f,-322.625275f},
       };
     PhysicVbo mesh(&vertices);
-    mesh.addIndex({0,2,1},0,3,zenkit::MaterialGroup::STONE,"npc-witness-face");
+    mesh.addIndex({0,2,1},0,3,asset::MaterialGroup::STONE,"npc-witness-face");
     auto body = world.addCollisionBody(mesh.shape(),at(0,0,0),.75f,
                                        DynamicWorld::C_Landscape,false,false,&mesh);
     JPH::CapsuleShape capsule(.231234491f,.0817193016f);
@@ -2387,7 +2386,7 @@ namespace {
       {86.245079f,5.06495762f,118.298805f},
       };
     PhysicVbo mesh(&vertices);
-    mesh.addIndex({0,2,1,3,5,4},0,6,zenkit::MaterialGroup::STONE,"npc-fall-contact");
+    mesh.addIndex({0,2,1,3,5,4},0,6,asset::MaterialGroup::STONE,"npc-fall-contact");
     auto body = world.addCollisionBody(mesh.shape(),at(0,0,0),.75f,
                                        DynamicWorld::C_Landscape,false,false,&mesh);
     JPH::CapsuleShape capsule(.231234491f,.0817193016f);
@@ -3349,7 +3348,7 @@ namespace {
       // excluded from the new blocker and must still receive walking impulses.
       const Tempest::Vec3 dimensions(40,83,400);
       ProtoMesh box(PackedMesh(movableBox(dimensions),PackedMesh::PK_Visual),"MONSTER_BOUNCE_BOX.MRM");
-      const float multiplier=1.f/(.4f*.83f*4.f*DynamicWorld::materialDensity(zenkit::MaterialGroup::WOOD));
+      const float multiplier=1.f/(.4f*.83f*4.f*DynamicWorld::materialDensity(asset::MaterialGroup::WOOD));
       DynamicWorld world(nullptr,movableFloor());
       auto prop=world.addMovableVob(box,"MONSTER_BOUNCE_BOX.MRM",at(100,height*.5f,0),multiplier,true,"crate",true,47);
       require(!prop.isEmpty() && prop.mass()>.9f && prop.mass()<1.1f,
@@ -3768,7 +3767,7 @@ namespace {
       zenkit::ModelHierarchy hierarchy;
       hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
       Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_CONTRACT");
-      DynamicWorld world(nullptr,zenkit::Mesh{});
+      DynamicWorld world(nullptr,asset::WorldMesh{});
       auto hero=world.addGhostObj(&shape);
       auto npc=world.addGhostObj(&shape);
       hero.setPosition({0,0,0});
@@ -3998,7 +3997,7 @@ namespace {
       }
     PhysicVbo metadataMesh(&vertices);
     for(size_t i=0;i<sectors.size();++i) {
-      const auto material = i%2==0 ? zenkit::MaterialGroup::STONE : zenkit::MaterialGroup::WOOD;
+      const auto material = i%2==0 ? asset::MaterialGroup::STONE : asset::MaterialGroup::WOOD;
       metadataMesh.addIndex(indices,i*3,3,material,sectors[i].c_str());
       }
     auto metadataBody = world.addCollisionBody(metadataMesh.shape(),at(500,-1000,0),.75f,
@@ -4008,7 +4007,7 @@ namespace {
       const auto triangleHit = world.rayCast({x,-900,0},{x,-1100,0},landscapeMask);
       require(triangleHit.hasHit,"translated landscape triangle must be queryable");
       requireNear(triangleHit.point.y,-1000,.01f,"translated compound mesh must preserve its shape origin");
-      const auto material = i%2==0 ? zenkit::MaterialGroup::STONE : zenkit::MaterialGroup::WOOD;
+      const auto material = i%2==0 ? asset::MaterialGroup::STONE : asset::MaterialGroup::WOOD;
       require(triangleHit.material==material,"mesh hit must retain its Gothic material");
       require(triangleHit.sector!=nullptr && sectors[i]==triangleHit.sector,
               "mesh hit must retain its sector beyond 32 segments");

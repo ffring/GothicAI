@@ -1,3 +1,4 @@
+#include "asset/fromzenkit.h"
 #include "basemesh.h"
 #include "commandline.h"
 #include "gltfmesh.h"
@@ -7,6 +8,7 @@
 #include "resources.h"
 
 #include <zenkit/Stream.hh>
+#include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/Texture.hh>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
@@ -187,8 +189,9 @@ struct BaseContentContract {
     std::printf("Textures: %zu equal (%zu DDS, %zu PNG, %zu TGA), both GPU mip flags\n",textureCount,dds,png,tga);
     for(const auto& [key,file]:resources.baseMeshes.files) {
       auto input=Resources::getFileBuffer(key+".MRM");
-      zenkit::MultiResolutionMesh original;
-      original.load(input.get());
+      zenkit::MultiResolutionMesh archiveMesh;
+      archiveMesh.load(input.get());
+      const auto original=asset::fromZenKit(archiveMesh);
       const auto converted=readBaseMesh(base/"meshes"/file);
       auto difference=compareBaseMeshes(original,converted);
       require(difference.empty(),key+": "+difference);
@@ -227,8 +230,9 @@ struct BaseContentContract {
     Resources::loadVdfs({},true);
     require(!resources.baseTextures.enabled && !resources.baseMeshes.enabled,"wrong archive sizes must disable both bases");
     auto input=Resources::getFileBuffer(meshKey+".MRM");
-    zenkit::MultiResolutionMesh original;
-    original.load(input.get());
+    zenkit::MultiResolutionMesh archiveMesh;
+    archiveMesh.load(input.get());
+    const auto original=asset::fromZenKit(archiveMesh);
     require(compareBaseMeshes(original,Resources::loadVisualMesh(meshKey+".MRM")).empty(),"disabled base must fall back to archive");
     }
     equal(json(censusPath)["replacements"].Size(),0u,"disabled base census replacements");

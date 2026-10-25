@@ -2,7 +2,7 @@
 
 #include <Tempest/Texture2d>
 
-#include <zenkit/Material.hh>
+#include "asset/material.h"
 #include <zenkit/world/VobTree.hh>
 #include <zenkit/DaedalusScript.hh>
 #include <zenkit/addon/daedalus.hh>
@@ -10,7 +10,7 @@
 class Material final {
   public:
     Material()=default;
-    Material(const zenkit::Material& m, bool enableAlphaTest, bool requireAlphaTest = false);
+    Material(const asset::Material& m, bool enableAlphaTest, bool requireAlphaTest = false);
     Material(const zenkit::VisualDecal& decal);
     Material(const zenkit::IParticleEffect &src);
 
@@ -68,20 +68,21 @@ class Material final {
     static bool isTextureInShadowPass(AlphaFunc alpha);
 
   private:
+    friend struct AssetDigest;
     bool             alphaTestEnabled = false;
     // An explicit GLB MASK must survive DXT1's one-bit transparency and later
     // albedo changes; native materials retain their format-based heuristics.
     bool             alphaTestRequired = false;
-    zenkit::AlphaFunction sourceAlphaFunc = zenkit::AlphaFunction::NONE;
-    zenkit::MaterialGroup sourceMaterialGroup = zenkit::MaterialGroup::UNDEFINED;
+    asset::AlphaFunction sourceAlphaFunc = asset::AlphaFunction::NONE;
+    asset::MaterialGroup sourceMaterialGroup = asset::MaterialGroup::UNDEFINED;
     uint8_t          sourceColorAlpha = 255;
     // Keep explicit alpha overrides separate from texture-derived classification.
     AlphaFunc        classifiedAlpha = AlphaTest;
 
-    static AlphaFunc loadAlphaFunc(zenkit::AlphaFunction zenAlpha, zenkit::MaterialGroup matGroup,
+    static AlphaFunc loadAlphaFunc(asset::AlphaFunction zenAlpha, asset::MaterialGroup matGroup,
                                    uint8_t alpha, const Tempest::Texture2d* tex, bool enableAlphaTest,
                                    bool requireAlphaTest = false);
-    void             loadFrames(const zenkit::Material& m);
+    void             loadFrames(const asset::Material& m);
     void             loadFrames(const std::string_view fr, float fps);
   };
 

@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <Tempest/Matrix4x4>
 
-#include <zenkit/Material.hh>
+#include "asset/material.h"
 
 #include "physics/physics.h"
 #include "resources.h"
@@ -22,9 +22,9 @@ class PhysicVbo final {
     PhysicVbo(const PhysicVbo&)=delete;
     PhysicVbo(PhysicVbo&&)=delete;
 
-    void                    addIndex(const std::vector<uint32_t>& index, size_t iboOff, size_t iboLen, zenkit::MaterialGroup material);
-    void                    addIndex(const std::vector<uint32_t>& index, size_t iboOff, size_t iboLen, zenkit::MaterialGroup material, const char* sector);
-    zenkit::MaterialGroup   materialId(size_t triangle) const;
+    void                    addIndex(const std::vector<uint32_t>& index, size_t iboOff, size_t iboLen, asset::MaterialGroup material);
+    void                    addIndex(const std::vector<uint32_t>& index, size_t iboOff, size_t iboLen, asset::MaterialGroup material, const char* sector);
+    asset::MaterialGroup   materialId(size_t triangle) const;
     auto                    sectorName(size_t triangle) const -> const char*;
     bool                    triangleVertices(uint32_t triangle, JPH::Vec3 (&vertices)[3]) const;
     float                   rayTriangleFraction(uint32_t triangle, JPH::Vec3Arg from, JPH::Vec3Arg to,
@@ -45,15 +45,16 @@ class PhysicVbo final {
 
   private:
     friend struct BaseContentContract;
+    friend struct AssetDigest;
     PhysicVbo(const std::vector<Vertex>& v);
 
-    void addSegment(size_t indexSize,size_t offset, zenkit::MaterialGroup material, const char* sector);
+    void addSegment(size_t indexSize,size_t offset, asset::MaterialGroup material, const char* sector);
     void prepareTriangleData() const;
 
     struct Segment {
       size_t                off;
       size_t                size;
-      zenkit::MaterialGroup mat;
+      asset::MaterialGroup mat;
       const char*           sector=nullptr;
       };
 

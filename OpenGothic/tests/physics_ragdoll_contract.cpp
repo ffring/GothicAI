@@ -529,9 +529,9 @@ void testItemMassImpulseAndWake() {
   DynamicWorld::Item empty;
   require(empty.mass()==0 && empty.isSleeping() && empty.velocity().quadLength()==0 && !empty.addImpulse({1,0,0}),
           "an empty item handle must safely reject impulse and report no dynamic state");
-  zenkit::Mesh ground;
+  asset::WorldMesh ground;
   ground.vertices={{-1000,0,-1000},{1000,0,-1000},{1000,0,1000},{-1000,0,1000}};
-  ground.materials.resize(1); ground.materials[0].group=zenkit::MaterialGroup::STONE;
+  ground.materials.resize(1); ground.materials[0].group=asset::MaterialGroup::STONE;
   ground.polygons.material_indices={0,0}; ground.polygons.vertex_indices={0,1,2,0,2,3};
   DynamicWorld world(nullptr,ground);
   std::unique_ptr<PhysicMeshShape> shape(PhysicMeshShape::load(PackedMesh(ground,PackedMesh::PK_Physic)));
@@ -543,7 +543,7 @@ void testItemMassImpulseAndWake() {
             "static and animation-driven handles must never accept dynamic impulses");
   Bounds bounds; bounds.bbox[0]={-10,-20,-30}; bounds.bbox[1]={10,20,30};
   auto matrix=at(0,300,0); matrix.rotateOY(31); matrix.scale(.5f,2.f,3.f);
-  auto body=world.addDynamicObj(matrix,bounds,zenkit::MaterialGroup::WOOD);
+  auto body=world.addDynamicObj(matrix,bounds,asset::MaterialGroup::WOOD);
   const float expected=.2f*.4f*.6f*700.f*3.f;
   near(body.mass(),expected,.001f,"native item mass must include material density, source volume and nonuniform object scale");
   require(!body.addImpulse({std::numeric_limits<float>::quiet_NaN(),0,0}) &&
@@ -557,7 +557,7 @@ void testItemMassImpulseAndWake() {
   require(body.addImpulse({expected,0,0}) && !body.isSleeping(),"a spell-sized impulse must awaken the sleeping native item immediately");
   near(body.velocity().x,100,.001f,"the woken item's mass must still govern its actual native velocity");
   Bounds tiny; tiny.bbox[0]={-1,-1,-1}; tiny.bbox[1]={1,1,1};
-  auto small=world.addDynamicObj(at(500,300,0),tiny,zenkit::MaterialGroup::WOOD);
+  auto small=world.addDynamicObj(at(500,300,0),tiny,asset::MaterialGroup::WOOD);
   near(small.mass(),.02f*.02f*.02f*700.f,.000001f,"minimum collision padding must not inflate a small item's material mass");
   }
 
@@ -610,7 +610,7 @@ void testProjectileWorldStopOptIn() {
     bool stopsAtWorldHit() const override { return enabled; }
     bool isPrecise() const override { return precise; }
     void onMove() override { ++moves; order+='M'; }
-    void onCollide(zenkit::MaterialGroup) override { ++materials; order+='C'; }
+    void onCollide(asset::MaterialGroup) override { ++materials; order+='C'; }
     void onWorldHit(const DynamicWorld::BulletWorldHit& value) override {
       ++worlds; order+='W'; hit=value;
       near((body->position()-value.point).length(),0,0,"attachment must observe the unchanged stopped projectile position");
@@ -619,8 +619,8 @@ void testProjectileWorldStopOptIn() {
       }
     void onStop() override { ++stops; order+='S'; }
     };
-  const auto wallAt=[](float x, zenkit::MaterialGroup material, bool fromRight=false) {
-    zenkit::Mesh wall;
+  const auto wallAt=[](float x, asset::MaterialGroup material, bool fromRight=false) {
+    asset::WorldMesh wall;
     wall.vertices={{x,-2000,-2000},{x,2000,-2000},{x,0,2000}};
     wall.materials.resize(1); wall.materials[0].group=material;
     wall.polygons.material_indices={0};
@@ -629,7 +629,7 @@ void testProjectileWorldStopOptIn() {
     };
   const Tempest::Vec3 from{0,500,0},direction{3,0,0};
   const auto to=from+direction*100.f-Tempest::Vec3(0,.5f*DynamicWorld::gravity*100.f*100.f,0);
-  for(const auto material:{zenkit::MaterialGroup::STONE,zenkit::MaterialGroup::METAL})
+  for(const auto material:{asset::MaterialGroup::STONE,asset::MaterialGroup::METAL})
     for(const bool enabled:{false,true})
       for(const int previousHits:{0,3}) {
         DynamicWorld world(nullptr,wallAt(100,material));
@@ -663,11 +663,11 @@ void testProjectileWorldStopOptIn() {
         }
 
   for(const bool enabled:{false,true}) {
-    DynamicWorld world(nullptr,wallAt(100,zenkit::MaterialGroup::WOOD));
+    DynamicWorld world(nullptr,wallAt(100,asset::MaterialGroup::WOOD));
     Callback callback; callback.enabled=enabled;
     auto* arrow=world.bulletObj(&callback); callback.body=arrow;
     const auto expected=world.ray(from,to);
-    require(expected.hasCol && expected.mat==zenkit::MaterialGroup::WOOD,"terminal contract must hit a soft wall");
+    require(expected.hasCol && expected.mat==asset::MaterialGroup::WOOD,"terminal contract must hit a soft wall");
     arrow->setPosition(from); arrow->setDirection(direction);
     world.tick(100);
     require(callback.worlds==int(enabled) && callback.materials==1 && callback.stops==1 && callback.moves==1 &&
@@ -687,7 +687,7 @@ void testProjectileWorldStopOptIn() {
   // The old speed*fraction gate moves to the wall but does not count, reflect,
   // collide or stop for this near-contact sample. Attachment must not widen it.
   for(const bool enabled:{false,true}) {
-    DynamicWorld world(nullptr,wallAt(100,zenkit::MaterialGroup::STONE));
+    DynamicWorld world(nullptr,wallAt(100,asset::MaterialGroup::STONE));
     Callback callback; callback.enabled=enabled;
     auto* arrow=world.bulletObj(&callback); callback.body=arrow;
     arrow->setPosition({95,500,0}); arrow->setDirection(direction);
@@ -704,7 +704,7 @@ void testProjectileWorldStopOptIn() {
   for(const bool enabled:{false,true})
     for(const bool precise:{false,true})
       for(const bool wallBehind:{false,true}) {
-        DynamicWorld world(nullptr,wallBehind ? wallAt(-160,zenkit::MaterialGroup::WOOD,true) : zenkit::Mesh{});
+        DynamicWorld world(nullptr,wallBehind ? wallAt(-160,asset::MaterialGroup::WOOD,true) : asset::WorldMesh{});
         auto pose=fixture.skeleton.tr;
         const auto object=at(0,300,0);
         for(auto& frame:pose) frame=object*frame;
@@ -738,7 +738,7 @@ void testProjectileWorldStopOptIn() {
         }
 
   for(const bool enabled:{false,true}) {
-    DynamicWorld world(nullptr,wallAt(100,zenkit::MaterialGroup::STONE));
+    DynamicWorld world(nullptr,wallAt(100,asset::MaterialGroup::STONE));
     Callback callback; callback.enabled=enabled;
     auto* spell=world.bulletObj(&callback); callback.body=spell;
     spell->setSpellId(1); spell->setPosition(from); spell->setDirection(direction);
@@ -751,7 +751,7 @@ void testProjectileWorldStopOptIn() {
     }
 
   for(const bool enabled:{false,true}) {
-    DynamicWorld world(nullptr,zenkit::Mesh{});
+    DynamicWorld world(nullptr,asset::WorldMesh{});
     Callback callback; callback.enabled=enabled;
     auto* arrow=world.bulletObj(&callback); callback.body=arrow;
     arrow->setPosition(from); arrow->setDirection(direction); arrow->addPathLen(10001);
@@ -774,16 +774,16 @@ void testSpellWorldImpactMetadata() {
       ++worlds; order+='W'; hit=value;
       DynamicWorld::BulletCallback::onSpellWorldHit(value);
       }
-    void onCollide(zenkit::MaterialGroup material) override {
-      require(material==zenkit::MaterialGroup::STONE,"default spell world-hit callback must preserve the old selected material callback");
+    void onCollide(asset::MaterialGroup material) override {
+      require(material==asset::MaterialGroup::STONE,"default spell world-hit callback must preserve the old selected material callback");
       ++materials; order+='C';
       }
     void onStop() override { ++stops; order+='S'; }
     void onMove() override { ++moves; order+='M'; }
     };
-  zenkit::Mesh wall;
+  asset::WorldMesh wall;
   wall.vertices={{100,-2000,-2000},{100,2000,-2000},{100,0,2000}};
-  wall.materials.resize(1); wall.materials[0].group=zenkit::MaterialGroup::STONE;
+  wall.materials.resize(1); wall.materials[0].group=asset::MaterialGroup::STONE;
   wall.polygons.material_indices={0}; wall.polygons.vertex_indices={0,1,2};
   DynamicWorld world(nullptr,wall);
   Callback callback;
@@ -1210,7 +1210,7 @@ void testRagdollWaterExcludesLivingReactions() {
   require(living && control,"living water exclusion needs native kinematic controls");
   std::vector<PhysicsNoise> noises;
   wet.setPhysicsNoiseEnabled(true);
-  wet.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { if(noise.surface==zenkit::MaterialGroup::WATER) noises.push_back(noise); });
+  wet.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { if(noise.surface==asset::MaterialGroup::WATER) noises.push_back(noise); });
   tickWater(wet,10); tickWater(dry,10);
   require(living->isKinematic() && wet.waterBodySnapshot().empty(),"animation driven living parts must stay outside buoyancy");
   const auto point=position(pose[6])+Tempest::Vec3(10,0,0);
@@ -1244,7 +1244,7 @@ void testRagdollWaterSplashOnceAndMomentum() {
     waterSurface(world);
     world.setPhysicsNoiseEnabled(true);
     std::vector<PhysicsNoise> noises;
-    world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { if(noise.surface==zenkit::MaterialGroup::WATER) noises.push_back(noise); });
+    world.setPhysicsNoiseCallback([&](const PhysicsNoise& noise) { if(noise.surface==asset::MaterialGroup::WATER) noises.push_back(noise); });
     auto object=at(0,35.f,0); object.rotateOX(90); object.scale(scale);
     auto body=fixture.create(world,object,{0,-speed,0});
     // All horizontal parts enter in the same short impact. A single corpse
