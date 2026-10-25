@@ -187,7 +187,7 @@ async def hero_yield(
     phrase = "Сдаюсь, забирай золото, только не бей"
     script = ClaimScript(said=[(phrase, FakeStep(tool_calls=[ToolCall(
         "accept_surrender", {"take": ["gold"], "words": "Ладно, живи. Золото моё.",
-                             **({"humiliate": True} if humiliating else {})},
+                             "humiliate": humiliating},
     )]))], told=[], default="")
     dialogue.llm = script
     results: dict[str, str] = {}

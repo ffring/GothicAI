@@ -306,7 +306,7 @@ def test_no_mercy_flag(monkeypatch):
 
 async def hero_yields(rig, take):
     rig.llm.script = [FakeStep(tool_calls=[ToolCall("accept_surrender", {
-        "take": take, "words": "Ладно, живи. Я заберу своё.",
+        "take": take, "words": "Ладно, живи. Я заберу своё.", "humiliate": False,
     })]), FakeStep()]
     rig.dialogue.open(NPC, "Лобарт", warm=False)
     await rig.dialogue.say_as_player(NPC, "Сдаюсь, забирай золото, только не бей", overlay=True)

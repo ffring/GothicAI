@@ -67,13 +67,14 @@ ACCEPT_SURRENDER = Tool(
     "take: gold — всё золото героя; weapons — надетое ближнее и дальнее оружие; fine — только для "
     "представителя закона, точная сумма долга crimes, если золота хватает; также до пяти id предметов "
     "из инвентаря героя, по одной штуке. Пустой take — отпустить без выкупа. gold включает fine. "
-    "humiliate (по умолчанию false) — унизить сдавшегося героя, обмочив его на коленях. "
+    "humiliate — обязательный bool: передавай false для обычной сдачи, "
+    "true — унизить сдавшегося героя, обмочив его на коленях. "
     "Решай по характеру сам или по просьбе героя; законникам, магам, паладинам и послушникам запрещено.",
     {"type": "object", "properties": {
         "take": {"type": "array", "items": {"type": "string"}},
         "humiliate": {"type": "boolean", "default": False},
         "words": {"type": "string"},
-    }, "required": ["take", "words"], "additionalProperties": False},
+    }, "required": ["take", "humiliate", "words"], "additionalProperties": False},
 )
 
 
