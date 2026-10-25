@@ -4,7 +4,9 @@
 #include <future>
 #include <cassert>
 #include <zenkit/World.hh>
+#include <zenkit/vobs/Light.hh>
 
+#include "asset/fromzenkit.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/worldview.h"
 #include "physics/dynamicworld.h"
@@ -13,6 +15,30 @@
 #include "resources.h"
 
 using namespace Tempest;
+
+namespace {
+asset::VLight lightForView(const zenkit::VLight& source) {
+  asset::VLight light {};
+  light.position = source.position;
+  light.preset = source.preset;
+  light.light_type = static_cast<asset::LightType>(source.light_type);
+  light.range = source.range;
+  light.color = source.color;
+  light.cone_angle = source.cone_angle;
+  light.is_static = source.is_static;
+  light.quality = static_cast<asset::LightQuality>(source.quality);
+  light.lensflare_fx = source.lensflare_fx;
+  light.on = source.on;
+  light.range_animation_scale = source.range_animation_scale;
+  light.range_animation_fps = source.range_animation_fps;
+  light.range_animation_smooth = source.range_animation_smooth;
+  light.color_animation_list = source.color_animation_list;
+  light.color_animation_fps = source.color_animation_fps;
+  light.color_animation_smooth = source.color_animation_smooth;
+  light.can_move = source.can_move;
+  return light;
+  }
+}
 
 auto WorldEdit::Vob::release(size_t i) -> std::unique_ptr<WorldEdit::Vob> {
   auto v = std::move(child[i]);
@@ -77,7 +103,7 @@ void WorldEdit::Vob::initView(WorldEdit& owner) {
        // setType(M_Mesh);
        if(vob.show_visual) {
          mesh = owner.wview->addStaticView(view, true);
-         mesh.setWind(vob.anim_mode,vob.anim_strength);
+         mesh.setWind(static_cast<asset::AnimationType>(vob.anim_mode),vob.anim_strength);
          mesh.setObjMatrix(pos);
          }
        if(vob.cd_dynamic) {
@@ -107,7 +133,7 @@ void WorldEdit::Vob::initView(WorldEdit& owner) {
     */
     //NOTE: light is shown anyway, in vanilla
     if(true || vob.show_visual) {
-      light = owner.wview->addLight(reinterpret_cast<const zenkit::VLight&>(vob), 0);
+      light = owner.wview->addLight(lightForView(static_cast<const zenkit::VLight&>(vob)), 0);
       }
     }
   }
@@ -166,7 +192,7 @@ WorldEdit::WorldEdit(std::string_view wname) {
   zenkit::World world;
   world.load(buf.get(), zenkit::GameVersion::GOTHIC_2);
 
-  auto& worldMesh = world.world_mesh;
+  auto worldMesh = asset::fromZenKit(world.world_mesh);
 
   auto wdynamicFut = std::async(std::launch::async, [&]() {
     Workers::setThreadName("Loading: BVH thread");
