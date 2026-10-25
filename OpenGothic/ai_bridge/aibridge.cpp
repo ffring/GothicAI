@@ -820,7 +820,8 @@ void AiBridge::Impl::onCombatHit(Npc& npc, Npc& by, int32_t damage, std::string_
   if(!nearbyHuman(npc) && !nearbyHuman(by))
     return;
   send(JsonWriter("combat_hit")
-         .str("npc",npcSymbol(*world,npc)).str("by",npcSymbol(*world,by))
+         .str("npc",npc.isPlayer() ? "PLAYER" : npcSymbol(*world,npc))
+         .str("by",by.isPlayer() ? "PLAYER" : npcSymbol(*world,by))
          .integer("damage",damage).integer("hp",npc.attribute(ATR_HITPOINTS))
          .integer("hp_max",npc.attribute(ATR_HITPOINTSMAX))
          .boolean("down",npc.isDown()).boolean("dead",npc.isDead()).str("kind",kind).finish());
