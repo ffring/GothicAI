@@ -9,17 +9,13 @@
 #include "physics/physicvbo.h"
 #include "physics/worldcloth.h"
 #include "resources.h"
+#include "sha256.h"
 #include "worldbase.h"
 
 #include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
 #include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/World.hh>
-#ifdef __APPLE__
-#include <CommonCrypto/CommonDigest.h>
-#else
-#include <openssl/evp.h>
-#endif
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -35,30 +31,12 @@ namespace {
 // GPU arrays include every allocated meshlet slot, including their explicit padding.
 class Digest {
   public:
-    Digest() {
-#ifdef __APPLE__
-      CC_SHA256_Init(&context);
-#else
-      if(!context || EVP_DigestInit_ex(context,EVP_sha256(),nullptr)!=1)
-        throw std::runtime_error("SHA-256 initialization failed");
-#endif
-      }
-    ~Digest() {
-#ifndef __APPLE__
-      EVP_MD_CTX_free(context);
-#endif
-      }
+    Digest()=default;
     Digest(const Digest&)=delete;
     Digest& operator=(const Digest&)=delete;
 
     void bytes(const void* data, size_t size) {
-      if(size==0) return;
-#ifdef __APPLE__
-      CC_SHA256_Update(&context,data,CC_LONG(size));
-#else
-      if(EVP_DigestUpdate(context,data,size)!=1)
-        throw std::runtime_error("SHA-256 update failed");
-#endif
+      context.update(data,size);
       }
     template<class T> void value(const T& v) {
       static_assert(std::is_arithmetic_v<T> || std::is_enum_v<T>);
@@ -75,27 +53,10 @@ class Digest {
       value(p.x); value(p.y); value(p.z);
       }
     std::string finish() {
-      std::array<unsigned char,32> result{};
-#ifdef __APPLE__
-      CC_SHA256_Final(result.data(),&context);
-#else
-      unsigned int size=0;
-      if(EVP_DigestFinal_ex(context,result.data(),&size)!=1 || size!=result.size())
-        throw std::runtime_error("SHA-256 finalization failed");
-#endif
-      std::string hex;
-      for(auto byte:result) {
-        hex.push_back("0123456789abcdef"[byte>>4]);
-        hex.push_back("0123456789abcdef"[byte&15]);
-        }
-      return hex;
+      return context.finish();
       }
   private:
-#ifdef __APPLE__
-    CC_SHA256_CTX context{};
-#else
-    EVP_MD_CTX* context=EVP_MD_CTX_new();
-#endif
+    Sha256 context;
   };
 }
 

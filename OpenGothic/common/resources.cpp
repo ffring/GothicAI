@@ -1,4 +1,5 @@
 #include "resources.h"
+#include "basestore.h"
 #include "asset/fromzenkit.h"
 #include "commandline.h"
 
@@ -165,6 +166,25 @@ Resources::Resources(Tempest::Device &device)
   }, this);
   }
 
+void Resources::zenkitLog(zenkit::LogLevel lvl, const char* cat, const char* message) {
+  BaseImport::onZenkitLog(lvl,cat,message);
+  switch (lvl) {
+    case zenkit::LogLevel::ERROR:
+      Tempest::Log::e("[zenkit] ", message);
+      break;
+    case zenkit::LogLevel::WARNING:
+      Tempest::Log::e("[zenkit] ", message);
+      break;
+    case zenkit::LogLevel::INFO:
+      Tempest::Log::i("[zenkit] ", message);
+      break;
+    case zenkit::LogLevel::DEBUG:
+    case zenkit::LogLevel::TRACE:
+      Tempest::Log::d("[zenkit] ", message); // unused
+      break;
+    }
+  }
+
 void Resources::mountWork(const std::filesystem::path& path) {
   inst->gothicAssets.mkdir("/_work");
   inst->gothicAssets.mount_host(path, "/_work", zenkit::VfsOverwriteBehavior::NONE);
@@ -221,6 +241,14 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
     }
 
   std::sort(mounted.begin(),mounted.end());
+  if(std::getenv("OPENGOTHIC_BASE")==nullptr) {
+    try {
+      inst->automaticBase=BaseStore::resolve(std::filesystem::path(CommandLine::inst().rootPath()),mounted,
+                                           [](std::string_view message) { Log::i(message); });
+      inst->indexBaseContent();
+      }
+    catch(const std::exception& e) { Log::e("base: automatic import unavailable: ",e.what(),"; using archives"); }
+    }
   inst->baseTextures.validate(mounted);
   inst->baseMeshes.validate(mounted);
   inst->baseZen.validate(mounted);
@@ -616,9 +644,7 @@ std::filesystem::path Resources::baseDir() {
       return {};
     return dir;
     }
-  if(const char* home = std::getenv("HOME"))
-    return std::filesystem::path(home)/".local/share/gothic-ai/base/v1";
-  return {};
+  return inst->automaticBase.path;
   }
 
 std::filesystem::path Resources::worldBaseDir(std::string_view world) {

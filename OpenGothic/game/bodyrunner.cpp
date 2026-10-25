@@ -1415,15 +1415,13 @@ int main(int argc, const char** argv) {
     setenv("OPENGOTHIC_PHYSICS_THREADS","0",0);
     std::filesystem::create_directories(opts.output);
     CommandLine commandLine(argc,argv);
+    zenkit::Logger::set(zenkit::LogLevel::WARNING,Resources::zenkitLog);
     Resources resources;
     Gothic gothic;
     auto stuckLogger = StuckLogger::fromEnvironment();
     gothic.isNpcInDialogFn = [](const Npc*) { return false; };
     gothic.setupGlobalScripts();
     GameMusic music;
-    zenkit::Logger::set(zenkit::LogLevel::WARNING,[](zenkit::LogLevel,const char*,const char* message) {
-      Tempest::Log::e("[zenkit] ",message);
-    });
     Runner runner(gothic,opts);
     if(!opts.stdio) {
       Json reset(rapidjson::kObjectType);

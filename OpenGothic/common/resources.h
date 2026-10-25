@@ -8,6 +8,7 @@
 
 #include <zenkit/Vfs.hh>
 #include "asset/staticmesh.h"
+#include "basestore.h"
 #include <zenkit/world/VobTree.hh>
 
 #include <tuple>
@@ -49,6 +50,8 @@ class Resources final {
     Resources();
     explicit Resources(Tempest::Device& device);
     ~Resources();
+
+    static void zenkitLog(zenkit::LogLevel level, const char* component, const char* message);
 
     enum class FontType : uint8_t {
       Normal,
@@ -222,6 +225,7 @@ class Resources final {
       };
     BaseIndex baseTextures, baseMeshes, baseZen;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
+    BaseStore::Selection automaticBase;
     static std::filesystem::path baseDir();
     void indexBaseContent();
 
