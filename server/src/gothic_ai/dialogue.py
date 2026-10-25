@@ -557,6 +557,7 @@ class Conversation:
     svm_phrases: deque[str] = field(default_factory=lambda: deque(maxlen=5))
     # queued or synthesizing, before its first sound: line -> finish its SVM trace
     svm_pending: dict[str, Callable[[str], None]] = field(default_factory=dict)
+    bark_pending: dict[str, Callable[[str], None]] = field(default_factory=dict)
 
     @property
     def history(self) -> list[Message]:
@@ -993,6 +994,13 @@ class DialogueManager:
             self._note(conv, f"Ты сказал вслух: «{words}»")
             record("said")
 
+    def _bark_started(self, conv: Conversation, line: str) -> None:
+        if record := conv.bark_pending.pop(line, None):
+            conv.earlier_lines.append(line)
+            self._line_replies[line] = line
+            self._note(conv, f"Ты сказал вслух: «{self._lines[line][0]}»")
+            record("said")
+
     async def _recover_svm(self) -> None:
         assert self.quick is not None
         while not self._svm_available:
@@ -1288,6 +1296,10 @@ class DialogueManager:
         """The npc's turn; once it is over, its history (grown by it) warms the quick model."""
         if svm := self._svm_tasks.get(conv.npc):
             svm.cancel()
+        conv.hushed.update(conv.bark_pending)
+        for record in conv.bark_pending.values():
+            record("busy")
+        conv.bark_pending.clear()
         conv.hushed.update(conv.svm_pending)
         for record in conv.svm_pending.values():
             record("busy")
@@ -1340,6 +1352,10 @@ class DialogueManager:
         conv.reply = None
 
     def _drop_unvoiced(self, conv: Conversation, lines: Collection[str] | None = None) -> None:
+        for line in tuple(conv.bark_pending):
+            if lines is None or line in lines:
+                conv.hushed.add(line)
+                conv.bark_pending.pop(line)("busy")
         for line in tuple(conv.svm_pending):
             if lines is None or line in lines:
                 conv.hushed.add(line)
@@ -1677,6 +1693,7 @@ class DialogueManager:
         *,
         filler: bool = False,
         to: str | None = None,
+        bark: Callable[[str], None] | None = None,
     ) -> str | None:
         """A line of the npc's, voiced if there is TTS. `filler`: its first words before the answer (the
         npc goes on thinking after them, protocol v14); `reply` None: not a line of a reply's text; `to`:
@@ -1691,6 +1708,8 @@ class DialogueManager:
             self._line_replies[line] = reply
         self._lines[line] = (text, None)
         self._sent[line] = time.monotonic()
+        if bark is not None:
+            conv.bark_pending[line] = bark
         if self.floor is not None:
             self._line_seats[line] = self.floor.seat(conv.npc)
         log.info("%s: %s", conv.persona.name, text)
@@ -1716,12 +1735,16 @@ class DialogueManager:
                     to=to,
                 )
             )
+            self._bark_started(conv, line)
             return line
         if conv.voice is None:
             conv.voice = asyncio.Queue()
             conv.voicing = asyncio.create_task(self._voice(conv, conv.voice))
 
             def finished(_done: asyncio.Task[None]) -> None:
+                while conv.bark_pending:
+                    _, record = conv.bark_pending.popitem()
+                    record("busy")
                 while conv.svm_pending:
                     _, record = conv.svm_pending.popitem()
                     record("busy")
@@ -1783,6 +1806,7 @@ class DialogueManager:
                             )
                         )
                         self._svm_started(conv, line)
+                        self._bark_started(conv, line)
 
                     async def chunk(pcm: bytes, line: str = line) -> None:
                         if line in conv.hushed:
@@ -1839,9 +1863,12 @@ class DialogueManager:
                         )
                     )
                     self._svm_started(conv, line)
+                    self._bark_started(conv, line)
             except GameError:
                 pass
             finally:
+                if record := conv.bark_pending.pop(line, None):
+                    record("busy" if line in conv.hushed else "error")
                 if record := conv.svm_pending.pop(line, None):
                     record("busy" if line in conv.hushed else "error")
                 queue.task_done()
