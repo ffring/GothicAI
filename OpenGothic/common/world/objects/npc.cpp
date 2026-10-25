@@ -199,6 +199,8 @@ Vec3 Npc::GoTo::target() const {
 bool Npc::GoTo::isClose(const Npc& self, float dist) const {
   if(flag==GT_Enemy)
     return self.fghAlgo.isInWRange(self, *npc, self.owner.script()); //need to be consistent with implAttack
+  if(npc!=nullptr && pointDistance>0.f && !self.canSeeNpc(*npc,true))
+    return false;
   if(npc!=nullptr)
     return MoveAlgo::isClose(self, *npc, dist);
   if(wp!=nullptr)

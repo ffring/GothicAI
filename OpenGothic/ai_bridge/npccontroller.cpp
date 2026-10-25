@@ -840,9 +840,9 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
       return;
       }
     const double d = std::sqrt(double(c.npc->qDistTo(*target)));
-    if(d<=a.radius)
+    if(d<=a.radius && c.npc->canSeeNpc(*target,true))
       finishAction(c,"done","",d); else
-      finishAction(c,"failed","stopped away from target",d);
+      finishAction(c,"failed","stopped away from target or without line of sight",d);
     return;
     }
 
