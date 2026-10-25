@@ -500,7 +500,10 @@ if(ANDROID)
   add_android_apk(OpenGothic-apk
     PACKAGE_NAME org.opengothic.app
     CODE Gothic2Notr
-    MANIFEST android/AndroidManifest.xml)
+    MANIFEST android/AndroidManifest.xml
+    CMAKE_ARGUMENTS
+      "-DOPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR}"
+      "-DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_CRYPTO_LIBRARY}")
 endif()
 
 # installation
