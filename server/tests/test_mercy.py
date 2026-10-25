@@ -7,7 +7,7 @@ import pytest
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.combat_barks import CombatBarks
 from gothic_ai.dialogue import DialogueManager
-from gothic_ai.llm import FakeBackend, FakeStep, ToolCall
+from gothic_ai.llm import FakeBackend, FakeStep, ToolCall, ToolResult
 from gothic_ai.memory import MemoryStore
 from gothic_ai.mercy import PARDON, YIELDING, Mercy
 from gothic_ai.orders import Fight, Orders, Standing
@@ -29,6 +29,13 @@ class MercyGame(FakeGame):
         self.vars.update(AIV_LASTFIGHTAGAINSTPLAYER=1, AIV_LASTFIGHTCOMMENT=2,
                          AIV_DEFEATEDBYPLAYER=3, FIGHT_LOST=2)
         self.target = "PC_HERO"
+        self.emit_trigger = True
+        self.trigger_error = None
+
+    def snapshot(self, npc):
+        snap = super().snapshot(npc)
+        snap["world"]["day"] = 1
+        return snap
 
     def evaluate(self, expr, npc=None):
         if expr[:2] == ["call", "NPC_GETTARGET"]:
@@ -42,8 +49,9 @@ class MercyGame(FakeGame):
         await super().handle(message)
         if message["type"] == "graph_patch":
             for op in message["ops"]:
-                if op.get("steps") is not None and op["id"].startswith("DIR_MERCY_"):
-                    await self.send(type="trigger_fired", id=op["id"], count=1)
+                if (self.emit_trigger and op.get("steps") is not None
+                        and op["id"].startswith("DIR_MERCY_")):
+                    await self.send(type="trigger_fired", id=op["id"], count=1, error=self.trigger_error)
 
 
 @pytest.fixture
@@ -89,13 +97,15 @@ def hit(rig, **fields):
 
 
 async def finish(rig):
+    if rig.dialogue._background:
+        await asyncio.gather(*rig.dialogue._background)
     conv = rig.dialogue.conversations.get(NPC)
     if conv and conv.reply:
         await conv.reply
     await rig.link.story_eval(NPC, [["int", 1]])  # wait for preceding speech to reach the fake game
 
 
-@pytest.mark.parametrize("reason", ["low_hp", "balance", "companion"])
+@pytest.mark.parametrize("reason", ["low_hp", "balance", "balance_stale", "companion"])
 async def test_opportunity_uses_conversational_model_once_and_sets_native_outcome(rig, reason):
     if reason == "companion":
         rig.dialogue.change_intent(FRIEND, "Диего", body=False, goal="follow_hero", target="PLAYER")
@@ -104,7 +114,16 @@ async def test_opportunity_uses_conversational_model_once_and_sets_native_outcom
         rig.orders.standing[FRIEND] = Standing("follow")
         rig.orders._resume = AsyncMock()
     quick = rig.dialogue.quick = FakeBackend("Продолжай бой!", delay=0)
-    if reason == "balance":
+    if reason.startswith("balance"):
+        if reason == "balance":
+            del rig.link.snapshots[NPC]
+        else:
+            snap = rig.link.snapshots[NPC]
+            rig.link.snapshots[NPC] = snap.model_copy(update={
+                "player": snap.player.model_copy(update={"armor": None}),
+            })
+            assert "он опасен" not in rig.parley.combat_balance(NPC)
+        rig.fake.hp = 700  # current health is 70%, while a cached snapshot still has full HP
         hit(rig, hp=80)
         assert not rig.llm.calls
         hit(rig, hp=70)
@@ -130,6 +149,19 @@ async def test_opportunity_uses_conversational_model_once_and_sets_native_outcom
     await finish(rig)
     assert len(rig.chronicle.facts("mercy_offer")) == 1
     assert all("surrender" not in {t.name for t in call[2]} for call in rig.llm.calls[1:])
+
+
+@pytest.mark.parametrize("failure", ["timeout", "error"])
+async def test_native_outcome_failure_rejects_without_surrender_or_truce(rig, failure):
+    rig.fake.emit_trigger = failure != "timeout"
+    rig.fake.trigger_error = "injected native write failure" if failure == "error" else None
+    hit(rig)
+    await finish(rig)
+    result = next(item for item in rig.llm.calls[1][1] if isinstance(item, ToolResult))
+    assert "Отклонено: игра не подтвердила исход сдачи" in result.output
+    assert not rig.chronicle.facts("surrender") and not rig.chronicle.facts("truce")
+    assert not rig.mercy.silent(NPC) and not rig.fake.says
+    assert not any(op.get("do") == "calm" for row in rig.fake.story for op in row.get("effects", []))
 
 
 async def test_no_opportunity_without_trigger_or_for_npc_only_combat(rig):

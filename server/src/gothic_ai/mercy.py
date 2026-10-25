@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections import deque
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
     from .dialogue import Conversation, DialogueManager
     from .orders import Orders
     from .parley import Parley
+
+log = logging.getLogger(__name__)
 
 PARDON = "Ты проиграл бой герою и сдался; он тебя пощадил"
 YIELDING = (
@@ -150,12 +153,26 @@ class Mercy:
         while battle.hits and battle.hits[0] < now - 5:
             battle.hits.popleft()
         low = hit.hp_max > 0 and hit.hp < hit.hp_max * 0.3
+        if low or (self.parley is not None and len(battle.hits) >= 2):
+            self.dialogue._spawn(self._offer(npc, battle, hit, low))
+
+    async def _offer(self, npc: str, battle: Battle, hit: CombatHit, low: bool) -> None:
+        if not low:
+            try:
+                snap = await self.link.snapshot(npc, fresh=True)
+            except (GameError, TimeoutError) as error:
+                log.info("mercy balance for %s: no fresh snapshot: %s", npc, error)
+                return
+            if snap.npc.hp <= 0:
+                return
+        if self.battles.get(npc) is not battle or battle.offered or not self._alive(npc):
+            return
         balance = self.parley.combat_balance(npc) if self.parley else None
-        losing = balance is not None and "он опасен" in balance and len(battle.hits) >= 2
-        if not (low or losing):
+        if not low and (balance is None or "он опасен" not in balance):
             return
         battle.offered = True
         self.chronicle.record({"fact": "mercy_offer", "npc": npc, "t": self._ticks})
+        attacker = hit.by.upper()
         who = "герой" if attacker in {"PLAYER", "PC_HERO"} else f"спутник героя {attacker}"
         plight = "ты тяжело ранен, сил почти не осталось" if low else "бой идёт против тебя"
         self._urgent(
@@ -269,6 +286,12 @@ class Mercy:
         ]])
         if not fighting:
             return ToolOutcome("Отклонено: ты больше не в бою с героем или его спутниками.", "rejected")
+        try:
+            await self._native_loss(conv.npc)
+        except (GameError, TimeoutError) as error:
+            return ToolOutcome(
+                f"Отклонено: игра не подтвердила исход сдачи ({type(error).__name__}: {error}).", "rejected",
+            )
         intent = Intent(attitude="wary")
         dialogue._change_intent(conv, intent, snap, body=False)
         _, ok = await dialogue._calm(conv, intent)
@@ -282,7 +305,6 @@ class Mercy:
         self.orders.truce(conv.npc)
         if self.parley:
             await self.parley.accept_deal(conv.npc, 1, now=now)
-        await self._native_loss(conv.npc)
         dialogue._drop_unvoiced(conv)
         await dialogue._say(conv, words.strip(), None, overlay=True)
         return ToolOutcome(
