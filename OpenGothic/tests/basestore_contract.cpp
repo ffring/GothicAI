@@ -14,6 +14,8 @@
 #include <csignal>
 #include <stdexcept>
 #include <sys/wait.h>
+#include <sys/file.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -181,6 +183,23 @@ int main() {
       require(logs.find("base: importing installation")==std::string::npos,"unexpected import");
       std::cout << logs;
       };
+    // A cache hit must return even while publication is blocked. It must also
+    // clean an interrupted store copy, despite the cache already being complete.
+    {
+    const auto partial=store/"base"/(identity.fingerprint+".tmp-2");
+    fs::create_directory(partial);
+    const auto lockPath=store/"base"/(identity.fingerprint+".lock");
+    const int lock=::open(lockPath.c_str(),O_RDWR);
+    require(lock>=0 && flock(lock,LOCK_EX)==0,"cannot hold publication lock");
+    auto selected=BaseStore::resolve(game,mounted,log);
+    require(selected.path==base && BaseImport::matches(base,identity),"cache must be usable before publication");
+    require(selected.publication.valid() && selected.publication.wait_for(std::chrono::milliseconds(50))==std::future_status::timeout,
+            "publication must be asynchronous");
+    flock(lock,LOCK_UN); close(lock);
+    selected.publication.get();
+    require(!fs::exists(partial),"cache hit must clean interrupted publication");
+    std::cout << "background publication: cache ready while store locked; cache-hit recovery passed\n";
+    }
     select("cache");
     fs::remove_all(cache);
     select("store");
@@ -286,7 +305,7 @@ int main() {
     for(const auto& entry:fs::directory_iterator(cache)) if(entry.is_directory()) ++directories;
     require(directories==3,"cache must retain three fingerprints");
     setenv("OPENGOTHIC_BASE","",1);
-    require(BaseStore::resolve(game,mounted,log).path.empty(),"explicit empty base must disable automatic import");
+    require(BaseStore::resolve(game,mounted,log).path==base,"empty base must select automatically");
     setenv("OPENGOTHIC_BASE",reference.c_str(),1);
     require(BaseStore::resolve(game,mounted,log).path==reference,"explicit base must win");
     std::cout << "base-store contract passed: import, cache, store, corrupt metadata, 2 processes, fingerprint, active lease, retention, SIGTERM recovery, explicit base\n";

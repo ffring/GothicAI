@@ -16,6 +16,9 @@
 #include <zenkit/Stream.hh>
 #include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/World.hh>
+#include <zenkit/Texture.hh>
+#include <zenkit/addon/texcvt.hh>
+#include <Tempest/MemReader>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -63,6 +66,7 @@ class Digest {
 struct AssetDigest {
   Digest total;
   size_t rows=0;
+  bool archiveTextures=false;
 
   void emit(const std::string& kind, const std::string& name, Digest& digest) {
     const auto line=kind+" "+name+" "+digest.finish()+"\n";
@@ -86,9 +90,45 @@ struct AssetDigest {
     d.point(p.bbox().first); d.point(p.bbox().second);
     }
 
-  static void materials(Digest& d, const PackedMesh& p) {
+  void archiveTexture(const std::string& name) {
+    auto& resources=*Resources::inst;
+    if(name.empty() || resources.texCache.count(name)) return;
+    std::string key=name;
+    for(auto& c:key) c=char(std::toupper(static_cast<unsigned char>(c)));
+    const auto* entry=Resources::vdfsIndex().find(key.ends_with(".TGA") ? key.substr(0,key.size()-4)+"-C.TEX" : key);
+    Tempest::Texture2d texture;
+    if(entry && key.ends_with(".TGA")) {
+      auto input=entry->open_read();
+      zenkit::Texture tex; tex.load(input.get());
+      if(tex.format()>=zenkit::TextureFormat::DXT1 && tex.format()<=zenkit::TextureFormat::DXT5) {
+        const auto dds=zenkit::to_dds(tex);
+        Tempest::MemReader reader(reinterpret_cast<const uint8_t*>(dds.data()),dds.size());
+        Tempest::Pixmap pm(reader);
+        texture=Resources::device().texture(pm,pm.mipCount()>1);
+        }
+      else {
+        const auto rgba=tex.as_rgba8(0);
+        Tempest::Pixmap pm(tex.width(),tex.height(),Tempest::TextureFormat::RGBA8);
+        std::memcpy(pm.data(),rgba.data(),rgba.size());
+        texture=Resources::device().texture(pm,true);
+        }
+      }
+    else if(const auto* raw=Resources::vdfsIndex().find(name)) {
+      auto input=raw->open_read();
+      input->seek(0,zenkit::Whence::END);
+      std::vector<uint8_t> bytes(input->tell()); input->seek(0,zenkit::Whence::BEG);
+      if(input->read(bytes.data(),bytes.size())!=bytes.size()) throw std::runtime_error("incomplete texture "+name);
+      Tempest::MemReader reader(bytes.data(),bytes.size());
+      Tempest::Pixmap pm(reader);
+      texture=Resources::device().texture(pm,pm.mipCount()>1);
+      }
+    resources.texCache[name]=texture.isEmpty() ? nullptr : std::make_unique<Tempest::Texture2d>(std::move(texture));
+    }
+
+  void materials(Digest& d, const PackedMesh& p) {
     d.value(uint64_t(p.subMeshes.size()));
     for(const auto& s:p.subMeshes) {
+      if(archiveTextures) archiveTexture(s.material.texture);
       const Material m(s.material,s.alphaTest,s.alphaTestRequired);
       d.value(m.alpha); d.value(m.sourceMaterialGroup); d.value(m.sourceAlphaFunc);
       d.value(m.sourceColorAlpha); d.value(m.alphaTestEnabled); d.value(m.alphaTestRequired);
@@ -182,11 +222,17 @@ struct AssetDigest {
   void run(const fs::path& base, Tempest::Device& device) {
     // Each path gets fresh texture caches, so Material sees its actual decoded format.
     for(const bool useBase:{false,true}) {
-      setenv("OPENGOTHIC_BASE",useBase ? base.c_str() : "",1);
+      setenv("OPENGOTHIC_BASE",base.c_str(),1);
+      archiveTextures=!useBase;
       Resources resources(device);
       Shaders shaders;
       shaders.waitCompiler();
       Resources::loadVdfs({},true);
+      if(archiveTextures) {
+        // Material's animation frames use uppercase names; seed their GPU textures
+        // from ZenKit in the test, without an archive loader in Resources.
+        for(const auto& [key,file]:resources.baseTextures.files) archiveTexture(key+".TGA");
+        }
       const std::string path=useBase ? "base" : "archive";
       for(const auto* name:{"NEWWORLD","OLDWORLD","ADDONWORLD","DRAGONISLAND"}) {
         const auto key=std::string(name)+".ZEN";

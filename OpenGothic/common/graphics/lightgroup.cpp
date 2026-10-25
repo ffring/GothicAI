@@ -3,8 +3,6 @@
 #include <Tempest/Dir>
 #include <Tempest/Log>
 
-#include <zenkit/Archive.hh>
-
 #include "graphics/shaders.h"
 #include "graphics/sceneglobals.h"
 #include "utils/string_frm.h"
@@ -122,23 +120,7 @@ LightGroup::LightGroup(const SceneGlobals& scene) {
       presets = std::move(base.light_presets);
       return;
       }
-    std::unique_ptr<zenkit::Read> read;
-    auto zen = Resources::openReader("LIGHTPRESETS.ZEN", read);
-
-    zenkit::ArchiveObject obj {};
-    auto count = zen->read_int();
-    for(int i = 0; i < count; ++i) {
-      zen->read_object_begin(obj);
-
-      zenkit::LightPreset preset {};
-      preset.load(*zen, Gothic::inst().version().game == 1 ? zenkit::GameVersion::GOTHIC_1
-                                                           : zenkit::GameVersion::GOTHIC_2);
-      presets.emplace_back(std::move(preset));
-
-      if(!zen->read_object_end()) {
-        zen->skip_object(true);
-        }
-      }
+    Log::e("unable to load base light presets");
     }
   catch(...) {
     Log::e("unable to load Zen-file: \"LIGHTPRESETS.ZEN\"");

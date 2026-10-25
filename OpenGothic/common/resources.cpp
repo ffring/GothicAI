@@ -14,15 +14,11 @@
 #include <Tempest/Log>
 #include <Tempest/Color>
 
-#include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/ModelHierarchy.hh>
 #include <zenkit/Model.hh>
 #include <zenkit/ModelScript.hh>
 #include "asset/material.h"
-#include <zenkit/Texture.hh>
 #include <zenkit/vobs/Camera.hh>
-#include <zenkit/addon/texcvt.hh>
-#include <zenkit/Texture.hh>
 #include <miniz.h>
 
 #include <cctype>
@@ -84,18 +80,16 @@ std::filesystem::path worldContentDir(const std::filesystem::path& root, std::st
 Resources::Resources() {
   inst=this;
   initCensus();
-  indexBaseContent();
   indexMeshOverrides();
   // Sound buffers remain CPU data: native sound selection consumes RNG and
   // dialogue uses their durations even when playback is disabled.
   fBuff.reserve(8*1024*1024);
   }
 
-Resources::Resources(Tempest::Device &device)
-  : dev(&device), sound(std::make_unique<Tempest::SoundDevice>()) {
+Resources::Resources(Tempest::Device &device, BaseImport::Progress progress)
+  : baseProgress(std::move(progress)), dev(&device), sound(std::make_unique<Tempest::SoundDevice>()) {
   inst=this;
   initCensus();
-  indexBaseContent();
 
   static const uint16_t index[] = {
       0, 1, 2, 0, 2, 3,
@@ -119,7 +113,6 @@ Resources::Resources(Tempest::Device &device)
   dxMusic->addPath(Gothic::nestedPath({u"_work",u"Data",u"Music"},Dir::FT_Dir));
 
   fBuff .reserve(8*1024*1024);
-  ddsBuf.reserve(8*1024*1024);
   indexHdTextures();
   indexMaterialMaps();
   indexMeshOverrides();
@@ -188,7 +181,6 @@ void Resources::zenkitLog(zenkit::LogLevel lvl, const char* cat, const char* mes
 void Resources::mountWork(const std::filesystem::path& path) {
   inst->gothicAssets.mkdir("/_work");
   inst->gothicAssets.mount_host(path, "/_work", zenkit::VfsOverwriteBehavior::NONE);
-  inst->baseZen.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
   }
 
 void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFilter) {
@@ -241,25 +233,22 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
     }
 
   std::sort(mounted.begin(),mounted.end());
-  if(std::getenv("OPENGOTHIC_BASE")==nullptr) {
-    try {
-      inst->automaticBase=BaseStore::resolve(std::filesystem::path(CommandLine::inst().rootPath()),mounted,
-                                           [](std::string_view message) { Log::i(message); });
-      inst->indexBaseContent();
-      }
-    catch(const std::exception& e) { Log::e("base: automatic import unavailable: ",e.what(),"; using archives"); }
+  try {
+    inst->automaticBase=BaseStore::resolve(std::filesystem::path(CommandLine::inst().rootPath()),mounted,
+                                         [](std::string_view message) {
+      Log::i(message);
+      if(inst->baseProgress) inst->baseProgress(message);
+      });
+    inst->indexBaseContent();
+    inst->baseTextures.validate(mounted);
+    inst->baseMeshes.validate(mounted);
+    inst->baseZen.validate(mounted);
+    inst->baseZen.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
+    inst->baseProgress={};
     }
-  inst->baseTextures.validate(mounted);
-  inst->baseMeshes.validate(mounted);
-  inst->baseZen.validate(mounted);
+  catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
+
   inst->mountedArchives = std::move(mounted);
-
-  //for(auto& i:inst->gothicAssets.getKnownFiles())
-  //  Log::i(i);
-
-  // auto v = getFileData("DRAGONISLAND.ZEN");
-  // Tempest::WFile f("../../internal/DRAGONISLAND.ZEN");
-  // f.write(v.data(),v.size());
   }
 
 Resources::~Resources() {
@@ -296,29 +285,19 @@ void Resources::loadWorld(zenkit::World& world, asset::WorldMesh& worldMesh, std
            result.chunks," chunks, ",result.readMs," ms");
     return;
     }
-  Log::i("world base: ",name,": ",result.error,"; using ZEN");
-  const auto* entry = vdfsIndex().find(name);
-  if(!entry)
-    throw std::runtime_error("unable to open Zen-file: "+std::string(name));
-  auto reader = entry->open_read();
-  world.load(reader.get(),Gothic::inst().version().game==1 ? zenkit::GameVersion::GOTHIC_1
-                                                        : zenkit::GameVersion::GOTHIC_2);
-  rooms = asset::roomVolumesFromZenKit(world.world_mesh,world.world_bsp_tree);
-  worldMesh = asset::fromZenKit(world.world_mesh);
+  if(inst->census) inst->census->missing(name,result.error);
+  throw BaseStore::Error("world "+std::string(name)+": "+result.error);
   }
 
 bool Resources::loadBaseZen(std::string_view name, std::string_view kind, WorldData::ZenFile& out) {
   const auto& index = inst->baseZen;
-  if(!index.enabled)
-    return false;
   const auto separator = name.find_last_of("/\\");
   std::string key(separator==std::string_view::npos ? name : name.substr(separator+1));
   for(auto& c:key)
     c = char(std::toupper(static_cast<unsigned char>(c)));
   const auto found = index.files.find(key);
-  if(found==index.files.end())
-    return false;
   try {
+    if(found==index.files.end()) throw std::runtime_error("missing from base index");
     auto data = WorldData::readZen(index.dir/found->second);
     if(data.kind!=kind || data.source.world!=key)
       throw std::runtime_error("ZEN kind or source name differs from index");
@@ -332,7 +311,8 @@ bool Resources::loadBaseZen(std::string_view name, std::string_view kind, WorldD
     return true;
     }
   catch(const std::exception& error) {
-    Log::e("base: ",key,": ",error.what(),"; using ZEN");
+    Log::e("base: ",key,": ",error.what());
+    if(inst->census) inst->census->missing(key,error.what());
     return false;
     }
   }
@@ -639,11 +619,6 @@ void Resources::indexHdTextures() {
   }
 
 std::filesystem::path Resources::baseDir() {
-  if(const char* dir = std::getenv("OPENGOTHIC_BASE")) {
-    if(dir[0]=='\0')
-      return {};
-    return dir;
-    }
   return inst->automaticBase.path;
   }
 
@@ -660,13 +635,12 @@ void Resources::indexBaseContent() {
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {
-  if(root.empty())
-    return;
+  *this = {};
   const auto folder = root/kind;
   const char* entries = std::string_view(kind)=="zen" ? "files" : kind;
   std::ifstream file(folder/(std::string(kind)+".json"),std::ios::binary);
   if(!file)
-    return;
+    throw std::runtime_error("base index missing: "+(folder/(std::string(kind)+".json")).string());
   try {
     const std::string text{std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};
     rapidjson::Document table;
@@ -714,7 +688,7 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
     files.clear();
     archives.clear();
     looseFiles.clear();
-    Log::e("base: ",kind," disabled: ",error.what()," in \"",folder.string(),"\"");
+    throw std::runtime_error("base index "+folder.string()+": "+error.what());
     }
   }
 
@@ -725,7 +699,7 @@ void Resources::BaseIndex::validate(const std::vector<std::pair<std::string,uint
   if(enabled)
     Log::i("base: ",files.size()," entries from \"",dir.string(),"\"");
   else
-    Log::e("base: ",dir.filename().string()," disabled: mounted archives differ from index in \"",dir.string(),"\"");
+    throw std::runtime_error("mounted archives differ from base index: "+dir.string());
   }
 
 void Resources::BaseIndex::validateLoose(const std::filesystem::path& game) {
@@ -736,8 +710,7 @@ void Resources::BaseIndex::validateLoose(const std::filesystem::path& game) {
     const auto actual=std::filesystem::file_size(game/path,error);
     if(error || actual!=size) {
       enabled=false;
-      Log::e("base: zen disabled: loose file differs from index: ",path,"; using ZEN");
-      return;
+      throw std::runtime_error("loose file differs from base index: "+path);
       }
     }
   }
@@ -868,14 +841,9 @@ asset::StaticMesh Resources::loadVisualMesh(std::string_view name, bool* replace
         }
       }
     }
-  // Do not even look up the original archive entry until replacement has failed.
-  const auto* entry = Resources::vdfsIndex().find(original);
-  if(entry==nullptr)
-    return {};
-  zenkit::MultiResolutionMesh mesh;
-  auto reader = entry->open_read();
-  mesh.load(reader.get());
-  return asset::fromZenKit(mesh);
+  Log::e("base: unable to load mesh \"",original,"\"");
+  if(inst->census) inst->census->missing(original,"mesh unavailable");
+  return {};
   }
 
 void Resources::indexMaterialMaps() {
@@ -1031,14 +999,8 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
     if(const auto it = baseTextures.files.find(key); it!=baseTextures.files.end()) {
       try {
         const auto path = baseTextures.dir/it->second;
-        Texture2d texture;
-        if(FileExt::hasExt(it->second,"PNG")) {
-          auto decoded = decodeBaseTexture(path,forceMips);
-          texture = device().texture(decoded.pixmap,decoded.useMipmap);
-          } else {
-          auto reader = zenkit::Read::from(path);
-          texture = implLoadTextureUncached(name,*reader,forceMips);
-          }
+        auto decoded = decodeBaseTexture(path,forceMips);
+        auto texture = device().texture(decoded.pixmap,decoded.useMipmap);
         if(!texture.isEmpty()) {
           if(census)
             census->replaced(name,"base/textures/"+it->second);
@@ -1052,77 +1014,17 @@ Texture2d Resources::implLoadTextureUncached(std::string_view name, bool forceMi
       }
     }
 
-  if(FileExt::hasExt(name,"TGA")) {
-    auto nameAlt = std::string(name);
-    nameAlt.resize(nameAlt.size() + 2);
-    std::memcpy(&nameAlt[0]+nameAlt.size()-6, "-C.TEX", 6);
-
-    if(const auto* entry = Resources::vdfsIndex().find(nameAlt)) {
-      zenkit::Texture tex;
-
-      auto reader = entry->open_read();
-      tex.load(reader.get());
-
-      try {
-        auto decoded = decodeTexture(tex,forceMips);
-        return device().texture(decoded.pixmap,decoded.useMipmap);
-        }
-      catch(...) {
-        }
-      }
-    }
-
-  if(auto* entry = Resources::vdfsIndex().find(name)) {
-    auto reader = entry->open_read();
-    return implLoadTextureUncached(name, *reader, forceMips);
-    }
+  Log::e("base: unable to load texture \"",name,"\"");
+  if(census) census->missing(name,"texture unavailable");
   return Texture2d();
-  }
-
-Texture2d Resources::implLoadTextureUncached(std::string_view name, zenkit::Read& data, bool forceMips) {
-  if(isHeadless())
-    return Texture2d();
-  try {
-    auto decoded = decodeTexture(data,forceMips);
-    return device().texture(decoded.pixmap,decoded.useMipmap);
-    }
-  catch(...){
-    return Texture2d();
-    }
-  }
-
-Resources::TextureData Resources::decodeTexture(zenkit::Read& data, bool forceMips) {
-  data.seek(0,zenkit::Whence::END);
-  std::vector<uint8_t> raw(data.tell());
-  data.seek(0,zenkit::Whence::BEG);
-  if(data.read(raw.data(),raw.size())!=raw.size())
-    throw std::runtime_error("Unable to read complete texture");
-  Tempest::MemReader reader(raw.data(),raw.size());
-  TextureData decoded{Tempest::Pixmap(reader)};
-  // Preserve the archive path's mip policy, including textures with no mip chain.
-  decoded.useMipmap = forceMips || decoded.pixmap.mipCount()>1;
-  return decoded;
-  }
-
-Resources::TextureData Resources::decodeTexture(const zenkit::Texture& tex, bool forceMips) {
-  if(tex.format()==zenkit::TextureFormat::DXT1 || tex.format()==zenkit::TextureFormat::DXT2 ||
-     tex.format()==zenkit::TextureFormat::DXT3 || tex.format()==zenkit::TextureFormat::DXT4 ||
-     tex.format()==zenkit::TextureFormat::DXT5) {
-    auto dds = zenkit::to_dds(tex);
-    auto reader = zenkit::Read::from(dds);
-    return decodeTexture(*reader,forceMips);
-    }
-  const auto rgba = tex.as_rgba8(0);
-  TextureData decoded{Tempest::Pixmap(tex.width(),tex.height(),TextureFormat::RGBA8),true};
-  std::memcpy(decoded.pixmap.data(),rgba.data(),rgba.size());
-  return decoded;
   }
 
 Resources::TextureData Resources::decodeBaseTexture(const std::filesystem::path& path, bool forceMips) {
   if(FileExt::hasExt(path.string(),"PNG"))
     return {Tempest::Pixmap(path.string()),true}; // device.texture(pm) generates mips for non-DXT originals.
-  auto reader = zenkit::Read::from(path);
-  return decodeTexture(*reader,forceMips);
+  TextureData decoded{Tempest::Pixmap(path.string())};
+  decoded.useMipmap = forceMips || decoded.pixmap.mipCount()>1;
+  return decoded;
   }
 
 ProtoMesh* Resources::implLoadMesh(std::string_view name) {
@@ -1685,6 +1587,13 @@ const Texture2d *Resources::loadTexture(std::string_view name, int32_t iv, int32
   return loadMaterialAlbedo(textureVariantName(name,iv,ic));
   }
 
+bool Resources::hasTexture(std::string_view name) const {
+  if(!FileExt::hasExt(name,"TGA")) return false;
+  std::string key(name.substr(0,name.size()-4));
+  for(auto& c:key) c=char(std::toupper(static_cast<unsigned char>(c)));
+  return hdTextures.count(key)!=0 || baseTextures.files.count(key)!=0;
+  }
+
 std::vector<const Texture2d*> Resources::loadTextureAnim(std::string_view name) {
   std::vector<const Texture2d*> ret;
   if(name.find("_A0")==std::string::npos &&
@@ -1707,10 +1616,10 @@ std::vector<const Texture2d*> Resources::loadTextureAnim(std::string_view name) 
       if(at>sizeof(buf))
         return ret;
       }
-   auto t = loadTexture(buf);
+   auto t = inst->hasTexture(buf) ? loadTexture(buf) : nullptr;
     if(t==nullptr) {
       string_frm buf2(buf,".TGA");
-      t = loadTexture(buf2);
+      t = inst->hasTexture(buf2) ? loadTexture(buf2) : nullptr;
       if(t==nullptr)
         return ret;
       }
@@ -1909,15 +1818,7 @@ const Resources::VobTree* Resources::implLoadVobBundle(std::string_view filename
     WorldData::ZenFile base;
     if(loadBaseZen(cname,"world",base)) {
       bundle = std::move(base.vobs);
-      } else {
-      const auto* entry = Resources::vdfsIndex().find(cname);
-      if(entry == nullptr)
-        throw std::runtime_error("failed to open resource: " + cname);
-      zenkit::World wrld;
-      auto reader = entry->open_read();
-      wrld.load(reader.get(), Gothic::inst().version().game==1 ? zenkit::GameVersion::GOTHIC_1
-                                                            : zenkit::GameVersion::GOTHIC_2);
-      bundle = std::move(wrld.world_vobs);
+
       }
     }
   catch(...) {

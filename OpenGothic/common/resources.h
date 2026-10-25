@@ -33,7 +33,6 @@ class ContentCensus;
 namespace asset { struct WorldMesh; }
 
 namespace zenkit {
-class Texture;
 class World;
 }
 namespace WorldData { struct Room; struct ZenFile; }
@@ -48,7 +47,7 @@ class Resources final {
     // Simulation resources: archives, geometry, skeletons and animation data,
     // without constructing a graphics or audio device.
     Resources();
-    explicit Resources(Tempest::Device& device);
+    explicit Resources(Tempest::Device& device, BaseImport::Progress progress = {});
     ~Resources();
 
     static void zenkitLog(zenkit::LogLevel level, const char* component, const char* message);
@@ -142,7 +141,7 @@ class Resources final {
 
     static const AttachBinder*       bindMesh       (const ProtoMesh& anim, const Skeleton& s);
     static const ProtoMesh*          loadMesh       (std::string_view name);
-    // All static visual readers share the same indexed GLB/original MRM path.
+    // All static visual readers share the selected base and content overrides.
     static asset::StaticMesh loadVisualMesh(std::string_view name, bool* replaced = nullptr);
     struct MeshReplacementSource {
       std::filesystem::path file;
@@ -208,6 +207,7 @@ class Resources final {
 
   private:
     friend struct BaseContentContract;
+    friend struct WorldDataContract;
     friend struct AssetDigest;
     static Resources* inst;
     void initCensus();
@@ -226,6 +226,7 @@ class Resources final {
     BaseIndex baseTextures, baseMeshes, baseZen;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     BaseStore::Selection automaticBase;
+    BaseImport::Progress baseProgress;
     static std::filesystem::path baseDir();
     void indexBaseContent();
 
@@ -233,8 +234,6 @@ class Resources final {
       Tempest::Pixmap pixmap;
       bool useMipmap = false;
       };
-    static TextureData decodeTexture(zenkit::Read& data, bool forceMips);
-    static TextureData decodeTexture(const zenkit::Texture& texture, bool forceMips);
     static TextureData decodeBaseTexture(const std::filesystem::path& path, bool forceMips);
 
     struct Archive {
@@ -268,7 +267,7 @@ class Resources final {
     const Tempest::Texture2d* implLoadMaterialTexture(const std::string& path, bool normalMap);
     Tempest::Texture2d*   implLoadTexture(std::string_view cname, bool forceMips);
     Tempest::Texture2d    implLoadTextureUncached(std::string_view name, bool forceMips);
-    Tempest::Texture2d    implLoadTextureUncached(std::string_view name, zenkit::Read& data, bool forceMips);
+    bool                 hasTexture(std::string_view name) const;
     ProtoMesh*            implLoadMesh(std::string_view name);
     std::unique_ptr<ProtoMesh> implLoadMeshMain(std::string name);
     bool                  replaceModelMesh(asset::ModelMesh& mesh, std::unique_ptr<Skeleton>& skeleton,
@@ -320,7 +319,7 @@ class Resources final {
     std::unique_ptr<ContentCensus>     census;
     zenkit::Vfs                       gothicAssets;
 
-    std::vector<uint8_t>              fBuff, ddsBuf;
+    std::vector<uint8_t>              fBuff;
     Tempest::IndexBuffer<uint16_t>    cube;
 
     struct DeleteQueue {

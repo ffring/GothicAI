@@ -1,5 +1,7 @@
 #include "basestore.h"
 
+#include <Tempest/Log>
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -109,7 +111,11 @@ void prune(const fs::path& cache, const fs::path& current) {
 }
 
 BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mounted, const BaseImport::Progress& log) {
-  if(const auto* explicitBase=std::getenv("OPENGOTHIC_BASE")) return {explicitBase,{}};
+  if(const auto* explicitBase=std::getenv("OPENGOTHIC_BASE"); explicitBase && *explicitBase) {
+    if(!BaseImport::matches(explicitBase,BaseImport::identify(gothic,mounted)))
+      throw std::runtime_error(std::string("OPENGOTHIC_BASE does not match this installation or importer: ")+explicitBase);
+    return {explicitBase,{},{}};
+    }
   const auto start=std::chrono::steady_clock::now();
   const auto identity=BaseImport::identify(gothic,mounted);
   fs::path cache;
@@ -120,17 +126,6 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   Lock cacheLock(cache/".lock");
   removeInterrupted(cache);
   const auto destination=cache/identity.fingerprint;
-  const auto finish=[&](const char* source) {
-    Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared)};
-    try { prune(cache,destination); }
-    catch(const std::exception& e) { log(std::string("base cache cleanup: ")+e.what()); }
-    const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
-    log(std::string("base: ")+source+" "+destination.string()+" ("+std::to_string(ms)+" ms)");
-    return selected;
-    };
-  if(BaseImport::matches(destination,identity)) return finish("cache");
-  if(fs::exists(destination)) log("base: rejected cache directory: base.json mismatch");
-
   fs::path store;
   if(const auto* env=std::getenv("OPENGOTHIC_BASE_STORE")) store=env;
   else {
@@ -142,6 +137,35 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     std::error_code error;
     if(fs::is_directory(shared,error)) store=shared;
     }
+  const auto finish=[&](const char* source, bool upload=true) {
+    Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared),{}};
+    try { prune(cache,destination); }
+    catch(const std::exception& e) { log(std::string("base cache cleanup: ")+e.what()); }
+    const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
+    log(std::string("base: ")+source+" "+destination.string()+" ("+std::to_string(ms)+" ms)");
+    if(upload && !store.empty()) {
+      // The worker owns a lease too: pruning cannot remove its source while copying.
+      selected.publication=std::async(std::launch::async,[store,destination,identity,lease=selected.lease] {
+        const auto started=std::chrono::steady_clock::now();
+        try {
+          const auto root=store/"base";
+          fs::create_directories(root);
+          Lock lock(root/(identity.fingerprint+".lock"));
+          removeInterrupted(root,identity.fingerprint);
+          const auto stored=root/identity.fingerprint;
+          if(BaseImport::matches(stored,identity)) return;
+          copy(destination,stored,identity);
+          const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+          Tempest::Log::i("base: published to store ",stored.string()," (",ms," ms, background)");
+          }
+        catch(const std::exception& e) { Tempest::Log::e("base: store publication failed: ",e.what()); }
+        });
+      }
+    return selected;
+    };
+  if(BaseImport::matches(destination,identity)) return finish("cache");
+  if(fs::exists(destination)) log("base: rejected cache directory: base.json mismatch");
+
   std::unique_ptr<Lock> storeLock;
   fs::path stored;
   if(!store.empty()) {
@@ -160,7 +184,7 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     try {
       if(BaseImport::matches(stored,identity)) {
         copy(stored,destination,identity);
-        return finish("store");
+        return finish("store",false);
         }
       }
     catch(const std::exception& e) {
@@ -175,15 +199,7 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   Temporary temporary(destination);
   log("base: importing installation");
   BaseImport::build(gothic,temporary.path,log);
-  if(storeLock) {
-    try {
-      copy(temporary.path,stored,identity);
-      log("base: published to store "+stored.string());
-      }
-    catch(const std::exception& e) { log(std::string("base: store publication failed: ")+e.what()); }
-    }
-  // If publication is interrupted, the next launch must revisit the store lock
-  // and clean its partial copy instead of returning early from a cache hit.
+  storeLock.reset();
   publish(temporary.path,destination,identity);
   return finish("import");
   }

@@ -1,5 +1,5 @@
-# P6b: run with WORLD=NEWWORLD.ZEN, once with a base and once without it.
-# Reload session-world-data.sav with the opposite base setting and world-data-load.
+# P6b: run with WORLD=NEWWORLD.ZEN, with the automatic base.
+# Reload session-world-data.sav with world-data-load and the automatic base.
 seed 73013
 cheat god
 set time 12 0

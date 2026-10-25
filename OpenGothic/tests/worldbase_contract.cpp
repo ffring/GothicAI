@@ -277,18 +277,6 @@ void clothContract(const WorldCloth::Extracted& zen, const WorldCloth::Extracted
   std::printf("Cloth: %zu surfaces with identical id, names, pins and triangles\n",zen.surfaces.size());
   }
 
-std::string readText(const fs::path& path) {
-  std::ifstream in(path,std::ios::binary);
-  require(bool(in),"cannot read "+path.string());
-  return {std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>()};
-  }
-
-void writeText(const fs::path& path, const std::string& text) {
-  std::ofstream out(path,std::ios::binary|std::ios::trunc);
-  out << text;
-  require(bool(out),"cannot write "+path.string());
-  }
-
 asset::WorldMesh selectionMesh() {
   asset::WorldMesh mesh;
   mesh.materials.resize(1);
@@ -336,21 +324,6 @@ void selectionContract(const fs::path& root) {
   const auto original=selectionMesh();
   const auto dir=root/"selection";
   const auto manifest=writeWorldChunks(original,source,dir);
-  const auto text=readText(dir/"world.json");
-  for(const auto& field:{std::pair<std::string,uint64_t>{"size",source.size},
-                         std::pair<std::string,uint64_t>{"crc32",source.crc32}}) {
-    auto invalid=text;
-    const auto value='"'+field.first+"\": "+std::to_string(field.second);
-    const auto at=invalid.find(value);
-    require(at!=std::string::npos,"cannot find source "+field.first+" in manifest");
-    invalid.replace(at,value.size(),'"'+field.first+"\": "+std::to_string(field.second+1));
-    writeText(dir/"world.json",invalid);
-    auto mesh=original;
-    const auto result=tryWorldBase(mesh,"NEWWORLD.ZEN",bytes,dir);
-    require(!result.replaced && !result.error.empty(),"wrong "+field.first+" must reject base");
-    require(compareWorldMeshes(original,mesh).empty(),"wrong "+field.first+" must retain .ZEN mesh");
-    }
-  writeText(dir/"world.json",text);
   auto changed=original;
   changed.vertices[0].x+=1.f;
   const auto replacement=root/"replacement";
@@ -360,13 +333,11 @@ void selectionContract(const fs::path& root) {
   const auto chunk=fs::path(manifest.chunks.front());
   fs::create_directories((overrideDir/chunk).parent_path());
   fs::copy_file(replacement/chunk,overrideDir/chunk);
-  auto mesh=original;
-  const auto result=tryWorldBase(mesh,"NEWWORLD.ZEN",bytes,dir,overrideDir);
-  require(result.replaced && result.error.empty(),"override fixture must load: "+result.error);
+  const auto mesh=readWorldChunks(dir,overrideDir);
   const auto difference=compareWorldMeshes(canonicalWorldMesh(changed),mesh);
   require(difference.empty(),"override must replace base chunk: "+difference);
   require(!compareWorldMeshes(canonicalWorldMesh(original),mesh).empty(),"override fixture must change a vertex");
-  std::puts("Selection: wrong CRC32 and size retain .ZEN; matching override chunk replaces base");
+  std::puts("Selection: matching override chunk replaces base");
   }
 }
 
@@ -382,7 +353,9 @@ int main() {
     const auto* entry=Resources::vdfsIndex().find("NEWWORLD.ZEN");
     require(entry!=nullptr,"NEWWORLD.ZEN is missing from the engine VFS");
     auto input=entry->open_read();
-    const auto bytes=readWorldBytes(*input);
+    input->seek(0,zenkit::Whence::END);
+    std::vector<std::byte> bytes(input->tell()); input->seek(0,zenkit::Whence::BEG);
+    require(input->read(bytes.data(),bytes.size())==bytes.size(),"incomplete archive world");
     auto buffer=zenkit::Read::from(&bytes);
     zenkit::World world;
     world.load(buffer.get(),zenkit::GameVersion::GOTHIC_2);
@@ -399,11 +372,9 @@ int main() {
     require(difference.empty(),"canonical round trip: "+difference);
     std::printf("NEWWORLD.ZEN: %zu bytes, CRC32 %08x, %zu triangles, %zu chunks; canonical round trip equal\n",
                 bytes.size(),source.crc32,zen.polygons.material_indices.size(),manifest.chunks.size());
-    // The actual engine retains the source name, bounds and BSP geometry.
-    base=zen;
-    const auto result=tryWorldBase(base,"NEWWORLD.ZEN",bytes,dir);
-    require(result.replaced && result.error.empty(),"matching base must replace world mesh: "+result.error);
-    require(result.triangles==manifest.triangles && result.chunks==manifest.chunks.size(),"base load statistics differ");
+    zenkit::World loaded;
+    std::vector<WorldData::Room> rooms;
+    Resources::loadWorld(loaded,base,rooms,"NEWWORLD.ZEN");
     require(base.name==zen.name && base.bbox.min==zen.bbox.min && base.bbox.max==zen.bbox.max,"base load must preserve source name and bounds");
     require(world.world_mesh.geometry.size()==rawPolygons && world.world_mesh.polygon_vertex_indices==rawVertices &&
             world.world_mesh.polygon_feature_indices==rawFeatures,"mesh conversion must preserve raw BSP geometry");

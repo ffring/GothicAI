@@ -10,6 +10,8 @@
 #include <zenkit/Stream.hh>
 #include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/Texture.hh>
+#include <zenkit/addon/texcvt.hh>
+#include <Tempest/MemReader>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
@@ -149,6 +151,32 @@ struct BaseContentContract {
       }
     }
 
+  static Resources::TextureData decodeArchive(zenkit::Read& input, bool compiled, bool forceMips) {
+    if(compiled) {
+      zenkit::Texture tex;
+      tex.load(&input);
+      if(tex.format()>=zenkit::TextureFormat::DXT1 && tex.format()<=zenkit::TextureFormat::DXT5) {
+        const auto dds=zenkit::to_dds(tex);
+        Tempest::MemReader reader(reinterpret_cast<const uint8_t*>(dds.data()),dds.size());
+        Resources::TextureData out{Tempest::Pixmap(reader)};
+        out.useMipmap=forceMips || out.pixmap.mipCount()>1;
+        return out;
+        }
+      const auto rgba=tex.as_rgba8(0);
+      Resources::TextureData out{Tempest::Pixmap(tex.width(),tex.height(),Tempest::TextureFormat::RGBA8),true};
+      std::memcpy(out.pixmap.data(),rgba.data(),rgba.size());
+      return out;
+      }
+    input.seek(0,zenkit::Whence::END);
+    std::vector<uint8_t> bytes(input.tell());
+    input.seek(0,zenkit::Whence::BEG);
+    require(input.read(bytes.data(),bytes.size())==bytes.size(),"incomplete archive texture");
+    Tempest::MemReader reader(bytes.data(),bytes.size());
+    Resources::TextureData out{Tempest::Pixmap(reader)};
+    out.useMipmap=forceMips || out.pixmap.mipCount()>1;
+    return out;
+    }
+
   static void run(const fs::path& base, const fs::path& temporary) {
     setenv("OPENGOTHIC_CONTENT","",1);
     setenv("OPENGOTHIC_TEXTURES","",1);
@@ -170,14 +198,7 @@ struct BaseContentContract {
       require(entry!=nullptr,key+": source texture missing");
       for(const bool forceMips:{false,true}) {
         auto input=entry->open_read();
-        Resources::TextureData original;
-        if(compiled) {
-          zenkit::Texture tex;
-          tex.load(input.get());
-          original=Resources::decodeTexture(tex,forceMips);
-          } else {
-          original=Resources::decodeTexture(*input,forceMips);
-          }
+        const auto original=decodeArchive(*input,compiled,forceMips);
         const auto converted=Resources::decodeBaseTexture(base/"textures"/file,forceMips);
         texture(original,converted,key+" forceMips="+std::to_string(forceMips));
         }
@@ -225,17 +246,23 @@ struct BaseContentContract {
                   static_cast<unsigned long long>(old),static_cast<unsigned long long>(old+1));
       }
     setenv("OPENGOTHIC_BASE",invalid.c_str(),1);
+    bool rejected=false;
+    try {
+      Resources resources;
+      Resources::loadVdfs({},true);
+      }
+    catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
+    require(rejected,"invalid explicit base must fail with recovery instructions");
+    setenv("OPENGOTHIC_BASE",base.c_str(),1);
     {
     Resources resources;
     Resources::loadVdfs({},true);
-    require(!resources.baseTextures.enabled && !resources.baseMeshes.enabled,"wrong archive sizes must disable both bases");
-    auto input=Resources::getFileBuffer(meshKey+".MRM");
-    zenkit::MultiResolutionMesh archiveMesh;
-    archiveMesh.load(input.get());
-    const auto original=asset::fromZenKit(archiveMesh);
-    require(compareBaseMeshes(original,Resources::loadVisualMesh(meshKey+".MRM")).empty(),"disabled base must fall back to archive");
+    require(Resources::loadVisualMesh("BASE_CONTRACT_MISSING.MRM").positions.empty(),"missing mesh must stay empty");
+    require(Resources::loadVobBundle("BASE_CONTRACT_MISSING.ZEN")->empty(),"missing bundle must stay empty");
     }
-    equal(json(censusPath)["replacements"].Size(),0u,"disabled base census replacements");
+    const auto missing=json(censusPath);
+    equal(missing["files"].Size(),0u,"missing resources must not open archives");
+    equal(missing["base_misses"].Size(),2u,"missing resources must enter the census");
 
     const auto content=temporary/"content";
     fs::create_directories(content/"meshes");
@@ -258,7 +285,7 @@ struct BaseContentContract {
     equal(selected["files"].Size(),0u,"own replacement archive opens");
     equal(selected["replacements"].Size(),1u,"own replacement count");
     require(std::string(selected["replacements"][0]["kind"].GetString())=="mesh","own replacement census kind");
-    std::puts("Selection: archive mismatch falls back; own content wins over enabled base; census kinds stay separate");
+    std::puts("Selection: invalid base rejected; missing resources recorded; own content wins; census kinds stay separate");
     }
   };
 
