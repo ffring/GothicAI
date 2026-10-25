@@ -14,8 +14,8 @@ namespace PortalRooms {
 // ordinary landscape polygons such as a ship's yard are not room ceilings.
 class Volumes final {
   public:
-    void reset(zenkit::BspTreeType mode,std::vector<WorldData::Room> volumes) {
-      indoorWorld=mode==zenkit::BspTreeType::INDOOR;
+    void reset(asset::BspTreeType mode,std::vector<WorldData::Room> volumes) {
+      indoorWorld=mode==asset::BspTreeType::INDOOR;
       rooms=std::move(volumes);
       }
 

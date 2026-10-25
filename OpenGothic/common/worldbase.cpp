@@ -9,7 +9,7 @@
 #include <cctype>
 #include <stdexcept>
 
-WorldBaseResult tryWorldData(zenkit::World& world, asset::WorldMesh& worldMesh, std::vector<WorldData::Room>& rooms,
+WorldBaseResult tryWorldData(WorldData::Data& world, asset::WorldMesh& worldMesh,
                             std::string_view name, const std::filesystem::path& dir,
                             const std::filesystem::path& overrideDir,
                             const std::vector<std::pair<std::string,uintmax_t>>& mounted) {
@@ -57,15 +57,12 @@ WorldBaseResult tryWorldData(zenkit::World& world, asset::WorldMesh& worldMesh, 
     if(!data.waynet)
       throw std::runtime_error("world waynet missing");
     auto mesh = readWorldChunks(dir,overrideDir);
-    mesh.name = std::move(data.name);
+    mesh.name = data.name;
     mesh.bbox = data.bbox;
     result.triangles = mesh.polygons.material_indices.size();
     result.chunks = manifest.chunks.size();
     worldMesh = std::move(mesh);
-    world.world_vobs = std::move(data.vobs);
-    world.way_net = std::move(data.waynet);
-    world.world_bsp_tree = std::move(data.bsp);
-    rooms = std::move(data.rooms);
+    world = std::move(data);
     result.replaced = true;
     }
   catch(const std::exception& error) {

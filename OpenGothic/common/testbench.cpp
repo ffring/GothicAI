@@ -3396,10 +3396,10 @@ void prepareMovableFixture(World& world,Npc& player) {
   const auto add=[&](const std::string& visual,const Vec3& support) {
     const auto* mesh=Resources::loadMesh(visual);if(!mesh)return uintptr_t(0);
     const auto* bounds=mesh->bbox();
-    zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+    asset::VirtualObject data;data.type=asset::VirtualObjectType::zCVob;data.id=uint32_t(-1);
     data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
     data.position={support.x-(bounds[0].x+bounds[1].x)*.5f,support.y-bounds[0].y+.2f,support.z-(bounds[0].z+bounds[1].z)*.5f};
-    data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+    data.visual=std::make_shared<asset::VisualMesh>();data.visual->type=asset::VisualType::MESH;data.visual->name=visual;
     const auto before=world.physic()->movableVobSnapshot();
     auto fixture=std::make_unique<Bench::MovableFixture>();
     fixture->visual.setVisual(data,world,false,false);
@@ -4027,10 +4027,10 @@ uintptr_t destructionAdd(World& world,std::string_view name,const Vec3& support)
   const auto* mesh=Resources::loadMesh(visual);const auto* rule=MovableVobs::classifyVisual(visual);
   if(!mesh || !rule)return 0;
   const auto* bounds=mesh->bbox();
-  zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+  asset::VirtualObject data;data.type=asset::VirtualObjectType::zCVob;data.id=uint32_t(-1);
   data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
   data.position={support.x-(bounds[0].x+bounds[1].x)*.5f,support.y-bounds[0].y+.2f,support.z-(bounds[0].z+bounds[1].z)*.5f};
-  data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+  data.visual=std::make_shared<asset::VisualMesh>();data.visual->type=asset::VisualType::MESH;data.visual->name=visual;
   const auto before=world.physic()->movableVobSnapshot();
   auto fixture=std::make_unique<Bench::MovableFixture>();
   fixture->visual.setVisual(data,world,false,false);
@@ -8098,10 +8098,10 @@ void prepareCharacterProp(World& world,Npc& player,const std::string& role) {
     const auto* mesh=Resources::loadMesh(visual);const auto* rule=MovableVobs::classifyVisual(visual);
     if(!mesh || !rule) {arenaAbort("character stock prop mesh/class unavailable: "+role);return;}
     const auto* bounds=mesh->bbox();
-    zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+    asset::VirtualObject data;data.type=asset::VirtualObjectType::zCVob;data.id=uint32_t(-1);
     data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
     data.position={center.x-(bounds[0].x+bounds[1].x)*.5f,center.y-bounds[0].y+.2f,center.z-(bounds[0].z+bounds[1].z)*.5f};
-    data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+    data.visual=std::make_shared<asset::VisualMesh>();data.visual->type=asset::VisualType::MESH;data.visual->name=visual;
     auto fixture=std::make_unique<Bench::MovableFixture>();fixture->visual.setVisual(data,world,false,false);
     auto matrix=Matrix4x4::mkIdentity();matrix.translate(data.position.x,data.position.y,data.position.z);fixture->visual.setObjMatrix(matrix);
     const auto before=world.physic()->movableVobSnapshot();
@@ -8835,9 +8835,9 @@ bool monsterCharacterProp(World& world,std::string_view role,const Vec3& at) {
   Vec3 floor;if(!characterFloor(world,at,floor)) {monsterCharacterError("monster prop has no stock support");return false;}
   const auto* bounds=mesh->bbox();auto matrix=Matrix4x4::mkIdentity();
   matrix.translate(floor.x-(bounds[0].x+bounds[1].x)*.5f,floor.y-bounds[0].y+.2f,floor.z-(bounds[0].z+bounds[1].z)*.5f);
-  zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+  asset::VirtualObject data;data.type=asset::VirtualObjectType::zCVob;data.id=uint32_t(-1);
   data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
-  data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+  data.visual=std::make_shared<asset::VisualMesh>();data.visual->type=asset::VisualType::MESH;data.visual->name=visual;
   const auto before=world.physic()->movableVobSnapshot();
   auto fixture=std::make_unique<Bench::MovableFixture>();fixture->visual.setVisual(data,world,false,false);fixture->visual.setObjMatrix(matrix);
   fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,rule->massMultiplier,rule->blocksWalking,rule->className,true);
@@ -9360,9 +9360,9 @@ void monsterCharacterPrepare(World& world,Npc& player,const std::string& name) {
     const auto center=route.start+(route.goal-route.start)*.35f;const auto* bounds=mesh->bbox();
     auto matrix=Matrix4x4::mkIdentity();matrix.translate(center.x-(bounds[0].x+bounds[1].x)*.5f,
       center.y-bounds[0].y+.2f,center.z-(bounds[0].z+bounds[1].z)*.5f);
-    zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+    asset::VirtualObject data;data.type=asset::VirtualObjectType::zCVob;data.id=uint32_t(-1);
     data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
-    data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+    data.visual=std::make_shared<asset::VisualMesh>();data.visual->type=asset::VisualType::MESH;data.visual->name=visual;
     const auto before=world.physic()->movableVobSnapshot();
     auto fixture=std::make_unique<Bench::MovableFixture>();fixture->visual.setVisual(data,world,false,false);fixture->visual.setObjMatrix(matrix);
     fixture->body=world.physic()->addMovableVob(*mesh,visual,matrix,rule->massMultiplier,rule->blocksWalking,rule->className,true);
@@ -10077,9 +10077,9 @@ bool prepareCharacterRideSupport(World& world,Npc& player,bool kinematic,bool ro
     else top.z+=std::min(40.f,(bounds[1].z-bounds[0].z)*.2f);
     }
   matrix.project(top);
-  zenkit::VirtualObject data;data.type=zenkit::VirtualObjectType::zCVob;data.id=uint32_t(-1);
+  asset::VirtualObject data;data.type=asset::VirtualObjectType::zCVob;data.id=uint32_t(-1);
   data.show_visual=true;data.cd_dynamic=true;data.cd_static=true;
-  data.visual=std::make_shared<zenkit::VisualMesh>();data.visual->type=zenkit::VisualType::MESH;data.visual->name=visual;
+  data.visual=std::make_shared<asset::VisualMesh>();data.visual->type=asset::VisualType::MESH;data.visual->name=visual;
   if(kinematic) {
     bench.characterPlatformVisual=std::make_unique<ObjVisual>();bench.characterPlatformVisual->setVisual(data,world,false,false);
     bench.characterPlatform=std::make_unique<PhysicMesh>(*mesh,*world.physic(),true);

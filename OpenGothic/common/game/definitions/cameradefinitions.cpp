@@ -1,7 +1,7 @@
 #include "cameradefinitions.h"
 
 #include <Tempest/Log>
-#include <zenkit/vobs/Camera.hh>
+#include "asset/worldtypes.h"
 
 #include "gothic.h"
 #include "worlddata.h"
@@ -36,12 +36,12 @@ CameraDefinitions::CameraDefinitions() {
   camModFall      = getCam("CAMMODFALL");
 
   // dialog presets: unused yet
-  std::vector<zenkit::VCutsceneCamera> cameras;
+  std::vector<asset::VCutsceneCamera> cameras;
   try {
     WorldData::ZenFile base;
     if(Resources::loadBaseZen("DialogCams.ZEN","cameras",base)) {
       for(const auto& camera:base.vobs)
-        cameras.push_back(*std::dynamic_pointer_cast<zenkit::VCutsceneCamera>(camera));
+        cameras.push_back(*std::dynamic_pointer_cast<asset::VCutsceneCamera>(camera));
       return;
       }
     Log::e("unable to load base dialog cameras");

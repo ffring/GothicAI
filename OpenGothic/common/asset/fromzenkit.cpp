@@ -1,6 +1,7 @@
 #include "fromzenkit.h"
 
 #include <zenkit/Mesh.hh>
+#include <zenkit/world/BspTree.hh>
 #include <zenkit/ModelMesh.hh>
 #include <algorithm>
 #include <set>

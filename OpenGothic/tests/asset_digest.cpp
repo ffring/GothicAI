@@ -1,4 +1,5 @@
 #include "asset/fromzenkit.h"
+#include <zenkit/World.hh>
 #include "basemesh.h"
 #include "commandline.h"
 #include "gothicglb.h"
@@ -15,7 +16,6 @@
 #include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
 #include <zenkit/MultiResolutionMesh.hh>
-#include <zenkit/World.hh>
 #include <zenkit/Texture.hh>
 #include <zenkit/addon/texcvt.hh>
 #include <Tempest/MemReader>
@@ -237,10 +237,9 @@ struct AssetDigest {
       for(const auto* name:{"NEWWORLD","OLDWORLD","ADDONWORLD","DRAGONISLAND"}) {
         const auto key=std::string(name)+".ZEN";
         if(useBase) {
-          zenkit::World loaded;
+          WorldData::Data loaded;
           asset::WorldMesh mesh;
-          std::vector<WorldData::Room> rooms;
-          const auto result=tryWorldData(loaded,mesh,rooms,key,base/"worlds"/name,{},resources.mountedArchives);
+          const auto result=tryWorldData(loaded,mesh,key,base/"worlds"/name,{},resources.mountedArchives);
           if(!result.replaced) throw std::runtime_error(key+": "+result.error);
           world(std::move(mesh),key,path);
           } else {

@@ -82,7 +82,7 @@ endif()
 
 # sources
 file(GLOB_RECURSE OPENGOTHIC_SOURCES "common/*.h" "common/*.cpp")
-foreach(source sha256 baseimport worldchunks worlddata basemesh gothicglb gltfmesh asset/fromzenkit)
+foreach(source sha256 baseimport worldchunks worlddata basemesh gothicglb gltfmesh asset/fromzenkit asset/worldfromzenkit)
   list(REMOVE_ITEM OPENGOTHIC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/common/${source}.cpp")
 endforeach()
 if(NOT OPENGOTHIC_ENABLE_FRAME_PROFILE)

@@ -73,7 +73,7 @@ Material::Material(const asset::Material& m, bool enableAlphaTest, bool requireA
     }
   }
 
-Material::Material(const zenkit::VisualDecal& decal)
+Material::Material(const asset::VisualDecal& decal)
   :alphaTestEnabled(true), sourceAlphaFunc(static_cast<asset::AlphaFunction>(decal.alpha_func)), sourceColorAlpha(decal.alpha_weight) {
   tex = Resources::loadTexture(decal.name);
   if(tex==nullptr && !decal.name.empty())

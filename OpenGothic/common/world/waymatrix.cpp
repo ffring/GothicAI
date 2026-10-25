@@ -10,7 +10,7 @@
 
 using namespace Tempest;
 
-WayMatrix::WayMatrix(World &world, const zenkit::WayNet& dat)
+WayMatrix::WayMatrix(World &world, const asset::WayNet& dat)
   :world(world) {
 
   wayPoints.resize(dat.points.size());

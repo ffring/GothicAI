@@ -3,7 +3,7 @@
 #include <Tempest/Painter>
 #include <Tempest/Matrix4x4>
 
-#include <zenkit/world/WayNet.hh>
+#include "asset/worldtypes.h"
 
 #include <vector>
 #include <functional>
@@ -16,7 +16,7 @@ class DbgPainter;
 
 class WayMatrix final {
   public:
-    WayMatrix(World& owner, const zenkit::WayNet& dat);
+    WayMatrix(World& owner, const asset::WayNet& dat);
 
     const WayPoint* findWayPoint (const Tempest::Vec3& at, const std::function<bool(const WayPoint&)>& filter) const;
     const WayPoint* findFreePoint(const Tempest::Vec3& at, std::string_view name, const std::function<bool(const WayPoint&)>& filter) const;

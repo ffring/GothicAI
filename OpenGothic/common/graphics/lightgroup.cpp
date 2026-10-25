@@ -127,7 +127,7 @@ LightGroup::LightGroup(const SceneGlobals& scene) {
     }
   }
 
-LightGroup::Light LightGroup::add(const zenkit::LightPreset& vob) {
+LightGroup::Light LightGroup::add(const asset::LightPreset& vob) {
   LightSource l;
   l.setPosition(Vec3(0, 0, 0));
   l.setDebugName(vob.preset);
@@ -160,8 +160,8 @@ LightGroup::Light LightGroup::add(const zenkit::LightPreset& vob) {
   return lx;
   }
 
-LightGroup::Light LightGroup::add(const zenkit::VLight& vob) {
-  auto l = add(static_cast<const zenkit::LightPreset&>(vob));
+LightGroup::Light LightGroup::add(const asset::VLight& vob) {
+  auto l = add(static_cast<const asset::LightPreset&>(vob));
   l.setPosition(Vec3(vob.position.x,vob.position.y,vob.position.z));
   return l;
   }
@@ -289,14 +289,14 @@ void LightGroup::resetDurty() {
   std::memset(duryBit.data(), 0, duryBit.size()*sizeof(duryBit[0]));
   }
 
-const zenkit::LightPreset& LightGroup::findPreset(std::string_view preset) const {
+const asset::LightPreset& LightGroup::findPreset(std::string_view preset) const {
   for(auto& i:presets) {
     if(i.preset!=preset)
       continue;
     return i;
     }
   Log::e("unknown light preset: \"",preset,"\"");
-  static zenkit::LightPreset zero {};
+  static asset::LightPreset zero {};
   return zero;
   }
 
