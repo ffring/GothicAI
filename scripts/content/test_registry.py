@@ -335,3 +335,33 @@ def test_concept_requires_top_level_raw_source_and_utc(tmp_path):
     del entry['utc']
     with pytest.raises(registry.RegistryError, match='UTC timestamp'):
         registry.validate_entry(entry)
+
+
+def world_chunk_entry(digest):
+    return {
+        "id": "harbour-stairs-newworld-1-1", "kind": "worldchunk", "replaces": ["NEWWORLD/1_-1"],
+        "pipeline": "blender-world-edit", "models": [], "prompt": "", "negative": "", "seed": None,
+        "parameters": {"steps": 12}, "status": "draft",
+        "tool": {"script": "scripts/content/world/harbour_stairs.py", "commit": "a" * 40},
+        "inputs": [{"input": "converted world mesh NEWWORLD/1_-1", "sha256": "b" * 64}],
+        "files": {"glb": {"path": "stairs-3/worlds/NEWWORLD/chunks/1_-1.glb", "sha256": digest}},
+    }
+
+
+def test_world_chunk_edit(tmp_path):
+    import hashlib
+    glb = tmp_path / "stairs-3/worlds/NEWWORLD/chunks/1_-1.glb"
+    glb.parent.mkdir(parents=True)
+    glb.write_bytes(b"glb")
+    entry = world_chunk_entry(hashlib.sha256(b"glb").hexdigest())
+    registry.validate_entry(entry, content_root=tmp_path)
+    with pytest.raises(registry.RegistryError, match="sha256 mismatch"):
+        registry.validate_entry(world_chunk_entry("c" * 64), content_root=tmp_path)
+    bad = world_chunk_entry("c" * 64)
+    bad["inputs"][0]["input"] = "original mesh NEWWORLD/1_-1"
+    with pytest.raises(registry.RegistryError, match="worldchunk.inputs"):
+        registry.validate_entry(bad)
+    bad = world_chunk_entry("c" * 64)
+    bad["replaces"] = ["NEWWORLD.ZEN"]
+    with pytest.raises(registry.RegistryError, match="worldchunk.replaces"):
+        registry.validate_entry(bad)
