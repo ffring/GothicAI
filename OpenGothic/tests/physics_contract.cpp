@@ -1,3 +1,4 @@
+#include "asset/fromzenkit.h"
 #include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicvbo.h"
@@ -25,6 +26,8 @@
 #include <Jolt/Physics/Collision/CastSphereVsTriangles.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <zenkit/ModelHierarchy.hh>
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -932,7 +935,7 @@ namespace {
     }
 
   void testRagdollNoise() {
-    zenkit::ModelHierarchy hierarchy;
+    zenkit::ModelHierarchy hierarchy{};
     const char* names[]={"BIP01","BIP01 PELVIS","BIP01 SPINE","BIP01 HEAD"};
     const float offsets[]={0,95,40,40};
     for(int i=0;i<4;++i) {
@@ -943,7 +946,7 @@ namespace {
       std::memcpy(&node.transform,&matrix,sizeof(matrix));
       hierarchy.nodes.push_back(node);
       }
-    Skeleton skeleton(hierarchy,nullptr,"NOISE_HUMAN.MDS");
+    Skeleton skeleton(asset::fromZenKit(hierarchy),nullptr,"NOISE_HUMAN.MDS");
     HitZones zones;
     zones.setSkeleton(&skeleton);
     require(zones.isValid(),"noise ragdoll fixture must contain canonical capsules");
@@ -1462,11 +1465,11 @@ namespace {
           require(arrow->position().x>to.x,"a live arrow must cross the entire former obstacle without stopping");
         world.deleteObj(arrow);
 
-        zenkit::ModelHierarchy hierarchy;
+        zenkit::ModelHierarchy hierarchy{};
         // Legacy walking tests the upper capsule, with its feet above the
         // logical root. Keep that capsule overlapping the 100 cm fixture.
         hierarchy.collision_bbox={{-25,0,-25},{25,140,25}};
-        Skeleton shape(hierarchy,nullptr,"DESTRUCTION_PASSAGE_WALKER");
+        Skeleton shape(asset::fromZenKit(hierarchy),nullptr,"DESTRUCTION_PASSAGE_WALKER");
         auto walker=world.addGhostObj(&shape);
         walker.setPosition({0,0,0});
         DynamicWorld::CollisionTest collision;
@@ -1537,9 +1540,9 @@ namespace {
       DynamicWorld world(nullptr,movableFloor());
       auto object=make(world,at(100,50,0));
       auto walker=world.movableVobSnapshot()[0];
-      zenkit::ModelHierarchy hierarchy;
+      zenkit::ModelHierarchy hierarchy{};
       hierarchy.collision_bbox={{-25,0,-25},{25,180,25}};
-      Skeleton shape(hierarchy,nullptr,"DESTRUCTION_WALKER");
+      Skeleton shape(asset::fromZenKit(hierarchy),nullptr,"DESTRUCTION_WALKER");
       auto hero=world.addGhostObj(&shape);
       hero.setPosition({0,0,0});
       for(int i=0;i<180;++i) {
@@ -1746,9 +1749,9 @@ namespace {
     // query proxies directly. No game assets or graphics device are required.
     Resources resources;
     ProtoMesh proto(PackedMesh(movableCube(),PackedMesh::PK_Visual),"CONTRACT_CUBE.MRM");
-    zenkit::ModelHierarchy hierarchy;
+    zenkit::ModelHierarchy hierarchy{};
     hierarchy.collision_bbox = {{-5,-10,-5},{5,10,5}};
-    Skeleton walkerShape(hierarchy,nullptr,"CONTRACT_WALKER");
+    Skeleton walkerShape(asset::fromZenKit(hierarchy),nullptr,"CONTRACT_WALKER");
     for(const bool blocksWalking:{false,true}) {
       for(const bool legacyCollision:{false,true}) {
         DynamicWorld world(nullptr,asset::WorldMesh{});
@@ -2443,9 +2446,9 @@ namespace {
   void testCharacterVirtualSkippedMove() {
     Resources resources;
     ProtoMesh wall(PackedMesh(movableCollisionBox({20,400,600}),PackedMesh::PK_Visual),"VIRTUAL_SKIP_WALL.MRM");
-    zenkit::ModelHierarchy hierarchy;
+    zenkit::ModelHierarchy hierarchy{};
     hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
-    Skeleton shape(hierarchy,nullptr,"VIRTUAL_SKIP_CONTRACT");
+    Skeleton shape(asset::fromZenKit(hierarchy),nullptr,"VIRTUAL_SKIP_CONTRACT");
     for(bool obstructed:{false,true}) {
       DynamicWorld world(nullptr,movableFloor());
       auto structure=obstructed ? world.addStaticObj(wall.attach[0].shape.get(),at(50,200,0),"VIRTUAL_SKIP_WALL.MRM") :
@@ -3128,10 +3131,10 @@ namespace {
       surface(-2000,0,100,0);
       surface(100,ledge.bottom,100,ledge.rise);
       surface(100,ledge.rise,2000,ledge.rise);
-      zenkit::ModelHierarchy hierarchy;
+      zenkit::ModelHierarchy hierarchy{};
       hierarchy.collision_bbox={{-ledge.radius,0,-ledge.radius},
                                 {ledge.radius,ledge.height,ledge.radius}};
-      Skeleton skeleton(hierarchy,nullptr,ledge.monster);
+      Skeleton skeleton(asset::fromZenKit(hierarchy),nullptr,ledge.monster);
       const float mass=Ragdoll::speciesMass(ledge.monster);
       for(int policy=0;policy<2;++policy) {
         const bool limitStairAdvance=policy!=0;
@@ -3202,9 +3205,9 @@ namespace {
     constexpr int stepCount=12;
     constexpr float riser=10.f;
     Resources resources;
-    zenkit::ModelHierarchy hierarchy;
+    zenkit::ModelHierarchy hierarchy{};
     hierarchy.collision_bbox={{-radius,0,-radius},{radius,height,radius}};
-    Skeleton skeleton(hierarchy,nullptr,"WOLF");
+    Skeleton skeleton(asset::fromZenKit(hierarchy),nullptr,"WOLF");
     const float mass=Ragdoll::speciesMass("WOLF");
     // Both stair pitches are below the fifty-degree limit. Include a narrow
     // tread so the requested stair advance is checked with closely spaced risers too.
@@ -3284,9 +3287,9 @@ namespace {
     constexpr float radius=15.f, height=83.f, stepHeight=60.f;
     constexpr float radians=.01745329252f, maxSlope=50.f*radians;
     Resources resources;
-    zenkit::ModelHierarchy hierarchy;
+    zenkit::ModelHierarchy hierarchy{};
     hierarchy.collision_bbox={{-radius,0,-radius},{radius,height,radius}};
-    Skeleton skeleton(hierarchy,nullptr,"WOLF");
+    Skeleton skeleton(asset::fromZenKit(hierarchy),nullptr,"WOLF");
     const float mass=Ragdoll::speciesMass("WOLF");
     ProtoMesh wall(PackedMesh(movableCollisionBox({20,400,2000}),PackedMesh::PK_Visual),"MONSTER_BOUNCE_WALL.MRM");
     // A 45-degree request retains half its projected advancement while sliding
@@ -3411,10 +3414,10 @@ namespace {
     const Monster monsters[]={{"WOLF",15,83,60,50},{"TROLL",68,272,100,50}};
     Resources resources;
     for(const auto& monster:monsters) {
-      zenkit::ModelHierarchy hierarchy;
+      zenkit::ModelHierarchy hierarchy{};
       hierarchy.collision_bbox={{-monster.radius,0,-monster.radius},
                                 {monster.radius,monster.height,monster.radius}};
-      Skeleton skeleton(hierarchy,nullptr,monster.name);
+      Skeleton skeleton(asset::fromZenKit(hierarchy),nullptr,monster.name);
       const float mass=Ragdoll::speciesMass(monster.name);
       const float maxSlope=monster.slopeDegrees*radians;
       {
@@ -3764,9 +3767,9 @@ namespace {
               "all bodies and repeated contacts must share one 450 newton walking budget per move");
     }
     {
-      zenkit::ModelHierarchy hierarchy;
+      zenkit::ModelHierarchy hierarchy{};
       hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
-      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_CONTRACT");
+      Skeleton shape(asset::fromZenKit(hierarchy),nullptr,"VIRTUAL_NPC_CONTRACT");
       DynamicWorld world(nullptr,asset::WorldMesh{});
       auto hero=world.addGhostObj(&shape);
       auto npc=world.addGhostObj(&shape);
@@ -3786,9 +3789,9 @@ namespace {
       requireNear(after.position.z,30,.001f,"controller recreation must retain the saved or teleported feet z");
     }
     {
-      zenkit::ModelHierarchy hierarchy;
+      zenkit::ModelHierarchy hierarchy{};
       hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
-      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_PAIR_CONTRACT");
+      Skeleton shape(asset::fromZenKit(hierarchy),nullptr,"VIRTUAL_NPC_PAIR_CONTRACT");
       DynamicWorld world(nullptr,movableFloor());
       auto left=world.addGhostObj(&shape);
       auto right=world.addGhostObj(&shape);
@@ -3820,9 +3823,9 @@ namespace {
       require(left.position().x>150.f,"a seated character with disabled collision must not leave a virtual obstacle");
     }
     {
-      zenkit::ModelHierarchy hierarchy;
+      zenkit::ModelHierarchy hierarchy{};
       hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
-      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_OVERLAP_CONTRACT");
+      Skeleton shape(asset::fromZenKit(hierarchy),nullptr,"VIRTUAL_NPC_OVERLAP_CONTRACT");
       DynamicWorld world(nullptr,movableFloor());
       auto walker=world.addGhostObj(&shape);
       auto overlapping=world.addGhostObj(&shape);
@@ -3840,9 +3843,9 @@ namespace {
     {
       Resources resources;
       ProtoMesh wall(PackedMesh(movableCollisionBox({20,400,600}),PackedMesh::PK_Visual),"VIRTUAL_NPC_WALL.MRM");
-      zenkit::ModelHierarchy hierarchy;
+      zenkit::ModelHierarchy hierarchy{};
       hierarchy.collision_bbox = {{-25,0,-25},{25,180,25}};
-      Skeleton shape(hierarchy,nullptr,"VIRTUAL_NPC_WALL_CONTRACT");
+      Skeleton shape(asset::fromZenKit(hierarchy),nullptr,"VIRTUAL_NPC_WALL_CONTRACT");
       DynamicWorld world(nullptr,movableFloor());
       auto structure=world.addStaticObj(wall.attach[0].shape.get(),at(50,200,0),"VIRTUAL_NPC_WALL.MRM");
       auto walker=world.addGhostObj(&shape);
@@ -3862,9 +3865,9 @@ namespace {
 
   void testVirtualFloorGuard() {
     constexpr float slope=.785398163f;
-    zenkit::ModelHierarchy hierarchy;
+    zenkit::ModelHierarchy hierarchy{};
     hierarchy.collision_bbox={{-25,0,-25},{25,180,25}};
-    Skeleton shape(hierarchy,nullptr,"VIRTUAL_FLOOR_GUARD_CONTRACT");
+    Skeleton shape(asset::fromZenKit(hierarchy),nullptr,"VIRTUAL_FLOOR_GUARD_CONTRACT");
     auto ledge=movableFloor();
     for(auto& vertex:ledge.vertices)
       vertex.x=vertex.x>0 ? 0.f : vertex.x;

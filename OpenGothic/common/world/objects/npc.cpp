@@ -1430,7 +1430,7 @@ void Npc::syncMeleeShadowSwing() {
       throw std::runtime_error("Melee shadow requires a sampled humanoid attack and hand bone");
     std::vector<uint32_t> optimal;
     for(const auto& event:data.events)
-      if(event.type==zenkit::MdsEventType::OPTIMAL_FRAME)
+      if(event.type==asset::MdsEventType::OPTIMAL_FRAME)
         for(const auto frame:event.frames) {
           // The same clamp as Sequence::processEvents, including truncated MAN ranges.
           const auto clamped = frame<int32_t(data.firstFrame) ? 0u :
@@ -3297,7 +3297,7 @@ std::string Npc::combatPoseLayers() const {
     const auto& data = *seq.data;
     std::vector<int32_t> optimal;
     for(const auto& ev:data.events)
-      if(ev.type==zenkit::MdsEventType::OPTIMAL_FRAME)
+      if(ev.type==asset::MdsEventType::OPTIMAL_FRAME)
         for(auto frame:ev.frames)
           optimal.push_back(frame);
     if(result.size()>1)
@@ -3637,7 +3637,7 @@ void Npc::implSetFightMode(const Animation::EvCount& ev) {
   if(!visual.setFightMode(ev.weaponCh))
     return;
 
-  if(ev.weaponCh==zenkit::MdsFightMode::NONE && (ws==WeaponState::W1H || ws==WeaponState::W2H)) {
+  if(ev.weaponCh==asset::MdsFightMode::NONE && (ws==WeaponState::W1H || ws==WeaponState::W2H)) {
     if(auto melee = invent.currentMeleeWeapon()) {
       auto at = centerPosition();
       if(melee->handle().material==ItemMaterial::MAT_METAL)
@@ -3646,7 +3646,7 @@ void Npc::implSetFightMode(const Animation::EvCount& ev) {
       sfxWeapon.play();
       }
     }
-  else if(ev.weaponCh==zenkit::MdsFightMode::SINGLE_HANDED || ev.weaponCh==zenkit::MdsFightMode::DUAL_HANDED) {
+  else if(ev.weaponCh==asset::MdsFightMode::SINGLE_HANDED || ev.weaponCh==asset::MdsFightMode::DUAL_HANDED) {
     if(auto melee = invent.currentMeleeWeapon()) {
       auto at = centerPosition();
       if(melee->handle().material==ItemMaterial::MAT_METAL)
@@ -3655,7 +3655,7 @@ void Npc::implSetFightMode(const Animation::EvCount& ev) {
       sfxWeapon.play();
       }
     }
-  else if(ev.weaponCh==zenkit::MdsFightMode::BOW || ev.weaponCh==zenkit::MdsFightMode::CROSSBOW) {
+  else if(ev.weaponCh==asset::MdsFightMode::BOW || ev.weaponCh==asset::MdsFightMode::CROSSBOW) {
     auto at = centerPosition();
     sfxWeapon = ::Sound(owner,::Sound::T_Regular,"DRAWSOUND_BOW",at,2500,false);
     sfxWeapon.play();
@@ -4113,27 +4113,27 @@ void Npc::tickTimedEvt(Animation::EvCount& ev) {
   // https://auronen.cokoliv.eu/gmc/zengin/anims/events/
   for(auto& i:ev.timed) {
     switch(i.def) {
-      case zenkit::MdsEventType::ITEM_CREATE: {
+      case asset::MdsEventType::ITEM_CREATE: {
         if(auto it = invent.addItem(i.item,1,world())) {
           invent.putToSlot(*this,it->clsId(),i.slot[0]);
           }
         break;
         }
-      case zenkit::MdsEventType::ITEM_INSERT: {
+      case asset::MdsEventType::ITEM_INSERT: {
         invent.putCurrentToSlot(*this,i.slot[0]);
         break;
         }
-      case zenkit::MdsEventType::ITEM_REMOVE:
-      case zenkit::MdsEventType::ITEM_DESTROY: {
-        invent.clearSlot(*this, "", i.def != zenkit::MdsEventType::ITEM_REMOVE);
+      case asset::MdsEventType::ITEM_REMOVE:
+      case asset::MdsEventType::ITEM_DESTROY: {
+        invent.clearSlot(*this, "", i.def != asset::MdsEventType::ITEM_REMOVE);
         break;
         }
-      case zenkit::MdsEventType::ITEM_PLACE: {
+      case asset::MdsEventType::ITEM_PLACE: {
         if(currentInteract!=nullptr)
           Inventory::moveItem(*this, invent, *currentInteract);
         break;
         }
-      case zenkit::MdsEventType::ITEM_EXCHANGE: {
+      case asset::MdsEventType::ITEM_EXCHANGE: {
         if(!invent.clearSlot(*this,i.slot[0],true)) {
           // fallback for cooking animations
           invent.putCurrentToSlot(*this,i.slot[0]);
@@ -4144,9 +4144,9 @@ void Npc::tickTimedEvt(Animation::EvCount& ev) {
           }
         break;
         }
-      case zenkit::MdsEventType::SET_FIGHT_MODE:
+      case asset::MdsEventType::SET_FIGHT_MODE:
         break;
-      case zenkit::MdsEventType::MUNITION_PLACE: {
+      case asset::MdsEventType::MUNITION_PLACE: {
         auto active=invent.activeWeapon();
         if(active!=nullptr) {
           const int32_t munition = active->handle().munition;
@@ -4154,40 +4154,40 @@ void Npc::tickTimedEvt(Animation::EvCount& ev) {
           }
         break;
         }
-      case zenkit::MdsEventType::MUNITION_REMOVE: {
+      case asset::MdsEventType::MUNITION_REMOVE: {
         invent.putAmmunition(*this,0,"");
         break;
         }
-      case zenkit::MdsEventType::TORCH_DRAW:
+      case asset::MdsEventType::TORCH_DRAW:
         setTorch(true);
         break;
-      case zenkit::MdsEventType::TORCH_INVENTORY:
+      case asset::MdsEventType::TORCH_INVENTORY:
         processDefInvTorch();
         break;
-      case zenkit::MdsEventType::TORCH_DROP:
+      case asset::MdsEventType::TORCH_DROP:
         dropTorch();
         break;
-      case zenkit::MdsEventType::SOUND_DRAW:
+      case asset::MdsEventType::SOUND_DRAW:
         break;
-      case zenkit::MdsEventType::SOUND_UNDRAW:
+      case asset::MdsEventType::SOUND_UNDRAW:
         break;
-      case zenkit::MdsEventType::MESH_SWAP:
+      case asset::MdsEventType::MESH_SWAP:
         break;
-      case zenkit::MdsEventType::HIT_LIMB:
+      case asset::MdsEventType::HIT_LIMB:
         break;
-      case zenkit::MdsEventType::HIT_DIRECTION:
+      case asset::MdsEventType::HIT_DIRECTION:
         break;
-      case zenkit::MdsEventType::DAMAGE_MULTIPLIER:
+      case asset::MdsEventType::DAMAGE_MULTIPLIER:
         break;
-      case zenkit::MdsEventType::PARRY_FRAME:
+      case asset::MdsEventType::PARRY_FRAME:
         break;
-      case zenkit::MdsEventType::OPTIMAL_FRAME:
+      case asset::MdsEventType::OPTIMAL_FRAME:
         break;
-      case zenkit::MdsEventType::HIT_END:
+      case asset::MdsEventType::HIT_END:
         break;
-      case zenkit::MdsEventType::COMBO_WINDOW:
+      case asset::MdsEventType::COMBO_WINDOW:
         break;
-      case zenkit::MdsEventType::UNKNOWN:
+      case asset::MdsEventType::UNKNOWN:
         break;
       }
     }

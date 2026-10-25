@@ -6,8 +6,13 @@
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "physics/physicvbo.h"
 #include "resources.h"
+#include "modeldata.h"
 
 #include <zenkit/Stream.hh>
+#include <zenkit/Model.hh>
+#include <zenkit/ModelAnimation.hh>
+#include <zenkit/ModelScript.hh>
+#include <zenkit/MorphMesh.hh>
 #include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/Model.hh>
 #include <zenkit/ModelScript.hh>
@@ -19,13 +24,18 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <map>
+#include <set>
 #include <stdexcept>
+#include <type_traits>
 
 namespace fs = std::filesystem;
 
@@ -58,6 +68,366 @@ struct BaseContentContract {
     equal(std::bit_cast<uint32_t>(a.x),std::bit_cast<uint32_t>(b.x),field+" x bits");
     equal(std::bit_cast<uint32_t>(a.y),std::bit_cast<uint32_t>(b.y),field+" y bits");
     equal(std::bit_cast<uint32_t>(a.z),std::bit_cast<uint32_t>(b.z),field+" z bits");
+    }
+
+  template<class A, class B>
+  static void modelField(const A& a, const B& b, const std::string& field) {
+    if constexpr(std::is_same_v<A,float> && std::is_same_v<B,float>)
+      equal(std::bit_cast<uint32_t>(a),std::bit_cast<uint32_t>(b),field+" bits");
+    else if constexpr(std::is_enum_v<A> && std::is_enum_v<B>)
+      equal(int64_t(a),int64_t(b),field);
+    else
+      require(a==b,field+": values differ");
+    }
+
+  template<class A, class B>
+  static void modelField(const std::vector<A>& a, const std::vector<B>& b, const std::string& field) {
+    equal(a.size(),b.size(),field+" count");
+    if(a.empty()) return;
+    if constexpr(std::is_same_v<A,B> && std::is_trivially_copyable_v<A>)
+      if(std::memcmp(a.data(),b.data(),a.size()*sizeof(A))==0) return;
+    for(size_t i=0;i<a.size();++i)
+      modelField(a[i],b[i],field+"["+std::to_string(i)+"]");
+    }
+
+  static void modelField(const zenkit::Vec2& a, const zenkit::Vec2& b, const std::string& field) {
+    modelField(a.x,b.x,field+".x"); modelField(a.y,b.y,field+".y");
+    }
+
+  static void modelField(const zenkit::Vec3& a, const zenkit::Vec3& b, const std::string& field) {
+    modelField(a.x,b.x,field+".x"); modelField(a.y,b.y,field+".y"); modelField(a.z,b.z,field+".z");
+    }
+
+  static void modelField(const zenkit::Quat& a, const zenkit::Quat& b, const std::string& field) {
+    modelField(a.w,b.w,field+".w"); modelField(a.x,b.x,field+".x");
+    modelField(a.y,b.y,field+".y"); modelField(a.z,b.z,field+".z");
+    }
+
+  static void modelField(const zenkit::Mat4& a, const zenkit::Mat4& b, const std::string& field) {
+    for(unsigned column=0;column<4;++column)
+      for(unsigned row=0;row<4;++row)
+        modelField(a[column][row],b[column][row],field+"["+std::to_string(column)+"]["+std::to_string(row)+"]");
+    }
+
+  static void modelField(const zenkit::Color& a, const zenkit::Color& b, const std::string& field) {
+    modelField(a.r,b.r,field+".r"); modelField(a.g,b.g,field+".g");
+    modelField(a.b,b.b,field+".b"); modelField(a.a,b.a,field+".a");
+    }
+
+  static void modelField(const zenkit::AxisAlignedBoundingBox& a, const zenkit::AxisAlignedBoundingBox& b,
+                         const std::string& field) {
+    modelField(a.min,b.min,field+".min"); modelField(a.max,b.max,field+".max");
+    }
+
+  static void modelField(const zenkit::OrientedBoundingBox& a, const zenkit::OrientedBoundingBox& b,
+                         const std::string& field) {
+    modelField(a.center,b.center,field+".center"); modelField(a.half_width,b.half_width,field+".half_width");
+    for(size_t i=0;i<3;++i) modelField(a.axes[i],b.axes[i],field+".axes["+std::to_string(i)+"]");
+    modelField(a.children,b.children,field+".children");
+    }
+
+#define MODEL_FIELD(member) modelField(a.member,b.member,field+"." #member)
+  static void modelField(const zenkit::Date& a, const asset::ModelDate& b, const std::string& field) {
+    MODEL_FIELD(year);
+    MODEL_FIELD(month);
+    MODEL_FIELD(day);
+    MODEL_FIELD(hour);
+    MODEL_FIELD(minute);
+    MODEL_FIELD(second);
+    }
+
+  static void modelField(const zenkit::ModelHierarchyNode& a, const asset::ModelHierarchyNode& b, const std::string& field) {
+    MODEL_FIELD(parent_index);
+    MODEL_FIELD(name);
+    MODEL_FIELD(transform);
+    }
+
+  static void modelField(const zenkit::ModelHierarchy& a, const asset::ModelHierarchy& b, const std::string& field) {
+    MODEL_FIELD(nodes);
+    MODEL_FIELD(bbox);
+    MODEL_FIELD(collision_bbox);
+    MODEL_FIELD(root_translation);
+    MODEL_FIELD(checksum);
+    MODEL_FIELD(source_date);
+    MODEL_FIELD(source_path);
+    }
+
+  static void modelField(const zenkit::AnimationSample& a, const asset::AnimationSample& b, const std::string& field) {
+    MODEL_FIELD(position);
+    MODEL_FIELD(rotation);
+    }
+
+  static void modelField(const zenkit::AnimationEvent& a, const asset::AnimationEvent& b, const std::string& field) {
+    MODEL_FIELD(type);
+    MODEL_FIELD(frame);
+    MODEL_FIELD(tag);
+    MODEL_FIELD(probability);
+    for(size_t i=0;i<4;++i) {
+      modelField(a.content[i],b.content[i],field+".content["+std::to_string(i)+"]");
+      modelField(a.values[i],b.values[i],field+".values["+std::to_string(i)+"]");
+      }
+    }
+
+  static void modelField(const zenkit::ModelAnimation& a, const asset::ModelAnimation& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(next);
+    MODEL_FIELD(layer);
+    MODEL_FIELD(frame_count);
+    MODEL_FIELD(node_count);
+    MODEL_FIELD(fps);
+    MODEL_FIELD(fps_source);
+    MODEL_FIELD(sample_position_min);
+    MODEL_FIELD(sample_position_scale);
+    MODEL_FIELD(bbox);
+    MODEL_FIELD(checksum);
+    MODEL_FIELD(source_path);
+    MODEL_FIELD(source_date);
+    MODEL_FIELD(source_script);
+    MODEL_FIELD(samples);
+    MODEL_FIELD(events);
+    MODEL_FIELD(node_indices);
+    }
+
+  static void modelField(const zenkit::MdsSkeleton& a, const asset::MdsSkeleton& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(disable_mesh);
+    }
+
+  static void modelField(const zenkit::MdsModelTag& a, const asset::MdsModelTag& b, const std::string& field) {
+    MODEL_FIELD(bone);
+    }
+
+  static void modelField(const zenkit::MdsEventTag& a, const asset::MdsEventTag& b, const std::string& field) {
+    MODEL_FIELD(frame);
+    MODEL_FIELD(type);
+    MODEL_FIELD(slot);
+    MODEL_FIELD(slot2);
+    MODEL_FIELD(item);
+    MODEL_FIELD(frames);
+    MODEL_FIELD(fight_mode);
+    MODEL_FIELD(attached);
+    }
+
+  static void modelField(const zenkit::MdsParticleEffect& a, const asset::MdsParticleEffect& b, const std::string& field) {
+    MODEL_FIELD(frame);
+    MODEL_FIELD(index);
+    MODEL_FIELD(name);
+    MODEL_FIELD(position);
+    MODEL_FIELD(attached);
+    }
+
+  static void modelField(const zenkit::MdsCameraTremor& a, const asset::MdsCameraTremor& b, const std::string& field) {
+    MODEL_FIELD(frame);
+    MODEL_FIELD(field1);
+    MODEL_FIELD(field2);
+    MODEL_FIELD(field3);
+    MODEL_FIELD(field4);
+    }
+
+  static void modelField(const zenkit::MdsParticleEffectStop& a, const asset::MdsParticleEffectStop& b, const std::string& field) {
+    MODEL_FIELD(frame);
+    MODEL_FIELD(index);
+    }
+
+  static void modelField(const zenkit::MdsSoundEffect& a, const asset::MdsSoundEffect& b, const std::string& field) {
+    MODEL_FIELD(frame);
+    MODEL_FIELD(name);
+    MODEL_FIELD(range);
+    MODEL_FIELD(empty_slot);
+    }
+
+  static void modelField(const zenkit::MdsSoundEffectGround& a, const asset::MdsSoundEffectGround& b, const std::string& field) {
+    MODEL_FIELD(frame);
+    MODEL_FIELD(name);
+    MODEL_FIELD(range);
+    MODEL_FIELD(empty_slot);
+    }
+
+  static void modelField(const zenkit::MdsMorphAnimation& a, const asset::MdsMorphAnimation& b, const std::string& field) {
+    MODEL_FIELD(frame);
+    MODEL_FIELD(animation);
+    MODEL_FIELD(node);
+    }
+
+  static void modelField(const zenkit::MdsAnimation& a, const asset::MdsAnimation& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(layer);
+    MODEL_FIELD(next);
+    MODEL_FIELD(blend_in);
+    MODEL_FIELD(blend_out);
+    MODEL_FIELD(flags);
+    MODEL_FIELD(model);
+    MODEL_FIELD(direction);
+    MODEL_FIELD(first_frame);
+    MODEL_FIELD(last_frame);
+    MODEL_FIELD(fps);
+    MODEL_FIELD(speed);
+    MODEL_FIELD(collision_volume_scale);
+    MODEL_FIELD(events);
+    MODEL_FIELD(pfx);
+    MODEL_FIELD(pfx_stop);
+    MODEL_FIELD(sfx);
+    MODEL_FIELD(sfx_ground);
+    MODEL_FIELD(morph);
+    MODEL_FIELD(tremors);
+    }
+
+  static void modelField(const zenkit::MdsAnimationAlias& a, const asset::MdsAnimationAlias& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(layer);
+    MODEL_FIELD(next);
+    MODEL_FIELD(blend_in);
+    MODEL_FIELD(blend_out);
+    MODEL_FIELD(flags);
+    MODEL_FIELD(alias);
+    MODEL_FIELD(direction);
+    }
+
+  static void modelField(const zenkit::MdsAnimationBlend& a, const asset::MdsAnimationBlend& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(next);
+    MODEL_FIELD(blend_in);
+    MODEL_FIELD(blend_out);
+    }
+
+  static void modelField(const zenkit::MdsAnimationCombine& a, const asset::MdsAnimationCombine& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(layer);
+    MODEL_FIELD(next);
+    MODEL_FIELD(blend_in);
+    MODEL_FIELD(blend_out);
+    MODEL_FIELD(flags);
+    MODEL_FIELD(model);
+    MODEL_FIELD(last_frame);
+    }
+
+  static void modelField(const zenkit::ModelScript& a, const asset::ModelScript& b, const std::string& field) {
+    MODEL_FIELD(skeleton);
+    MODEL_FIELD(meshes);
+    MODEL_FIELD(disabled_animations);
+    MODEL_FIELD(combinations);
+    MODEL_FIELD(blends);
+    MODEL_FIELD(aliases);
+    MODEL_FIELD(model_tags);
+    MODEL_FIELD(animations);
+    }
+
+  static void modelField(const zenkit::MorphAnimation& a, const asset::MorphAnimation& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(layer);
+    MODEL_FIELD(blend_in);
+    MODEL_FIELD(blend_out);
+    MODEL_FIELD(duration);
+    MODEL_FIELD(speed);
+    MODEL_FIELD(flags);
+    MODEL_FIELD(frame_count);
+    MODEL_FIELD(vertices);
+    MODEL_FIELD(samples);
+    }
+
+  static void modelField(const zenkit::MorphSource& a, const asset::MorphSource& b, const std::string& field) {
+    MODEL_FIELD(file_date);
+    MODEL_FIELD(file_name);
+    }
+
+  static void modelField(const zenkit::MorphMesh& a, const asset::MorphMesh& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(mesh);
+    MODEL_FIELD(morph_positions);
+    MODEL_FIELD(animations);
+    MODEL_FIELD(sources);
+    }
+
+  static void modelField(const zenkit::Material& a, const asset::Material& b, const std::string& field) {
+    MODEL_FIELD(name);
+    MODEL_FIELD(group);
+    MODEL_FIELD(color);
+    MODEL_FIELD(smooth_angle);
+    MODEL_FIELD(texture);
+    MODEL_FIELD(texture_scale);
+    MODEL_FIELD(texture_anim_fps);
+    MODEL_FIELD(texture_anim_map_mode);
+    MODEL_FIELD(texture_anim_map_dir);
+    MODEL_FIELD(disable_collision);
+    MODEL_FIELD(disable_lightmap);
+    MODEL_FIELD(dont_collapse);
+    MODEL_FIELD(detail_object);
+    MODEL_FIELD(detail_object_scale);
+    MODEL_FIELD(force_occluder);
+    MODEL_FIELD(environment_mapping);
+    MODEL_FIELD(environment_mapping_strength);
+    MODEL_FIELD(wave_mode);
+    MODEL_FIELD(wave_speed);
+    MODEL_FIELD(wave_max_amplitude);
+    MODEL_FIELD(wave_grid_size);
+    MODEL_FIELD(ignore_sun);
+    MODEL_FIELD(alpha_func);
+    MODEL_FIELD(default_mapping);
+    }
+
+  static void modelField(const zenkit::MeshTriangle& a, const asset::MeshTriangle& b, const std::string& field) {
+    for(size_t i=0;i<3;++i) modelField(a.wedges[i],b.wedges[i],field+".wedges["+std::to_string(i)+"]");
+    }
+
+  static void modelField(const zenkit::MeshWedge& a, const asset::MeshWedge& b, const std::string& field) {
+    MODEL_FIELD(normal);
+    MODEL_FIELD(texture);
+    MODEL_FIELD(index);
+    }
+
+  static void modelField(const zenkit::SubMesh& a, const asset::SubMesh& b, const std::string& field) {
+    MODEL_FIELD(mat);
+    MODEL_FIELD(triangles);
+    MODEL_FIELD(wedges);
+    }
+
+  static void modelField(const zenkit::MultiResolutionMesh& a, const asset::StaticMesh& b, const std::string& field) {
+    MODEL_FIELD(positions);
+    MODEL_FIELD(normals);
+    MODEL_FIELD(sub_meshes);
+    MODEL_FIELD(materials);
+    MODEL_FIELD(alpha_test);
+    MODEL_FIELD(bbox);
+    MODEL_FIELD(obbox);
+    }
+
+  static void modelField(const zenkit::SoftSkinWeightEntry& a, const asset::SkinWeight& b, const std::string& field) {
+    MODEL_FIELD(weight);
+    MODEL_FIELD(position);
+    MODEL_FIELD(node_index);
+    }
+
+  static void modelField(const zenkit::SoftSkinMesh& a, const asset::SoftSkinMesh& b, const std::string& field) {
+    MODEL_FIELD(mesh);
+    MODEL_FIELD(bboxes);
+    MODEL_FIELD(weights);
+    }
+
+  static void modelField(const zenkit::ModelMesh& a, const asset::ModelMesh& b, const std::string& field) {
+    MODEL_FIELD(meshes);
+    equal(a.attachments.size(),b.attachments.size(),field+".attachments count");
+    size_t i=0;
+    for(const auto& [name,mesh]:a.attachments) {
+      const auto where=field+".attachments["+std::to_string(i)+"]";
+      require(name==b.attachments[i].first,where+": native source attachment order differs");
+      modelField(mesh,b.attachments[i].second,where+"."+name);
+      ++i;
+      }
+    }
+
+  static void modelField(const zenkit::Model& a, const asset::Model& b, const std::string& field) {
+    MODEL_FIELD(hierarchy);
+    MODEL_FIELD(mesh);
+    }
+
+#undef MODEL_FIELD
+
+  static void modelField(const std::vector<zenkit::AnimationSample>& a,
+                         const std::vector<asset::AnimationSample>& b, const std::string& field) {
+    equal(a.size(),b.size(),field+" count");
+    static_assert(sizeof(zenkit::AnimationSample)==sizeof(asset::AnimationSample));
+    if(!a.empty() && std::memcmp(a.data(),b.data(),a.size()*sizeof(a[0]))!=0)
+      for(size_t i=0;i<a.size();++i) modelField(a[i],b[i],field+"["+std::to_string(i)+"]");
     }
 
   static void texture(const Resources::TextureData& a, const Resources::TextureData& b, const std::string& name) {
@@ -147,13 +517,213 @@ struct BaseContentContract {
     gothicglb::writeFile(file,data.data(),data.size());
     }
 
-  static void census(const fs::path& file, size_t meshes) {
-    const auto data=json(file);
-    equal(data["replacements"].Size(),meshes,"census base mesh count");
-    for(const auto& row:data["replacements"].GetArray()) {
-      require(std::string(row["kind"].GetString())=="basemesh","base mesh census kind");
-      require(std::string(row["replacement"].GetString()).starts_with("base/meshes/"),"base mesh census path");
+  static void modelNames(const zenkit::VfsNode& directory, std::set<std::string>& names) {
+    for(const auto& node:directory.children()) {
+      if(node.type()==zenkit::VfsNodeType::DIRECTORY) {
+        modelNames(node,names);
+        continue;
+        }
+      auto name=node.name();
+      for(auto& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(name.ends_with(".MDH") || name.ends_with(".MDM") || name.ends_with(".MDL") ||
+         name.ends_with(".MAN") || name.ends_with(".MMB") || name.ends_with(".MSB") || name.ends_with(".MDS"))
+        names.insert(std::move(name));
       }
+    }
+
+  static size_t models(const fs::path& base) {
+    Resources::mountWork(CommandLine::inst().nestedPath({u"_work"},Tempest::Dir::FT_Dir));
+    const auto index=json(base/"models/models.json");
+    require(index.HasMember("format") && index["format"].IsString() &&
+            std::string_view(index["format"].GetString())=="gothic-models" && index["version"]==1,
+            "model index must use gothic-models version 1");
+    require(index.HasMember("files") && index["files"].IsObject(),"model index must contain file records");
+    const auto& records=index["files"];
+    std::set<std::string> names;
+    modelNames(Resources::vdfsIndex().root(),names);
+    equal(names.size(),size_t(records.MemberCount()),"model index must include every mounted model resource");
+    std::map<std::string,size_t> counts;
+    for(const auto& name:names) {
+      require(records.HasMember(name.c_str()),name+": source model missing from base index");
+      require(records[name.c_str()].IsString(),name+": model record path must be a string");
+      const auto* entry=Resources::vdfsIndex().find(name);
+      require(entry!=nullptr,name+": original model resource missing");
+      auto reader=entry->open_read();
+      const auto extension=fs::path(name).extension().string();
+      if(extension==".MDH") {
+        zenkit::ModelHierarchy source{};
+        source.load(reader.get());
+        asset::ModelHierarchy loaded;
+        require(Resources::loadHierarchyData(name,loaded),name+": hierarchy must load through Resources");
+        modelField(source,loaded,name);
+        }
+      else if(extension==".MDM") {
+        zenkit::ModelMesh source{};
+        source.load(reader.get());
+        asset::ModelMesh loaded;
+        require(Resources::loadModelMeshData(name,loaded),name+": model mesh must load through Resources");
+        modelField(source,loaded,name);
+        }
+      else if(extension==".MDL") {
+        zenkit::Model source{};
+        source.load(reader.get());
+        asset::Model loaded;
+        require(Resources::loadModelData(name,loaded),name+": combined model must load through Resources");
+        modelField(source,loaded,name);
+        }
+      else if(extension==".MAN") {
+        zenkit::ModelAnimation source{};
+        source.load(reader.get());
+        asset::ModelAnimation loaded;
+        require(Resources::loadAnimationData(name,loaded),name+": animation must load through Resources");
+        modelField(source,loaded,name);
+        }
+      else if(extension==".MMB") {
+        zenkit::MorphMesh source{};
+        source.load(reader.get());
+        modelField(source,Resources::loadMorphData(name),name);
+        }
+      else {
+        zenkit::ModelScript source{};
+        source.load(reader.get());
+        asset::ModelScript loaded;
+        require(Resources::loadModelScriptData(name,loaded),name+": model script must load through Resources");
+        modelField(source,loaded,name);
+        }
+      ++counts[extension];
+      }
+    std::printf("Models: %zu equal to independently parsed sources",names.size());
+    for(const auto& [extension,count]:counts) std::printf("; %s=%zu",extension.c_str(),count);
+    std::puts("; selected through Resources; every owned field and native attachment order equal");
+    return names.size();
+    }
+
+  static void modelFixtures(const fs::path& temporary) {
+    zenkit::ModelHierarchy hierarchy{};
+    hierarchy.nodes={{-1,"ROOT",zenkit::Mat4::identity()},{0,"CHILD",zenkit::Mat4::identity()}};
+    hierarchy.nodes[1].transform[3]={-0.f,12.25f,-34.5f,1};
+    hierarchy.bbox={{-10,-20,-30},{40,50,60}};
+    hierarchy.collision_bbox={{-1,-2,-3},{4,5,6}};
+    hierarchy.root_translation={-0.f,17.5f,-22.25f}; hierarchy.checksum=0x12345678;
+    hierarchy.source_date={2026,10,25,12,34,56}; hierarchy.source_path="source/model.asc";
+    auto file=temporary/"MODEL_CONTRACT.MDH.json";
+    ModelData::writeHierarchy(asset::fromZenKit(hierarchy),file);
+    modelField(hierarchy,ModelData::readHierarchy(file),"synthetic hierarchy");
+
+    zenkit::ModelAnimation animation{};
+    animation.name="ANIMATION"; animation.next="NEXT"; animation.layer=3;
+    animation.frame_count=2; animation.node_count=1; animation.fps=25.f; animation.fps_source=30.f;
+    animation.sample_position_min=-0.f; animation.sample_position_scale=.03125f;
+    animation.bbox=hierarchy.bbox; animation.checksum=hierarchy.checksum;
+    animation.source_path="source/animation.asc"; animation.source_date=hierarchy.source_date;
+    animation.source_script="ani (ANIMATION)"; animation.node_indices={1};
+    animation.samples={{{-0.f,3,4},{.8f,-0.f,.6f,0}},{{5,-6,7},{-.8f,0,-.6f,-0.f}}};
+    zenkit::AnimationEvent event{};
+    event.type=zenkit::AnimationEventType::CAMERA_TREMOR; event.frame=7; event.tag="EVENT";
+    for(size_t i=0;i<4;++i) { event.content[i]="content"+std::to_string(i); event.values[i]=float(i)-.5f; }
+    event.values[0]=-0.f; event.probability=.75f; animation.events.push_back(event);
+    file=temporary/"MODEL_CONTRACT.MAN.json";
+    ModelData::writeAnimation(asset::fromZenKit(animation),file);
+    modelField(animation,ModelData::readAnimation(file),"synthetic animation");
+
+    zenkit::ModelScript script{};
+    script.skeleton={"SOURCE.ASC",true}; script.meshes={"BODY.ASC","ARMOR.ASC"};
+    script.disabled_animations={"DISABLED"}; script.model_tags={{"BONE"}};
+    script.combinations={{"COMB",2,"NEXT",.25f,.5f,zenkit::AnimationFlags(0x81),"MODEL",5}};
+    script.blends={{"BLEND","NEXT",.125f,.375f}};
+    script.aliases={{"ALIAS",4,"NEXT",.25f,.5f,zenkit::AnimationFlags::MOVE,"ANIMATION",zenkit::AnimationDirection::BACKWARD}};
+    zenkit::MdsAnimation ani{};
+    ani.name="ANIMATION"; ani.layer=1; ani.next="NEXT"; ani.blend_in=.25f; ani.blend_out=.75f;
+    ani.flags=zenkit::AnimationFlags::ROTATE; ani.model="SOURCE.ASC";
+    ani.direction=zenkit::AnimationDirection::BACKWARD; ani.first_frame=3; ani.last_frame=7;
+    ani.fps=25.f; ani.speed=1.5f; ani.collision_volume_scale=.875f;
+    ani.events={{7,zenkit::MdsEventType::ITEM_EXCHANGE,"SLOT","SLOT2","ITEM",{1,3,5},zenkit::MdsFightMode::INVALID,true}};
+    ani.pfx={{2,3,"PARTICLE","BONE",true}}; ani.pfx_stop={{5,3}};
+    ani.sfx={{3,"SOUND",321.f,true}}; ani.sfx_ground={{4,"GROUND",456.f,true}};
+    ani.morph={{6,"MORPH","HEAD"}}; ani.tremors={{8,1,2,3,4}};
+    script.animations.push_back(ani);
+    file=temporary/"MODEL_CONTRACT.MSB.json";
+    ModelData::writeScript(asset::fromZenKit(script),file);
+    modelField(script,ModelData::readScript(file),"synthetic script");
+
+    zenkit::MorphMesh morph{};
+    morph.name="MORPH"; morph.mesh.bbox=hierarchy.bbox;
+    morph.mesh.positions={{1,2,3},{-0.f,4,5}}; morph.mesh.normals={{0,1,0},{0,0,1}};
+    morph.morph_positions={{3,2,1},{6,5,4}};
+    morph.animations={{"MOVE",2,.25f,.5f,1.5f,2.5f,0x81,2,{1},{{-0.f,.5f,.25f},{1,2,3}}}};
+    morph.sources={{hierarchy.source_date,"source/morph.asc"}};
+    file=temporary/"MODEL_CONTRACT.MMB.json";
+    ModelData::writeMorph(asset::fromZenKit(morph),file);
+    modelField(morph,ModelData::readMorph(file),"synthetic morph");
+
+    zenkit::Model model{};
+    model.hierarchy=hierarchy;
+    std::vector<std::string> order;
+    for(size_t i=0;i<24;++i) {
+      const auto name="ATTACHMENT_"+std::to_string(i);
+      order.push_back(name);
+      model.mesh.attachments.emplace(name,morph.mesh);
+      }
+    zenkit::SoftSkinMesh skin{};
+    skin.mesh=morph.mesh;
+    skin.weights={{{.25f,{1,-0.f,3},0},{.75f,{-1,2,4},1}},{{1.f,{5,6,-7},1}}};
+    zenkit::OrientedBoundingBox box{};
+    box.center={1,2,3}; box.axes[0]={1,0,0}; box.axes[1]={0,1,0}; box.axes[2]={0,0,1}; box.half_width={4,5,6};
+    auto child=box; child.center={-1,-2,-3}; box.children.push_back(child);
+    skin.bboxes={box}; skin.mesh.obbox=box;
+    zenkit::Material material{};
+    material.name="MATERIAL"; material.group=zenkit::MaterialGroup::WOOD; material.color={12,34,56,78};
+    material.smooth_angle=33.f; material.texture="TEXTURE.TGA"; material.texture_scale={2,3};
+    material.texture_anim_fps=7.f; material.texture_anim_map_mode=zenkit::AnimationMapping::LINEAR;
+    material.texture_anim_map_dir={-.25f,.5f}; material.disable_collision=true; material.disable_lightmap=true;
+    material.dont_collapse=true; material.detail_object="DETAIL"; material.detail_object_scale=.75f;
+    material.force_occluder=true; material.environment_mapping=true; material.environment_mapping_strength=.625f;
+    material.wave_mode=zenkit::WaveMode::WIND; material.wave_speed=zenkit::WaveSpeed::FAST;
+    material.wave_max_amplitude=9.f; material.wave_grid_size=13.f; material.ignore_sun=true;
+    material.alpha_func=zenkit::AlphaFunction::BLEND; material.default_mapping={5,6};
+    skin.mesh.materials={material}; skin.mesh.alpha_test=0;
+    zenkit::SubMesh sub{}; sub.mat=material; sub.triangles={{{0,1,0}}};
+    sub.wedges={{{0,1,0},{.25f,.75f},0},{{0,0,1},{.5f,.125f},1}};
+    skin.mesh.sub_meshes={sub}; model.mesh.meshes.push_back(skin);
+    auto stored=asset::fromZenKit(model);
+    // Simulate a foreign standard library's map order while retaining source insertion order.
+    std::reverse(stored.mesh.attachments.begin(),stored.mesh.attachments.end());
+    file=temporary/"MODEL_CONTRACT.MDM.json";
+    ModelData::writeMesh(stored.mesh,file,order);
+    modelField(model.mesh,ModelData::readMesh(file),"synthetic model mesh");
+    file=temporary/"MODEL_CONTRACT.MDL.json";
+    ModelData::writeModel(stored,file,order);
+    modelField(model,ModelData::readModel(file),"synthetic combined model");
+    std::puts("Model fixtures: complete script/MAN events, metadata, sample bits, skin weights, nested OBB and native attachment order equal");
+    }
+
+  static void census(const fs::path& file, size_t meshes, size_t models) {
+    const auto data=json(file);
+    equal(data["replacements"].Size(),meshes+models,"census base mesh/model count");
+    size_t selectedMeshes=0,selectedModels=0,sourceModels=0;
+    for(const auto& row:data["replacements"].GetArray()) {
+      const std::string_view kind=row["kind"].GetString(),path=row["replacement"].GetString();
+      if(kind=="basemodel") {
+        ++selectedModels;
+        require(path.starts_with("base/models/"),"base model census path");
+        equal(row["opens"].GetUint64(),1u,"base model selected once");
+        }
+      else {
+        ++selectedMeshes;
+        require(kind=="basemesh","base mesh census kind");
+        require(path.starts_with("base/meshes/"),"base mesh census path");
+        }
+      }
+    equal(selectedMeshes,meshes,"census selected mesh count");
+    equal(selectedModels,models,"census selected model count");
+    for(const auto& row:data["files"].GetArray()) {
+      const std::string_view kind=row["kind"].GetString();
+      if(kind!="model" && kind!="skeleton" && kind!="anim" && kind!="morph") continue;
+      ++sourceModels;
+      equal(row["opens"].GetUint64(),1u,std::string(row["name"].GetString())+": only independent source oracle may open the archive");
+      }
+    equal(sourceModels,models,"census independent source model count");
+    std::puts("Model census: each source opened once by the oracle; Resources selected each base record without original opens");
     }
 
   static Resources::TextureData decodeArchive(zenkit::Read& input, bool compiled, bool forceMips) {
@@ -320,15 +890,18 @@ struct BaseContentContract {
     const auto censusPath=temporary/"census.json";
     setenv("OPENGOTHIC_CENSUS",censusPath.c_str(),1);
     std::string meshKey;
-    size_t textureCount=0,meshCount=0,dds=0,png=0,tga=0,vertices=0,indices=0,meshlets=0;
+    size_t textureCount=0,meshCount=0,modelCount=0,dds=0,png=0,tga=0,vertices=0,indices=0,meshlets=0;
     {
     Resources resources;
-    require(!resources.baseTextures.enabled && !resources.baseMeshes.enabled,"base must wait for mounted archives");
+    require(!resources.baseTextures.enabled && !resources.baseMeshes.enabled && !resources.baseModels.enabled,
+            "base must wait for mounted archives");
     Resources::loadVdfs({},true);
-    require(resources.baseTextures.enabled && resources.baseMeshes.enabled,"matching archives must enable both indices");
-    require(!resources.baseTextures.files.empty() && !resources.baseMeshes.files.empty(),"both indices must contain files");
-    legacyModelBounds();
-    modelTagBoundary();
+    require(resources.baseTextures.enabled && resources.baseMeshes.enabled && resources.baseModels.enabled,
+            "matching archives must enable texture, mesh and model indices");
+    require(!resources.baseTextures.files.empty() && !resources.baseMeshes.files.empty() && !resources.baseModels.files.empty(),
+            "texture, mesh and model indices must contain files");
+    modelCount=models(base);
+    modelFixtures(temporary);
     for(const auto& [key,file]:resources.baseTextures.files) {
       auto* entry=Resources::vdfsIndex().find(key+"-C.TEX");
       const bool compiled=entry!=nullptr;
@@ -369,7 +942,14 @@ struct BaseContentContract {
       }
     meshKey=resources.baseMeshes.files.begin()->first;
     }
-    census(censusPath,meshCount);
+    census(censusPath,meshCount,modelCount);
+    // Keep parser regression reads separate from the runtime-open census.
+    {
+    Resources resources;
+    Resources::loadVdfs({},true);
+    legacyModelBounds();
+    modelTagBoundary();
+    }
     std::printf("Meshes: %zu equal; %zu vertices, %zu indices, %zu meshlets; physics packing equal\n",
                 meshCount,vertices,indices,meshlets);
 
@@ -392,6 +972,22 @@ struct BaseContentContract {
       }
     catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
     require(rejected,"invalid explicit base must fail with recovery instructions");
+
+    const auto incomplete=temporary/"missing-model-index";
+    fs::create_directories(incomplete/"models");
+    fs::copy_file(base/"base.json",incomplete/"base.json");
+    for(const auto* kind:{"textures","meshes","zen"})
+      fs::create_directory_symlink(base/kind,incomplete/kind);
+    setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
+    std::string missingModelIndexError;
+    try {
+      Resources resources;
+      Resources::loadVdfs({},true);
+      }
+    catch(const BaseStore::Error& error) { missingModelIndexError=error.what(); }
+    require(missingModelIndexError.find("base index missing: "+(incomplete/"models/models.json").string())!=std::string::npos &&
+            missingModelIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
+            "base without models/models.json must fail with recovery instructions");
     setenv("OPENGOTHIC_BASE",base.c_str(),1);
     {
     Resources resources;

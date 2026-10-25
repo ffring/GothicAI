@@ -246,9 +246,9 @@ class Pose final {
     std::vector<uint8_t>            physicalMask;
     float                          physicalWeight = 1.f;
     AnimBlend                      physicalBlend;
-    std::vector<zenkit::AnimationSample> physicalRaw;
-    std::vector<zenkit::AnimationSample> physicalShown;
-    std::vector<zenkit::AnimationSample> physicalTargetNext;
+    std::vector<asset::AnimationSample> physicalRaw;
+    std::vector<asset::AnimationSample> physicalShown;
+    std::vector<asset::AnimationSample> physicalTargetNext;
     std::vector<Tempest::Matrix4x4> physicalStretchFrom;
     std::vector<Tempest::Matrix4x4> physicalStretchTarget;
     bool                           physicalReturning = false;
@@ -259,8 +259,8 @@ class Pose final {
 
     size_t                          numBones = 0;
     SampleStatus                    hasSamples[Resources::MAX_NUM_SKELETAL_NODES] = {};
-    zenkit::AnimationSample         base      [Resources::MAX_NUM_SKELETAL_NODES] = {};  // shown: raw blended by AnimBlend
-    zenkit::AnimationSample         raw       [Resources::MAX_NUM_SKELETAL_NODES] = {};  // what the animations give
+    asset::AnimationSample         base      [Resources::MAX_NUM_SKELETAL_NODES] = {};  // shown: raw blended by AnimBlend
+    asset::AnimationSample         raw       [Resources::MAX_NUM_SKELETAL_NODES] = {};  // what the animations give
     Tempest::Matrix4x4              tr        [Resources::MAX_NUM_SKELETAL_NODES] = {};
     Tempest::Matrix4x4              pos;
   };

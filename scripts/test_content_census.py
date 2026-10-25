@@ -106,25 +106,32 @@ def test_base_resources_are_separate_from_own_replacements():
              "replacement": "base/worlds/NEWWORLD/world.json", "opens": 1}
     zen = {"name": "FIRE.ZEN", "kind": "basezen",
            "replacement": "base/zen/FIRE.json", "opens": 1}
+    models = [{"name": name, "kind": "basemodel",
+               "replacement": f"base/models/{name}.json", "opens": 1}
+              for name in ("HERO.MDL", "HUMANS.MDH", "HUMANS-WALK.MAN", "BOW.MMB")]
     summary = census.summarize([
-        run([original("STONE-C.TEX")], [texture, mesh, world, zen, replacement("OWN.TGA")]),
+        run([original("STONE-C.TEX")], [texture, mesh, world, zen, *models, replacement("OWN.TGA")]),
         run(replacements=[dict(texture, name="stone.tga"), mesh,
                           replacement("STONE.TGA"), replacement("BARREL.MRM", "mesh"),
-                          world, zen, replacement("FIRE.ZEN", "world")]),
+                          world, zen, replacement("FIRE.ZEN", "world"),
+                          *[replacement(row["name"].lower(), kind) for row, kind in
+                            zip(models, ("model", "skeleton", "anim", "morph"))]]),
     ])
     assert summary["counts"] == [
         {"kind": "texture", "original": 1, "own": 1},
         {"kind": "basetexture", "original": 0, "own": 0, "base": 1},
         {"kind": "basemesh", "original": 0, "own": 0, "base": 1},
+        {"kind": "basemodel", "original": 0, "own": 0, "base": 4},
         {"kind": "baseworld", "original": 0, "own": 0, "base": 1},
         {"kind": "basezen", "original": 0, "own": 0, "base": 1},
     ]
     markdown = census.render_markdown(summary)
     assert "| basetexture | 0 | 0 | 1 | 0.0% |" in markdown
     assert "| basemesh | 0 | 0 | 1 | 0.0% |" in markdown
+    assert "| basemodel | 0 | 0 | 4 | 0.0% |" in markdown
     assert "| baseworld | 0 | 0 | 1 | 0.0% |" in markdown
     assert "| basezen | 0 | 0 | 1 | 0.0% |" in markdown
-    assert "| **Всего** | **1** | **1** | **4** | **16.7%** |" in markdown
+    assert "| **Всего** | **1** | **1** | **8** | **10.0%** |" in markdown
 
 
 def test_top20_uses_summed_opens_and_stable_order_for_ties():

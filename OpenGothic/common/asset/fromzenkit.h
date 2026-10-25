@@ -1,6 +1,7 @@
 #pragma once
 
 #include "staticmesh.h"
+#include "modeltypes.h"
 #include "worldmesh.h"
 #include "worlddata.h"
 
@@ -10,6 +11,12 @@ class Mesh;
 class MultiResolutionMesh;
 class SoftSkinMesh;
 class ModelMesh;
+class ModelHierarchy;
+class ModelAnimation;
+class ModelScript;
+class MorphMesh;
+class Model;
+class Read;
 class World;
 class BspTree;
 }
@@ -20,6 +27,18 @@ WorldMesh fromZenKit(const zenkit::Mesh& source);
 StaticMesh fromZenKit(const zenkit::MultiResolutionMesh& source);
 SoftSkinMesh fromZenKit(const zenkit::SoftSkinMesh& source);
 ModelMesh fromZenKit(const zenkit::ModelMesh& source);
+ModelHierarchy fromZenKit(const zenkit::ModelHierarchy& source);
+ModelAnimation fromZenKit(const zenkit::ModelAnimation& source);
+ModelScript fromZenKit(const zenkit::ModelScript& source);
+MorphMesh fromZenKit(const zenkit::MorphMesh& source);
+Model fromZenKit(const zenkit::Model& source);
+// Original MAN codes, before host-specific floating-point decoding.
+// The reader retains its position on success.
+std::vector<QuantizedAnimationSample> animationSamplesFromZenKit(zenkit::Read* source,
+                                                               const zenkit::ModelAnimation& animation);
+// Source insertion order, before the standard library orders the attachment map.
+// The reader starts at a model-mesh section and retains its position on success.
+std::vector<std::string> modelAttachmentOrder(zenkit::Read* source);
 
 // Raw polygons belong to the BSP/archive boundary; the base stores these volumes.
 std::vector<WorldData::Room> roomVolumesFromZenKit(const zenkit::Mesh& mesh, const zenkit::BspTree& bsp);

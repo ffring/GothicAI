@@ -27,6 +27,7 @@ int verifyWorld(const std::filesystem::path& gothic, const std::string& name, co
 int convertZen(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
 int convertTextures(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
 int convertMeshes(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
+int convertModels(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
 
 std::string sha256(std::string_view bytes);
 Identity identify(const std::filesystem::path& gothic);

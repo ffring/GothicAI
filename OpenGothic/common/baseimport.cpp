@@ -3,12 +3,17 @@
 #include "sha256.h"
 #include "asset/fromzenkit.h"
 #include "basemesh.h"
+#include "modeldata.h"
 #include "worldchunks.h"
 #include "worlddata.h"
 #include "gothicglb.h"
 
 #include <zenkit/Logger.hh>
 #include <zenkit/MultiResolutionMesh.hh>
+#include <zenkit/Model.hh>
+#include <zenkit/ModelAnimation.hh>
+#include <zenkit/ModelScript.hh>
+#include <zenkit/MorphMesh.hh>
 #include <zenkit/Stream.hh>
 #include <zenkit/Vfs.hh>
 #include <zenkit/Texture.hh>
@@ -162,6 +167,12 @@ void collectFiles(const zenkit::VfsNode& node, std::vector<const zenkit::VfsNode
 
 bool endsWith(const std::string& s, const std::string& tail) {
   return s.size()>=tail.size() && s.compare(s.size()-tail.size(),tail.size(),tail)==0;
+  }
+
+bool modelSource(const fs::path& path) {
+  const auto ext=upper(path.extension().string());
+  return ext==".MDH" || ext==".MDM" || ext==".MDL" || ext==".MAN" ||
+         ext==".MSB" || ext==".MDS" || ext==".MMB";
   }
 
 std::vector<std::byte> readHost(const fs::path& path) {
@@ -512,6 +523,122 @@ int convertMeshes(const fs::path& gothic, const fs::path& out, bool verifyOnly) 
   return bad==0 ? 0 : 1;
   }
 
+int convertModels(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
+  const auto t0=std::chrono::steady_clock::now();
+  std::string openedSource;
+  zenkit::Vfs vfs;
+  vfs.set_open_observer([&](std::string_view, std::string_view source) { openedSource=source; });
+  const auto archives=mountArchives(vfs,gothic);
+  for(const auto& entry:fs::directory_iterator(gothic))
+    if(entry.is_directory() && upper(entry.path().filename().string())=="_WORK") {
+      vfs.mkdir("/_work");
+      vfs.mount_host(fs::absolute(entry.path()),"/_work",zenkit::VfsOverwriteBehavior::NONE);
+      break;
+      }
+  std::vector<const zenkit::VfsNode*> files;
+  collectFiles(vfs.root(),files);
+  std::map<std::string,const zenkit::VfsNode*> models;
+  for(const auto* file:files)
+    if(modelSource(file->name())) models[upper(file->name())]=vfs.find(file->name());
+  if(!verifyOnly) {
+    fs::create_directories(out);
+    fs::remove(out/"models.json");
+    }
+
+  std::string entries="{", loose="[";
+  size_t count=0, looseCount=0;
+  uint64_t bytes=0;
+  for(const auto& [name,node]:models) {
+    const auto file=name+".json";
+    const auto path=out/file;
+    const auto ext=fs::path(name).extension().string();
+    try {
+      ImportErrors errors;
+      auto input=node->open_read();
+      std::string diff;
+      if(ext==".MDH") {
+        zenkit::ModelHierarchy source {};
+        source.load(input.get());
+        errors.check();
+        const auto own=asset::fromZenKit(source);
+        if(!verifyOnly) ModelData::writeHierarchy(own,path);
+        diff=ModelData::compare(own,ModelData::readHierarchy(path));
+        }
+      else if(ext==".MDM") {
+        const auto order=asset::modelAttachmentOrder(input.get());
+        zenkit::ModelMesh source {};
+        source.load(input.get());
+        errors.check();
+        const auto own=asset::fromZenKit(source);
+        if(!verifyOnly) ModelData::writeMesh(own,path,order);
+        diff=ModelData::compare(own,ModelData::readMesh(path));
+        }
+      else if(ext==".MDL") {
+        zenkit::Model source {};
+        source.hierarchy.load(input.get());
+        const auto order=asset::modelAttachmentOrder(input.get());
+        source.mesh.load(input.get());
+        errors.check();
+        const auto own=asset::fromZenKit(source);
+        if(!verifyOnly) ModelData::writeModel(own,path,order);
+        diff=ModelData::compare(own,ModelData::readModel(path));
+        }
+      else if(ext==".MAN") {
+        zenkit::ModelAnimation source {};
+        source.load(input.get());
+        errors.check();
+        const auto encoded=asset::animationSamplesFromZenKit(input.get(),source);
+        const auto own=asset::fromZenKit(source);
+        if(!verifyOnly) ModelData::writeAnimation(own,path,encoded);
+        diff=ModelData::compare(own,ModelData::readAnimation(path));
+        }
+      else if(ext==".MSB" || ext==".MDS") {
+        zenkit::ModelScript source {};
+        source.load(input.get());
+        errors.check();
+        const auto own=asset::fromZenKit(source);
+        if(!verifyOnly) ModelData::writeScript(own,path);
+        diff=ModelData::compare(own,ModelData::readScript(path));
+        }
+      else if(ext==".MMB") {
+        zenkit::MorphMesh source {};
+        source.load(input.get());
+        errors.check();
+        const auto own=asset::fromZenKit(source);
+        if(!verifyOnly) ModelData::writeMorph(own,path);
+        diff=ModelData::compare(own,ModelData::readMorph(path));
+        }
+      else {
+        throw std::runtime_error("unsupported model resource extension");
+        }
+      require(diff.empty(),diff);
+      if(count++) entries+=",";
+      entries+="\n    "+gothicglb::jsonString(name)+":"+gothicglb::jsonString(file);
+      if(fs::path(openedSource).is_absolute()) {
+        const auto source=fs::path(openedSource).lexically_relative(fs::absolute(gothic)).generic_string();
+        if(looseCount++) loose+=",";
+        loose+="\n    {\"path\":"+gothicglb::jsonString(source)+",\"size\":"+std::to_string(fs::file_size(openedSource))+"}";
+        }
+      bytes+=fs::file_size(path);
+      auto binary=path;
+      binary.replace_extension(".bin");
+      bytes+=fs::file_size(binary);
+      }
+    catch(const std::exception& e) { throw std::runtime_error(name+": "+e.what()); }
+    }
+  const auto index="{\n  \"format\":\"gothic-models\",\n  \"version\":1,\n  \"archives\":"+archivesJson(archives)+
+                   ",\n  \"loose_files\":"+loose+"\n  ],\n  \"files\":"+entries+"\n  }\n}\n";
+  if(!verifyOnly) writeHost(out/"models.json",index.data(),index.size());
+  const auto actual=parseJson(out/"models.json");
+  rapidjson::Document expected;
+  expected.Parse(index.c_str());
+  require(actual==expected,"models.json files, archives or loose files differ");
+  const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << (verifyOnly ? "verified " : "written and verified ") << count << " model resources, "
+            << (bytes>>20) << " MiB; 0 failed (" << ms << " ms)\n";
+  return 0;
+  }
+
 
 int convertWorld(const fs::path& gothic, const std::string& name, const fs::path& out) {
       const auto world = loadWorld(gothic,name);
@@ -540,7 +667,7 @@ Identity identify(const fs::path& gothic, Files mounted) {
   for(const auto& dir:fs::directory_iterator(gothic))
     if(dir.is_directory() && upper(dir.path().filename().string())=="_WORK") {
       for(const auto& file:fs::recursive_directory_iterator(dir.path()))
-        if(file.is_regular_file() && upper(file.path().extension().string())==".ZEN")
+        if(file.is_regular_file() && (upper(file.path().extension().string())==".ZEN" || modelSource(file.path())))
           loose.emplace_back(file.path().lexically_relative(gothic).generic_string(),file.file_size());
       break;
       }
@@ -587,13 +714,15 @@ void build(const fs::path& gothic, const fs::path& out, const Progress& progress
     if(progress) progress(std::string("base import: ")+world);
     require(convertWorld(gothic,std::string(world)+".ZEN",out/"worlds"/world)==0,"world import failed");
     }
-  for(const char* kind:{"zen","textures","meshes"}) fs::remove_all(out/kind);
+  for(const char* kind:{"zen","textures","meshes","models"}) fs::remove_all(out/kind);
   if(progress) progress("base import: ZEN files");
   require(convertZen(gothic,out/"zen",false)==0,"ZEN import failed");
   if(progress) progress("base import: textures");
   require(convertTextures(gothic,out/"textures",false)==0,"texture import failed");
   if(progress) progress("base import: meshes");
   require(convertMeshes(gothic,out/"meshes",false)==0,"mesh import failed");
+  if(progress) progress("base import: models and animations");
+  require(convertModels(gothic,out/"models",false)==0,"model import failed");
   require(identify(gothic).json==identity.json,"installation changed during base import");
   writeHost(out/"base.json",identity.json.data(),identity.json.size());
   }
