@@ -166,6 +166,25 @@ Resources::Resources(Tempest::Device &device)
   }, this);
   }
 
+void Resources::zenkitLog(zenkit::LogLevel lvl, const char* cat, const char* message) {
+  BaseImport::onZenkitLog(lvl,cat,message);
+  switch (lvl) {
+    case zenkit::LogLevel::ERROR:
+      Tempest::Log::e("[zenkit] ", message);
+      break;
+    case zenkit::LogLevel::WARNING:
+      Tempest::Log::e("[zenkit] ", message);
+      break;
+    case zenkit::LogLevel::INFO:
+      Tempest::Log::i("[zenkit] ", message);
+      break;
+    case zenkit::LogLevel::DEBUG:
+    case zenkit::LogLevel::TRACE:
+      Tempest::Log::d("[zenkit] ", message); // unused
+      break;
+    }
+  }
+
 void Resources::mountWork(const std::filesystem::path& path) {
   inst->gothicAssets.mkdir("/_work");
   inst->gothicAssets.mount_host(path, "/_work", zenkit::VfsOverwriteBehavior::NONE);

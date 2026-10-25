@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+#include <zenkit/Logger.hh>
 
 namespace BaseImport {
 using Files = std::vector<std::pair<std::string,uintmax_t>>;
@@ -15,6 +16,10 @@ struct Identity {
   std::string fingerprint;
   std::string json;
   };
+
+// Forward the application's ZenKit log callback here. Only active import reads
+// consume errors; normal archive loading keeps its existing behavior.
+void onZenkitLog(zenkit::LogLevel level, const char* component, const char* message);
 
 int convertWorld(const std::filesystem::path& gothic, const std::string& name, const std::filesystem::path& out);
 int verifyWorld(const std::filesystem::path& gothic, const std::string& name, const std::filesystem::path& out,

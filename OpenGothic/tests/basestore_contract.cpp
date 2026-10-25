@@ -2,6 +2,7 @@
 #include "basestore.h"
 #include "commandline.h"
 #include "resources.h"
+#include <zenkit/Archive.hh>
 
 #include <chrono>
 #include <cctype>
@@ -87,6 +88,52 @@ int main() {
     require(BaseImport::identify(game,mounted).json==identity.json,"archive identity differs");
     const char* args[]={"gothic-base-store-contract","-g",game};
     CommandLine commandLine(3,args);
+    zenkit::Logger::set(zenkit::LogLevel::ERROR,Resources::zenkitLog);
+    // The real engine log callback must reject a class ZenKit otherwise skips.
+    const auto unknownGame=temporary.path/"unknown-game";
+    fs::create_directories(unknownGame/"Data");
+    {
+    std::vector<std::byte> bytes;
+    auto stream=zenkit::Write::to(&bytes);
+    auto archive=zenkit::WriteArchive::to(stream.get(),zenkit::ArchiveFormat::ASCII);
+    archive->write_object_begin("world","oCWorld:zCWorld",0);
+    archive->write_object_begin("VobTree","",0);
+    archive->write_int("childs0",1);
+    archive->write_object_begin("vob","zCUnknownImportVob:zCVob",0);
+    archive->write_object_end();
+    archive->write_int("childs1",0);
+    archive->write_object_end();
+    archive->write_object_begin("EndMarker","",0);
+    archive->write_object_end();
+    archive->write_object_end();
+    archive->write_header();
+    zenkit::Vfs vfs;
+    vfs.mount(zenkit::VfsNode::file("NEWWORLD.ZEN",{bytes.data(),bytes.size(),false}),"/");
+    auto disk=zenkit::Write::to(unknownGame/"Data/UNKNOWN.VDF");
+    vfs.save(disk.get(),zenkit::GameVersion::GOTHIC_2);
+    }
+    const auto rejectUnknown=[&](auto run) {
+      std::string failure;
+      try { run(); }
+      catch(const std::exception& e) { failure=e.what(); }
+      require(failure.find("NEWWORLD.ZEN")!=std::string::npos &&
+              failure.find("Unknown object type: zCUnknownImportVob:zCVob")!=std::string::npos,
+              "import must reject unknown classes with file and class names: "+failure);
+      };
+    const auto unknownOut=temporary.path/"unknown-zen";
+    rejectUnknown([&] { BaseImport::convertZen(unknownGame,unknownOut,false); });
+    require(!fs::exists(unknownOut/"NEWWORLD.json") && !fs::exists(unknownOut/"zen.json"),
+            "rejected ZEN must not be written or indexed");
+    const auto unknownIdentity=BaseImport::identify(unknownGame);
+    rejectUnknown([&] {
+      BaseStore::resolve(unknownGame,{{"UNKNOWN.VDF",fs::file_size(unknownGame/"Data/UNKNOWN.VDF")}},
+                         [](std::string_view) {});
+      });
+    require(!fs::exists(cache/unknownIdentity.fingerprint) && !fs::exists(store/"base"/unknownIdentity.fingerprint),
+            "rejected import must not publish a base");
+    // Neither a failed import nor an unrelated log may poison the next import.
+    zenkit::Logger::log(zenkit::LogLevel::ERROR,"contract","Unknown object type: outside import");
+    std::cout << "unknown class: ZEN and world import rejected, file/class reported, no publication\n";
     // SIGTERM skips RAII cleanup. The next lock owner must remove these partial bases.
     const auto interrupted=fork(); require(interrupted>=0,"fork failed");
     if(interrupted==0) {

@@ -172,10 +172,9 @@ int selfTest() {
 
 int main(int argc, char** argv) {
   try {
-    zenkit::Logger::set(zenkit::LogLevel::ERROR,[](auto,const char* component,const char* message) {
+    zenkit::Logger::set(zenkit::LogLevel::ERROR,[](auto level,const char* component,const char* message) {
       std::cerr << "ZenKit " << component << ": " << message << '\n';
-      if(std::string_view(message).find("Unknown object type")!=std::string_view::npos)
-        throw std::runtime_error(message);
+      BaseImport::onZenkitLog(level,component,message);
       });
     const std::vector<std::string> args(argv+1,argv+argc);
     if(args.size()==1 && args[0]=="--self-test")

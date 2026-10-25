@@ -51,6 +51,8 @@ class Resources final {
     explicit Resources(Tempest::Device& device);
     ~Resources();
 
+    static void zenkitLog(zenkit::LogLevel level, const char* component, const char* message);
+
     enum class FontType : uint8_t {
       Normal,
       Hi,

@@ -41,6 +41,17 @@ namespace fs = std::filesystem;
 namespace BaseImport {
 namespace {
 
+thread_local std::string* importError=nullptr;
+
+struct ImportErrors {
+  std::string error;
+  std::string* previous=std::exchange(importError,&error);
+  ~ImportErrors() { importError=previous; }
+  void check() const {
+    if(!error.empty()) throw std::runtime_error("ZenKit "+error);
+    }
+  };
+
 void require(bool ok, const std::string& what) {
   if(!ok)
     throw std::runtime_error(what);
@@ -108,7 +119,12 @@ SourceWorld loadWorld(const fs::path& gothic, const std::string& name) {
 
   zenkit::World world;
   auto in = zenkit::Read::from(&bytes);
-  world.load(in.get(),zenkit::GameVersion::GOTHIC_2);
+  try {
+    ImportErrors errors;
+    world.load(in.get(),zenkit::GameVersion::GOTHIC_2);
+    errors.check();
+    }
+  catch(const std::exception& e) { throw std::runtime_error(name+": "+e.what()); }
   r.data = WorldData::fromWorld(world,r.source);
   r.archives = archives;
   r.mesh = asset::fromZenKit(world.world_mesh);
@@ -281,6 +297,11 @@ int verifyWorld(const SourceWorld& world, const fs::path& dir, const fs::path& o
 
 }
 
+void onZenkitLog(zenkit::LogLevel level, const char* component, const char* message) {
+  if(level==zenkit::LogLevel::ERROR && importError!=nullptr && importError->empty())
+    *importError=std::string(component)+": "+message;
+  }
+
 int convertZen(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
   const auto t0=std::chrono::steady_clock::now();
   std::string openedSource;
@@ -312,7 +333,10 @@ int convertZen(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
     WorldData::ZenFile zen;
     const WorldChunkSource source{name,sourceBytes.size(),worldChunkCrc32(sourceBytes.data(),sourceBytes.size())};
     try {
-      if(!WorldData::loadZen(sourceBytes,source,zen)) { ++worlds; continue; }
+      ImportErrors errors;
+      const bool meshless=WorldData::loadZen(sourceBytes,source,zen);
+      errors.check();
+      if(!meshless) { ++worlds; continue; }
       const auto file=name.substr(0,name.size()-4)+".json";
       if(!verifyOnly) WorldData::writeZen(zen,out/file);
       const auto diff=WorldData::compareZen(zen,WorldData::readZen(out/file));
@@ -363,9 +387,11 @@ int convertTextures(const fs::path& gothic, const fs::path& out, bool verifyOnly
   uint64_t bytes = 0;
   for(const auto& [stem,node]:compiled) {
     try {
+      ImportErrors errors;
       zenkit::Texture tex;
       auto in = node->open_read();
       tex.load(in.get());
+      errors.check();
       if(isDxt(tex.format())) {
         const auto data = zenkit::to_dds(tex);
         const auto file = stem+".dds";
@@ -452,9 +478,11 @@ int convertMeshes(const fs::path& gothic, const fs::path& out, bool verifyOnly) 
   uint64_t bytes = 0;
   for(const auto& [stem,node]:meshes) {
     try {
+      ImportErrors errors;
       zenkit::MultiResolutionMesh archiveMesh;
       auto in = node->open_read();
       archiveMesh.load(in.get());
+      errors.check();
       const auto mrm = asset::fromZenKit(archiveMesh);
       const auto file = stem+".glb";
       if(!verifyOnly)
