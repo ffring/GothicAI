@@ -204,6 +204,7 @@ class Resources final {
 
   private:
     friend struct BaseContentContract;
+    friend struct AssetDigest;
     static Resources* inst;
     void initCensus();
 

@@ -45,6 +45,7 @@ class PhysicVbo final {
 
   private:
     friend struct BaseContentContract;
+    friend struct AssetDigest;
     PhysicVbo(const std::vector<Vertex>& v);
 
     void addSegment(size_t indexSize,size_t offset, zenkit::MaterialGroup material, const char* sector);

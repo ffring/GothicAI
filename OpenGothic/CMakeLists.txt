@@ -396,6 +396,13 @@ if(NOT ANDROID AND NOT IOS)
   target_link_libraries(gothic-worldcloth-contract PRIVATE OpenGothic AiBridge)
   add_executable(gothic-worldbase-contract EXCLUDE_FROM_ALL tests/worldbase_contract.cpp)
   target_link_libraries(gothic-worldbase-contract PRIVATE OpenGothic AiBridge)
+  add_executable(gothic-asset-digest EXCLUDE_FROM_ALL tests/asset_digest.cpp)
+  target_link_libraries(gothic-asset-digest PRIVATE OpenGothic AiBridge)
+  target_include_directories(gothic-asset-digest SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
+  if(NOT APPLE)
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    target_link_libraries(gothic-asset-digest PRIVATE OpenSSL::Crypto)
+  endif()
   add_custom_target(gothic-worlddata-converter
     COMMAND ${CMAKE_COMMAND} -S ${PROJECT_SOURCE_DIR}/../scripts/convert
             -B ${CMAKE_BINARY_DIR}/worlddata-convert -DCMAKE_BUILD_TYPE=Release

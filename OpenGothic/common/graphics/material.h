@@ -68,6 +68,7 @@ class Material final {
     static bool isTextureInShadowPass(AlphaFunc alpha);
 
   private:
+    friend struct AssetDigest;
     bool             alphaTestEnabled = false;
     // An explicit GLB MASK must survive DXT1's one-bit transparency and later
     // albedo changes; native materials retain their format-based heuristics.
