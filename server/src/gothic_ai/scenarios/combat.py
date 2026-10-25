@@ -5,6 +5,7 @@ from typing import Any
 
 from .. import triggers
 from ..combat_barks import CombatBarks
+from ..contracts import GOLD
 from ..dialogue import DialogueManager
 from ..game import GameError, GameLink
 from ..llm import ToolCall
@@ -125,6 +126,88 @@ async def mercy(
         return _logged(results)
     finally:
         link.listeners.remove(record)
+        dialogue.llm = original
+
+
+async def hero_yield(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, mercy: Mercy,
+) -> dict[str, str]:
+    """The hero's typed surrender stops a native fight and pays real gold to its winner."""
+    if dialogue.llm.name != "fake":
+        raise GameError("scenario hero_yield requires LLM=fake")
+    await link.wait_world()
+    await link.debug("skip_important", near=LOBART)
+    await attach_when_free(link, LOBART)
+    await link.debug("teleport", near=LOBART, distance=200)
+    await link.act(LOBART, "stop")
+    await link.debug("player_hp", hp=2000)
+    sword = "ITMW_SHORTSWORD1"
+    await link.debug("player_equip", item=sword)
+    equipped = await _until_async(
+        lambda: link.story_eval(LOBART, [["call", "NPC_GETEQUIPPEDMELEEWEAPON", ["inst", "HERO"]]]),
+        lambda values: values == [sword], 4,
+    )
+    if not equipped:
+        raise GameError("hero_yield preparation: the hero did not equip the sword")
+    await _m5b_player_weapon(link, "melee")
+    gold = [["call", "NPC_HASITEMS", ["inst", who], ["sym", GOLD]] for who in ("HERO", "SELF")]
+    [hero_gold, _] = await link.story_eval(LOBART, gold)
+    if hero_gold < 100:
+        await link.story_effect(LOBART, [{"do": "create", "item": GOLD, "count": 100 - hero_gold},
+                                       {"do": "give", "item": GOLD, "count": 100 - hero_gold}])
+    before = await link.story_eval(LOBART, gold)
+    original = dialogue.llm
+    phrase = "Сдаюсь, забирай золото, только не бей"
+    script = ClaimScript(said=[(phrase, FakeStep(tool_calls=[ToolCall(
+        "accept_surrender", {"take": ["gold"], "words": "Ладно, живи. Золото моё."},
+    )]))], told=[], default="")
+    dialogue.llm = script
+    results: dict[str, str] = {}
+    try:
+        await link.detach(LOBART)
+        await link.debug("player_hit", npc=LOBART)
+        await link.story_effect(LOBART, [{"do": "attack", "reason": "AR_NONE"}])
+        combat = [
+            ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_ATTACK"]],
+            ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+             ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
+              ["call", "HLP_GETINSTANCEID", ["inst", "HERO"]]]],
+        ]
+        started = await _until_async(lambda: link.story_eval(LOBART, combat), lambda v: v == [1, 1], 8)
+        roster_ready = await _until(lambda: fights(talk.people.get(LOBART)), 4)
+        state = await link.story_eval(LOBART, combat)
+        results["fight_started"] = (
+            f"{'done' if started and roster_ready else 'failed'} (fighting/hero_target={state})"
+        )
+        if not started or not roster_ready:
+            return _logged(results)
+        await link.debug("type", text=phrase)
+        accepted = await _until(lambda: bool(mercy.chronicle.facts("hero_yield")), 8)
+        results["accepted"] = f"{'done' if accepted else 'failed'} (outcomes={script.outputs})"
+        if not accepted:
+            return _logged(results)
+        at = time.monotonic()
+        stopped = await _until_async(
+            lambda: link.npc_view([LOBART]),
+            lambda views: bool(views) and views[0].hp > 0 and views[0].weapon == "none"
+            and not fights(talk.people.get(LOBART)), 3,
+        )
+        results["fight_stopped"] = f"{'done' if stopped else 'failed'} (seconds={time.monotonic() - at:.2f})"
+        after = await link.story_eval(LOBART, gold)
+        transferred = before[0] > 0 and after == [0, before[1] + before[0]]
+        results["real_gold"] = (
+            f"{'done' if transferred else 'failed'} (hero/npc before={before}, after={after})"
+        )
+        indices = await link.story_eval(LOBART, [
+            ["var", n] for n in ("AIV_LASTFIGHTAGAINSTPLAYER", "AIV_LASTFIGHTCOMMENT")
+        ])
+        values = await link.story_eval(LOBART, [
+            *(["field", ["inst", "SELF"], "AIVAR", i] for i in indices), ["var", "FIGHT_WON"],
+        ])
+        native = all(type(i) is int for i in indices) and values[:2] == [values[2], 0]
+        results["native_outcome"] = f"{'done' if native else 'failed'} (indices={indices}, values={values})"
+        return _logged(results)
+    finally:
         dialogue.llm = original
 
 

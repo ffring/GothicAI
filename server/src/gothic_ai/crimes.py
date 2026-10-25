@@ -18,10 +18,10 @@ from .chronicle import Chronicle, Fact
 from .crime_sides import CrimeSides
 from .game import GameError, GameLink
 from .gamedata.storygraph import StoryGraph
-from .mercy import fresh_surrender
+from .mercy import fresh_surrender, fresh_yield
 from .people_knowledge import rumor_subject
 from .promise_breach import silence_facts
-from .protocol import DeedItem, DeedSnapshot, GameMessage, HeroDeed, Session
+from .protocol import DeedItem, DeedSnapshot, GameMessage, HeroDeed, NpcRoster, NpcViews, Session, Snapshot
 
 if TYPE_CHECKING:
     from .blame import Blame
@@ -124,6 +124,7 @@ class Crimes:
         self.names = names or (lambda npc: npc)
         self.cover = cover
         self.mercy = mercy
+        self._ticks = 0
         self.sightings: Sightings | None = None
         self.blame: Blame | None = None
         self.react: CrimeReact | None = None
@@ -334,7 +335,8 @@ class Crimes:
                 if victim:
                     action += f" (пострадавший: {victim})"
             case "attack":
-                action = f"напал на {victim}"
+                action = (f"сдался в бою {victim}, был отпущен и ударил его"
+                          if crime.get("yield_broken") else f"напал на {victim}")
             case "murder":
                 action = (f"убил того, кто сдался: {victim}" if crime.get("surrendered")
                           else f"убил человека: {victim}")
@@ -667,6 +669,9 @@ class Crimes:
         elif isinstance(msg, Session):
             self.people.clear()
             self._noncrimes.clear()
+            self._ticks = 0
+        elif isinstance(msg, (Snapshot, NpcRoster, NpcViews)):
+            self._ticks = msg.t
 
     def record(self, deed: HeroDeed) -> Fact | None:
         """Classify a raw bridge deed and keep one truth plus one fact per real witness."""
@@ -716,7 +721,8 @@ class Crimes:
             case "attack":
                 if not victim:
                     return None
-                if (
+                betrayal = self.mercy and fresh_yield(self.chronicle, victim, self._ticks)
+                if not betrayal and (
                     deed.victim_is_monster
                     or deed.victim_guild > 16
                     or deed.victim_in_fight
@@ -729,6 +735,8 @@ class Crimes:
                     return self._noncrime(deed.id)
                 community = self.community(deed.victim_guild, deed.victim_npctype)
                 kind = "attack"
+                if betrayal:
+                    extra["yield_broken"] = True
             case "murder":
                 if not victim:
                     return None

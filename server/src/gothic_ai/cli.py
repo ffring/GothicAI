@@ -1016,7 +1016,10 @@ async def serve(args: argparse.Namespace) -> int:
             state.bounty = Bounty(link, state.dialogue, state.chronicle, perception=perception)
             state.dialogue.extensions.append(state.bounty)
         if not args.no_mercy:
-            state.mercy = Mercy(state.dialogue, state.chronicle, orders, state.parley)
+            state.mercy = Mercy(
+                state.dialogue, state.chronicle, orders, state.parley,
+                law=state.crime_law.law if state.crime_law else None,
+            )
             state.dialogue.extensions.append(state.mercy)
             if state.combat_barks is not None:
                 state.combat_barks.silenced = state.mercy.silent
@@ -1598,11 +1601,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
-            elif args.scenario == "mercy":
+            elif args.scenario in {"mercy", "hero_yield"}:
                 assert state.dialogue is not None and state.mercy is not None and state.talk is not None
-                results = await scenarios.mercy(link, state.dialogue, state.talk, state.mercy)
+                scenario = scenarios.hero_yield if args.scenario == "hero_yield" else scenarios.mercy
+                results = await scenario(link, state.dialogue, state.talk, state.mercy)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
-                log.info("scenario mercy: %d checks, %d failed", len(results), len(bad))
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "svm_lines":
                 assert state.dialogue is not None
@@ -3030,6 +3034,7 @@ def main() -> None:
             "svm_lines",
             "combat_barks",
             "mercy",
+            "hero_yield",
             "orders",
             "fight_reactions_wolf",
             "fight_reactions_sight",
@@ -3183,7 +3188,7 @@ def main() -> None:
         "--no-svm-lines", action="store_true", help="keep the humans' native SVM voices and subtitles"
     )
     p.add_argument("--no-combat-barks", action="store_true", help="disable quick-model combat cries")
-    p.add_argument("--no-mercy", action="store_true", help="disable NPC surrender and mercy")
+    p.add_argument("--no-mercy", action="store_true", help="disable NPC and hero surrender and mercy")
     p.add_argument("--no-brain", action="store_true", help="do not plan npc decisions outside conversations")
     p.add_argument("--no-director", action="store_true", help="do not repair quests left without an ending")
     p.add_argument("--no-gates", action="store_true", help="disable conversational gate admission")

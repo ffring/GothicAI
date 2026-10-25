@@ -16,6 +16,7 @@ from .basics import tts_lines as tts_lines
 from .basics import websocket as websocket
 from .cheat import cheat_scenario as cheat_scenario
 from .combat import combat_barks as combat_barks
+from .combat import hero_yield as hero_yield
 from .combat import mercy as mercy
 from .companions import calm_scenario as calm_scenario
 from .companions import companion_scenario as companion_scenario

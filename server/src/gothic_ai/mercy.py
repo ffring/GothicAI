@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from . import triggers
 from .chronicle import Chronicle, Fact
+from .contracts import GOLD, SYMBOL, Give
 from .executor import Intent
 from .game import GameError
 from .llm import Tool, ToolCall
@@ -29,6 +30,7 @@ from .protocol import (
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
+    from .crime_law import CrimeLaw
     from .dialogue import Conversation, DialogueManager
     from .orders import Orders
     from .parley import Parley
@@ -47,11 +49,32 @@ SURRENDER = Tool(
     {"type": "object", "properties": {"words": {"type": "string"}},
      "required": ["words"], "additionalProperties": False},
 )
+VICTOR = (
+    "Недавно он сдался тебе в бою, и ты его отпустил. Держишься с ним как победитель — "
+    "насколько позволяет твой характер."
+)
+ACCEPT_SURRENDER = Tool(
+    "accept_surrender",
+    "Принять сдачу героя: прекратить бой и сказать words на ходу. Решай по характеру и положению, "
+    "принимать ли и что брать: можно меньше или больше предложенного, либо отказаться и драться дальше. "
+    "take: gold — всё золото героя; weapons — надетое ближнее и дальнее оружие; fine — только для "
+    "представителя закона, точная сумма долга crimes, если золота хватает; также до пяти id предметов "
+    "из инвентаря героя, по одной штуке. Пустой take — отпустить без выкупа. gold включает fine.",
+    {"type": "object", "properties": {
+        "take": {"type": "array", "items": {"type": "string"}},
+        "words": {"type": "string"},
+    }, "required": ["take", "words"], "additionalProperties": False},
+)
 
 
 def fresh_surrender(chronicle: Chronicle, npc: str, now: int) -> Fact | None:
     return next((f for f in reversed(chronicle.facts("surrender"))
                  if f["npc"] == npc.upper() and now < f["until"]), None)
+
+
+def fresh_yield(chronicle: Chronicle, npc: str, ticks: int) -> Fact | None:
+    return next((f for f in reversed(chronicle.facts("hero_yield"))
+                 if f["npc"] == npc.upper() and f["t"] <= ticks < f["deadline"]), None)
 
 
 @dataclass
@@ -64,14 +87,16 @@ class Battle:
 
 
 class Mercy:
-    all_tools = (SURRENDER,)
+    all_tools = (SURRENDER, ACCEPT_SURRENDER)
 
     def __init__(
         self, dialogue: DialogueManager, chronicle: Chronicle, orders: Orders,
-        parley: Parley | None,
+        parley: Parley | None, *, law: CrimeLaw | None = None,
     ) -> None:
         self.dialogue, self.link, self.chronicle = dialogue, dialogue.link, chronicle
         self.orders, self.parley = orders, parley
+        self.law = law
+        self.accepting: set[str] = set()
         self.battles: dict[str, Battle] = {}
         self.offering: set[str] = set()
         self._ticks = 0
@@ -137,6 +162,12 @@ class Mercy:
             offers = self.chronicle.facts("mercy_offer")
             battle.offered = any(f["npc"] == npc and self._ticks - f["t"] < 20000 for f in offers)
         battle.last, battle.hp, battle.opponent = now, hit.hp, attacker
+        if attacker in {"PLAYER", "PC_HERO"} and self._betray(npc):
+            if not hit.dead and not hit.down:
+                self._urgent(
+                    npc, "[Он сдался тебе и ударил. Перемирие снято. Реши по характеру, что делать.]",
+                )
+            return
         if hit.dead or hit.down:
             self._dead.add(npc)
             return
@@ -196,6 +227,7 @@ class Mercy:
             self._loading = isinstance(msg, Loading)
             self.battles.clear()
             self.offering.clear()
+            self.accepting.clear()
             self._dead.clear()
             self._armed = False
             self._ticks, self._minute = 0, None
@@ -227,18 +259,54 @@ class Mercy:
                     self._spare(npc)
 
     async def prepare(self, npc: str) -> None:
-        pass
+        self.accepting.discard(npc)
+        if self._hero_turn(npc) and await self._hero_fight(npc):
+            self.accepting.add(npc)
+
+    def _hero_turn(self, npc: str) -> bool:
+        conv = self.dialogue.conversations.get(npc)
+        return bool(conv and conv.trigger and conv.trigger.role == "user"
+                    and conv.reply and not conv.reply.done())
+
+    async def _hero_fight(self, npc: str) -> bool:
+        entry = self.orders.talk.people.get(npc)
+        if (entry is None or entry.guild >= BEASTS or self.orders.companion(npc)
+                or not self._alive(npc) or self.silent(npc)):
+            return False
+        [fighting] = await self.link.story_eval(npc, [[
+            "&&", ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_ATTACK"]],
+            ["!", ["call", "NPC_ISDEAD", ["inst", "SELF"]]],
+            ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+            ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
+             ["call", "HLP_GETINSTANCEID", ["inst", "PC_HERO"]]],
+        ]])
+        return fighting == 1
 
     def situation(self, npc: str) -> str | None:
         now = self._now()
         fact = fresh_surrender(self.chronicle, npc, now) if now is not None else None
-        return YIELDING if fact and fact["status"] == "spared" else None
+        lines = [YIELDING] if fact and fact["status"] == "spared" else []
+        if now is not None and any(f["npc"] == npc and now < f["until"]
+                                   for f in self.chronicle.facts("hero_yield")):
+            lines.append(VICTOR)
+        if npc in self.accepting and self._hero_turn(npc):
+            lines.append("Сейчас ты в бою с героем, твоя цель — герой. Он сказал тебе эту фразу. "
+                         "Если решишь принять его сдачу, вызови accept_surrender{take, words}; "
+                         "без вызова бой продолжается. Выкуп и решение — по твоему характеру и положению.")
+        return "\n".join(lines) or None
 
     def tools(self, npc: str) -> list[Tool]:
-        return [SURRENDER] if npc.upper() in self.offering else []
+        tools = [SURRENDER] if npc.upper() in self.offering else []
+        if npc.upper() in self.accepting and self._hero_turn(npc.upper()):
+            tools.append(ACCEPT_SURRENDER)
+        return tools
 
-    async def _native_loss(self, npc: str) -> None:
-        names = ["AIV_LASTFIGHTAGAINSTPLAYER", "AIV_LASTFIGHTCOMMENT", "AIV_DEFEATEDBYPLAYER"]
+    async def _native_outcome(self, npc: str, *, won: bool = False) -> None:
+        names = ["AIV_LASTFIGHTAGAINSTPLAYER", "AIV_LASTFIGHTCOMMENT"]
+        values = [["var", "FIGHT_WON" if won else "FIGHT_LOST"], ["int", 0]]
+        if not won:
+            names.append("AIV_DEFEATEDBYPLAYER")
+            values.append(["int", 1])
         indices = await self.link.story_eval(npc, [["var", name] for name in names])
         key = f"DIR_MERCY_{uuid.uuid4().hex[:12].upper()}"
         done = asyncio.get_running_loop().create_future()
@@ -251,7 +319,7 @@ class Mercy:
         try:
             await self.link.patch_graph([triggers.trigger(key, triggers.STATE, [
                 {"do": "set", "target": ["field", ["inst", "SELF"], "AIVAR", index], "value": value}
-                for index, value in zip(indices, [["var", "FIGHT_LOST"], ["int", 0], ["int", 1]], strict=True)
+                for index, value in zip(indices, values, strict=True)
             ], npc=npc)])
             result = await asyncio.wait_for(done, 3)
             if result.error is not None:
@@ -260,9 +328,104 @@ class Mercy:
             self.link.listeners.remove(fired)
             await self.link.patch_graph([triggers.removal(key)])
 
+    def _betray(self, npc: str) -> bool:
+        fact = fresh_yield(self.chronicle, npc, self._ticks)
+        if fact is None or any(f["yield"] == fact["id"] for f in self.chronicle.facts("yield_broken")):
+            return False
+        self.chronicle.record({"fact": "yield_broken", "yield": fact["id"], "npc": npc, "t": self._ticks})
+        for truce in self.chronicle.facts("truce"):
+            if npc in truce["members"] and not any(
+                f["truce"] == truce["id"] for f in self.chronicle.facts("truce_broken")
+            ):
+                self.chronicle.record({"fact": "truce_broken", "truce": truce["id"], "npc": npc,
+                                       "members": truce["members"], "reason": "yield_broken"})
+        return True
+
+    async def _ransom(self, npc: str, raw: object) -> tuple[list[Give], str | None, list[str]]:
+        if not isinstance(raw, list) or any(not isinstance(x, str) for x in raw):
+            raise GameError("take must be a list of gold, weapons, fine or item ids")
+        take = set(raw)
+        ids = {x.upper() for x in take - {"gold", "weapons", "fine"}}
+        if len(ids) > 5 or any(not SYMBOL.fullmatch(x) for x in ids):
+            raise GameError("take accepts at most five item ids")
+        community, fine = None, 0
+        cases = []
+        if "fine" in take:
+            community = self.law.community_of(npc) if self.law else None
+            if self.law is None or not self.law.is_guard(npc, community):
+                raise GameError("fine is only available to community lawkeepers")
+            fine = self.law.debt(community)
+            if fine <= 0:
+                raise GameError("the hero has no unpaid crimes known to your community law")
+            cases = [f["id"] for f in self.law.unpaid(community)]
+        if "weapons" in take:
+            weapons = await self.link.story_eval(npc, [
+                ["call", fn, ["inst", "HERO"]]
+                for fn in ("NPC_GETEQUIPPEDMELEEWEAPON", "NPC_GETEQUIPPEDRANGEDWEAPON")
+            ])
+            equipped = {w.upper() for w in weapons if isinstance(w, str)}
+            if not equipped:
+                raise GameError("the hero has no equipped weapons")
+            ids.update(equipped)
+        if "gold" in take or fine:
+            ids.add(GOLD)
+        items = sorted(ids)
+        state = await self.link.story_state(symbols=items, items=items) if items else {}
+        if missing := [i for i in items if state.get("symbols", {}).get(i) != "item"]:
+            raise GameError(f"unknown item ids: {', '.join(missing)}")
+        counts = await self.link.story_eval(npc, [
+            ["call", "NPC_HASITEMS", ["inst", "HERO"], ["sym", item]] for item in items
+        ]) if items else []
+        gives = []
+        for item, held in zip(items, counts, strict=True):
+            wanted = held if item == GOLD and "gold" in take else fine if item == GOLD and fine else 1
+            if type(held) is not int or held <= 0 or held < wanted or (item == GOLD and held < fine):
+                raise GameError(f"missing hero item: {item} (has {held}, needs {max(wanted or 0, fine)})")
+            gives.append(Give(item, wanted, state.get("items", {}).get(item) or item))
+        return gives, community, cases
+
+    async def _accept(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
+        npc, now = conv.npc, self._now()
+        if npc not in self.accepting or not self._hero_turn(npc) or not await self._hero_fight(npc):
+            return ToolOutcome(
+                "Отклонено: ты не в бою с героем, не слышал его фразу или уже сдался сам.", "rejected",
+            )
+        words = call.arguments.get("words")
+        if not isinstance(words, str) or not words.strip() or now is None:
+            return ToolOutcome("Отклонено: нужны слова в words и известное время мира.", "rejected")
+        try:
+            gives, community, cases = await self._ransom(npc, call.arguments.get("take"))
+            await self._native_outcome(npc, won=True)
+        except (GameError, TimeoutError) as error:
+            return ToolOutcome(f"Отклонено: не удалось принять сдачу ({error}).", "rejected")
+        intent = Intent(attitude="wary")
+        self.dialogue._change_intent(conv, intent, snap, body=False)
+        output, ok = await self.dialogue._calm(conv, intent, effects=[g.effect("self") for g in gives])
+        if not ok:
+            return ToolOutcome(f"Отклонено: {output}", "rejected")
+        self.accepting.discard(npc)
+        if community is not None:
+            self.law.absolve(community, crimes=cases)
+        self.chronicle.record({
+            "fact": "hero_yield", "id": uuid.uuid4().hex, "npc": npc, "name": conv.persona.name,
+            "t": self._ticks, "deadline": self._ticks + 60000, "until": (now // 1440 + 2) * 1440,
+            "take": [g.fact() for g in gives],
+        })
+        self.orders.truce(npc)
+        if self.parley:
+            await self.parley.accept_deal(npc, 1, now=now)
+        taken = "; ".join(f"{g.name} ×{g.count} ({g.item})" for g in gives) or "ничего, без выкупа"
+        self.dialogue.remember(npc, conv.persona.name, f"Герой сдался тебе в бою; ты взял: {taken}.")
+        self.dialogue._drop_unvoiced(conv)
+        await self.dialogue._say(conv, words.strip(), None, overlay=True)
+        return ToolOutcome(f"Принято: бой прекращён; герой передал тебе: {taken}."
+                           + (" Долг перед законом погашен." if community else ""), "accepted")
+
     async def handle(
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None,
     ) -> ToolOutcome | None:
+        if call.name == "accept_surrender":
+            return await self._accept(conv, call, snap)
         if call.name != "surrender":
             return None
         if not self._alive(conv.npc):
@@ -287,7 +450,7 @@ class Mercy:
         if not fighting:
             return ToolOutcome("Отклонено: ты больше не в бою с героем или его спутниками.", "rejected")
         try:
-            await self._native_loss(conv.npc)
+            await self._native_outcome(conv.npc)
         except (GameError, TimeoutError) as error:
             return ToolOutcome(
                 f"Отклонено: игра не подтвердила исход сдачи ({type(error).__name__}: {error}).", "rejected",

@@ -20,7 +20,7 @@ from gothic_ai.llm.fake import FakeBackend
 from gothic_ai.memory import MemoryStore
 from gothic_ai.orders import Orders
 from gothic_ai.persona import PersonaProvider
-from gothic_ai.protocol import HeroDeed, Loading, NpcEvent, NpcViews, Perception, Session
+from gothic_ai.protocol import HeroDeed, Loading, NpcEvent, NpcRoster, NpcViews, Perception, Session
 from gothic_ai.questbook import Goal, Progress, Quest, Stage, Talk
 
 LOBART = "BAU_950_LOBART"
@@ -61,6 +61,27 @@ async def test_ordinary_murder_stays_as_before_mercy(system, surrender, enabled)
     assert crimes.side(HILDA, crime["id"])["why"] == "fought"
     chronicle.record({"fact": "crime_known", "community": "farm", "crime": crime["id"]})
     assert CrimeLaw(crimes).debt("farm") == 550
+
+
+@pytest.mark.parametrize("enabled,ticks,broken", [(True, 60999, True), (True, 61000, False),
+                                                  (False, 1000, False)])
+async def test_hero_yield_betrayal_reaches_witness_with_ordinary_attack_debt(system, enabled, ticks, broken):
+    crimes, chronicle = system.crimes, system.chronicle
+    crimes.mercy = enabled
+    chronicle.record({"fact": "hero_yield", "id": "yield-1", "npc": LOBART,
+                      "t": 1000, "deadline": 61000, "until": 5 * 1440})
+    system.link.receive(NpcRoster(type="npc_roster", t=ticks, npcs=[]))
+    crime = crimes.record(deed(
+        kind="attack", victim=LOBART, victim_guild=8, victim_started_fight=True,
+        witnesses=[HILDA], witnesses_metadata=[{"npc": HILDA, "guild": 8}],
+    ))
+    if not broken:
+        assert crime is None
+        return
+    assert crime["kind"] == "attack" and crime["yield_broken"] and "surrendered" not in crime
+    assert "сдался в бою" in crimes.situation(HILDA) and "ударил его" in crimes.situation(HILDA)
+    chronicle.record({"fact": "crime_known", "community": "farm", "crime": crime["id"]})
+    assert CrimeLaw(crimes).debt("farm") == 50
 
 
 class Link:
