@@ -19,6 +19,7 @@ struct Selection {
   std::filesystem::path path;
   // Keep the cache entry leased until its resource owner is destroyed.
   std::shared_ptr<Lock> lease;
+  // Optional completion wait for callers that need the store copy, not shutdown.
   std::future<void> publication;
   };
 // A nonempty OPENGOTHIC_BASE selects and validates an explicit base.

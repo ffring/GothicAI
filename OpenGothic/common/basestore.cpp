@@ -1,14 +1,14 @@
 #include "basestore.h"
 
-#include <Tempest/Log>
-
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
+#include <thread>
 #ifndef _WIN32
 #include <fcntl.h>
 #include <sys/file.h>
@@ -145,7 +145,7 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     log(std::string("base: ")+source+" "+destination.string()+" ("+std::to_string(ms)+" ms)");
     if(upload && !store.empty()) {
       // The worker owns a lease too: pruning cannot remove its source while copying.
-      selected.publication=std::async(std::launch::async,[store,destination,identity,lease=selected.lease] {
+      std::packaged_task<void()> publication([store,destination,identity,lease=selected.lease] {
         const auto started=std::chrono::steady_clock::now();
         try {
           const auto root=store/"base";
@@ -156,10 +156,16 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
           if(BaseImport::matches(stored,identity)) return;
           copy(destination,stored,identity);
           const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
-          Tempest::Log::i("base: published to store ",stored.string()," (",ms," ms, background)");
+          // The worker may outlive Resources and Tempest's logging callback.
+          std::fprintf(stderr,"base: published to store %s (%lld ms, background)\n",
+                       stored.string().c_str(),static_cast<long long>(ms));
           }
-        catch(const std::exception& e) { Tempest::Log::e("base: store publication failed: ",e.what()); }
+        catch(const std::exception& e) { std::fprintf(stderr,"base: store publication failed: %s\n",e.what()); }
         });
+      selected.publication=publication.get_future();
+      // A packaged-task future does not join on destruction. Process exit can
+      // interrupt the copy; the next publisher removes its temporary directory.
+      std::thread(std::move(publication)).detach();
       }
     return selected;
     };
