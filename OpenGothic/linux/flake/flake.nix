@@ -21,7 +21,6 @@
           ];
           buildInputs = with pkgs; [
             alsa-lib
-            openssl
             libX11
             libXcursor
             vulkan-headers

@@ -103,17 +103,17 @@ sudo apt update
 sudo apt install vulkan-sdk
 
 # distro-provided packages
-sudo apt install git cmake g++ glslang-tools libvulkan-dev libasound2-dev libssl-dev libx11-dev libxcursor-dev
+sudo apt install git cmake g++ glslang-tools libvulkan-dev libasound2-dev libx11-dev libxcursor-dev
 ```
 
 * Arch
 ```bash
-sudo pacman -S git cmake gcc glslang vulkan-devel alsa-lib openssl libx11 libxcursor vulkan-icd-loader libglvnd
+sudo pacman -S git cmake gcc glslang vulkan-devel alsa-lib libx11 libxcursor vulkan-icd-loader libglvnd
 ```
 
 * Fedora
 ```bash
-sudo dnf install git cmake gcc-c++ glslang vulkan-loader-devel alsa-lib-devel openssl-devel libX11-devel libXcursor-devel vulkan-validation-layers-devel libglvnd-devel
+sudo dnf install git cmake gcc-c++ glslang vulkan-loader-devel alsa-lib-devel libX11-devel libXcursor-devel vulkan-validation-layers-devel libglvnd-devel
 ```
 
 * NixOS
@@ -151,9 +151,8 @@ Executables can be located at `OpenGothic/build/opengothic`.
 Install dependencies: JDK 17, Gradle 8.9, CMake 3.22.1 or newer, Ninja and the Android SDK with SDK 35, build-tools 35.0.0, NDK 27.0.12077973 and SDK CMake 3.22.1.
 Set `JAVA_HOME`, `ANDROID_HOME` and `VULKAN_SDK`. Put Gradle, Ninja and the host Vulkan SDK's `glslangValidator` on `PATH`. 
 Vulkan headers come from the host SDK; Android links the NDK's Vulkan loader.
-Build the ARM64 OpenSSL dependency first as described in [android/README.md](android/README.md#build); the NDK does not provide Crypto. Use its installation prefix below.
 ```bash
-cmake -S . -B build/android -G Ninja -DCMAKE_TOOLCHAIN_FILE=/path/to/ndk/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 -DOPENSSL_INCLUDE_DIR=/path/to/openssl-android/include -DOPENSSL_CRYPTO_LIBRARY=/path/to/openssl-android/lib/libcrypto.a -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build/android -G Ninja -DCMAKE_TOOLCHAIN_FILE=/path/to/ndk/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 -DCMAKE_BUILD_TYPE=Release
 cmake --build build/android --target OpenGothic-apk
 ```
 Details on APK build and ADB game-file setup are documented in [android/README.md](android/README.md).

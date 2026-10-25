@@ -1,5 +1,6 @@
 #include "baseimport.h"
 #include "baseformat.h"
+#include "sha256.h"
 #include "asset/fromzenkit.h"
 #include "basemesh.h"
 #include "worldchunks.h"
@@ -30,11 +31,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#ifdef __APPLE__
-#include <CommonCrypto/CommonDigest.h>
-#else
-#include <openssl/evp.h>
-#endif
 
 namespace fs = std::filesystem;
 
@@ -535,21 +531,7 @@ int verifyWorld(const fs::path& gothic, const std::string& name, const fs::path&
   }
 
 std::string sha256(std::string_view bytes) {
-  unsigned char digest[32];
-#ifdef __APPLE__
-  require(bytes.size()<=UINT32_MAX,"SHA-256 input too large");
-  CC_SHA256(bytes.data(),CC_LONG(bytes.size()),digest);
-#else
-  unsigned int size=0;
-  require(EVP_Digest(bytes.data(),bytes.size(),digest,&size,EVP_sha256(),nullptr)==1 && size==32,
-          "SHA-256 failed");
-#endif
-  std::string hex;
-  for(auto byte:digest) {
-    hex.push_back("0123456789abcdef"[byte>>4]);
-    hex.push_back("0123456789abcdef"[byte&15]);
-    }
-  return hex;
+  return Sha256::hash(bytes);
   }
 
 Identity identify(const fs::path& gothic, Files mounted) {

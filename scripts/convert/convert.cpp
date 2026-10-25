@@ -22,6 +22,7 @@
 // The output is Gothic content: it never goes into git.
 
 #include "baseimport.h"
+#include "sha256.h"
 #include "asset/fromzenkit.h"
 #include "basemesh.h"
 #include "worldchunks.h"
@@ -72,6 +73,22 @@ asset::Material material(const std::string& name, const std::string& texture, as
   }
 
 int selfTest() {
+  // NIST SHA-256 vectors: empty, one block, two padding blocks and a long message.
+  const std::pair<std::string,std::string_view> vectors[] = {
+    {"", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+    {"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+    {"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"},
+    {std::string(1000000,'a'), "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"}
+    };
+  for(const auto& [input,expected]:vectors) {
+    require(BaseImport::sha256(input)==expected,"SHA-256 NIST vector");
+    Sha256 streamed;
+    // Exercise the small, unaligned updates used by the asset digest.
+    for(size_t i=0;i<input.size();i+=7)
+      streamed.update(input.data()+i,std::min(size_t(7),input.size()-i));
+    require(streamed.finish()==expected,"SHA-256 streamed NIST vector");
+    }
+
   asset::WorldMesh mesh;
   mesh.materials.push_back(material("UNUSED","UNUSED.TGA",asset::MaterialGroup::STONE));
   // Sector name with a byte above 0x7F: must survive byte for byte.

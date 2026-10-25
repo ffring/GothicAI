@@ -82,7 +82,7 @@ endif()
 
 # sources
 file(GLOB_RECURSE OPENGOTHIC_SOURCES "common/*.h" "common/*.cpp")
-foreach(source baseimport worldchunks worlddata basemesh gothicglb gltfmesh asset/fromzenkit)
+foreach(source sha256 baseimport worldchunks worlddata basemesh gothicglb gltfmesh asset/fromzenkit)
   list(REMOVE_ITEM OPENGOTHIC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/common/${source}.cpp")
 endforeach()
 if(NOT OPENGOTHIC_ENABLE_FRAME_PROFILE)
@@ -401,19 +401,9 @@ if(NOT ANDROID AND NOT IOS)
   target_link_libraries(gothic-worldcloth-contract PRIVATE OpenGothic AiBridge)
   add_executable(gothic-worldbase-contract EXCLUDE_FROM_ALL tests/worldbase_contract.cpp)
   target_link_libraries(gothic-worldbase-contract PRIVATE OpenGothic AiBridge)
-  if(NOT APPLE)
-    find_package(OpenSSL QUIET COMPONENTS Crypto)
-  endif()
-  if(APPLE OR TARGET OpenSSL::Crypto)
-    add_executable(gothic-asset-digest EXCLUDE_FROM_ALL tests/asset_digest.cpp)
-    target_link_libraries(gothic-asset-digest PRIVATE OpenGothic AiBridge)
-    target_include_directories(gothic-asset-digest SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
-    if(NOT APPLE)
-      target_link_libraries(gothic-asset-digest PRIVATE OpenSSL::Crypto)
-    endif()
-  else()
-    message(STATUS "gothic-asset-digest unavailable: OpenSSL Crypto development files are required")
-  endif()
+  add_executable(gothic-asset-digest EXCLUDE_FROM_ALL tests/asset_digest.cpp)
+  target_link_libraries(gothic-asset-digest PRIVATE OpenGothic AiBridge)
+  target_include_directories(gothic-asset-digest SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
   add_custom_target(gothic-worlddata-converter
     COMMAND ${CMAKE_COMMAND} -S ${PROJECT_SOURCE_DIR}/../scripts/convert
             -B ${CMAKE_BINARY_DIR}/worlddata-convert -DCMAKE_BUILD_TYPE=Release
@@ -500,10 +490,7 @@ if(ANDROID)
   add_android_apk(OpenGothic-apk
     PACKAGE_NAME org.opengothic.app
     CODE Gothic2Notr
-    MANIFEST android/AndroidManifest.xml
-    CMAKE_ARGUMENTS
-      "-DOPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR}"
-      "-DOPENSSL_CRYPTO_LIBRARY=${OPENSSL_CRYPTO_LIBRARY}")
+    MANIFEST android/AndroidManifest.xml)
 endif()
 
 # installation
