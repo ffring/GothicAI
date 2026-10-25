@@ -1,4 +1,5 @@
 #include "resources.h"
+#include "basestore.h"
 #include "asset/fromzenkit.h"
 #include "commandline.h"
 
@@ -221,6 +222,14 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
     }
 
   std::sort(mounted.begin(),mounted.end());
+  if(std::getenv("OPENGOTHIC_BASE")==nullptr) {
+    try {
+      inst->automaticBase=BaseStore::resolve(std::filesystem::path(CommandLine::inst().rootPath()),mounted,
+                                           [](std::string_view message) { Log::i(message); });
+      inst->indexBaseContent();
+      }
+    catch(const std::exception& e) { Log::e("base: automatic import unavailable: ",e.what(),"; using archives"); }
+    }
   inst->baseTextures.validate(mounted);
   inst->baseMeshes.validate(mounted);
   inst->baseZen.validate(mounted);
@@ -616,9 +625,7 @@ std::filesystem::path Resources::baseDir() {
       return {};
     return dir;
     }
-  if(const char* home = std::getenv("HOME"))
-    return std::filesystem::path(home)/".local/share/gothic-ai/base/v1";
-  return {};
+  return inst->automaticBase;
   }
 
 std::filesystem::path Resources::worldBaseDir(std::string_view world) {

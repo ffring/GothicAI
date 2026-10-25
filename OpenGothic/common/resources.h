@@ -222,6 +222,7 @@ class Resources final {
       };
     BaseIndex baseTextures, baseMeshes, baseZen;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
+    std::filesystem::path automaticBase;
     static std::filesystem::path baseDir();
     void indexBaseContent();
 

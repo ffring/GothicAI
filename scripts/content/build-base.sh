@@ -6,7 +6,7 @@
 #   GOTHIC_DIR=... scripts/content/build-base.sh
 #
 # The output is Gothic content: it stays outside git. On Ryzen pass an explicit folder of
-# your task: other sessions' runs read ~/.local/share/gothic-ai/base when OPENGOTHIC_BASE is unset.
+# your task; automatic engine imports use a fingerprinted cache instead.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
@@ -17,12 +17,5 @@ cmake -S "$ROOT/scripts/convert" -B "$BUILD" "${generator[@]}" -DCMAKE_BUILD_TYP
 cmake --build "$BUILD" --parallel 4 >/dev/null
 tool="$BUILD/content-convert"
 "$tool" --self-test
-for world in NEWWORLD OLDWORLD ADDONWORLD DRAGONISLAND; do
-  rm -rf "$OUT/worlds/$world"
-  "$tool" world "$GOTHIC_DIR" "$world.ZEN" "$OUT/worlds/$world"
-done
-rm -rf "$OUT/textures" "$OUT/meshes" "$OUT/zen"
-"$tool" zen "$GOTHIC_DIR" "$OUT/zen"
-"$tool" textures "$GOTHIC_DIR" "$OUT/textures"
-"$tool" meshes "$GOTHIC_DIR" "$OUT/meshes"
+"$tool" base "$GOTHIC_DIR" "$OUT"
 du -sh "$OUT"
