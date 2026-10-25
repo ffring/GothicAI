@@ -7,7 +7,7 @@
 #include <functional>
 #include <array>
 
-#include <zenkit/World.hh>
+#include "worlddata.h"
 
 #include "graphics/worldview.h"
 #include "graphics/lightgroup.h"
@@ -124,8 +124,8 @@ class World final {
     MeshObjects::Mesh    addAtachView (const ProtoMesh::Attach& visual, const int32_t version);
     MeshObjects::Mesh    addStaticView(const ProtoMesh* visual, bool staticDraw);
     MeshObjects::Mesh    addStaticView(std::string_view visual);
-    MeshObjects::Mesh    addDecalView (const zenkit::VisualDecal& decal);
-    LightGroup::Light    addLight(const zenkit::VLight& vob);
+    MeshObjects::Mesh    addDecalView (const asset::VisualDecal& decal);
+    LightGroup::Light    addLight(const asset::VLight& vob);
     LightGroup::Light    addLight(std::string_view preset);
 
     void                 updateAnimation(uint64_t dt);
@@ -184,7 +184,7 @@ class World final {
     void                 removeNpc  (Npc& npc);
 
     Item*                addItem    (size_t itemInstance,   std::string_view     at);
-    Item*                addItem    (const zenkit::VItem& vob);
+    Item*                addItem    (const asset::VItem& vob);
     Item*                addItem    (size_t itemInstance, const Tempest::Vec3&      pos);
     Item*                addItemDyn (size_t itemInstance, const Tempest::Matrix4x4& pos, size_t owner);
     auto                 takeItem   (Item& it) -> std::unique_ptr<Item>;
@@ -224,7 +224,7 @@ class World final {
     void                 addInteractive(Interactive* inter);
     void                 addStartPoint (const Tempest::Vec3& pos, const Tempest::Vec3& dir, std::string_view name);
     void                 addFreePoint  (const Tempest::Vec3& pos, const Tempest::Vec3& dir, std::string_view name);
-    void                 addSound      (const zenkit::VirtualObject& vob);
+    void                 addSound      (const asset::VirtualObject& vob);
 
     void                 invalidateVobIndex();
     std::vector<Vob::AttachmentSnapshot> vobAttachmentSnapshot(uint32_t zenId) const { return wobj.vobAttachmentSnapshot(zenId); }
@@ -243,8 +243,8 @@ class World final {
       };
 
     struct {
-      std::vector<zenkit::BspNode>        nodes;
-      std::vector<zenkit::BspSector>      sectors;
+      std::vector<asset::BspNode>        nodes;
+      std::vector<asset::BspSector>      sectors;
       std::vector<std::uint64_t>          leaf_node_indices;
       std::vector<BspSector>              sectorsData;
       } bsp;
@@ -285,7 +285,7 @@ class World final {
     std::vector<SpellField>               spellFields;
     std::unique_ptr<Npc>                  lvlInspector;
 
-    auto         roomAt(const zenkit::BspNode &node) -> std::string_view;
+    auto         roomAt(const asset::BspNode &node) -> std::string_view;
     auto         portalAt(std::string_view tag) -> BspSector*;
 
     void         initScripts(bool firstTime);

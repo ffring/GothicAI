@@ -9,7 +9,7 @@
 #include <zenkit/Vfs.hh>
 #include "asset/staticmesh.h"
 #include "basestore.h"
-#include <zenkit/world/VobTree.hh>
+#include "asset/worldtypes.h"
 
 #include <tuple>
 #include <string_view>
@@ -32,10 +32,8 @@ class ContentCensus;
 
 namespace asset { struct WorldMesh; }
 
-namespace zenkit {
-class World;
-}
-namespace WorldData { struct Room; struct ZenFile; }
+namespace zenkit { class ReadArchive; }
+namespace WorldData { struct Data; struct ZenFile; }
 
 namespace Dx8 {
 class DirectMusic;
@@ -94,7 +92,7 @@ class Resources final {
       Tempest::Vec3 color;
       };
 
-    using VobTree = std::vector<std::shared_ptr<zenkit::VirtualObject>>;
+    using VobTree = std::vector<std::shared_ptr<asset::VirtualObject>>;
 
     static Tempest::Device&          device();
     static bool                      hasGraphicsDevice() { return inst!=nullptr && inst->dev!=nullptr; }
@@ -158,7 +156,7 @@ class Resources final {
 
     static Dx8::PatternList          loadDxMusic(std::string_view name);
     static DmSegment*                loadMusicSegment(char const* name);
-    static const ProtoMesh*          decalMesh(const zenkit::VisualDecal& decal);
+    static const ProtoMesh*          decalMesh(const asset::VisualDecal& decal);
 
     static const VobTree*            loadVobBundle(std::string_view name);
 
@@ -199,7 +197,7 @@ class Resources final {
     static std::filesystem::path      worldBaseDir(std::string_view world);
     static std::filesystem::path      worldOverrideDir(std::string_view world);
     static void                      censusFile(std::u16string_view path);
-    static void                      loadWorld(zenkit::World& world, asset::WorldMesh& worldMesh, std::vector<WorldData::Room>& rooms, std::string_view name);
+    static void                      loadWorld(WorldData::Data& world, asset::WorldMesh& worldMesh, std::string_view name);
     static bool                      loadBaseZen(std::string_view name, std::string_view kind, WorldData::ZenFile& out);
     static bool                      writeCensus();
 
@@ -273,7 +271,7 @@ class Resources final {
     bool                  replaceModelMesh(asset::ModelMesh& mesh, std::unique_ptr<Skeleton>& skeleton,
                                            std::string_view visual, std::string_view meshFile);
     std::unique_ptr<Animation> implLoadAnimation(std::string name);
-    ProtoMesh*            implDecalMesh(const zenkit::VisualDecal& decal);
+    ProtoMesh*            implDecalMesh(const asset::VisualDecal& decal);
     Tempest::Sound        implLoadSoundBuffer(std::string_view name);
     Dx8::PatternList      implLoadDxMusic(std::string_view name);
     DmSegment*            implLoadMusicSegment(char const* name);

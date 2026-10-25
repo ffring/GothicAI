@@ -708,7 +708,7 @@ void WorldObjects::stopEffect(const VisualFx& vfx) {
     i->stopEffect(vfx);
   }
 
-Item* WorldObjects::addItem(const zenkit::VItem& vob) {
+Item* WorldObjects::addItem(const asset::VItem& vob) {
   size_t inst = owner.script().findSymbolIndex(vob.instance);
   Item*  it   = addItem(inst,"");
   if(it==nullptr)
@@ -830,7 +830,7 @@ void WorldObjects::addStatic(StaticObj* obj) {
   objStatic.push_back(obj);
   }
 
-void WorldObjects::addRoot(const std::shared_ptr<zenkit::VirtualObject>& vob, bool startup) {
+void WorldObjects::addRoot(const std::shared_ptr<asset::VirtualObject>& vob, bool startup) {
   auto p = Vob::load(nullptr,owner,*vob,(startup ? Vob::Startup : Vob::None) | Vob::Static);
   if(p==nullptr)
     return;

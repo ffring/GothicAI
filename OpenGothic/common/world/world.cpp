@@ -117,12 +117,11 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
   :wname(std::move(file)), game(game), wsound(game,*this), wobj(*this) {
   const auto loadStarted = std::chrono::steady_clock::now();
   try {
-    zenkit::World world;
-    std::vector<WorldData::Room> rooms;
+    WorldData::Data world;
     asset::WorldMesh worldMesh;
-    Resources::loadWorld(world,worldMesh,rooms,wname);
+    Resources::loadWorld(world,worldMesh,wname);
     loadProgress(20);
-    windRooms.reset(world.world_bsp_tree.mode,std::move(rooms));
+    windRooms.reset(world.bsp.mode,std::move(world.rooms));
     auto worldCloth=WorldCloth::extract(worldMesh);
 
     auto wdynamicFut = std::async(std::launch::async, [&]() {
@@ -147,11 +146,11 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     loadProgress(30);
 
     {
-      bsp.nodes             = std::move(world.world_bsp_tree.nodes);
-      bsp.sectors           = std::move(world.world_bsp_tree.sectors);
-      bsp.leaf_node_indices = std::move(world.world_bsp_tree.leaf_node_indices);
+      bsp.nodes             = std::move(world.bsp.nodes);
+      bsp.sectors           = std::move(world.bsp.sectors);
+      bsp.leaf_node_indices = std::move(world.bsp.leaf_node_indices);
       bsp.sectorsData.resize(bsp.sectors.size());
-      world.world_bsp_tree  = zenkit::BspTree();
+      world.bsp  = asset::BspTree();
     }
     loadProgress(50);
 
@@ -170,12 +169,11 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
       if(auto visual=ClothVisual::createSurface(*this,surface.mesh,surface.pins,surface.visual,surface.id,surface.stiffness,surface.linearDamping))
         clothSurfaces.push_back(std::move(visual));
     worldMesh = {};
-    world.world_mesh = {};
     loadProgress(70);
 
     globFx.reset(new GlobalEffects(*this));
-    wmatrix.reset(new WayMatrix(*this, *world.way_net));
-    for(auto& vob:world.world_vobs)
+    wmatrix.reset(new WayMatrix(*this, *world.waynet));
+    for(auto& vob:world.vobs)
       wobj.addRoot(vob,startup);
     wdynamic->finalizeMovableVobs();
 
@@ -574,13 +572,13 @@ MeshObjects::Mesh World::addStaticView(std::string_view visual) {
   return view()->addStaticView(visual);
   }
 
-MeshObjects::Mesh World::addDecalView(const zenkit::VisualDecal& decal) {
+MeshObjects::Mesh World::addDecalView(const asset::VisualDecal& decal) {
   if(Resources::isHeadless())
     return MeshObjects::Mesh();
   return view()->addDecalView(decal);
   }
 
-LightGroup::Light World::addLight(const zenkit::VLight& vob) {
+LightGroup::Light World::addLight(const asset::VLight& vob) {
   if(Resources::isHeadless())
     return LightGroup::Light();
   return view()->addLight(vob, tickCount());
@@ -637,7 +635,7 @@ std::string_view World::roomAt(const Tempest::Vec3& p) {
   return "";
   }
 
-std::string_view World::roomAt(const zenkit::BspNode& node) {
+std::string_view World::roomAt(const asset::BspNode& node) {
   const std::string* ret=nullptr;
   size_t       count=0;
   auto         id = &node-bsp.nodes.data();(void)id;
@@ -945,7 +943,7 @@ Item *World::addItem(size_t itemInstance, std::string_view at) {
   return wobj.addItem(itemInstance,at);
   }
 
-Item* World::addItem(const zenkit::VItem& vob) {
+Item* World::addItem(const asset::VItem& vob) {
   return wobj.addItem(vob);
   }
 
@@ -1340,15 +1338,15 @@ void World::addFreePoint(const Tempest::Vec3& pos, const Tempest::Vec3& dir, std
   wmatrix->addFreePoint(pos,dir,name);
   }
 
-void World::addSound(const zenkit::VirtualObject& vob) {
-  if(vob.type==zenkit::VirtualObjectType::zCVobSound || vob.type==zenkit::VirtualObjectType::zCVobSoundDaytime) {
-    wsound.addSound(reinterpret_cast<const zenkit::VSound&>(vob));
+void World::addSound(const asset::VirtualObject& vob) {
+  if(vob.type==asset::VirtualObjectType::zCVobSound || vob.type==asset::VirtualObjectType::zCVobSoundDaytime) {
+    wsound.addSound(reinterpret_cast<const asset::VSound&>(vob));
     }
-  else if(vob.type==zenkit::VirtualObjectType::oCZoneMusic) {
-    wsound.addZone(reinterpret_cast<const zenkit::VZoneMusic&>(vob));
+  else if(vob.type==asset::VirtualObjectType::oCZoneMusic) {
+    wsound.addZone(reinterpret_cast<const asset::VZoneMusic&>(vob));
     }
-  else if(vob.type==zenkit::VirtualObjectType::oCZoneMusicDefault) {
-    wsound.setDefaultZone(reinterpret_cast<const zenkit::VZoneMusicDefault&>(vob));
+  else if(vob.type==asset::VirtualObjectType::oCZoneMusicDefault) {
+    wsound.setDefaultZone(reinterpret_cast<const asset::VZoneMusicDefault&>(vob));
     }
   }
 

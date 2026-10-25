@@ -3,7 +3,7 @@
 #include <Tempest/Texture2d>
 
 #include "asset/material.h"
-#include <zenkit/world/VobTree.hh>
+#include "asset/worldtypes.h"
 #include <zenkit/DaedalusScript.hh>
 #include <zenkit/addon/daedalus.hh>
 
@@ -11,7 +11,7 @@ class Material final {
   public:
     Material()=default;
     Material(const asset::Material& m, bool enableAlphaTest, bool requireAlphaTest = false);
-    Material(const zenkit::VisualDecal& decal);
+    Material(const asset::VisualDecal& decal);
     Material(const zenkit::IParticleEffect &src);
 
     enum AlphaFunc:uint8_t {

@@ -1,4 +1,5 @@
 #include "asset/fromzenkit.h"
+#include <zenkit/World.hh>
 #include "commandline.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "physics/collisionworld.h"
@@ -13,7 +14,6 @@
 #include "world/portalrooms.h"
 
 #include <zenkit/Stream.hh>
-#include <zenkit/World.hh>
 
 #include <array>
 #include <bit>
@@ -299,7 +299,7 @@ void worldDataContract(const zenkit::World& world, const WorldChunkSource& sourc
   const auto diff=WorldData::compare(original,restored);
   require(diff.empty(),"world data: "+diff);
   PortalRooms::Volumes rooms;
-  rooms.reset(world.world_bsp_tree.mode,asset::roomVolumesFromZenKit(world.world_mesh,world.world_bsp_tree));
+  rooms.reset(static_cast<asset::BspTreeType>(world.world_bsp_tree.mode),asset::roomVolumesFromZenKit(world.world_mesh,world.world_bsp_tree));
   const auto& bounds=world.world_bsp_tree.nodes.empty() ? world.world_mesh.bbox : world.world_bsp_tree.nodes.front().bbox;
   const auto nx=uint64_t(std::ceil(double(bounds.max.x-bounds.min.x)/400.));
   const auto nz=uint64_t(std::ceil(double(bounds.max.z-bounds.min.z)/400.));
@@ -372,9 +372,8 @@ int main() {
     require(difference.empty(),"canonical round trip: "+difference);
     std::printf("NEWWORLD.ZEN: %zu bytes, CRC32 %08x, %zu triangles, %zu chunks; canonical round trip equal\n",
                 bytes.size(),source.crc32,zen.polygons.material_indices.size(),manifest.chunks.size());
-    zenkit::World loaded;
-    std::vector<WorldData::Room> rooms;
-    Resources::loadWorld(loaded,base,rooms,"NEWWORLD.ZEN");
+    WorldData::Data loaded;
+    Resources::loadWorld(loaded,base,"NEWWORLD.ZEN");
     require(base.name==zen.name && base.bbox.min==zen.bbox.min && base.bbox.max==zen.bbox.max,"base load must preserve source name and bounds");
     require(world.world_mesh.geometry.size()==rawPolygons && world.world_mesh.polygon_vertex_indices==rawVertices &&
             world.world_mesh.polygon_feature_indices==rawFeatures,"mesh conversion must preserve raw BSP geometry");

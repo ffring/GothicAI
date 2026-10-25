@@ -346,7 +346,7 @@ struct ClothVisual::State {
   Matrix4x4 matrix = Matrix4x4::mkIdentity();
   Matrix4x4 referenceTransform = Matrix4x4::mkIdentity();
   uint64_t referenceTick = uint64_t(-1);
-  zenkit::AnimationType mode = zenkit::AnimationType::NONE;
+  asset::AnimationType mode = asset::AnimationType::NONE;
   float strength = 0;
   std::vector<Vec4> deformation;
   std::vector<Vec3> references, normals, interpolatedPositions;
@@ -525,7 +525,7 @@ bool ClothVisual::supports(std::string_view visual) {
   }
 
 std::unique_ptr<ClothVisual> ClothVisual::create(MeshObjects::Mesh& view, World& world,
-                                               const zenkit::VirtualObject& vob, bool enableCollision) {
+                                               const asset::VirtualObject& vob, bool enableCollision) {
   const auto* def = definition(vob.visual->name);
   if(def==nullptr || view.isEmpty())
     return nullptr;
@@ -540,13 +540,13 @@ std::unique_ptr<ClothVisual> ClothVisual::create(MeshObjects::Mesh& view, World&
     state.world = &world;
     state.geometry = std::move(geometry);
     state.nativeCollision = enableCollision;
-    state.nativeMovable = vob.visual->type==zenkit::VisualType::MORPH_MESH;
+    state.nativeMovable = vob.visual->type==asset::VisualType::MORPH_MESH;
     state.mode = vob.anim_mode;
     state.strength = vob.anim_strength;
-    if(state.strength!=0 && state.mode==zenkit::AnimationType::NONE)
-      state.mode = zenkit::AnimationType::WIND_ALT;
+    if(state.strength!=0 && state.mode==asset::AnimationType::NONE)
+      state.mode = asset::AnimationType::WIND_ALT;
     if(state.strength==0)
-      state.mode = zenkit::AnimationType::NONE;
+      state.mode = asset::AnimationType::NONE;
     state.bindPhysics(def->stiffness,vob.visual->name,vob.id);
     if(!state.physics)
       return nullptr;

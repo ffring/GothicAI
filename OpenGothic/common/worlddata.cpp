@@ -1,16 +1,6 @@
 #include "worlddata.h"
-#include "asset/fromzenkit.h"
 #include "gothicglb.h"
 
-#include <zenkit/Archive.hh>
-#include <zenkit/CutsceneLibrary.hh>
-#include <zenkit/Stream.hh>
-#include <zenkit/vobs/Camera.hh>
-#include <zenkit/vobs/Misc.hh>
-#include <zenkit/vobs/MovableObject.hh>
-#include <zenkit/vobs/Sound.hh>
-#include <zenkit/vobs/Trigger.hh>
-#include <zenkit/vobs/Zone.hh>
 #include <rapidjson/error/en.h>
 
 #include <algorithm>
@@ -28,7 +18,14 @@
 
 namespace WorldData {
 namespace {
-using namespace zenkit;
+using namespace asset;
+using zenkit::Vec2;
+using zenkit::Vec3;
+using zenkit::Quat;
+using zenkit::Color;
+using zenkit::Mat3;
+using zenkit::Mat4;
+using zenkit::AxisAlignedBoundingBox;
 using Json = rapidjson::Value;
 using gothicglb::jsonString;
 namespace fs = std::filesystem;
@@ -435,7 +432,7 @@ template<class IO> void fields(IO& io, AxisAlignedBoundingBox& v) {
   io("max",v.max);
   }
 
-template<class IO> void fields(IO& io, AnimationSample& v) {
+template<class IO> void fields(IO& io, MoverKeyframe& v) {
   io("position",v.position);
   io("rotation",v.rotation);
   }
@@ -1360,7 +1357,7 @@ double intersect(const Vec3& from,const Vec3& direction,const Triangle& triangle
 
 } // namespace
 
-bool isIndoor(zenkit::BspTreeType mode, const std::vector<Room>& rooms, const zenkit::Vec3& point) {
+bool isIndoor(asset::BspTreeType mode, const std::vector<Room>& rooms, const zenkit::Vec3& point) {
       if(mode==BspTreeType::INDOOR) return true;
       for(const auto& room:rooms) {
         if(point.x<room.min.x || point.x>room.max.x ||
@@ -1484,7 +1481,6 @@ void readBsp(BspTree& bsp, const fs::path& file) {
     n.back_index=std::bit_cast<int32_t>(u32());
     n.parent_index=std::bit_cast<int32_t>(u32());
     n.lod=bytes.at(at++);
-    n.polygon_index=n.polygon_count=0;
     for(const auto i:{n.front_index,n.back_index,n.parent_index})
       require(i==-1 || (i>=0 && uint32_t(i)<count),"bsp.bin: node reference out of range");
     }
@@ -1497,18 +1493,6 @@ void readBsp(BspTree& bsp, const fs::path& file) {
     }
   }
 } // namespace
-
-Data fromWorld(const zenkit::World& world, const WorldChunkSource& source) {
-  Data d;
-  d.source=source;
-  d.name=world.world_mesh.name;
-  d.bbox=world.world_mesh.bbox;
-  d.vobs=world.world_vobs;
-  d.waynet=world.way_net;
-  d.bsp=world.world_bsp_tree;
-  d.rooms=asset::roomVolumesFromZenKit(world.world_mesh,world.world_bsp_tree);
-  return d;
-  }
 
 void write(const Data& data, const fs::path& dir) {
   fs::create_directories(dir);
@@ -1577,34 +1561,13 @@ Data read(const fs::path& dir, const fs::path& overrideDir) {
   }
 
 namespace {
-// ASCII archives carry wall-clock time. Only that provenance line is normalized;
-// every object, field, reference and child count still comes from ZenKit itself.
-std::string ascii(const std::function<void(WriteArchive&)>& save) {
-  std::vector<std::byte> bytes;
-  auto stream=Write::to(&bytes);
-  auto archive=WriteArchive::to(stream.get(),ArchiveFormat::ASCII);
-  save(*archive);
-  archive->write_header();
-  std::string text(reinterpret_cast<const char*>(bytes.data()),bytes.size());
-  const auto date=text.find("\ndate ");
-  require(date!=std::string::npos,"ZenKit ASCII header lacks date");
-  text.replace(date+1,text.find('\n',date+1)-date-1,"date 1.1.2000 00:00:00");
-  return text;
-  }
-std::string textDifference(const std::string& expected, const std::string& actual, const std::string& context) {
-  if(expected==actual) return {};
+template<class T> std::string recordDifference(const T& a, const T& b, const std::string& where) {
+  WriteContext ac,bc; JsonWriter aw{ac,{}},bw{bc,{}};
+  const auto x=aw.value(const_cast<T&>(a)),y=bw.value(const_cast<T&>(b));
+  if(x==y) return {};
   size_t at=0;
-  while(at<std::min(expected.size(),actual.size()) && expected[at]==actual[at]) ++at;
-  const auto line=[&](const std::string& s) {
-    if(at>=s.size()) return std::string("<EOF>");
-    const auto start=s.rfind('\n',at);
-    return s.substr(start==std::string::npos ? 0 : start+1,s.find('\n',at)-(start==std::string::npos ? 0 : start+1));
-    };
-  auto object=expected.rfind('[',at);
-  auto objectEnd=object==std::string::npos ? object : expected.find('\n',object);
-  return context+": ZenKit ASCII byte "+std::to_string(at)+" "+
-         (object==std::string::npos ? "" : expected.substr(object,objectEnd-object))+
-         ", expected '"+line(expected)+"', actual '"+line(actual)+"'";
+  while(at<std::min(x.size(),y.size()) && x[at]==y[at]) ++at;
+  return where+": JSON byte "+std::to_string(at)+", expected '"+x.substr(at,80)+"', actual '"+y.substr(at,80)+"'";
   }
 void equalFloat(float a, float b, const std::string& where) {
   require(std::bit_cast<uint32_t>(a)==std::bit_cast<uint32_t>(b),where+": expected "+
@@ -1617,110 +1580,6 @@ void equalVec(const Vec3& a, const Vec3& b, const std::string& where) {
 template<class T> void equalInt(T a, T b, const std::string& where) {
   require(a==b,where+": expected "+std::to_string(a)+", actual "+std::to_string(b));
   }
-void equalString(const std::string& a, const std::string& b, const std::string& where) {
-  require(a==b,where+": expected '"+a+"', actual '"+b+"'");
-  }
-void compareLight(const LightPreset& a, const LightPreset& b, const std::string& where) {
-  // Static presets omit their animation/on fields from ZenKit's archive.
-  equalInt(a.on,b.on,where+"on");
-  equalInt(a.can_move,b.can_move,where+"can_move");
-  equalInt(a.range_animation_scale.size(),b.range_animation_scale.size(),where+"range_animation_scale.size");
-  for(size_t i=0;i<a.range_animation_scale.size();++i)
-    equalFloat(a.range_animation_scale[i],b.range_animation_scale[i],where+"range_animation_scale["+std::to_string(i)+"]");
-  equalFloat(a.range_animation_fps,b.range_animation_fps,where+"range_animation_fps");
-  equalInt(a.range_animation_smooth,b.range_animation_smooth,where+"range_animation_smooth");
-  equalInt(a.color_animation_list.size(),b.color_animation_list.size(),where+"color_animation_list.size");
-  for(size_t i=0;i<a.color_animation_list.size();++i) {
-    const auto& x=a.color_animation_list[i]; const auto& y=b.color_animation_list[i];
-    const auto field=where+"color_animation_list["+std::to_string(i)+"]";
-    equalInt(x.r,y.r,field+".r"); equalInt(x.g,y.g,field+".g");
-    equalInt(x.b,y.b,field+".b"); equalInt(x.a,y.a,field+".a");
-    }
-  equalFloat(a.color_animation_fps,b.color_animation_fps,where+"color_animation_fps");
-  equalInt(a.color_animation_smooth,b.color_animation_smooth,where+"color_animation_smooth");
-  }
-void compareVobTree(const std::vector<std::shared_ptr<VirtualObject>>& a,
-                    const std::vector<std::shared_ptr<VirtualObject>>& b, const std::string& path) {
-  equalInt(a.size(),b.size(),path+" count");
-  for(size_t i=0;i<a.size();++i) {
-    const auto node=path+"["+std::to_string(i)+"]";
-    require(a[i]!=nullptr && b[i]!=nullptr,node+": null vob");
-    const auto& x=*a[i]; const auto& y=*b[i];
-    const auto where=node+" "+className(*a[i])+" '"+x.vob_name+"' ";
-    equalString(className(*a[i]),className(*b[i]),where+"class");
-    // Vob dispatch and save entry keys use these members, not archive-assigned IDs.
-    equalInt(int(x.type),int(y.type),where+"type");
-    equalInt(x.id,y.id,where+"id");
-    // Packed ZenKit output masks these fields or derives them from other members.
-    equalInt(int(x.anim_mode),int(y.anim_mode),where+"anim_mode");
-    equalInt(x.bias,y.bias,where+"bias");
-    equalInt(int(x.sprite_camera_facing_mode),int(y.sprite_camera_facing_mode),where+"sprite_camera_facing_mode");
-    equalInt(int(x.dynamic_shadows),int(y.dynamic_shadows),where+"dynamic_shadows");
-    equalInt(x.physics_enabled,y.physics_enabled,where+"physics_enabled");
-    equalInt(bool(x.visual),bool(y.visual),where+"visual present");
-    if(x.visual) equalInt(int(x.visual->type),int(y.visual->type),where+"visual.type");
-    if(const auto* trigger=dynamic_cast<const VTrigger*>(&x)) {
-      const auto& other=dynamic_cast<const VTrigger&>(y);
-      // The engine reads these bools; ZenKit writes only flags/filter_flags.
-      equalInt(trigger->start_enabled,other.start_enabled,where+"start_enabled");
-      equalInt(trigger->send_untrigger,other.send_untrigger,where+"send_untrigger");
-      equalInt(trigger->react_to_on_trigger,other.react_to_on_trigger,where+"react_to_on_trigger");
-      equalInt(trigger->react_to_on_touch,other.react_to_on_touch,where+"react_to_on_touch");
-      equalInt(trigger->react_to_on_damage,other.react_to_on_damage,where+"react_to_on_damage");
-      equalInt(trigger->respond_to_object,other.respond_to_object,where+"respond_to_object");
-      equalInt(trigger->respond_to_pc,other.respond_to_pc,where+"respond_to_pc");
-      equalInt(trigger->respond_to_npc,other.respond_to_npc,where+"respond_to_npc");
-      }
-    if(const auto* light=dynamic_cast<const VLight*>(&x))
-      compareLight(*light,dynamic_cast<const VLight&>(y),where);
-    compareVobTree(x.children,y.children,where+"children");
-    }
-  }
-std::string compareVobs(const std::vector<std::shared_ptr<VirtualObject>>& a,
-                        const std::vector<std::shared_ptr<VirtualObject>>& b) {
-  compareVobTree(a,b,"vobs");
-  const auto serialize=[](const auto& vobs) {
-    return ascii([&](WriteArchive& w) {
-      require(vobs.size()<=INT32_MAX,"too many root vobs");
-      w.write_int("roots",int32_t(vobs.size()));
-      for(const auto& v:vobs) {
-        require(v!=nullptr,"null root vob");
-        save_vob_tree(w,GameVersion::GOTHIC_2,v);
-        }
-      });
-    };
-  return textDifference(serialize(a),serialize(b),"vobs");
-  }
-std::string compareWaynet(const std::shared_ptr<WayNet>& a, const std::shared_ptr<WayNet>& b) {
-  equalInt(bool(a),bool(b),"waynet present");
-  if(a) {
-    equalInt(a->points.size(),b->points.size(),"waynet points count");
-    std::unordered_map<const WayPoint*,size_t> aIndices,bIndices;
-    for(size_t i=0;i<a->points.size();++i) {
-      const auto where="waynet points["+std::to_string(i)+"] ";
-      require(a->points[i]!=nullptr && b->points[i]!=nullptr,where+"null waypoint");
-      const auto& x=*a->points[i]; const auto& y=*b->points[i];
-      aIndices.emplace(&x,i); bIndices.emplace(&y,i);
-      equalString(x.name,y.name,where+"name");
-      equalInt(x.water_depth,y.water_depth,where+"water_depth");
-      equalInt(x.under_water,y.under_water,where+"under_water");
-      equalVec(x.position,y.position,where+"position");
-      equalVec(x.direction,y.direction,where+"direction");
-      equalInt(x.free_point,y.free_point,where+"free_point");
-      }
-    equalInt(a->edges.size(),b->edges.size(),"waynet edges count");
-    for(size_t i=0;i<a->edges.size();++i) {
-      const auto where="waynet edges["+std::to_string(i)+"]";
-      const auto& x=a->edges[i]; const auto& y=b->edges[i];
-      require(aIndices.count(x.first.get()) && aIndices.count(x.second.get()) &&
-              bIndices.count(y.first.get()) && bIndices.count(y.second.get()),where+": endpoint outside points");
-      equalInt(aIndices.at(x.first.get()),bIndices.at(y.first.get()),where+"[0]");
-      equalInt(aIndices.at(x.second.get()),bIndices.at(y.second.get()),where+"[1]");
-      }
-    }
-  auto serialize=[](const auto& p) { return ascii([&](WriteArchive& w){ w.write_object(p,GameVersion::GOTHIC_2); }); };
-  return textDifference(serialize(a),serialize(b),"waynet");
-  }
 } // namespace
 
 std::string compare(const Data& a, const Data& b) {
@@ -1728,8 +1587,8 @@ std::string compare(const Data& a, const Data& b) {
     sameSource(a.source,b.source);
     require(a.name==b.name,"world name differs");
     equalVec(a.bbox.min,b.bbox.min,"world bbox.min"); equalVec(a.bbox.max,b.bbox.max,"world bbox.max");
-    const auto vobs=compareVobs(a.vobs,b.vobs); if(!vobs.empty()) return vobs;
-    const auto ways=compareWaynet(a.waynet,b.waynet); if(!ways.empty()) return ways;
+    const auto vobs=recordDifference(a.vobs,b.vobs,"vobs"); if(!vobs.empty()) return vobs;
+    const auto ways=recordDifference(a.waynet,b.waynet,"waynet"); if(!ways.empty()) return ways;
     equalInt(uint32_t(a.bsp.mode),uint32_t(b.bsp.mode),"BSP mode");
     equalInt(a.bsp.nodes.size(),b.bsp.nodes.size(),"BSP node count");
     for(size_t i=0;i<a.bsp.nodes.size();++i) {
@@ -1776,67 +1635,11 @@ std::string compare(const Data& a, const Data& b) {
   catch(const std::exception& e) { return a.source.world+": "+e.what(); }
   }
 
-size_t vobCount(const std::vector<std::shared_ptr<zenkit::VirtualObject>>& vobs) {
+size_t vobCount(const std::vector<std::shared_ptr<asset::VirtualObject>>& vobs) {
   size_t count=0;
   for(const auto& v:vobs) { require(v!=nullptr,"null vob"); count+=1+vobCount(v->children); }
   return count;
   }
-bool loadZen(const std::vector<std::byte>& bytes, const WorldChunkSource& source, ZenFile& out) {
-  out=ZenFile{};
-  out.source=source;
-  auto stream=Read::from(&bytes);
-  auto archive=ReadArchive::from(stream.get());
-  require(!archive->is_save_game(),source.world+": save-game archive is not a content .ZEN");
-  // BIN_SAFE stores its key table after the objects, before physical EOF.
-  size_t objectsEnd=bytes.size();
-  if(archive->get_header().format==ArchiveFormat::BINSAFE) {
-    const auto start=stream->tell();
-    stream->seek(-4,Whence::CUR); // Last u32 of the BIN_SAFE header: key table offset.
-    objectsEnd=stream->read_uint();
-    stream->seek(static_cast<ssize_t>(start),Whence::BEG);
-    require(objectsEnd>=start && objectsEnd<=bytes.size(),"invalid BIN_SAFE key table offset");
-    }
-  if(source.world=="LIGHTPRESETS.ZEN") {
-    out.kind="light_presets";
-    const auto count=archive->read_int();
-    require(count>=0,"negative light preset count");
-    for(int i=0;i<count;++i) {
-      ArchiveObject obj;
-      require(archive->read_object_begin(obj),"missing light preset object");
-      out.light_presets.emplace_back().load(*archive,GameVersion::GOTHIC_2);
-      require(archive->read_object_end(),"unread light preset fields");
-      }
-    return true;
-    }
-  if(source.world=="DIALOGCAMS.ZEN") {
-    out.kind="cameras";
-    while(stream->tell()<objectsEnd && !stream->eof()) {
-      // As in CameraDefinitions: these archives contain consecutive camera presets.
-      ArchiveObject obj;
-      if(!archive->read_object_begin(obj)) {
-        require(stream->eof(),"expected camera object");
-        break;
-        }
-      require(obj.class_name=="zCCSCamera:zCVob","unknown camera class "+obj.class_name);
-      auto camera=std::make_shared<VCutsceneCamera>();
-      camera->type=VirtualObjectType::zCCSCamera; camera->id=obj.index;
-      camera->load(*archive,GameVersion::GOTHIC_2);
-      require(archive->read_object_end(),"unread camera fields");
-      require(stream->tell()<=objectsEnd,"camera overlaps BIN_SAFE key table");
-      out.vobs.push_back(camera);
-      }
-    return true;
-    }
-  World world;
-  stream=Read::from(&bytes);
-  world.load(stream.get(),GameVersion::GOTHIC_2);
-  if(!world.world_mesh.vertices.empty()) return false;
-  out.kind="world";
-  out.vobs=std::move(world.world_vobs);
-  out.waynet=std::move(world.way_net);
-  return true;
-  }
-
 void writeZen(const ZenFile& data, const fs::path& file) {
   auto& d=const_cast<ZenFile&>(data);
   WriteContext ctx; auto w=header(ctx,d.source);
@@ -1865,137 +1668,11 @@ std::string compareZen(const ZenFile& a, const ZenFile& b) {
   try {
     sameSource(a.source,b.source);
     require(a.kind==b.kind,"ZEN kind differs");
-    auto diff=compareVobs(a.vobs,b.vobs); if(!diff.empty()) return a.source.world+": "+diff;
-    diff=compareWaynet(a.waynet,b.waynet); if(!diff.empty()) return a.source.world+": "+diff;
-    equalInt(a.light_presets.size(),b.light_presets.size(),"light preset count");
-    for(size_t i=0;i<a.light_presets.size();++i)
-      compareLight(a.light_presets[i],b.light_presets[i],"light_presets["+std::to_string(i)+"] ");
-    auto lights=[](const auto& presets) {
-      return ascii([&](WriteArchive& w) {
-        w.write_int("count",int32_t(presets.size()));
-        for(const auto& p:presets) p.save(w,GameVersion::GOTHIC_2);
-        });
-      };
-    return textDifference(lights(a.light_presets),lights(b.light_presets),a.source.world+" light presets");
+    auto diff=recordDifference(a.vobs,b.vobs,"vobs"); if(!diff.empty()) return a.source.world+": "+diff;
+    diff=recordDifference(a.waynet,b.waynet,"waynet"); if(!diff.empty()) return a.source.world+": "+diff;
+    return recordDifference(a.light_presets,b.light_presets,"light presets");
     }
   catch(const std::exception& e) { return a.source.world+": "+e.what(); }
-  }
-
-void selfTest(const fs::path& dir) {
-  World world;
-  auto& mesh=world.world_mesh;
-  mesh.name="ROOM_\xE4";
-  mesh.bbox.min={-400,-400,-400}; mesh.bbox.max={400,400,400};
-  mesh.vertices={{-100,-100,-100},{100,-100,-100},{100,100,-100},{-100,100,-100},
-                 {-100,-100,100},{100,-100,100},{100,100,100},{-100,100,100}};
-  const uint32_t faces[][4]={{0,1,2,3},{4,5,6,7},{0,1,5,4},{3,2,6,7},{0,3,7,4},{1,2,6,5}};
-  for(const auto& face:faces) {
-    Polygon p{}; p.index_offset=mesh.polygon_vertex_indices.size(); p.index_count=4;
-    p.flags.is_sector=mesh.geometry.size()!=5;
-    mesh.geometry.push_back(p);
-    mesh.polygon_vertex_indices.insert(mesh.polygon_vertex_indices.end(),std::begin(face),std::end(face));
-    }
-  auto& bsp=world.world_bsp_tree;
-  bsp.mode=BspTreeType::OUTDOOR;
-  bsp.nodes.resize(3);
-  bsp.nodes[0].front_index=1; bsp.nodes[0].back_index=2;
-  bsp.nodes[1].parent_index=bsp.nodes[2].parent_index=0;
-  bsp.nodes[1].polygon_index=0; bsp.nodes[1].polygon_count=5;
-  bsp.nodes[0].plane={1.25f,-0.f,0.125f,42.f}; bsp.nodes[0].lod=3;
-  for(auto& n:bsp.nodes) n.bbox=mesh.bbox;
-  bsp.polygon_indices={0,1,2,3,4}; bsp.leaf_node_indices={1,2};
-  bsp.sectors={{"ROOM_\xE4",{0},{5}},{"EMPTY",{1},{}}};
-
-  for(int i=0;i<44;++i) {
-    auto object=makeObject(enumNames<VirtualObjectType>().at(size_t(i)+1).second);
-    auto v=std::dynamic_pointer_cast<VirtualObject>(object);
-    require(v!=nullptr,"self-test missing vob class "+std::to_string(i));
-    v->type=VirtualObjectType(i); v->id=uint32_t(i+100);
-    v->vob_name="VOB_"+std::to_string(i)+"_\xE4\xFF";
-    v->position={-0.f,0.1f,12345.678f}; v->rotation={{1,2,3},{4,5,6},{7,8,9}};
-    v->anim_mode=AnimationType(3);
-    world.world_vobs.push_back(v);
-    }
-  auto decal=std::make_shared<VisualDecal>(); decal->type=VisualType::DECAL; decal->name="DECAL_\xFF.TGA";
-  decal->dimension={33.3f,45.6f}; decal->offset={-0.f,0.1f}; decal->alpha_weight=127;
-  decal->alpha_func=AlphaFunction::BLEND; decal->two_sided=true; decal->ignore_daylight=true;
-  decal->texture_anim_fps=0.123456789f;
-  world.world_vobs[0]->visual=world.world_vobs[1]->visual=decal;
-  world.world_vobs[0]->visual_decal=*decal;
-  world.world_vobs[0]->children.push_back(std::make_shared<VItem>());
-  auto camera=std::dynamic_pointer_cast<VCutsceneCamera>(world.world_vobs[16]);
-  auto frame=std::dynamic_pointer_cast<VCameraTrajectoryFrame>(world.world_vobs[17]);
-  camera->trajectory_frames={frame}; camera->target_frames={frame}; camera->position_count=camera->target_count=1;
-  frame->original_pose[1][2]=0.123456789f;
-  auto npc=std::dynamic_pointer_cast<VNpc>(world.world_vobs[3]);
-  auto item=std::dynamic_pointer_cast<VItem>(world.world_vobs[2]);
-  npc->items={item}; npc->talents.push_back(std::make_shared<VNpc::Talent>());
-  npc->talents[0]->talent=7; npc->talents[0]->value=9;
-  npc->slots.push_back(std::make_unique<VNpc::Slot>()); npc->slots[0]->item=item; npc->slots[0]->used=true;
-  npc->news.push_back(std::make_unique<VNpc::News>()); npc->news[0]->news_id=VNpc::NewsId::THEFT;
-  auto ai=std::make_shared<AiMove>(); ai->vob=item; ai->owner=npc; item->ai=ai;
-  std::dynamic_pointer_cast<VContainer>(world.world_vobs[28])->contents="ITMI_GOLD:12";
-  auto mover=std::dynamic_pointer_cast<VMover>(world.world_vobs[35]);
-  mover->flags=7; mover->filter_flags=0x3f;
-  mover->keyframes.push_back({{1,2,3},{0.1f,0.2f,0.3f,0.4f}});
-
-  world.way_net=std::make_shared<WayNet>();
-  for(int i=0;i<3;++i) {
-    auto point=std::make_shared<WayPoint>(); point->name="WP_"+std::to_string(i)+"_\xFC";
-    point->position={float(i),-0.f,0.1f}; point->direction={0,1,0}; point->free_point=i==1;
-    world.way_net->points.push_back(point);
-    }
-  world.way_net->edges={{world.way_net->points[2],world.way_net->points[0]},
-                       {world.way_net->points[1],world.way_net->points[2]}};
-  const auto original=fromWorld(world,{"TEST.ZEN",1234,0xDEADBEEFu});
-  require(original.rooms[0].triangles.size()==12 && original.rooms[1].triangles.empty(),"room polygon fan or portal cap");
-  require(isIndoor(bsp.mode,original.rooms,{0,0,0}) && !isIndoor(bsp.mode,original.rooms,{200,0,0}),"closed room containment");
-  write(original,dir);
-  const auto back=read(dir);
-  const auto difference=compare(original,back); require(difference.empty(),"self-test round trip: "+difference);
-  require(back.vobs[0]->anim_mode==AnimationType(3),"unnamed enum must retain raw value 3");
-  equalFloat(original.vobs[0]->position.x,back.vobs[0]->position.x,"negative zero");
-  require(back.vobs[0]->rotation==original.vobs[0]->rotation,"matrix rows");
-  require(back.vobs[0]->visual==back.vobs[1]->visual,"shared visual identity");
-  require(back.waynet->points[0]->name==original.waynet->points[0]->name,"waypoint order");
-  for(const auto* kind:{"world","cameras","light_presets"}) {
-    ZenFile zen; zen.source={"SYNTHETIC.ZEN",10,20}; zen.kind=kind;
-    if(zen.kind=="light_presets") {
-      zen.light_presets.emplace_back(); auto& light=zen.light_presets.back();
-      light.preset="LIGHT_\xE4"; light.range_animation_scale={0.1f,1.25f};
-      light.color_animation_list={{1,2,3,255}}; light.light_type=LightType(17);
-      } else { zen.vobs=original.vobs; zen.waynet=original.waynet; }
-    const auto file=dir/(zen.kind+".json"); writeZen(zen,file);
-    const auto restored=readZen(file); const auto diff=compareZen(zen,restored);
-    require(diff.empty(),"self-test ZEN: "+diff);
-    if(zen.kind=="light_presets") require(restored.light_presets[0].light_type==LightType(17),"unnamed light enum");
-    }
-  // The installed archives may not contain camera/light presets. Exercise their
-  // original .ZEN reader with ZenKit-produced archives as well as our JSON files.
-  for(const auto format:{ArchiveFormat::BINARY,ArchiveFormat::BINSAFE}) for(bool lights:{false,true}) {
-    std::vector<std::byte> bytes;
-    auto stream=Write::to(&bytes);
-    auto archive=WriteArchive::to(stream.get(),format);
-    if(lights) {
-      archive->write_int("count",1);
-      archive->write_object_begin("preset","zCLightPreset",0);
-      LightPreset preset; preset.preset="TEST_LIGHT"; preset.is_static=true; preset.range=12.5f;
-      preset.save(*archive,GameVersion::GOTHIC_2);
-      archive->write_object_end();
-      } else archive->write_object(camera,GameVersion::GOTHIC_2);
-    archive->write_header();
-    ZenFile zen;
-    const WorldChunkSource source{lights ? "LIGHTPRESETS.ZEN" : "DIALOGCAMS.ZEN",bytes.size(),
-                                  worldChunkCrc32(bytes.data(),bytes.size())};
-    require(loadZen(bytes,source,zen),"synthetic presets must be meshless");
-    const auto file=dir/(source.world+".json"); writeZen(zen,file);
-    const auto diff=compareZen(zen,readZen(file));
-    require(diff.empty(),"preset archive round trip: "+diff);
-    }
-  // A named enum can also be supplied as its raw number by an editor.
-  auto doc=document(dir/"sectors.json"); ReadContext ctx; JsonReader r{ctx,doc};
-  BspTreeType mode{}; Json numeric(1); r.value(numeric,mode);
-  require(mode==BspTreeType::OUTDOOR,"numeric known enum");
   }
 
 } // namespace WorldData

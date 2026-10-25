@@ -18,7 +18,7 @@
 #include <zenkit/Model.hh>
 #include <zenkit/ModelScript.hh>
 #include "asset/material.h"
-#include <zenkit/vobs/Camera.hh>
+#include "asset/worldtypes.h"
 #include <miniz.h>
 
 #include <cctype>
@@ -275,9 +275,9 @@ void Resources::censusFile(std::u16string_view path) {
   inst->census->opened(source,source);
   }
 
-void Resources::loadWorld(zenkit::World& world, asset::WorldMesh& worldMesh, std::vector<WorldData::Room>& rooms, std::string_view name) {
+void Resources::loadWorld(WorldData::Data& world, asset::WorldMesh& worldMesh, std::string_view name) {
   const auto dir = worldBaseDir(name);
-  const auto result = tryWorldData(world,worldMesh,rooms,name,dir,worldOverrideDir(name),inst->mountedArchives);
+  const auto result = tryWorldData(world,worldMesh,name,dir,worldOverrideDir(name),inst->mountedArchives);
   if(result.replaced) {
     if(inst->census)
       inst->census->replaced(name,(worldContentDir("base",name)/"world.json").generic_string());
@@ -303,7 +303,7 @@ bool Resources::loadBaseZen(std::string_view name, std::string_view kind, WorldD
       throw std::runtime_error("ZEN kind or source name differs from index");
     if(kind=="cameras")
       for(const auto& camera:data.vobs)
-        if(!std::dynamic_pointer_cast<zenkit::VCutsceneCamera>(camera))
+        if(!std::dynamic_pointer_cast<asset::VCutsceneCamera>(camera))
           throw std::runtime_error("invalid dialog camera class");
     out = std::move(data);
     if(inst->census)
@@ -1370,7 +1370,7 @@ PfxEmitterMesh* Resources::implLoadEmiterMesh(std::string_view name) {
   return nullptr;
   }
 
-ProtoMesh* Resources::implDecalMesh(const zenkit::VisualDecal& decal) {
+ProtoMesh* Resources::implDecalMesh(const asset::VisualDecal& decal) {
   DecalK key;
   key.mat         = Material(decal);
   key.sX          = decal.dimension.x;
@@ -1744,7 +1744,7 @@ DmSegment* Resources::loadMusicSegment(char const* name) {
   return inst->implLoadMusicSegment(name);
   }
 
-const ProtoMesh* Resources::decalMesh(const zenkit::VisualDecal& decal) {
+const ProtoMesh* Resources::decalMesh(const asset::VisualDecal& decal) {
   std::lock_guard<std::recursive_mutex> g(inst->sync);
   return inst->implDecalMesh(decal);
   }
@@ -1813,7 +1813,7 @@ const Resources::VobTree* Resources::implLoadVobBundle(std::string_view filename
   if(i!=zenCache.end())
     return i->second.get();
 
-  std::vector<std::shared_ptr<zenkit::VirtualObject>> bundle;
+  std::vector<std::shared_ptr<asset::VirtualObject>> bundle;
   try {
     WorldData::ZenFile base;
     if(loadBaseZen(cname,"world",base)) {

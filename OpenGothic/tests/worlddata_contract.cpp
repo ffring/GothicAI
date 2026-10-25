@@ -1,4 +1,5 @@
 #include "asset/fromzenkit.h"
+#include <zenkit/World.hh>
 #include "commandline.h"
 #include "gothic.h"
 #include "resources.h"
@@ -180,15 +181,14 @@ struct WorldDataContract {
         gothic.isNpcInDialogFn=[](const Npc*) { return false; };
         gothic.setupGlobalScripts();
         GameMusic music;
-        zenkit::World loaded;
+        WorldData::Data loaded;
         asset::WorldMesh loadedMesh;
-        std::vector<WorldData::Room> rooms;
         const auto manifest=readWorldChunkManifest(base/"worlds"/name);
         if(!useBase) {
           auto reader=Resources::vdfsIndex().find(file)->open_read();
-          loaded.load(reader.get(),zenkit::GameVersion::GOTHIC_2);
-          original=WorldData::fromWorld(loaded,manifest.source);
-          loadedMesh=asset::fromZenKit(loaded.world_mesh);
+          zenkit::World archive; archive.load(reader.get(),zenkit::GameVersion::GOTHIC_2);
+          original=WorldData::fromWorld(archive,manifest.source);
+          loadedMesh=asset::fromZenKit(archive.world_mesh);
           // Feed the same runtime consumers from an independently decoded archive
           // fixture. There is no archive selection mode in the engine any more.
           const auto dir=reference/"worlds"/name;
@@ -202,7 +202,7 @@ struct WorldDataContract {
           write(dir/"world.json",index);
           resources.automaticBase.path=reference;
           } else {
-          Resources::loadWorld(loaded,loadedMesh,rooms,file);
+          Resources::loadWorld(loaded,loadedMesh,file);
           require(zenOpens(census)==0,file+": base loader opened ZEN");
           auto restored=WorldData::read(base/"worlds"/name);
           const auto diff=WorldData::compare(original,restored);
@@ -232,14 +232,14 @@ struct WorldDataContract {
     auto index=json(dir/"world.json");
     const auto size=index["archives"][0]["size"].GetUint64();
     index["archives"][0]["size"].SetUint64(size+1); write(dir/"world.json",index);
-    zenkit::World fallback; std::vector<WorldData::Room> rooms;
+    WorldData::Data fallback;
     asset::WorldMesh fallbackMesh;
     bool rejected=false;
-    try { Resources::loadWorld(fallback,fallbackMesh,rooms,"NEWWORLD.ZEN"); }
+    try { Resources::loadWorld(fallback,fallbackMesh,"NEWWORLD.ZEN"); }
     catch(const BaseStore::Error&) { rejected=true; }
     require(rejected,"archive size +1 must reject the world");
     index["archives"][0]["size"].SetUint64(size); write(dir/"world.json",index);
-    Resources::loadWorld(fallback,fallbackMesh,rooms,"NEWWORLD.ZEN");
+    Resources::loadWorld(fallback,fallbackMesh,"NEWWORLD.ZEN");
     const auto content=root/"content"; const auto overrides=content/"worlds/NEWWORLD";
     fs::create_directories(overrides);
     auto vobs=json(dir/"vobs.json");
@@ -247,12 +247,11 @@ struct WorldDataContract {
     auto waynet=json(dir/"waynet.json");
     waynet["waynet"]["edges"].Clear(); write(overrides/"waynet.json",waynet);
     setenv("OPENGOTHIC_CONTENT",content.c_str(),1);
-    zenkit::World changed;
+    WorldData::Data changed;
     asset::WorldMesh changedMesh;
-    Resources::loadWorld(changed,changedMesh,rooms,"NEWWORLD.ZEN");
-    require(changed.world_vobs.empty() && !fallback.world_vobs.empty(),"content vobs.json must replace the whole base tree");
-    require(changed.way_net->edges.empty() && !fallback.way_net->edges.empty(),"content waynet.json must replace the whole base graph");
-    require(changed.world_mesh.geometry.empty(),"content selection must use the base world");
+    Resources::loadWorld(changed,changedMesh,"NEWWORLD.ZEN");
+    require(changed.vobs.empty() && !fallback.vobs.empty(),"content vobs.json must replace the whole base tree");
+    require(changed.waynet->edges.empty() && !fallback.waynet->edges.empty(),"content waynet.json must replace the whole base graph");
     const auto zenIndex=json(base/"zen/zen.json");
     size_t zenCount=0;
     for(const auto& entry:zenIndex["files"].GetObject()) {

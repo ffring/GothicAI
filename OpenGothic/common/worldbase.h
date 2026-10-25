@@ -18,7 +18,7 @@ struct WorldBaseResult {
   };
 
 // Select a complete world without opening its ZEN. Failure leaves outputs untouched.
-WorldBaseResult tryWorldData(zenkit::World& world, asset::WorldMesh& worldMesh, std::vector<WorldData::Room>& rooms,
+WorldBaseResult tryWorldData(WorldData::Data& world, asset::WorldMesh& worldMesh,
                             std::string_view name, const std::filesystem::path& dir,
                             const std::filesystem::path& overrideDir,
                             const std::vector<std::pair<std::string,uintmax_t>>& mounted);

@@ -13,7 +13,7 @@ class PfxEmitterMesh;
 
 class ParticleFx final {
   public:
-    ParticleFx(const Material& mat, const zenkit::VirtualObject& vob);
+    ParticleFx(const Material& mat, const asset::VirtualObject& vob);
     ParticleFx(const zenkit::IParticleEffect& src, std::string_view name);
     ParticleFx(const ParticleFx& proto, const VisualFx::Key& key);
 
