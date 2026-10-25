@@ -30,6 +30,7 @@ LEE = "SLD_800_LEE"
 class Link:
     def __init__(self) -> None:
         self.listeners: list[Any] = []
+        self.hello = None
         self.session = Session(type="session", branch="A")
         self.sent: list[Any] = []
 
