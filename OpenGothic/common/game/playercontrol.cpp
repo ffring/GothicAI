@@ -106,6 +106,12 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
     return;
 
   handleMovementAction(KeyCodec::ActionMapping{a,mapping}, true);
+  if(pl!=nullptr && (a==Action::Forward || a==Action::Back || a==Action::Left || a==Action::Right ||
+                    a==Action::RotateL || a==Action::RotateR || a==Action::Jump ||
+                    a==Action::ActionGeneric || a==Action::ActionLeft || a==Action::ActionRight ||
+                    a==Action::Parade || a==Action::Weapon || a==Action::WeaponMele ||
+                    a==Action::WeaponBow || (a>=Action::WeaponMage3 && a<=Action::WeaponMage10)))
+    pl->setPlayerPose(false);
 
   if(pl!=nullptr && !pl->spellFrozen() && pl->interactive()!=nullptr && c!=nullptr && !c->isFree()) {
     auto inter = pl->interactive();
@@ -308,6 +314,11 @@ bool PlayerControl::isPressed(KeyCodec::Action a) const {
   }
 
 void PlayerControl::onRotateMouse(float dAngleX, float dAngleY) {
+  if(dAngleX!=0.f) {
+    if(auto* w = Gothic::inst().world())
+      if(auto* pl = w->player())
+        pl->setPlayerPose(false);
+    }
   rotMouse  += dAngleX;
   rotMouseY += dAngleY;
   }
@@ -671,6 +682,14 @@ bool PlayerControl::tickMove(uint64_t dt) {
     // Explicit Marvin teleports above already leave the scripted state first.
     clearInput();
     rotMouse = rotMouseY = 0;
+    runAngleDest = 0;
+    return true;
+    }
+
+  if(movement.forwardBackward.any() || movement.strafeRightLeft.any() || movement.turnRightLeft.any() ||
+     ctrl[Action::ActionGeneric] || ctrl[Action::Jump])
+    pl->setPlayerPose(false);
+  if(pl->tickPlayerPose()) {
     runAngleDest = 0;
     return true;
     }

@@ -24,6 +24,8 @@
 #       sheathing the hero's weapon records mercy and ordinary player_text opens conversation again
 #   hero_yield: new game, LLM=fake; the hero surrenders via player_text during a native fight;
 #       accept_surrender stops attacks within 3 s, transfers all real gold and sets victory AIV
+#   humiliate: hero_yield with humiliate:true; checks native S_PRAY/S_PEE, distance, said bark,
+#       held kneeling and native exit after hero movement; records positions and game/wall times
 #   svm_lines: new game, no SAVE, LLM=fake; QUICK_URL supplies ten live Gemma SVM lines, their native
 #       text and voice delays, then Cavalorn kills a beast and speaks its native script SVM.
 #       An unavailable QUICK_URL falls back after three errors; TTS=fake|inworld.
@@ -468,7 +470,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "svm_lines" ] || [ "$SCENARIO" = "combat_barks" ] || [ "$SCENARIO" = "mercy" ] || [ "$SCENARIO" = "hero_yield" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ] || [ "${SCENARIO#fight_reactions_}" != "$SCENARIO" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "svm_lines" ] || [ "$SCENARIO" = "combat_barks" ] || [ "$SCENARIO" = "mercy" ] || [ "$SCENARIO" = "hero_yield" ] || [ "$SCENARIO" = "humiliate" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ] || [ "${SCENARIO#fight_reactions_}" != "$SCENARIO" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")

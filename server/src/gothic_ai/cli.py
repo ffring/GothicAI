@@ -860,8 +860,8 @@ async def serve(args: argparse.Namespace) -> int:
             quick=quick,
             svm_lines=not args.no_svm_lines,
         )
-        if not args.no_combat_barks:
-            state.combat_barks = CombatBarks(state.dialogue)
+        if not args.no_combat_barks or not args.no_mercy:
+            state.combat_barks = CombatBarks(state.dialogue, hits=not args.no_combat_barks)
         # the bandits below Xardas's tower are freed of their scripted ambush: our models decide (story.py)
         static = freed(graph.nodes.__contains__) if graph is not None else freed()
         static = static if args.free_bandits else []
@@ -1019,6 +1019,7 @@ async def serve(args: argparse.Namespace) -> int:
             state.mercy = Mercy(
                 state.dialogue, state.chronicle, orders, state.parley,
                 law=state.crime_law.law if state.crime_law else None,
+                barks=state.combat_barks, places=place_book,
             )
             state.dialogue.extensions.append(state.mercy)
             if state.combat_barks is not None:
@@ -1601,9 +1602,9 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
-            elif args.scenario in {"mercy", "hero_yield"}:
+            elif args.scenario in {"mercy", "hero_yield", "humiliate"}:
                 assert state.dialogue is not None and state.mercy is not None and state.talk is not None
-                scenario = scenarios.hero_yield if args.scenario == "hero_yield" else scenarios.mercy
+                scenario = getattr(scenarios, args.scenario)
                 results = await scenario(link, state.dialogue, state.talk, state.mercy)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -3035,6 +3036,7 @@ def main() -> None:
             "combat_barks",
             "mercy",
             "hero_yield",
+            "humiliate",
             "orders",
             "fight_reactions_wolf",
             "fight_reactions_sight",

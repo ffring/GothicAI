@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -10,8 +11,8 @@ from ..dialogue import DialogueManager
 from ..game import GameError, GameLink
 from ..llm import ToolCall
 from ..llm.fake import FakeBackend, FakeStep
-from ..mercy import PARDON, Mercy
-from ..protocol import CombatHit, GameMessage, LineStarted
+from ..mercy import PARDON, PEE_DISTANCE_CM, Mercy
+from ..protocol import CombatHit, GameMessage, LineStarted, Snapshot
 from ..talk import TalkDesk, fights
 from ..trace import read as read_trace
 from .common import LOBART, ClaimScript, _logged, _m5b_player_weapon, _until, _until_async, attach_when_free
@@ -129,8 +130,14 @@ async def mercy(
         dialogue.llm = original
 
 
-async def hero_yield(
+async def humiliate(
     link: GameLink, dialogue: DialogueManager, talk: TalkDesk, mercy: Mercy,
+) -> dict[str, str]:
+    return await hero_yield(link, dialogue, talk, mercy, humiliating=True)
+
+
+async def hero_yield(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, mercy: Mercy, *, humiliating: bool = False,
 ) -> dict[str, str]:
     """The hero's typed surrender stops a native fight and pays real gold to its winner."""
     if dialogue.llm.name != "fake":
@@ -156,10 +163,30 @@ async def hero_yield(
         await link.story_effect(LOBART, [{"do": "create", "item": GOLD, "count": 100 - hero_gold},
                                        {"do": "give", "item": GOLD, "count": 100 - hero_gold}])
     before = await link.story_eval(LOBART, gold)
-    original = dialogue.llm
+    original, original_quick = dialogue.llm, dialogue.quick
+    original_hits = mercy.barks.hits if mercy.barks is not None else False
+    if humiliating and mercy.barks is not None:
+        mercy.barks.hits = False  # the setup hit must not consume the scene's fake phrase
+    if humiliating and dialogue.quick is None:
+        dialogue.quick = FakeBackend("[hostile] Вот тебе и пощада!", delay=0)
+    samples = []
+    typed_at = time.monotonic()
+
+    def record(msg: GameMessage) -> None:
+        if humiliating and isinstance(msg, Snapshot) and msg.npc.id == LOBART and msg.player:
+            samples.append({
+                "game_ms": msg.t, "elapsed_ms": round((time.monotonic() - typed_at) * 1000),
+                "npc_pos": msg.npc.pos, "hero_pos": msg.player.pos,
+                "distance_cm": round(msg.player.distance, 1),
+                "npc_animations": msg.npc.animations, "hero_animations": msg.player.animations,
+                "kneeling": msg.player.kneeling,
+            })
+
+    link.listeners.append(record)
     phrase = "Сдаюсь, забирай золото, только не бей"
     script = ClaimScript(said=[(phrase, FakeStep(tool_calls=[ToolCall(
-        "accept_surrender", {"take": ["gold"], "words": "Ладно, живи. Золото моё."},
+        "accept_surrender", {"take": ["gold"], "words": "Ладно, живи. Золото моё.",
+                             **({"humiliate": True} if humiliating else {})},
     )]))], told=[], default="")
     dialogue.llm = script
     results: dict[str, str] = {}
@@ -181,6 +208,7 @@ async def hero_yield(
         )
         if not started or not roster_ready:
             return _logged(results)
+        typed_at = time.monotonic()
         await link.debug("type", text=phrase)
         accepted = await _until(lambda: bool(mercy.chronicle.facts("hero_yield")), 8)
         results["accepted"] = f"{'done' if accepted else 'failed'} (outcomes={script.outputs})"
@@ -206,9 +234,51 @@ async def hero_yield(
         ])
         native = all(type(i) is int for i in indices) and values[:2] == [values[2], 0]
         results["native_outcome"] = f"{'done' if native else 'failed'} (indices={indices}, values={values})"
+        if humiliating:
+            pee = await _until_async(
+                lambda: link.snapshot(LOBART, fresh=True),
+                lambda snap: snap.player is not None and snap.player.kneeling
+                and "S_PRAY" in snap.player.animations and "S_PEE" in snap.npc.animations
+                and snap.player.distance <= PEE_DISTANCE_CM + 30, 20,
+            )
+            results["pee_state"] = f"{'done' if pee else 'failed'}"
+            finished = await _until_async(
+                lambda: link.snapshot(LOBART, fresh=True),
+                lambda snap: mercy._scene is None and "S_PEE" not in snap.npc.animations, 15,
+            )
+            conv = dialogue.conversations.get(LOBART)
+            if finished and conv is not None and conv.reply is not None:
+                await conv.reply
+            snap = await link.snapshot(LOBART, fresh=True)
+            held = finished and snap.player and snap.player.kneeling and "S_PRAY" in snap.player.animations
+            results["kneeling_held"] = f"{'done' if held else 'failed'}"
+            traces = ([r for r in read_trace(dialogue.trace.path()) if r.get("type") == "combat_bark"
+                       and r.get("reason") == "humiliate"] if dialogue.trace else [])
+            said = any(r.get("outcome") == "said" for r in traces)
+            results["humiliate_said"] = f"{'done' if said else 'failed'} ({traces})"
+            if snap.player:
+                x, y, z = snap.player.pos
+                await link.debug("player_goto", pos=(x + 200, y, z))
+                released = await _until_async(
+                    lambda: link.snapshot(LOBART, fresh=True),
+                    lambda state: state.player is not None and not state.player.kneeling
+                    and "S_PRAY" not in state.player.animations
+                    and "T_PRAY_2_STAND" not in state.player.animations, 8,
+                )
+                results["pose_released"] = f"{'done' if released else 'failed'}"
+            else:
+                results["pose_released"] = "failed (no player snapshot)"
+            results["native_pose_exit"] = (
+                "done" if any("T_PRAY_2_STAND" in row["hero_animations"] for row in samples)
+                else "failed"
+            )
+            results["scene_samples"] = "done " + json.dumps(samples, ensure_ascii=False)
         return _logged(results)
     finally:
-        dialogue.llm = original
+        link.listeners.remove(record)
+        dialogue.llm, dialogue.quick = original, original_quick
+        if mercy.barks is not None:
+            mercy.barks.hits = original_hits
 
 
 async def combat_barks(

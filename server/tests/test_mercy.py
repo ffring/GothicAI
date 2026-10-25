@@ -5,14 +5,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from gothic_ai.chronicle import Chronicle
-from gothic_ai.combat_barks import CombatBarks
+from gothic_ai.combat_barks import HUMILIATE_HINT, CombatBarks
 from gothic_ai.contracts import GOLD
 from gothic_ai.crime_law import CrimeLaw
 from gothic_ai.crimes import Crimes
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import FakeBackend, FakeStep, ToolCall, ToolResult
 from gothic_ai.memory import MemoryStore
-from gothic_ai.mercy import PARDON, VICTOR, YIELDING, Mercy
+from gothic_ai.mercy import PARDON, PEE_DISTANCE_CM, PEE_HOLD_MS, VICTOR, YIELDING, Mercy
 from gothic_ai.orders import Fight, Orders, Standing
 from gothic_ai.parley import Parley
 from gothic_ai.persona import PersonaProvider
@@ -38,10 +38,13 @@ class MercyGame(FakeGame):
         self.symbols.update(dict.fromkeys(self.hero_items, "item"))
         self.emit_trigger = True
         self.trigger_error = None
+        self.kneeling = False
+        self.approach_status = "done"
 
     def snapshot(self, npc):
         snap = super().snapshot(npc)
         snap["world"]["day"] = 1
+        snap["player"]["kneeling"] = self.kneeling
         return snap
 
     def evaluate(self, expr, npc=None):
@@ -59,6 +62,18 @@ class MercyGame(FakeGame):
         return super().evaluate(expr, npc)
 
     async def handle(self, message):
+        if message["type"] == "player_pose":
+            self.kneeling = message["pose"] == "kneel"
+            await self.send(type="result", req=message["req"], ok=True)
+            return
+        if message["type"] == "action" and (
+            message["action"] == "play_ani"
+            and message["args"]["name"] in {"T_STAND_2_PEE", "S_PEE", "T_PEE_2_STAND"}
+            or message["action"] == "go_to_npc" and self.approach_status != "done"
+        ):
+            status = self.approach_status if message["action"] == "go_to_npc" else "done"
+            await self.send(type="action_result", id=message["id"], npc=message["npc"], status=status)
+            return
         await super().handle(message)
         if message["type"] == "graph_patch":
             for op in message["ops"]:
@@ -429,3 +444,97 @@ async def test_hero_yield_band_truce_betrayal_and_memory_branch(rig, elapsed):
     rig.mercy._minute = 1920
     assert rig.mercy.situation(NPC) is None and not rig.chronicle.facts("hero_yield")
     assert "Герой сдался тебе" not in str(rig.dialogue.open(NPC, "Лобарт", warm=False).history)
+
+
+@pytest.mark.parametrize("guild,guard,approach", [
+    (8, False, "done"), (9, False, "failed"), (8, False, "timeout"),
+    (8, True, "done"), (1, False, "done"), (4, False, "done"),
+    (5, False, "done"), (14, False, "done"),
+])
+async def test_humiliate_scene_law_memory_and_branch(rig, guild, guard, approach):
+    rig.talk.people[NPC] = rig.talk.people[NPC].model_copy(update={"guild": guild})
+    if guard:
+        rig.law.community_of = lambda *args: "city"
+        rig.law.is_guard = lambda *args: True
+    rig.fake.approach_status = approach
+    rig.fake.views[FRIEND] = dict(
+        npc=FRIEND, name="Диего", hp=100, senses_range=2000,
+        hero=dict(id="PLAYER", name="Герой", distance=150),
+    )
+    # A living person outside their own perception radius is not a witness.
+    far = "VLK_FAR"
+    rig.talk.people[far] = rig.talk.people[FRIEND].model_copy(update={"id": far})
+    rig.fake.views[far] = dict(
+        npc=far, name="Прохожий", hp=100, senses_range=100,
+        hero=dict(id="PLAYER", name="Герой", distance=150),
+    )
+    rows = []
+    rig.dialogue.trace = SimpleNamespace(write=rows.append, instructions=lambda text: text)
+    quick = FakeBackend("[hostile] Вот тебе и пощада!", delay=0)
+    scene = rig.mercy._humiliate
+
+    async def with_quick(conv):
+        rig.dialogue.quick = quick
+        return await scene(conv)
+
+    rig.mercy._humiliate = with_quick
+    barks = rig.mercy.barks = CombatBarks(rig.dialogue, hits=False)
+    barks.roster.update(rig.talk.people)
+    rig.llm.script = [FakeStep(tool_calls=[ToolCall("accept_surrender", {
+        "take": ["gold"], "words": "Живи.", "humiliate": True,
+    })]), FakeStep()]
+    rig.dialogue.open(NPC, "Лобарт", warm=False)
+    await rig.dialogue.say_as_player(NPC, "Обоссыте, но не бейте", overlay=True)
+    await finish(rig)
+    output = next(item.output for item in rig.llm.calls[-1][1] if isinstance(item, ToolResult))
+    poses = [m["pose"] for m in rig.fake.received if m["type"] == "player_pose"]
+    forbidden = guard or guild in {1, 4, 5, 14}
+    if forbidden:
+        assert output.startswith("Отклонено:") and "запрещено" in output
+        assert not poses and not rig.chronicle.facts("hero_yield")
+        assert rig.fake.hero_items[GOLD] == 120
+        return
+    assert output.startswith("Принято:")
+    assert rig.chronicle.facts("hero_yield") and rig.fake.hero_items[GOLD] == 0
+    commands = [m for m in rig.fake.received if m["type"] in {"action", "player_pose"}]
+    actions = [m for m in commands if m["type"] == "action"]
+    if approach != "done":
+        assert poses == ["kneel", "none"] and not rig.fake.kneeling
+        assert not rig.chronicle.facts("humiliated") and not quick.calls
+        assert [m["action"] for m in actions] == ["go_to_npc", "return_to_routine"]
+        assert "сдача остаётся в силе" in output
+        return
+    assert poses == ["kneel"] and rig.fake.kneeling
+    assert commands[0]["type"] == "player_pose"
+    assert [m["action"] for m in actions] == [
+        "go_to_npc", "turn_to", "play_ani", "play_ani", "play_ani", "return_to_routine",
+    ]
+    assert actions[0]["args"]["radius"] == PEE_DISTANCE_CM
+    assert [m["args"] for m in actions if m["action"] == "play_ani"] == [
+        {"name": "T_STAND_2_PEE"}, {"name": "S_PEE", "hold_ms": PEE_HOLD_MS},
+        {"name": "T_PEE_2_STAND"},
+    ]
+    [bark] = [r for r in rows if r.get("type") == "combat_bark"]
+    assert (bark["reason"], bark["outcome"]) == ("humiliate", "said")
+    assert quick.calls[-1][1][0].content.endswith(HUMILIATE_HINT.format(target="герой"))
+    phrase = next(m for m in rig.fake.received if m.get("text") == "Вот тебе и пощада!")
+    assert rig.fake.received.index(actions[3]) < rig.fake.received.index(phrase)
+    assert rig.fake.received.index(phrase) < rig.fake.received.index(actions[4])
+    [fact] = rig.chronicle.facts("humiliated")
+    assert fact["npc"] == NPC and fact["hero"] == "PLAYER" and fact["witnesses"] == [FRIEND]
+    assert fact["place"] == "NW_XARDAS_TOWER_IN1_31" and fact["time"] is not None
+    own = rig.dialogue.open(NPC, "Лобарт", warm=False)
+    witness = rig.dialogue.open(FRIEND, "Диего", warm=False)
+    assert "Ты обмочил сдавшегося героя:" in str(own.history)
+    assert "Лобарт обмочил сдавшегося героя у" in str(witness.history)
+    rig.mercy._minute = 999999  # unlike the fresh victory, humiliation has no expiry
+    for conv, expected in [(own, "Ты помнишь, как обмочил его, когда он сдался."),
+                           (witness, "Ты помнишь, как Лобарт обмочил его, когда он сдался.")]:
+        situation, _, _ = await rig.dialogue._situation(conv, None)
+        assert expected in situation
+    rig.link._dispatch(Session(type="session", branch="other", reason="new_game"))
+    assert not rig.chronicle.facts("humiliated")
+    for who in (NPC, FRIEND):
+        conv = rig.dialogue.open(who, who, warm=False)
+        situation, _, _ = await rig.dialogue._situation(conv, None)
+        assert "Ты помнишь, как" not in situation and "обмочил" not in str(conv.history)

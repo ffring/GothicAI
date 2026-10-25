@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 51
+PROTOCOL_VERSION = 52
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -164,6 +164,7 @@ class NpcState(_GameMessage):
     hp: int
     hp_max: int
     busy: bool
+    animations: str = ""  # v52: native animation names, including transitions
     action: str | None = None
     following: bool = False
     gaze: str | None = None  # v27: whom its eyes are on (an npc id, PLAYER), none: nobody
@@ -174,6 +175,8 @@ class NpcState(_GameMessage):
 
 class PlayerState(_GameMessage):
     name: str
+    animations: str = ""
+    kneeling: bool = False
     pos: tuple[float, float, float]
     # v32: where he faces on the ground (x, z), ahead of him and to his right as the screen shows it
     ahead: tuple[float, float] | None = None
@@ -599,6 +602,7 @@ class NpcView(_GameMessage):
     indoors: bool = False
     room_guild: int | None = None  # whose room it is in (the scripts' guilds), indoors only
     state: str = ""
+    senses_range: float = 0  # v52: native perception radius, cm
     theft_ready: bool | None = None  # v44: initialized native ASSESSTHEFT callback, for scene setup
     theft_range: float | None = None  # v48: native ASSESSTHEFT range, cm; also available outside AiNormal
     others_damage_ready: bool | None = None  # v47: initialized native ASSESSOTHERSDAMAGE callback
@@ -1481,6 +1485,14 @@ class NpcActCmd(_Command):
     npc: str
     action: NpcActType
     args: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlayerPoseCmd(_Command):
+    """v52: native hero kneeling until movement, attack or dialogue; result acknowledges the request."""
+
+    type: Literal["player_pose"] = "player_pose"
+    req: str
+    pose: Literal["kneel", "none"]
 
 
 class SnapshotCmd(_Command):

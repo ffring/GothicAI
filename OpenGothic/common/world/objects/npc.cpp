@@ -2261,6 +2261,42 @@ const Animation::Sequence* Npc::playAnimByName(std::string_view name, BodyState 
   return visual.startAnimAndGet(*this,name,calcAniComb(),bs);
   }
 
+bool Npc::setPlayerPose(bool kneel) {
+  if(!isPlayer())
+    return false;
+  if(kneel) {
+    if(isDown() || isDead() || isInAir() || interactive()!=nullptr || spellFrozen() ||
+       !hasAnim("T_STAND_2_PRAY") || !hasAnim("S_PRAY") || !hasAnim("T_PRAY_2_STAND"))
+      return false;
+    if(playerKneeling)
+      return true;
+    clearAiQueue();
+    aiPush(AiQueue::aiRemoveWeapon());
+    aiPush(AiQueue::aiPlayAnim("T_STAND_2_PRAY"));
+    playerKneeling = true;
+    playerPoseExiting = false;
+    }
+  else if(playerKneeling) {
+    playerKneeling = false;
+    playerPoseExiting = true;
+    clearAiQueue();
+    aiPush(AiQueue::aiPlayAnim("T_PRAY_2_STAND"));
+    }
+  return true;
+  }
+
+bool Npc::tickPlayerPose() {
+  if(isDown() || isDead()) {
+    playerKneeling = playerPoseExiting = false;
+    return false;
+    }
+  if(playerKneeling)
+    return true;
+  if(playerPoseExiting && !isAiBusy())
+    playerPoseExiting = false;
+  return playerPoseExiting;
+  }
+
 bool Npc::setAnim(Npc::Anim a) {
   return setAnimAngGet(a)!=nullptr;
   }
@@ -4481,7 +4517,8 @@ void Npc::nextAiAction(AiQueue& queue, uint64_t dt) {
         break;
         }
       attachToPoint(nullptr);
-      go2.set(act.target);
+      go2.set(act.target,act.i0>0 ? GT_Point : GT_Way);
+      go2.pointDistance = float(act.i0);
       go2.nativeCombatTarget = act.nativeCombatTarget==act.target ? act.nativeCombatTarget : nullptr;
       wayPath.clear();
       break;
@@ -6628,6 +6665,7 @@ void Npc::startDialog(Npc& pl) {
     }
   if(pl.isDown() || pl.isInAir() || isPlayer())
     return;
+  pl.setPlayerPose(false);
   stopPhysicsInvestigation(false);
   if(perceptionProcess(pl,nullptr,0,PERC_ASSESSTALK))
     setOther(&pl);
