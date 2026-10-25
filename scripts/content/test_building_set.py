@@ -181,6 +181,37 @@ def test_enable_replaces_only_materials_and_meshes(tmp_path, monkeypatch):
         building_set.enable('missing')
 
 
+def staged_chunk(root, name, chunk='1_-1'):
+    """A world edit like the harbour stairs: one chunk of the converted world mesh, no materials."""
+    folder = root / 'content-staging' / name / 'worlds/NEWWORLD/chunks'
+    folder.mkdir(parents=True)
+    (folder / f'{chunk}.glb').write_bytes(b'chunk ' + name.encode())
+
+
+def test_compose_and_enable_carry_world_chunks(tmp_path, monkeypatch):
+    monkeypatch.setenv('GOTHIC_AI_DATA', str(tmp_path))
+    staged(tmp_path, 'roofs-1', {'ROOF_01.TGA': 'roofs-1-roof-01'})
+    staged_chunk(tmp_path, 'stairs-1')
+    result = building_set.compose('city-1', ['roofs-1', 'stairs-1'])
+    assert result == {'set': 'city-1', 'entries': 1, 'meshes': 0, 'parts': {'roofs-1': 1, 'stairs-1': 1}, 'chunks': 1}
+    out = tmp_path / 'content-staging/city-1'
+    assert (out / 'worlds/NEWWORLD/chunks/1_-1.glb').read_bytes() == b'chunk stairs-1'
+    composition = json.loads((out / 'composition.json').read_text())
+    assert composition['parts']['stairs-1'] == ['worlds/NEWWORLD/chunks/1_-1.glb']
+    assert list(composition['world_sha256']) == ['NEWWORLD/chunks/1_-1.glb']
+    record = building_set.enable('city-1')
+    assert record['chunks'] == 1
+    assert (tmp_path / 'content/worlds/NEWWORLD/chunks/1_-1.glb').read_bytes() == b'chunk stairs-1'
+    building_set.enable('roofs-1')                       # a set without chunks takes the old ones away
+    assert not (tmp_path / 'content/worlds').exists()
+    staged_chunk(tmp_path, 'stairs-2')
+    with pytest.raises(ValueError, match='chunk NEWWORLD/CHUNKS/1_-1.GLB: in both stairs-1 and stairs-2'):
+        building_set.compose('two-stairs', ['stairs-1', 'roofs-1', 'stairs-2'])
+    (tmp_path / 'content-staging/empty').mkdir()
+    with pytest.raises(ValueError, match='empty: no materials, meshes or world chunks'):
+        building_set.compose('none', ['roofs-1', 'empty'])
+
+
 def test_crop_band_drops_grey_margins():
     from PIL import Image
     canvas = Image.new('RGB', (300, 200), (200, 200, 200))

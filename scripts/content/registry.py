@@ -123,6 +123,52 @@ def verify_sources(entry: Any, source_root: Path) -> None:
             raise RegistryError(f"source_sha256: mismatch for {relative}: expected {expected}, got {actual}")
 
 
+WORLD_CHUNK = re.compile(r"[A-Z0-9_]+/-?[0-9]+_-?[0-9]+\Z")
+
+
+def _validate_world_chunk(entry: dict[str, Any], content_root: Path | None) -> None:
+    """A chunk of the converted world mesh edited as a derivative (docs/asset-migration.md, П2).
+
+    No generator is involved: the edit is a script run on the base chunk. ``replaces`` names the
+    chunk as ``<WORLD>/<x>_<z>``, ``inputs`` records it as ``converted world mesh <WORLD>/<x>_<z>``
+    with the base file's digest, ``files.glb`` is the edited chunk with its digest."""
+    if entry["status"] != "draft":
+        raise RegistryError("status: expected 'draft'")
+    replaces = entry["replaces"]
+    if not isinstance(replaces, list) or len(replaces) != 1 or not isinstance(replaces[0], str) \
+            or not WORLD_CHUNK.fullmatch(replaces[0]):
+        raise RegistryError("worldchunk.replaces: expected one '<WORLD>/<x>_<z>' chunk")
+    if entry["pipeline"] != "blender-world-edit" or entry["models"] != [] or entry["seed"] is not None:
+        raise RegistryError("worldchunk: expected blender-world-edit pipeline, no models and null seed")
+    if not isinstance(entry["prompt"], str) or not isinstance(entry["negative"], str):
+        raise RegistryError("worldchunk: prompt and negative must be strings")
+    tool = entry.get("tool")
+    if not isinstance(tool, dict) or not _nonempty(tool.get("script")) or \
+            not isinstance(tool.get("commit"), str) or not REVISION.fullmatch(tool["commit"]):
+        raise RegistryError("worldchunk.tool: expected script and a full commit hash")
+    if not isinstance(entry["parameters"], dict):
+        raise RegistryError("parameters: expected an object")
+    inputs = entry.get("inputs")
+    expected = f"converted world mesh {replaces[0]}"
+    if not isinstance(inputs, list) or len(inputs) != 1 or not isinstance(inputs[0], dict) or \
+            inputs[0].get("input") != expected or not SHA256.fullmatch(str(inputs[0].get("sha256", ""))):
+        raise RegistryError(f"worldchunk.inputs: expected one '{expected}' with its sha256")
+    files = entry["files"]
+    if not isinstance(files, dict) or files.keys() != {"glb"} or not isinstance(files["glb"], dict):
+        raise RegistryError("worldchunk.files: expected only glb with path and sha256")
+    relative = _safe_path(files["glb"].get("path"), "files.glb.path")
+    digest = files["glb"].get("sha256")
+    if relative.suffix != ".glb" or not isinstance(digest, str) or not SHA256.fullmatch(digest):
+        raise RegistryError("worldchunk.files.glb: expected a .glb path and a sha256")
+    if content_root is not None:
+        root = Path(content_root).expanduser().resolve()
+        candidate = (root / relative).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            raise RegistryError(f"files.glb: file does not exist: {relative}")
+        if hashlib.sha256(candidate.read_bytes()).hexdigest() != digest:
+            raise RegistryError(f"files.glb: sha256 mismatch for {relative}")
+
+
 def validate_entry(entry: Any, *, content_root: Path | None = None,
                    source_root: Path | None = None) -> None:
     """Raise RegistryError on invalid recipes; optionally verify output files.
@@ -140,8 +186,11 @@ def validate_entry(entry: Any, *, content_root: Path | None = None,
         raise RegistryError(f"entry: missing fields: {', '.join(sorted(missing))}")
     if not isinstance(entry["id"], str) or not SLUG.fullmatch(entry["id"]):
         raise RegistryError("id: expected a lowercase resource slug")
+    if entry["kind"] == "worldchunk":
+        _validate_world_chunk(entry, content_root)
+        return
     if entry["kind"] not in ("material", "concept"):
-        raise RegistryError("kind: expected 'material' or 'concept'")
+        raise RegistryError("kind: expected 'material', 'concept' or 'worldchunk'")
     concept = entry["kind"] == "concept"
     if entry["status"] != "draft":
         raise RegistryError("status: expected 'draft'")
