@@ -58,17 +58,17 @@ bool isNpcMoveSkipped(const Tempest::Vec3& displacement) {
   return std::abs(displacement.x)<eps && std::abs(displacement.y)<eps && std::abs(displacement.z)<eps;
   }
 
-ItemMaterial impactMaterial(zenkit::MaterialGroup material) {
+ItemMaterial impactMaterial(asset::MaterialGroup material) {
   switch(material) {
-    case zenkit::MaterialGroup::METAL: return MAT_METAL;
-    case zenkit::MaterialGroup::STONE: return MAT_STONE;
-    case zenkit::MaterialGroup::WOOD:  return MAT_WOOD;
+    case asset::MaterialGroup::METAL: return MAT_METAL;
+    case asset::MaterialGroup::STONE: return MAT_STONE;
+    case asset::MaterialGroup::WOOD:  return MAT_WOOD;
     default:                          return MAT_CLAY;
     }
   }
 
-float vobBuoyancyFraction(zenkit::MaterialGroup material, std::string_view className = {}) {
-  if(material!=zenkit::MaterialGroup::WOOD)
+float vobBuoyancyFraction(asset::MaterialGroup material, std::string_view className = {}) {
+  if(material!=asset::MaterialGroup::WOOD)
     return DynamicWorld::materialDensity(material)/1000.f;
   // Water displacement is independent of native push mass and its CSV multipliers.
   // Classless wood, including broken pieces, uses the solid-wood target.
@@ -142,7 +142,7 @@ struct DynamicWorld::MovableVobs {
   struct Shape {
     JPH::ShapeRefC              hull;
     std::vector<Part>           parts;
-    zenkit::MaterialGroup      material = zenkit::MaterialGroup::UNDEFINED;
+    asset::MaterialGroup      material = asset::MaterialGroup::UNDEFINED;
     float                      friction = 0.f;
     bool                       hullAttempted = false;
     std::shared_ptr<const FractureMesh> fracture;
@@ -717,7 +717,7 @@ struct DynamicWorld::BBoxList final {
   DynamicWorld&          wrld;
   };
 
-DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh, const zenkit::Mesh* originalCloth) {
+DynamicWorld::DynamicWorld(World* owner, const asset::WorldMesh& worldMesh, const asset::WorldMesh* originalCloth) {
   world.reset(new CollisionWorld());
   ownerWorld=owner;
   clothWorld=std::make_unique<Cloth>(*world);
@@ -757,7 +757,7 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh, const ze
   for(size_t i=0;i<pkg.subMeshes.size();++i) {
     auto& sm = pkg.subMeshes[i];
     if(!sm.material.disable_collision && sm.iboLength>0) {
-      if(sm.material.group==zenkit::MaterialGroup::WATER) {
+      if(sm.material.group==asset::MaterialGroup::WATER) {
         waterMesh->addIndex(pkg.indices,sm.iboOffset,sm.iboLength,sm.material.group);
         } else {
         landMesh ->addIndex(pkg.indices,sm.iboOffset,sm.iboLength,sm.material.group,sectors[i].c_str());
@@ -781,7 +781,7 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh, const ze
   Tempest::Matrix4x4 mt;
   mt.identity();
   if(!landMesh->isEmpty() && landMesh->shape()!=nullptr) {
-    bodies->landscape = world->addCollisionBody(landMesh->shape(),mt,materialFriction(zenkit::MaterialGroup::NONE),
+    bodies->landscape = world->addCollisionBody(landMesh->shape(),mt,materialFriction(asset::MaterialGroup::NONE),
                                                C_Landscape,false,false,landMesh.get());
     bodies->landscape->setLabel("landscape");
     JPH::Vec3 min, max;
@@ -804,7 +804,7 @@ DynamicWorld::DynamicWorld(World* owner, const zenkit::Mesh& worldMesh, const ze
   bboxList  .reset(new BBoxList   (*this));
 
   if(owner!=nullptr) {
-    world->setItemHitCallback([owner](::Item& itm, zenkit::MaterialGroup mat, float impulse, float mass) {
+    world->setItemHitCallback([owner](::Item& itm, asset::MaterialGroup mat, float impulse, float mass) {
       auto  snd = owner->addLandHitEffect(ItemMaterial(itm.handle().material),mat,itm.transform());
       float v   = impulse/mass;
       float vol = snd.volume()*std::min(v/10.f,1.f);
@@ -830,7 +830,7 @@ void DynamicWorld::setClothEnabled(bool value) {
     } else if(bodies->originalCloth==nullptr && originalClothMesh!=nullptr &&
               !originalClothMesh->isEmpty() && originalClothMesh->shape()!=nullptr) {
     bodies->originalCloth=world->addCollisionBody(originalClothMesh->shape(),Tempest::Matrix4x4::mkIdentity(),
-                                                materialFriction(zenkit::MaterialGroup::NONE),
+                                                materialFriction(asset::MaterialGroup::NONE),
                                                 C_Landscape,false,false,originalClothMesh.get());
     bodies->originalCloth->setLabel("cloth-fallback");
     }
@@ -1001,7 +1001,7 @@ DynamicWorld::Item DynamicWorld::addMovableObj(const PhysicMeshShape* shape, con
   return Item(this,obj.release());
   }
 
-DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& b, zenkit::MaterialGroup mat) {
+DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& b, asset::MaterialGroup mat) {
   auto extent = CollisionWorld::toMeters(b.bbox[1]-b.bbox[0]);
   const auto* m=pos.data();
   const double volumeScale=std::abs(double(m[0])*(double(m[5])*m[10]-double(m[9])*m[6])-
@@ -1987,7 +1987,7 @@ void DynamicWorld::breakMovableVob(BodyData& obj) {
   const bool wooden=obj.fractureRule->className=="crate" || obj.fractureRule->className=="barrel" ||
                     obj.fractureRule->className=="fence";
   noise.material=wooden ? MAT_WOOD : MAT_CLAY;
-  noise.surface=wooden ? zenkit::MaterialGroup::WOOD : zenkit::MaterialGroup::STONE;
+  noise.surface=wooden ? asset::MaterialGroup::WOOD : asset::MaterialGroup::STONE;
   noise.what=obj.visual+" break";
   noise.impulse=obj.breakImpulse;
   noise.volume=1.f;
@@ -2104,7 +2104,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     }
   const bool attachAtWorldStop=!isSpell && b.cb!=nullptr && b.cb->stopsAtWorldHit();
   const auto hit = world->rayCast(pos,to,visualMask,false);
-  const auto matId = hit.hasHit ? hit.material : zenkit::MaterialGroup::NONE;
+  const auto matId = hit.hasHit ? hit.material : asset::MaterialGroup::NONE;
   ArrowTrace::write(b,b.cb,"world_query",dt,nullptr,hit.hasHit,hit.fraction,hit.point,hit.normal,
                     unsigned(matId),hit.body!=nullptr ? unsigned(hit.body->category()) : 0);
 
@@ -2131,7 +2131,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
   // where their bones are
   const bool precise = !isSpell && b.cb!=nullptr && b.cb->isPrecise();
   if(precise) {
-    const float a   = matId!=zenkit::MaterialGroup::NONE ? hit.fraction : 1.f;
+    const float a   = matId!=asset::MaterialGroup::NONE ? hit.fraction : 1.f;
     const auto  end = pos + (to-pos)*a;
     if(npcList->rayTestAll(pos,end,b.targetRange(),[&](Npc& npc) {
       // Capture the same bone intersection before damage can alter its pose.
@@ -2150,7 +2150,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     }
 
   bool stopBullet = false;
-  if(matId != zenkit::MaterialGroup::NONE) {
+  if(matId != asset::MaterialGroup::NONE) {
     notifyCloth(pos+(to-pos)*hit.fraction);
     if(!isSpell && hit.body!=nullptr && hit.body->ptrType()==P_MovableVob) {
       auto& target=*static_cast<BodyData*>(hit.body->payload());
@@ -2183,8 +2183,8 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
         }
       stopBullet = true;
       } else {
-      if(matId==zenkit::MaterialGroup::METAL ||
-         matId==zenkit::MaterialGroup::STONE) {
+      if(matId==asset::MaterialGroup::METAL ||
+         matId==asset::MaterialGroup::STONE) {
         auto m = b.dir;
         auto n = Tempest::Vec3::normalize(hit.normal);
         const float l = b.speed();
@@ -2241,7 +2241,7 @@ void DynamicWorld::moveBullet(BulletBody &b, const Tempest::Vec3& dir, uint64_t 
     if(b.cb!=nullptr) {
       // Pin only after the unchanged flight code has decided to stop at a solid
       // world contact. In particular, stone/metal still reflect before this test.
-      if(attachAtWorldStop && matId!=zenkit::MaterialGroup::NONE) {
+      if(attachAtWorldStop && matId!=asset::MaterialGroup::NONE) {
         BulletWorldHit result;
         result.point=b.position();
         result.normal=hit.normal;
@@ -2349,45 +2349,45 @@ void DynamicWorld::deleteObj(BulletBody* obj) {
   bulletList->del(obj);
   }
 
-float DynamicWorld::materialFriction(zenkit::MaterialGroup mat) {
+float DynamicWorld::materialFriction(asset::MaterialGroup mat) {
   // https://www.thoughtspike.com/friction-coefficients-for-bullet-physics/
   switch(mat) {
-    case zenkit::MaterialGroup::UNDEFINED:
+    case asset::MaterialGroup::UNDEFINED:
       return 0.5f;
-    case zenkit::MaterialGroup::METAL:
+    case asset::MaterialGroup::METAL:
       return 1.1f;
-    case zenkit::MaterialGroup::STONE:
+    case asset::MaterialGroup::STONE:
       return 0.65f;
-    case zenkit::MaterialGroup::WOOD:
+    case asset::MaterialGroup::WOOD:
       return 0.4f;
-    case zenkit::MaterialGroup::EARTH:
+    case asset::MaterialGroup::EARTH:
       return 0.4f;
-    case zenkit::MaterialGroup::WATER:
+    case asset::MaterialGroup::WATER:
       return 0.01f;
-    case zenkit::MaterialGroup::SNOW:
+    case asset::MaterialGroup::SNOW:
       return 0.2f;
-    case zenkit::MaterialGroup::NONE:
+    case asset::MaterialGroup::NONE:
       break;
     }
   return 0.75f;
   }
 
-float DynamicWorld::materialDensity(zenkit::MaterialGroup mat) {
+float DynamicWorld::materialDensity(asset::MaterialGroup mat) {
   switch (mat) {
-    case zenkit::MaterialGroup::UNDEFINED:
-    case zenkit::MaterialGroup::NONE:
+    case asset::MaterialGroup::UNDEFINED:
+    case asset::MaterialGroup::NONE:
       return 2000.0f;
-    case zenkit::MaterialGroup::METAL:
+    case asset::MaterialGroup::METAL:
       return 7800.f;
-    case zenkit::MaterialGroup::STONE:
+    case asset::MaterialGroup::STONE:
       return 2200.f;
-    case zenkit::MaterialGroup::WOOD:
+    case asset::MaterialGroup::WOOD:
       return 700.f;
-    case zenkit::MaterialGroup::EARTH:
+    case asset::MaterialGroup::EARTH:
       return 1500.f;
-    case zenkit::MaterialGroup::WATER:
+    case asset::MaterialGroup::WATER:
       return 1000.f;
-    case zenkit::MaterialGroup::SNOW:
+    case asset::MaterialGroup::SNOW:
       return 1000.f;
     }
   return 2000.f;
@@ -2906,8 +2906,8 @@ void DynamicWorld::Item::setItem(::Item* it) {
   obj->body->setPayload(it,P_Item);
   if(it!=nullptr) {
     const auto material=ItemMaterial(it->handle().material);
-    const auto surface=material==MAT_WOOD ? zenkit::MaterialGroup::WOOD :
-                       material==MAT_METAL ? zenkit::MaterialGroup::METAL : zenkit::MaterialGroup::STONE;
+    const auto surface=material==MAT_WOOD ? asset::MaterialGroup::WOOD :
+                       material==MAT_METAL ? asset::MaterialGroup::METAL : asset::MaterialGroup::STONE;
     obj->body->setNoiseProfile(material,surface,it->handle().visual);
     obj->body->setLabel(it->handle().visual);
     }

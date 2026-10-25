@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <limits>
 
-#include <zenkit/Material.hh>
+#include "asset/material.h"
 
 #include <Tempest/Point>
 
@@ -87,7 +87,7 @@ class MoveAlgo final {
     bool    characterVirtualActive() const { return virtualMovementActive; }
     auto    characterVirtualGroundVelocity() const -> Tempest::Vec3 { return virtualGroundVelocity; }
 
-    zenkit::MaterialGroup groundMaterial() const;
+    asset::MaterialGroup groundMaterial() const;
     auto    groundNormal() const -> Tempest::Vec3;
 
     auto    portalName() -> std::string_view;

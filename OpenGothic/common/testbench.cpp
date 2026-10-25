@@ -5213,7 +5213,7 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
     for(int pass=0;pass<8 && from.y>bottom;++pass) {
       const auto hit=world.physic()->landRay(from,from.y-bottom);
       if(!hit.hasCol)return {};
-      if(hit.mat==zenkit::MaterialGroup::EARTH && hit.n.y>.7f)return hit.v.y;
+      if(hit.mat==asset::MaterialGroup::EARTH && hit.n.y>.7f)return hit.v.y;
       from.y=hit.v.y-.5f;
       }
     return {};
@@ -5315,7 +5315,7 @@ bool clothFrame(World& world,const Cloth::Snapshot& body,Vec3& cameraEye,Vec3& c
           const auto hit=world.physic()->rayClothCamera(eye,end,body.visual,bounds,candidateSelfHits,&label);
           if(!hit.hasCol)continue;
           bool attachment=false;
-          if(hit.mat!=zenkit::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f) {
+          if(hit.mat!=asset::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f) {
             for(const auto& anchor:body.anchorsCm)
               if((target-anchor).length()<=25.f && (hit.v-anchor).length()<=25.f) {attachment=true;break;}
             }
@@ -5545,7 +5545,7 @@ void clothCameraRange(World& world,float range) {
       const auto hit=world.physic()->rayClothCamera(eye,end,body->visual,bounds,selfHits);
       if(!hit.hasCol)continue;
       bool attachment=false;
-      if(hit.mat!=zenkit::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f)
+      if(hit.mat!=asset::MaterialGroup::EARTH && !hit.vob && (hit.v-target).length()<=20.f)
         attachment=std::any_of(body->anchorsCm.begin(),body->anchorsCm.end(),[&](const Vec3& anchor) {
           return (target-anchor).length()<=25.f && (hit.v-anchor).length()<=25.f;
           });
@@ -8752,7 +8752,7 @@ void monsterCharacterLedge(World& world,Npc& player,std::string_view species,flo
   // elevated support excludes stock rocks/actors while remaining part of the
   // real World queried by both legacy MoveAlgo and CharacterVirtual.
   anchor.y+=10000.f;
-  zenkit::Mesh mesh;mesh.materials.resize(1);mesh.materials[0].group=zenkit::MaterialGroup::STONE;
+  asset::WorldMesh mesh;mesh.materials.resize(1);mesh.materials[0].group=asset::MaterialGroup::STONE;
   const auto quad=[&](Vec3 a,Vec3 b,Vec3 c,Vec3 d) {
     const auto index=uint32_t(mesh.vertices.size());
     for(const auto& point:{a,b,c,d})mesh.vertices.push_back({point.x,point.y,point.z});
@@ -9051,7 +9051,7 @@ void monsterCharacterPack(World& world,Npc& player) {
         const auto support=world.physic()->landRay(floor+Vec3(0,15,0),30);
         if(!support.hasCol || support.n.y<std::cos(30.f*float(M_PI)/180.f) ||
            world.physic()->waterRay(floor+Vec3(0,1,0),0).hasCol) {valid=false;break;}
-        stone+=support.mat==zenkit::MaterialGroup::STONE;
+        stone+=support.mat==asset::MaterialGroup::STONE;
         if(!ring.empty() && !characterLane(world,ring.back(),floor,35)) {valid=false;break;}
         low=std::min(low,floor.y);high=std::max(high,floor.y);ring.push_back(floor);
         }
@@ -9270,7 +9270,7 @@ bool monsterCharacterStairs(World& world,Npc& npc,Npc& player,Vec3& start,Vec3& 
     Vec3 center;if(!characterFloor(world,point->pos+Vec3(x,0,z),center))continue;
     if(stoneOnly) {
       const auto support=world.physic()->landRay(center+Vec3(0,15,0),30);
-      if(!support.hasCol || support.mat!=zenkit::MaterialGroup::STONE)continue;
+      if(!support.hasCol || support.mat!=asset::MaterialGroup::STONE)continue;
       }
     float angle=0,rough=0;Vec3 downhill;
     if(!slopeAt(world,center,angle,downhill,rough) || angle<(stoneOnly?10.f:18.f) || angle>40 ||
@@ -9777,10 +9777,10 @@ void characterStairPerformance(World& world,Npc& player) {
     }
   constexpr float radians=float(M_PI)/180.f, angle=55.f*radians, padding=1.f;
   const float cosine=std::cos(angle), tangent=std::tan(angle);
-  zenkit::Mesh plane;
+  asset::WorldMesh plane;
   plane.vertices={{-2000,-2000*tangent,-2000},{-2000,-2000*tangent,2000},
                   {2000,2000*tangent,2000},{2000,2000*tangent,-2000}};
-  plane.materials.resize(1);plane.materials[0].group=zenkit::MaterialGroup::STONE;
+  plane.materials.resize(1);plane.materials[0].group=asset::MaterialGroup::STONE;
   // PhysicVbo reverses Gothic source winding into upward-facing native triangles.
   plane.polygons.vertex_indices={0,2,1,0,3,2};plane.polygons.material_indices={0,0};
   DynamicWorld isolated(nullptr,plane);

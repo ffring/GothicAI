@@ -20,7 +20,7 @@ std::vector<std::byte> readWorldBytes(zenkit::Read& reader) {
   return bytes;
   }
 
-WorldBaseResult tryWorldBase(zenkit::Mesh& mesh, std::string_view world,
+WorldBaseResult tryWorldBase(asset::WorldMesh& mesh, std::string_view world,
                              const std::vector<std::byte>& source,
                              const std::filesystem::path& dir,
                              const std::filesystem::path& overrideDir) {
@@ -58,7 +58,7 @@ WorldBaseResult tryWorldBase(zenkit::Mesh& mesh, std::string_view world,
   return result;
   }
 
-WorldBaseResult tryWorldData(zenkit::World& world, std::vector<WorldData::Room>& rooms,
+WorldBaseResult tryWorldData(zenkit::World& world, asset::WorldMesh& worldMesh, std::vector<WorldData::Room>& rooms,
                             std::string_view name, const std::filesystem::path& dir,
                             const std::filesystem::path& overrideDir,
                             const std::vector<std::pair<std::string,uintmax_t>>& mounted) {
@@ -110,7 +110,7 @@ WorldBaseResult tryWorldData(zenkit::World& world, std::vector<WorldData::Room>&
     mesh.bbox = data.bbox;
     result.triangles = mesh.polygons.material_indices.size();
     result.chunks = manifest.chunks.size();
-    world.world_mesh = std::move(mesh);
+    worldMesh = std::move(mesh);
     world.world_vobs = std::move(data.vobs);
     world.way_net = std::move(data.waynet);
     world.world_bsp_tree = std::move(data.bsp);

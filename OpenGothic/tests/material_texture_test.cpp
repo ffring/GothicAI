@@ -100,11 +100,11 @@ struct Fixture final {
     }
   };
 
-zenkit::Material source(std::string_view name) {
-  zenkit::Material ret;
+asset::Material source(std::string_view name) {
+  asset::Material ret;
   ret.texture = name;
   ret.color = {255,255,255,255};
-  ret.alpha_func = zenkit::AlphaFunction::NONE;
+  ret.alpha_func = asset::AlphaFunction::NONE;
   return ret;
   }
 
@@ -127,7 +127,7 @@ void variants() {
   require(Resources::textureVariantName(longName,2,3)==longName,"long-name fallback must remain unchanged");
   }
 
-void opaqueStaticVariant(MeshObjects& owner, const zenkit::MultiResolutionMesh& mesh, bool ownAlbedo) {
+void opaqueStaticVariant(MeshObjects& owner, const asset::StaticMesh& mesh, bool ownAlbedo) {
   PackedMesh packed(mesh,PackedMesh::PK_Visual);
   packed.isUsingAlphaTest = false;
   StaticMesh rigid(packed);
@@ -156,8 +156,8 @@ void opaqueStaticVariant(MeshObjects& owner, const zenkit::MultiResolutionMesh& 
           "equal current formats must not hide a different alpha-test policy");
   }
 
-void sourceAlphaPolicy(MeshObjects& owner, const zenkit::ModelMesh& model, bool ownAlbedo) {
-  for(auto function:{zenkit::AlphaFunction::BLEND,zenkit::AlphaFunction::NONE}) {
+void sourceAlphaPolicy(MeshObjects& owner, const asset::ModelMesh& model, bool ownAlbedo) {
+  for(auto function:{asset::AlphaFunction::BLEND,asset::AlphaFunction::NONE}) {
     for(uint8_t colorAlpha:{uint8_t(255),uint8_t(128)}) {
       auto baseSource = source("HUM_BODY_V0_C0.TGA");
       baseSource.alpha_func = function;
@@ -166,7 +166,7 @@ void sourceAlphaPolicy(MeshObjects& owner, const zenkit::ModelMesh& model, bool 
       variantSource.texture = "HUM_BODY_V2_C3.TGA";
       const Material base(baseSource,true);
       const Material variant(variantSource,true);
-      if(function==zenkit::AlphaFunction::BLEND && colorAlpha==255)
+      if(function==asset::AlphaFunction::BLEND && colorAlpha==255)
         require(base.alpha==(ownAlbedo ? Material::Solid : Material::Transparent),
                 "the BLEND fixture must exercise the DXT1 solid optimization in one direction");
 
@@ -180,7 +180,7 @@ void sourceAlphaPolicy(MeshObjects& owner, const zenkit::ModelMesh& model, bool 
       require(changed.alpha==base.alpha,
               "reverse albedo changes must classify alpha like the base constructor");
 
-      if(function==zenkit::AlphaFunction::BLEND) {
+      if(function==asset::AlphaFunction::BLEND) {
         auto blendModel = model;
         blendModel.meshes[0].mesh.sub_meshes[0].mat = baseSource;
         ProtoMesh blendProto(blendModel,nullptr,"MATERIAL_TEXTURE_BLEND.MDM");
@@ -204,8 +204,7 @@ void skinnedVariant(bool ownAlbedo) {
   VisualObjects visuals(globals,{{0,0,0},{1,1,0}});
   MeshObjects owner(visuals);
 
-  zenkit::ModelMesh model;
-  model.checksum = 0;
+  asset::ModelMesh model;
   model.meshes.resize(1);
   auto& skin = model.meshes[0];
   skin.mesh.positions = {{0,0,0},{1,0,0},{0,1,0}};
@@ -216,7 +215,6 @@ void skinnedVariant(bool ownAlbedo) {
   surface.wedges = {{{0,0,1},{0,0},0},{{0,0,1},{1,0},1},{{0,0,1},{0,1},2}};
   surface.triangles = {{{0,1,2}}};
   skin.weights = {{{1.f,{0,0,0},0}},{{1.f,{1,0,0},0}},{{1.f,{0,1,0},0}}};
-  skin.nodes = {0};
   ProtoMesh proto(model,nullptr,"MATERIAL_TEXTURE_SKIN.MDM");
   require(proto.skined.size()==1 && proto.skined[0].sub.size()==1,
           "the variant fixture must contain one real skinned submesh");

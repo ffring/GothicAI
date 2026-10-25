@@ -1,3 +1,4 @@
+#include "asset/fromzenkit.h"
 #include "commandline.h"
 #include "gothic.h"
 #include "resources.h"
@@ -186,8 +187,9 @@ struct WorldDataContract {
         gothic.setupGlobalScripts();
         GameMusic music;
         zenkit::World loaded;
+        asset::WorldMesh loadedMesh;
         std::vector<WorldData::Room> rooms;
-        Resources::loadWorld(loaded,rooms,file);
+        Resources::loadWorld(loaded,loadedMesh,rooms,file);
         const auto manifest=readWorldChunkManifest(base/"worlds"/name);
         if(!useBase) {
           original=WorldData::fromWorld(loaded,manifest.source);
@@ -200,7 +202,7 @@ struct WorldDataContract {
           const auto* entry=Resources::vdfsIndex().find(file);
           auto reader=entry->open_read(); zenkit::World zen;
           zen.load(reader.get(),zenkit::GameVersion::GOTHIC_2);
-          const auto meshDiff=compareWorldMeshes(canonicalWorldMesh(zen.world_mesh),canonicalWorldMesh(loaded.world_mesh));
+          const auto meshDiff=compareWorldMeshes(canonicalWorldMesh(asset::fromZenKit(zen.world_mesh)),canonicalWorldMesh(loadedMesh));
           require(meshDiff.empty(),file+": mesh "+meshDiff);
           }
         const auto before=zenOpens(census);
@@ -224,7 +226,8 @@ struct WorldDataContract {
     const auto size=index["archives"][0]["size"].GetUint64();
     index["archives"][0]["size"].SetUint64(size+1); write(dir/"world.json",index);
     zenkit::World fallback; std::vector<WorldData::Room> rooms;
-    Resources::loadWorld(fallback,rooms,"NEWWORLD.ZEN");
+    asset::WorldMesh fallbackMesh;
+    Resources::loadWorld(fallback,fallbackMesh,rooms,"NEWWORLD.ZEN");
     require(!fallback.world_mesh.geometry.empty(),"archive size +1 must return raw ZEN geometry");
     index["archives"][0]["size"].SetUint64(size); write(dir/"world.json",index);
     const auto content=root/"content"; const auto overrides=content/"worlds/NEWWORLD";
@@ -235,7 +238,8 @@ struct WorldDataContract {
     waynet["waynet"]["edges"].Clear(); write(overrides/"waynet.json",waynet);
     setenv("OPENGOTHIC_CONTENT",content.c_str(),1);
     zenkit::World changed;
-    Resources::loadWorld(changed,rooms,"NEWWORLD.ZEN");
+    asset::WorldMesh changedMesh;
+    Resources::loadWorld(changed,changedMesh,rooms,"NEWWORLD.ZEN");
     require(changed.world_vobs.empty() && !fallback.world_vobs.empty(),"content vobs.json must replace the whole base tree");
     require(changed.way_net->edges.empty() && !fallback.way_net->edges.empty(),"content waynet.json must replace the whole base graph");
     require(changed.world_mesh.geometry.empty(),"content selection must use the base world");

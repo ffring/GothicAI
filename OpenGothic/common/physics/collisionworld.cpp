@@ -332,7 +332,7 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
   struct NoiseImpact {
     JPH::BodyID body,other;
     Tempest::Vec3 point;
-    zenkit::MaterialGroup surface;
+    asset::MaterialGroup surface;
     float impulse, structuralImpulse;
     uint64_t step;
     uint64_t logicalBody;
@@ -340,7 +340,7 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
     };
   struct Impact {
     JPH::BodyID item;
-    zenkit::MaterialGroup material;
+    asset::MaterialGroup material;
     float impulse;
     float mass;
     uint64_t step;
@@ -424,9 +424,9 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
           auto surface=[](const JPH::Body& body,JPH::SubShapeID subShape) {
             const auto layer=body.GetObjectLayer();
             if(layer==DynamicWorld::C_Ragdoll || layer==DynamicWorld::C_LivingBody || layer==DynamicWorld::C_ActiveBody)
-              return zenkit::MaterialGroup::UNDEFINED;
+              return asset::MaterialGroup::UNDEFINED;
             auto* obj=reinterpret_cast<CollisionBody*>(body.GetUserData());
-            if(obj==nullptr) return zenkit::MaterialGroup::STONE;
+            if(obj==nullptr) return asset::MaterialGroup::STONE;
             if(obj->mesh!=nullptr)
               return obj->mesh->materialId(Physics::triangleData(*body.GetShape(),subShape));
             return obj->noiseSurface;
@@ -475,7 +475,7 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
     const float impulse = response.mContactImpulse[0];
     if(impulse/obj->bodyMass<0.9f)
       return;
-    auto material = zenkit::MaterialGroup::STONE;
+    auto material = asset::MaterialGroup::STONE;
     if(terrain!=nullptr && terrain->mesh!=nullptr)
       material = terrain->mesh->materialId(Physics::triangleData(*land->GetShape(),landSubShape));
     std::lock_guard<std::mutex> guard(impactMutex);
@@ -1466,7 +1466,7 @@ void CollisionWorld::CollisionBody::setBuoyancyFraction(float fraction) {
   buoyancyFraction=std::isfinite(fraction) && fraction>0.f ? fraction : 0.f;
   }
 
-void CollisionWorld::CollisionBody::setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what) {
+void CollisionWorld::CollisionBody::setNoiseProfile(ItemMaterial material, asset::MaterialGroup surface, std::string_view what) {
   noiseMaterial=material;
   noiseSurface=surface;
   noiseWhat=what;
@@ -3053,7 +3053,7 @@ void CollisionWorld::prepareBuoyancy(std::vector<PhysicsNoise>& splashes) {
         if(speed>.2f && momentum>.02f) {
           PhysicsNoise noise;
           noise.position={center.x,surface,center.z};
-          noise.surface=zenkit::MaterialGroup::WATER;
+          noise.surface=asset::MaterialGroup::WATER;
           noise.impulse=momentum;
           noise.volume=std::clamp(std::sqrt(momentum)/12.f,.015f,1.f);
           noise.radius=100.f+1500.f*noise.volume;
@@ -3199,7 +3199,7 @@ void CollisionWorld::setBBox(JPH::Vec3Arg min, JPH::Vec3Arg) {
   bboxMin = min;
   }
 
-void CollisionWorld::setItemHitCallback(std::function<void(Item&, zenkit::MaterialGroup, float, float)> callback) {
+void CollisionWorld::setItemHitCallback(std::function<void(Item&, asset::MaterialGroup, float, float)> callback) {
   hitItem = std::move(callback);
   impl->emitImpacts = bool(hitItem) && !impl->noiseEnabled;
   }

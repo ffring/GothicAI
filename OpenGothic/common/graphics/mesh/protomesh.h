@@ -5,8 +5,7 @@
 #include <Tempest/Device>
 #include <Tempest/Matrix4x4>
 
-#include <zenkit/Model.hh>
-#include <zenkit/ModelMesh.hh>
+#include "asset/staticmesh.h"
 #include <zenkit/ModelHierarchy.hh>
 #include <zenkit/MorphMesh.hh>
 
@@ -24,9 +23,9 @@ class ProtoMesh {
 
     ProtoMesh(PackedMesh&&  pm, std::string_view fname);
     ProtoMesh(PackedMesh&&  pm, const std::vector<zenkit::MorphAnimation>& aniList, std::string_view fname);
-    ProtoMesh(const zenkit::Model& lib, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest = false);
+    ProtoMesh(const zenkit::ModelHierarchy& hierarchy, const asset::ModelMesh& lib, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest = false);
     ProtoMesh(const zenkit::ModelHierarchy& lib, std::unique_ptr<Skeleton>&& sk, std::string_view fname);
-    ProtoMesh(const zenkit::ModelMesh& lib, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest = false);
+    ProtoMesh(const asset::ModelMesh& lib, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest = false);
     ProtoMesh(const Material& mat, std::vector<Resources::Vertex> vbo, std::vector<uint32_t> ibo); //decals
     ProtoMesh(ProtoMesh&&)=delete;
     ProtoMesh& operator=(ProtoMesh&&)=delete;

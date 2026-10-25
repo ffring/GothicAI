@@ -17,7 +17,6 @@ struct Room {
   };
 
 // One volume per BSP sector, including empty rooms, in source order.
-std::vector<Room> buildRoomVolumes(const zenkit::Mesh& mesh, const zenkit::BspTree& bsp);
 bool isIndoor(zenkit::BspTreeType mode, const std::vector<Room>& rooms, const zenkit::Vec3& point);
 
 struct Data {

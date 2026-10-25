@@ -1,4 +1,5 @@
 #include "worlddata.h"
+#include "asset/fromzenkit.h"
 #include "gothicglb.h"
 
 #include <zenkit/Archive.hh>
@@ -1359,52 +1360,6 @@ double intersect(const Vec3& from,const Vec3& direction,const Triangle& triangle
 
 } // namespace
 
-std::vector<Room> buildRoomVolumes(const zenkit::Mesh& mesh, const zenkit::BspTree& bsp) {
-  std::vector<Room> rooms;
-      for(const auto& sector:bsp.sectors) {
-        std::set<uint32_t> polygons;
-        for(const auto leaf:sector.node_indices) {
-          if(leaf>=bsp.leaf_node_indices.size()) continue;
-          const auto node=bsp.leaf_node_indices[leaf];
-          if(node>=bsp.nodes.size()) continue;
-          const auto& bounds=bsp.nodes[node];
-          const size_t end=std::min(size_t(bounds.polygon_index)+bounds.polygon_count,bsp.polygon_indices.size());
-          for(size_t i=bounds.polygon_index;i<end;++i) {
-            const auto polygon=bsp.polygon_indices[i];
-            if(polygon<mesh.geometry.size() && mesh.geometry[polygon].flags.is_sector)
-              polygons.insert(polygon);
-            }
-          }
-        // Portal polygons are invisible openings in the renderer, but close
-        // the indoor volume at doors and windows for this containment test.
-        polygons.insert(sector.portal_polygon_indices.begin(),sector.portal_polygon_indices.end());
-        Room room;
-        for(const auto index:polygons) {
-          if(index>=mesh.geometry.size()) continue;
-          const auto& polygon=mesh.geometry[index];
-          if(polygon.index_count<3 || polygon.index_offset+polygon.index_count>mesh.polygon_vertex_indices.size()) continue;
-          const auto source=[&](size_t corner) { return mesh.polygon_vertex_indices[polygon.index_offset+corner]; };
-          for(size_t corner=2;corner<polygon.index_count;++corner) {
-            const auto a=source(0),b=source(corner-1),c=source(corner);
-            if(a>=mesh.vertices.size() || b>=mesh.vertices.size() || c>=mesh.vertices.size()) continue;
-            Triangle triangle;
-            const uint32_t indices[3]={a,b,c};
-            for(size_t i=0;i<3;++i) {
-              const auto point=mesh.vertices[indices[i]];
-              triangle.point[i]={point.x,point.y,point.z};
-              if(room.triangles.empty() && i==0) room.min=room.max=triangle.point[i];
-              room.min.x=std::min(room.min.x,point.x); room.max.x=std::max(room.max.x,point.x);
-              room.min.y=std::min(room.min.y,point.y); room.max.y=std::max(room.max.y,point.y);
-              room.min.z=std::min(room.min.z,point.z); room.max.z=std::max(room.max.z,point.z);
-              }
-            room.triangles.push_back(triangle);
-            }
-          }
-        rooms.push_back(std::move(room));
-        }
-  return rooms;
-  }
-
 bool isIndoor(zenkit::BspTreeType mode, const std::vector<Room>& rooms, const zenkit::Vec3& point) {
       if(mode==BspTreeType::INDOOR) return true;
       for(const auto& room:rooms) {
@@ -1551,7 +1506,7 @@ Data fromWorld(const zenkit::World& world, const WorldChunkSource& source) {
   d.vobs=world.world_vobs;
   d.waynet=world.way_net;
   d.bsp=world.world_bsp_tree;
-  d.rooms=buildRoomVolumes(world.world_mesh,world.world_bsp_tree);
+  d.rooms=asset::roomVolumesFromZenKit(world.world_mesh,world.world_bsp_tree);
   return d;
   }
 

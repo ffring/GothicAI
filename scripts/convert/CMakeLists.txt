@@ -11,6 +11,7 @@ endif()
 add_subdirectory(../../OpenGothic/lib/ZenKit zenkit EXCLUDE_FROM_ALL)
 # gltfmesh.cpp carries the cgltf implementation; worldchunks.cpp is the engine's own reader and writer.
 add_executable(content-convert convert.cpp
+  ../../OpenGothic/common/asset/fromzenkit.cpp
   ../../OpenGothic/common/worlddata.cpp ../../OpenGothic/common/worldchunks.cpp ../../OpenGothic/common/gothicglb.cpp ../../OpenGothic/common/basemesh.cpp
   ../../OpenGothic/common/gltfmesh.cpp
   ../../OpenGothic/lib/miniz/miniz.c)

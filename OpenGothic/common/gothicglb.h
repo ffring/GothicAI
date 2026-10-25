@@ -1,7 +1,7 @@
 #pragma once
 
 // Shared pieces of our glTF formats for converted Gothic content
-// (docs/asset-migration.md): the full zenkit::Material record as JSON in
+// (docs/asset-migration.md): the full asset::Material record as JSON in
 // extras, exact float formatting, a minimal GLB writer and a strict GLB reader.
 
 #include <cstdint>
@@ -14,7 +14,7 @@
 #include <vector>
 
 #include <rapidjson/document.h>
-#include <zenkit/Material.hh>
+#include "asset/material.h"
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -50,10 +50,10 @@ E jsonToEnum(const Json& obj, const char* name) {
   }
 
 
-// extras.gothic of a material: every field of zenkit::Material plus its source index.
-std::string      materialJson(const zenkit::Material& m, size_t index);
-zenkit::Material materialFromJson(const Json& g);
-bool             sameMaterial(const zenkit::Material& a, const zenkit::Material& b);
+// extras.gothic of a material: every field of asset::Material plus its source index.
+std::string      materialJson(const asset::Material& m, size_t index);
+asset::Material materialFromJson(const Json& g);
+bool             sameMaterial(const asset::Material& a, const asset::Material& b);
 
 class GlbBuilder {
   public:

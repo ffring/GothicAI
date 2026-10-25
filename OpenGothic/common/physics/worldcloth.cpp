@@ -57,8 +57,8 @@ const std::vector<Rule>& rules() {
 
 // A compact subset preserves authored material parameters and vertex features,
 // including both sides, UV seams and the native flag wave_mode.
-zenkit::Mesh subset(const zenkit::Mesh& source,const std::vector<uint32_t>& faces) {
-  zenkit::Mesh mesh;
+asset::WorldMesh subset(const asset::WorldMesh& source,const std::vector<uint32_t>& faces) {
+  asset::WorldMesh mesh;
   mesh.name=source.name;
   std::unordered_map<uint32_t,uint32_t> vertices,features,materials;
   for(auto face:faces) {
@@ -105,7 +105,7 @@ struct DVec3 {
   DVec3 normalized() const { return *this*(1./std::max(std::sqrt(dot(*this)),1e-12)); }
   };
 
-std::vector<uint32_t> attachment(const zenkit::Mesh& mesh,const Rule& rule) {
+std::vector<uint32_t> attachment(const asset::WorldMesh& mesh,const Rule& rule) {
   std::vector<uint32_t> pins;
   const auto& vertices=mesh.vertices;
   if(vertices.empty())
@@ -169,7 +169,7 @@ std::vector<uint32_t> attachment(const zenkit::Mesh& mesh,const Rule& rule) {
 
 }
 
-WorldCloth::Extracted WorldCloth::extract(zenkit::Mesh& landscape) {
+WorldCloth::Extracted WorldCloth::extract(asset::WorldMesh& landscape) {
   Extracted result;
   const auto faceCount=landscape.polygons.material_indices.size();
   std::vector<bool> selected(faceCount,false);
@@ -234,7 +234,7 @@ WorldCloth::Extracted WorldCloth::extract(zenkit::Mesh& landscape) {
   if(clothFaces.empty())
     return result;
   result.original=subset(landscape,clothFaces);
-  zenkit::PolygonList remaining;
+  asset::PolygonList remaining;
   const auto remainingCount=faceCount-clothFaces.size();
   remaining.material_indices.reserve(remainingCount);
   remaining.lightmap_indices.reserve(remainingCount);

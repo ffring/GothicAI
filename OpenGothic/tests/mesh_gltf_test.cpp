@@ -12,6 +12,7 @@
 #include <Tempest/Log>
 #include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
+#include <zenkit/Model.hh>
 #include <miniz.h>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
@@ -697,7 +698,7 @@ void modelGpuGeometry(const Fixture& fixture, Tempest::Device& device, std::stri
   const bool multi = hierarchy.nodes.size()==3;
   require(proto!=nullptr && proto->attach.size()==(multi ? 2u : 1u) && proto->nodes.size()==hierarchy.nodes.size(),
           "GPU model replacement must retain its original hierarchy and attachment");
-  const auto source = multi ? zenkit::MultiResolutionMesh{} : loadGltfMesh(glb);
+  const auto source = multi ? asset::StaticMesh{} : loadGltfMesh(glb);
   const Skeleton expected(hierarchy,nullptr,visual);
   for(size_t attachId=0;attachId<proto->attach.size();++attachId) {
     const auto& attachment = proto->attach[attachId];
@@ -829,13 +830,13 @@ void resourcePaths(const Fixture& fixture, bool own, bool mountOriginal = true) 
   require(source.sub_meshes.size()==1,"shared cloth geometry source must load");
   require(source.sub_meshes[0].mat.texture==(own ? "OWN_TEST_BARREL_WOOD.TGA" : "ORIGINAL.TGA"),
           "shared loader must retain the selected texture");
-  require(source.sub_meshes[0].mat.group==(own ? zenkit::MaterialGroup::WOOD : zenkit::MaterialGroup::STONE),
+  require(source.sub_meshes[0].mat.group==(own ? asset::MaterialGroup::WOOD : asset::MaterialGroup::STONE),
           "shared loader must retain the selected physical material group");
   require(close(source.bbox.min.x,own ? -400.f : 10.f),"cloth source must select the same geometry");
   checkCensus(fixture,own,3);
   }
 
-void frontFaces(const zenkit::MultiResolutionMesh& mesh) {
+void frontFaces(const asset::StaticMesh& mesh) {
   size_t triangles = 0;
   // Original NW_HARBOUR_BARREL_01.MRM: 180/180 wedge normals in 60 triangles
   // have negative dot(cross(edge1,edge2), normal). PackedMesh retains winding;
@@ -886,7 +887,7 @@ void generatedBarrel(const Fixture& fixture) {
   const auto mesh = loadGltfMesh(output/"meshes/test/nw_harbour_barrel_01.glb");
   frontFaces(mesh);
   require(mesh.sub_meshes.size()==1 && mesh.sub_meshes[0].mat.texture=="OWN_TEST_BARREL_WOOD.TGA" &&
-          mesh.sub_meshes[0].mat.group==zenkit::MaterialGroup::WOOD,
+          mesh.sub_meshes[0].mat.group==asset::MaterialGroup::WOOD,
           "actual generated barrel must use the shared wood material and physical group");
   }
 
@@ -936,11 +937,11 @@ void converterCases(const Fixture& fixture) {
   for(const auto& wedge:mesh.sub_meshes[0].wedges)
     require(close(wedge.normal.x,0.f) && close(wedge.normal.y,-.8f) && close(wedge.normal.z,.6f),
             "normal must use the inverse transpose of the composed rotation and nonuniform scale");
-  const std::array<std::pair<const char*,zenkit::MaterialGroup>,6> groups = {{
-      {"UNDEF",zenkit::MaterialGroup::UNDEFINED},{"METAL",zenkit::MaterialGroup::METAL},
-      {"STONE",zenkit::MaterialGroup::STONE},{"WOOD",zenkit::MaterialGroup::WOOD},
-      {"EARTH",zenkit::MaterialGroup::EARTH},
-      {"SNOW",zenkit::MaterialGroup::SNOW}}};
+  const std::array<std::pair<const char*,asset::MaterialGroup>,6> groups = {{
+      {"UNDEF",asset::MaterialGroup::UNDEFINED},{"METAL",asset::MaterialGroup::METAL},
+      {"STONE",asset::MaterialGroup::STONE},{"WOOD",asset::MaterialGroup::WOOD},
+      {"EARTH",asset::MaterialGroup::EARTH},
+      {"SNOW",asset::MaterialGroup::SNOW}}};
   for(const auto& group:groups) {
     options = {};
     options.group = group.first;
@@ -955,7 +956,7 @@ void converterCases(const Fixture& fixture) {
   glbFile(path,options);
   mesh = loadGltfMesh(path);
   require(mesh.sub_meshes.size()==2,"OPAQUE and MASK surfaces must remain separate");
-  require(mesh.sub_meshes[1].mat.group==zenkit::MaterialGroup::UNDEFINED,"missing group must default to UNDEF");
+  require(mesh.sub_meshes[1].mat.group==asset::MaterialGroup::UNDEFINED,"missing group must default to UNDEF");
   Resources resources;
   PackedMesh packed(mesh,PackedMesh::PK_Visual,true);
   ProtoMesh proto(std::move(packed),"MIXED.MRM");

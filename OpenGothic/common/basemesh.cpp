@@ -35,7 +35,7 @@ bool sameVec3(const zenkit::Vec3& a, const zenkit::Vec3& b) {
 
 }
 
-void writeBaseMesh(const zenkit::MultiResolutionMesh& mesh, const std::string& name, const std::filesystem::path& file) {
+void writeBaseMesh(const asset::StaticMesh& mesh, const std::string& name, const std::filesystem::path& file) {
   if(mesh.positions.empty())
     fail(name + ": no positions");
   GlbBuilder glb;
@@ -125,7 +125,7 @@ void writeBaseMesh(const zenkit::MultiResolutionMesh& mesh, const std::string& n
   writeFile(file,bytes.data(),bytes.size());
   }
 
-zenkit::MultiResolutionMesh readBaseMesh(const std::filesystem::path& file) {
+asset::StaticMesh readBaseMesh(const std::filesystem::path& file) {
   auto parsed = parseGlb(file);
   const auto& d = *parsed.data;
   if(d.meshes_count!=1 || d.nodes_count!=1 || d.nodes[0].mesh!=&d.meshes[0])
@@ -145,7 +145,7 @@ zenkit::MultiResolutionMesh readBaseMesh(const std::filesystem::path& file) {
   if(jsonToString(member(g,"format"),"format")!=meshFormat || jsonToInt(member(g,"version"),"version")!=formatVersion)
     fail(file.string() + ": not a converted mesh of this version");
 
-  zenkit::MultiResolutionMesh out;
+  asset::StaticMesh out;
   out.alpha_test = uint8_t(jsonToInt(member(g,"alpha_test"),"alpha_test"));
   const auto& bbox = member(g,"bbox");
   if(!bbox.IsArray() || bbox.Size()!=2)
@@ -216,7 +216,7 @@ zenkit::MultiResolutionMesh readBaseMesh(const std::filesystem::path& file) {
   return out;
   }
 
-std::string compareBaseMeshes(const zenkit::MultiResolutionMesh& e, const zenkit::MultiResolutionMesh& a) {
+std::string compareBaseMeshes(const asset::StaticMesh& e, const asset::StaticMesh& a) {
   if(e.alpha_test!=a.alpha_test)
     return "alpha_test differs";
   if(!sameVec3(e.bbox.min,a.bbox.min) || !sameVec3(e.bbox.max,a.bbox.max))

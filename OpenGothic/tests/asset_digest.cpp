@@ -1,3 +1,4 @@
+#include "asset/fromzenkit.h"
 #include "basemesh.h"
 #include "commandline.h"
 #include "gothicglb.h"
@@ -12,6 +13,7 @@
 
 #include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
+#include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/World.hh>
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
@@ -162,7 +164,7 @@ struct AssetDigest {
     PhysicVbo land(&vertices),water(&vertices);
     for(const auto& s:p.subMeshes) {
       if(s.material.disable_collision || s.iboLength==0) continue;
-      if(s.material.group==zenkit::MaterialGroup::WATER)
+      if(s.material.group==asset::MaterialGroup::WATER)
         water.addIndex(p.indices,s.iboOffset,s.iboLength,s.material.group);
       else
         land.addIndex(p.indices,s.iboOffset,s.iboLength,s.material.group,s.material.name.c_str());
@@ -170,7 +172,7 @@ struct AssetDigest {
     physics(d,land); physics(d,water);
     }
 
-  void world(zenkit::Mesh mesh, const std::string& name, const std::string& path) {
+  void world(asset::WorldMesh mesh, const std::string& name, const std::string& path) {
     const auto cloth=WorldCloth::extract(mesh);
     const PackedMesh visual(mesh,PackedMesh::PK_VisualLnd);
     Digest gpu,mat,phys,clothDigest;
@@ -206,7 +208,7 @@ struct AssetDigest {
     emit("world-material-"+path,name,mat); emit("world-cloth-"+path,name,clothDigest);
     }
 
-  void mesh(const zenkit::MultiResolutionMesh& mesh, const std::string& name, const std::string& path) {
+  void mesh(const asset::StaticMesh& mesh, const std::string& name, const std::string& path) {
     PackedMesh p(mesh,PackedMesh::PK_Visual);
     Digest gpu,mat,phys;
     packed(gpu,p); materials(mat,p);
@@ -229,15 +231,16 @@ struct AssetDigest {
         const auto key=std::string(name)+".ZEN";
         if(useBase) {
           zenkit::World loaded;
+          asset::WorldMesh mesh;
           std::vector<WorldData::Room> rooms;
-          const auto result=tryWorldData(loaded,rooms,key,base/"worlds"/name,{},resources.mountedArchives);
+          const auto result=tryWorldData(loaded,mesh,rooms,key,base/"worlds"/name,{},resources.mountedArchives);
           if(!result.replaced) throw std::runtime_error(key+": "+result.error);
-          world(std::move(loaded.world_mesh),key,path);
+          world(std::move(mesh),key,path);
           } else {
           auto input=Resources::getFileBuffer(key);
           zenkit::World loaded;
           loaded.load(input.get(),zenkit::GameVersion::GOTHIC_2);
-          world(std::move(loaded.world_mesh),key,path);
+          world(asset::fromZenKit(loaded.world_mesh),key,path);
           }
         }
       // Use the converted index on both paths; require the archive loader to contain every entry.
@@ -252,7 +255,7 @@ struct AssetDigest {
           auto input=Resources::getFileBuffer(key+".MRM");
           zenkit::MultiResolutionMesh loaded;
           loaded.load(input.get());
-          mesh(loaded,key+".MRM",path);
+          mesh(asset::fromZenKit(loaded),key+".MRM",path);
           }
         }
       }

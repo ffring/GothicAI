@@ -92,22 +92,22 @@ const char* materialTag(ItemMaterial src) {
   return "UD";
   }
 
-const char* materialTag(zenkit::MaterialGroup src) {
+const char* materialTag(asset::MaterialGroup src) {
   switch(src) {
-    case zenkit::MaterialGroup::UNDEFINED:
-    case zenkit::MaterialGroup::NONE:
+    case asset::MaterialGroup::UNDEFINED:
+    case asset::MaterialGroup::NONE:
       return "UD";
-    case zenkit::MaterialGroup::METAL:
+    case asset::MaterialGroup::METAL:
       return "ME";
-    case zenkit::MaterialGroup::STONE:
+    case asset::MaterialGroup::STONE:
       return "ST";
-    case zenkit::MaterialGroup::WOOD:
+    case asset::MaterialGroup::WOOD:
       return "WO";
-    case zenkit::MaterialGroup::EARTH:
+    case asset::MaterialGroup::EARTH:
       return "EA";
-    case zenkit::MaterialGroup::WATER:
+    case asset::MaterialGroup::WATER:
       return "WA";
-    case zenkit::MaterialGroup::SNOW:
+    case asset::MaterialGroup::SNOW:
       return "SA"; // sand?
     }
   return "UD";
@@ -119,9 +119,9 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
   try {
     zenkit::World world;
     std::vector<WorldData::Room> rooms;
-    Resources::loadWorld(world,rooms,wname);
+    asset::WorldMesh worldMesh;
+    Resources::loadWorld(world,worldMesh,rooms,wname);
     loadProgress(20);
-    auto& worldMesh = world.world_mesh;
     windRooms.reset(world.world_bsp_tree.mode,std::move(rooms));
     auto worldCloth=WorldCloth::extract(worldMesh);
 
@@ -169,7 +169,8 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     for(auto& surface:worldCloth.surfaces)
       if(auto visual=ClothVisual::createSurface(*this,surface.mesh,surface.pins,surface.visual,surface.id,surface.stiffness,surface.linearDamping))
         clothSurfaces.push_back(std::move(visual));
-    world.world_mesh = zenkit::Mesh();
+    worldMesh = {};
+    world.world_mesh = {};
     loadProgress(70);
 
     globFx.reset(new GlobalEffects(*this));
@@ -1238,7 +1239,7 @@ Sound World::addWeaponHitEffect(Npc& src, const Bullet* srcArrow, Npc& reciver) 
     return addHitEffect("FI",armor,"MAM",pos);
   }
 
-Sound World::addLandHitEffect(ItemMaterial src, zenkit::MaterialGroup reciver, const Tempest::Matrix4x4& pos) {
+Sound World::addLandHitEffect(ItemMaterial src, asset::MaterialGroup reciver, const Tempest::Matrix4x4& pos) {
   // IHI - item hits item
   // IHL - Item hits Level
   return addHitEffect(materialTag(src),materialTag(reciver),"IHL",pos);
@@ -1247,11 +1248,11 @@ Sound World::addLandHitEffect(ItemMaterial src, zenkit::MaterialGroup reciver, c
 void World::emitPhysicsNoise(const PhysicsNoise& noise) {
   // Gothic has no CS_IHL_CL_* instances. Its existing clay contact samples are
   // named for the reverse pair (wood/metal/stone hitting clay).
-  const auto surface = noise.surface==zenkit::MaterialGroup::UNDEFINED || noise.surface==zenkit::MaterialGroup::NONE ?
+  const auto surface = noise.surface==asset::MaterialGroup::UNDEFINED || noise.surface==asset::MaterialGroup::NONE ?
                        "ST" : materialTag(noise.surface);
-  const auto claySurface = noise.surface==zenkit::MaterialGroup::WOOD ? "WO" :
-                           noise.surface==zenkit::MaterialGroup::METAL ? "ME" : "ST";
-  const bool splash = noise.surface==zenkit::MaterialGroup::WATER;
+  const auto claySurface = noise.surface==asset::MaterialGroup::WOOD ? "WO" :
+                           noise.surface==asset::MaterialGroup::METAL ? "ME" : "ST";
+  const bool splash = noise.surface==asset::MaterialGroup::WATER;
   // Reuse the native splash sample already used by MoveAlgo::emitWaterSplash.
   std::string name = splash ? "CS_INTRO_WATERSPLASH.WAV" :
                      noise.material==MAT_CLAY ? std::string("CS_IHL_")+claySurface+"_CL.wav" :

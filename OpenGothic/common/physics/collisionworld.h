@@ -2,7 +2,7 @@
 
 #include <Tempest/Matrix4x4>
 #include <Tempest/Vec>
-#include <zenkit/Material.hh>
+#include "asset/material.h"
 
 #include <functional>
 #include <atomic>
@@ -69,7 +69,7 @@ class CollisionWorld final {
         // Target submerged-volume fraction, independent of native push mass.
         // Zero uses physical density; a target above one makes the body sink.
         void                setBuoyancyFraction(float fraction);
-        void                setNoiseProfile(ItemMaterial material, zenkit::MaterialGroup surface, std::string_view what);
+        void                setNoiseProfile(ItemMaterial material, asset::MaterialGroup surface, std::string_view what);
         // The latest engine-known cause survives the short noise attribution
         // window and NPC destruction, until a new impulse replaces it.
         void                setTraceCulprit(Npc* culprit);
@@ -103,7 +103,7 @@ class CollisionWorld final {
         void*               pointer = nullptr;
         std::atomic<bool>   npcContact{false};
         ItemMaterial       noiseMaterial = MAT_WOOD;
-        zenkit::MaterialGroup noiseSurface = zenkit::MaterialGroup::STONE;
+        asset::MaterialGroup noiseSurface = asset::MaterialGroup::STONE;
         std::string         noiseWhat = "item";
         std::weak_ptr<zenkit::INpc> noiseCulprit;
         uint64_t            noiseCulpritUntilStep = 0;
@@ -128,7 +128,7 @@ class CollisionWorld final {
       Tempest::Vec3        point = {};
       Tempest::Vec3        normal = {};
       CollisionBody*       body = nullptr;
-      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
+      asset::MaterialGroup material = asset::MaterialGroup::UNDEFINED;
       const char*          sector = nullptr;
       Ragdoll*             ragdoll = nullptr;
       size_t               bone = size_t(-1);
@@ -198,7 +198,7 @@ class CollisionWorld final {
       };
     std::vector<WaterBodySnapshot> waterBodySnapshot() const;
     void setBBox(JPH::Vec3Arg min, JPH::Vec3Arg max);
-    void setItemHitCallback(std::function<void(Item&, zenkit::MaterialGroup, float impulse, float mass)> f);
+    void setItemHitCallback(std::function<void(Item&, asset::MaterialGroup, float impulse, float mass)> f);
     void setPhysicsNoiseEnabled(bool enabled);
     bool physicsNoiseEnabled() const;
     void setPhysicsNoiseCallback(std::function<void(const PhysicsNoise&)> callback);
@@ -221,7 +221,7 @@ class CollisionWorld final {
       float                 depth = 0; // centimetres
       Tempest::Vec3         axis = {}; // unit direction that moves the other body out
       Tempest::Vec3         point1 = {}, point2 = {}; // world centimetres
-      zenkit::MaterialGroup material = zenkit::MaterialGroup::UNDEFINED;
+      asset::MaterialGroup material = asset::MaterialGroup::UNDEFINED;
       const char*           sector = nullptr;
       };
     std::vector<Overlap> overlaps(const CollisionBody& body, float marginCm, uint32_t mask) const;
@@ -301,7 +301,7 @@ class CollisionWorld final {
     std::vector<DynamicBody*> rigid;
     std::vector<Ragdoll*> ragdolls;
     uint32_t nextRagdollGroup = 1;
-    std::function<void(Item&, zenkit::MaterialGroup, float, float)> hitItem;
+    std::function<void(Item&, asset::MaterialGroup, float, float)> hitItem;
     std::function<void(const PhysicsNoise&)> physicsNoise;
     std::function<void(CollisionBody&,float,const Tempest::Vec3&,std::string_view)> bodyImpact;
     std::function<bool(const Tempest::Vec3&,float,float&)> waterSurface;
