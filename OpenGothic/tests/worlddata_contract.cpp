@@ -136,15 +136,6 @@ struct WorldDataContract {
                 matrix.wayPoints.size(),matrix.edges.size(),samples,indoor,static_cast<unsigned long long>(key));
     return rows;
     }
-  static std::string quote(const fs::path& path) {
-    std::string result="'";
-    for(const char c:path.string()) result+=c=='\'' ? "'\\''" : std::string(1,c);
-    return result+"'";
-    }
-  static void convert(const std::string& command) {
-    const auto result=std::system((quote(WORLDDATA_CONVERTER)+" "+command).c_str());
-    require(result==0,"converter exit status "+std::to_string(result));
-    }
   static rapidjson::Document json(const fs::path& path) {
     std::ifstream in(path); require(bool(in),"cannot read "+path.string());
     const std::string text{std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>()};
@@ -166,10 +157,13 @@ struct WorldDataContract {
   static void run(const fs::path& root, const fs::path& gothicDir) {
     const auto base=root/"base";
     const std::array<std::string,4> worlds={"NEWWORLD","OLDWORLD","ADDONWORLD","DRAGONISLAND"};
-    for(const auto& name:worlds)
-      convert("world "+quote(gothicDir)+" "+name+".ZEN "+quote(base/"worlds"/name));
-    convert("zen "+quote(gothicDir)+" "+quote(base/"zen"));
-    convert("verify-zen "+quote(gothicDir)+" "+quote(base/"zen"));
+    const auto* supplied=std::getenv("OPENGOTHIC_BASE");
+    require(supplied && *supplied,"OPENGOTHIC_BASE must point to build-base.sh output");
+    fs::copy(supplied,base,fs::copy_options::recursive);
+    const auto reference=root/"archive-reference";
+    fs::create_directory(reference);
+    for(const char* part:{"base.json","textures","meshes","zen"})
+      fs::create_symlink(base/part,reference/part);
     setenv("OPENGOTHIC_CONTENT","",1); setenv("OPENGOTHIC_TEXTURES","",1);
     setenv("OPENGOTHIC_FRACTURE","",1); setenv("OPENGOTHIC_PHYSICS_THREADS","0",1);
     Workers::setSerialExecution(true);
@@ -178,7 +172,7 @@ struct WorldDataContract {
       WorldData::Data original;
       Rows expected;
       for(const bool useBase:{false,true}) {
-        setenv("OPENGOTHIC_BASE",useBase ? base.c_str() : "",1);
+        setenv("OPENGOTHIC_BASE",base.c_str(),1);
         const auto census=root/(name+(useBase ? "-base.json" : "-zen.json"));
         setenv("OPENGOTHIC_CENSUS",census.c_str(),1);
         Resources resources;
@@ -189,18 +183,31 @@ struct WorldDataContract {
         zenkit::World loaded;
         asset::WorldMesh loadedMesh;
         std::vector<WorldData::Room> rooms;
-        Resources::loadWorld(loaded,loadedMesh,rooms,file);
         const auto manifest=readWorldChunkManifest(base/"worlds"/name);
         if(!useBase) {
+          auto reader=Resources::vdfsIndex().find(file)->open_read();
+          loaded.load(reader.get(),zenkit::GameVersion::GOTHIC_2);
           original=WorldData::fromWorld(loaded,manifest.source);
+          loadedMesh=asset::fromZenKit(loaded.world_mesh);
+          // Feed the same runtime consumers from an independently decoded archive
+          // fixture. There is no archive selection mode in the engine any more.
+          const auto dir=reference/"worlds"/name;
+          writeWorldChunks(loadedMesh,manifest.source,dir);
+          WorldData::write(original,dir);
+          auto index=json(dir/"world.json");
+          const auto sourceIndex=json(base/"worlds"/name/"world.json");
+          rapidjson::Value archives;
+          archives.CopyFrom(sourceIndex["archives"],index.GetAllocator());
+          index.AddMember("archives",archives,index.GetAllocator());
+          write(dir/"world.json",index);
+          resources.automaticBase.path=reference;
           } else {
-          require(loaded.world_mesh.geometry.empty(),file+": base selection unexpectedly fell back to ZEN");
+          Resources::loadWorld(loaded,loadedMesh,rooms,file);
           require(zenOpens(census)==0,file+": base loader opened ZEN");
           auto restored=WorldData::read(base/"worlds"/name);
           const auto diff=WorldData::compare(original,restored);
           require(diff.empty(),file+": "+diff);
-          const auto* entry=Resources::vdfsIndex().find(file);
-          auto reader=entry->open_read(); zenkit::World zen;
+          auto reader=Resources::vdfsIndex().find(file)->open_read(); zenkit::World zen;
           zen.load(reader.get(),zenkit::GameVersion::GOTHIC_2);
           const auto meshDiff=compareWorldMeshes(canonicalWorldMesh(asset::fromZenKit(zen.world_mesh)),canonicalWorldMesh(loadedMesh));
           require(meshDiff.empty(),file+": mesh "+meshDiff);
@@ -215,7 +222,7 @@ struct WorldDataContract {
         }
       std::printf("%s: complete headless World / Vob::load / WorldObjects / WayMatrix equal (%zu fields); 0 engine ZEN opens with base\n",file.c_str(),expected.size());
       }
-    // The actual selection function must open ZEN on a mismatched archive size,
+    // The actual selection function must reject a mismatched archive size,
     // and accept complete vob/waynet files from content ahead of the base.
     setenv("OPENGOTHIC_BASE",base.c_str(),1);
     setenv("OPENGOTHIC_CENSUS","",1);
@@ -227,9 +234,12 @@ struct WorldDataContract {
     index["archives"][0]["size"].SetUint64(size+1); write(dir/"world.json",index);
     zenkit::World fallback; std::vector<WorldData::Room> rooms;
     asset::WorldMesh fallbackMesh;
-    Resources::loadWorld(fallback,fallbackMesh,rooms,"NEWWORLD.ZEN");
-    require(!fallback.world_mesh.geometry.empty(),"archive size +1 must return raw ZEN geometry");
+    bool rejected=false;
+    try { Resources::loadWorld(fallback,fallbackMesh,rooms,"NEWWORLD.ZEN"); }
+    catch(const BaseStore::Error&) { rejected=true; }
+    require(rejected,"archive size +1 must reject the world");
     index["archives"][0]["size"].SetUint64(size); write(dir/"world.json",index);
+    Resources::loadWorld(fallback,fallbackMesh,rooms,"NEWWORLD.ZEN");
     const auto content=root/"content"; const auto overrides=content/"worlds/NEWWORLD";
     fs::create_directories(overrides);
     auto vobs=json(dir/"vobs.json");
@@ -247,13 +257,16 @@ struct WorldDataContract {
     size_t zenCount=0;
     for(const auto& entry:zenIndex["files"].GetObject()) {
       const auto name=std::string(entry.name.GetString());
-      auto source=Resources::vdfsIndex().find(name)->open_read(); const auto bytes=readWorldBytes(*source);
+      auto source=Resources::vdfsIndex().find(name)->open_read();
+      source->seek(0,zenkit::Whence::END);
+      std::vector<std::byte> bytes(source->tell()); source->seek(0,zenkit::Whence::BEG);
+      require(source->read(bytes.data(),bytes.size())==bytes.size(),"incomplete archive ZEN");
       WorldData::ZenFile zen,converted;
       require(WorldData::loadZen(bytes,{name,bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())},zen),"meshless ZEN expected");
       require(Resources::loadBaseZen(name,zen.kind,converted),"base ZEN selection failed: "+name);
       const auto diff=WorldData::compareZen(zen,converted); require(diff.empty(),name+": "+diff); ++zenCount;
       }
-    std::printf("Selection: archive size %llu -> %llu returns ZEN; content vobs/waynet win; %zu base ZEN files equal\n",
+    std::printf("Selection: archive size %llu -> %llu rejected; content vobs/waynet win; %zu base ZEN files equal\n",
                 static_cast<unsigned long long>(size),static_cast<unsigned long long>(size+1),zenCount);
     }
     // A stale loose-file identity disables the ZEN index just like stale archives.
@@ -264,14 +277,11 @@ struct WorldDataContract {
     loose["size"].SetUint64(size+1); write(base/"zen/zen.json",zenIndex);
     const auto census=root/"loose-mismatch.json";
     setenv("OPENGOTHIC_CENSUS",census.c_str(),1);
-    {
-    Resources resources; Gothic gothic;
-    WorldData::ZenFile camera;
-    require(!Resources::loadBaseZen("DIALOGCAMS.ZEN","cameras",camera),"loose size +1 must disable base ZEN");
-    gothic.setupGlobalScripts();
-    require(zenOpens(census)>0,"loose size +1 must load original dialog cameras");
-    }
-    std::printf("Selection: loose file %s size %llu -> %llu returns ZEN\n",loose["path"].GetString(),
+    bool rejected=false;
+    try { Resources resources; Gothic gothic; }
+    catch(const BaseStore::Error&) { rejected=true; }
+    require(rejected,"loose size +1 must reject the base");
+    std::printf("Selection: loose file %s size %llu -> %llu rejected\n",loose["path"].GetString(),
                 static_cast<unsigned long long>(size),static_cast<unsigned long long>(size+1));
     }
   };

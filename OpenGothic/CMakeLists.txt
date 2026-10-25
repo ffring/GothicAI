@@ -404,17 +404,9 @@ if(NOT ANDROID AND NOT IOS)
   add_executable(gothic-asset-digest EXCLUDE_FROM_ALL tests/asset_digest.cpp)
   target_link_libraries(gothic-asset-digest PRIVATE OpenGothic AiBridge)
   target_include_directories(gothic-asset-digest SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
-  add_custom_target(gothic-worlddata-converter
-    COMMAND ${CMAKE_COMMAND} -S ${PROJECT_SOURCE_DIR}/../scripts/convert
-            -B ${CMAKE_BINARY_DIR}/worlddata-convert -DCMAKE_BUILD_TYPE=Release
-    COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR}/worlddata-convert --parallel 4
-    BYPRODUCTS ${CMAKE_BINARY_DIR}/worlddata-convert/content-convert)
   add_executable(gothic-worlddata-contract EXCLUDE_FROM_ALL tests/worlddata_contract.cpp)
   target_link_libraries(gothic-worlddata-contract PRIVATE OpenGothic AiBridge)
   target_include_directories(gothic-worlddata-contract SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
-  target_compile_definitions(gothic-worlddata-contract PRIVATE
-    WORLDDATA_CONVERTER="${CMAKE_BINARY_DIR}/worlddata-convert/content-convert")
-  add_dependencies(gothic-worlddata-contract gothic-worlddata-converter)
   add_executable(gothic-basecontent-contract EXCLUDE_FROM_ALL tests/basecontent_contract.cpp)
   target_link_libraries(gothic-basecontent-contract PRIVATE OpenGothic AiBridge)
   target_include_directories(gothic-basecontent-contract SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)

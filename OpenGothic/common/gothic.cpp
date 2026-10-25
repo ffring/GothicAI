@@ -522,6 +522,7 @@ bool Gothic::finishLoading() {
     return false;
   if(loadingFlag.compare_exchange_strong(state,LoadState::Idle)){
     loaderTh.join();
+    if(baseLoadError) std::rethrow_exception(std::exchange(baseLoadError,{}));
 #if defined(__GLIBC__)
     const bool loadedWorld = state==LoadState::Finalize && loadingWorld && pendingGame!=nullptr;
 #endif
@@ -583,6 +584,11 @@ void Gothic::implStartLoadSave(std::string_view banner,
         next        = f(std::move(game));
         pendingGame = std::move(next);
         loadingFlag.compare_exchange_strong(curState,LoadState::Finalize);
+        }
+      catch(const BaseStore::Error& e) {
+        Tempest::Log::e(e.what());
+        baseLoadError=std::current_exception();
+        loadingFlag.compare_exchange_strong(curState,err);
         }
       catch(std::bad_alloc&){
         Tempest::Log::e("loading error: out of memory");

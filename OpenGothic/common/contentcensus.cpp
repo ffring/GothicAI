@@ -94,6 +94,14 @@ void ContentCensus::replaced(std::string_view name, std::string_view replacement
     }
   }
 
+void ContentCensus::missing(std::string_view name, std::string_view reason) noexcept {
+  try {
+    std::lock_guard<std::mutex> guard(sync);
+    ++misses[{basename(name),std::string(reason)}];
+    }
+  catch(...) { Tempest::Log::e("census: unable to record base miss"); }
+  }
+
 bool ContentCensus::write() noexcept {
   try {
     std::lock_guard<std::mutex> guard(sync);
@@ -127,6 +135,17 @@ bool ContentCensus::write() noexcept {
                                key.second.compare(0,7,"worlds/")==0 ? "worldmesh" : kind(key.first,{}));
       json.Key("replacement"); string(key.second);
       json.Key("opens"); json.Uint64(count);
+      json.EndObject();
+      }
+    json.EndArray();
+    json.Key("base_misses");
+    json.StartArray();
+    for(const auto& [key,count]:misses) {
+      json.StartObject();
+      json.Key("name"); string(key.first);
+      json.Key("kind"); string(kind(key.first,{}));
+      json.Key("reason"); string(key.second);
+      json.Key("count"); json.Uint64(count);
       json.EndObject();
       }
     json.EndArray();

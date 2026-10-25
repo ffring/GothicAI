@@ -3,6 +3,7 @@
 #include <string>
 #include <memory>
 #include <thread>
+#include <exception>
 
 #include <Tempest/Signal>
 #include <Tempest/Dir>
@@ -314,6 +315,7 @@ class Gothic final {
     Tempest::Texture2d                      saveTex;
     std::atomic_int                         loadProgress{0};
     std::thread                             loaderTh;
+    std::exception_ptr                      baseLoadError;
     std::atomic<LoadState>                  loadingFlag{LoadState::Idle};
 #if defined(__GLIBC__)
     bool                                    loadingWorld = false;

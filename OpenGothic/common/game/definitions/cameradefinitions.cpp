@@ -44,20 +44,7 @@ CameraDefinitions::CameraDefinitions() {
         cameras.push_back(*std::dynamic_pointer_cast<zenkit::VCutsceneCamera>(camera));
       return;
       }
-    std::unique_ptr<zenkit::Read> read;
-    auto zen = Resources::openReader("DialogCams.ZEN", read);
-
-    while(!read->eof()) {
-      zenkit::ArchiveObject   obj {};
-      zenkit::VCutsceneCamera preset {};
-      zen->read_object_begin(obj);
-      preset.load(*zen, Gothic::inst().version().game == 1 ? zenkit::GameVersion::GOTHIC_1
-                                                           : zenkit::GameVersion::GOTHIC_2);
-      cameras.emplace_back(std::move(preset));
-      if(!zen->read_object_end()) {
-        zen->skip_object(true);
-        }
-      }
+    Log::e("unable to load base dialog cameras");
     }
   catch(...) {
     Log::e("unable to load Zen-file: \"DialogCams.ZEN\"");
