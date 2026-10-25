@@ -45,7 +45,9 @@ async def combat_barks(
 
     def ready() -> bool:
         warm = dialogue._prewarms.get(LOBART)
-        return (barks._eligible(LOBART) and not barks._busy(LOBART) and not barks._cooldown(LOBART)
+        slot = dialogue._quick_slots.get(LOBART)
+        return (slot is not None and not dialogue._quick_busy[slot] and barks._eligible(LOBART)
+                and not barks._busy(LOBART) and not barks._cooldown(LOBART)
                 and not barks._world_busy() and (warm is None or warm.done()))
 
     results: dict[str, str] = {}

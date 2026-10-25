@@ -236,10 +236,8 @@ class CombatBarks:
         text = ""
         try:
             async with asyncio.timeout_at(received + REPLY_S):
-                if warm := self.dialogue._prewarms.get(conv.npc):
-                    await asyncio.shield(warm)
-                async with aclosing(quick.stream(
-                    instructions=conv.persona.instructions,
+                async with aclosing(self.dialogue._quick_stream(
+                    conv.npc, instructions=conv.persona.instructions,
                     messages=[Message(
                         "developer", f"{self.dialogue._brief(conv)}\n{HINT.format(event=event)}",
                     )],
@@ -250,6 +248,12 @@ class CombatBarks:
                             attempt.setdefault(
                                 "first_token_ms", round((time.monotonic() - received) * 1000, 1),
                             )
+                            slot = self.dialogue._quick_slots[conv.npc]
+                            if timings := getattr(quick, "timings", {}).get(slot):
+                                attempt.update(
+                                    slot=slot, cache_n=timings.get("cache_n"),
+                                    prompt_n=timings.get("prompt_n"),
+                                )
                             text += delta.text
                             if _FIRST_SENTENCE.search(text) or paragraph_end(text) is not None:
                                 break

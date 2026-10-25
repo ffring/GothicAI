@@ -113,9 +113,16 @@ async def test_player_down_chooses_nearest_friend_or_companion(rig, distance, sp
 
 
 async def test_first_hit_warms_both_people_once_and_reuses_the_persona_prefix(rig):
+    # A different world's bark lets both warm-ups finish before this NPC's real request preempts one.
+    occupied = asyncio.create_task(asyncio.sleep(60))
+    rig.barks.task = occupied
+    hit(rig, by="A")
+    await asyncio.gather(*list(rig.dialogue._prewarms.values()))
+    occupied.cancel()
+    await asyncio.gather(occupied, return_exceptions=True)
+    rig.barks.task = None
     hit(rig, by="A")
     await finish(rig)
-    await asyncio.gather(*list(rig.dialogue._prewarms.values()))
     assert {instructions for instructions, _ in rig.quick.prewarms} == {
         rig.dialogue.conversations[npc].persona.instructions for npc in ("V", "A")
     }

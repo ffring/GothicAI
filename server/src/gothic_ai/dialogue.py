@@ -25,9 +25,10 @@ import re
 import time
 import uuid
 from collections import deque
-from collections.abc import Awaitable, Callable, Collection, Coroutine, Iterator
-from contextlib import aclosing
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Coroutine, Iterator
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -41,6 +42,7 @@ from .llm import (
     Item,
     LLMBackend,
     LLMError,
+    LLMEvent,
     Message,
     Role,
     TextDelta,
@@ -51,6 +53,7 @@ from .llm import (
     open_ahead,
     with_deadlines,
 )
+from .llm.base import QUICK_SLOT
 from .memory import Entry, MemoryStore, NpcMemory
 from .persona import MOOD_DELIVERY, Persona, PersonaProvider
 from .protocol import (
@@ -764,6 +767,12 @@ class DialogueManager:
         self.quick_first_s, self.quick_idle_s = QUICK_FIRST_S, QUICK_IDLE_S
         self._prewarms: dict[str, asyncio.Task[None]] = {}  # npc -> filling the quick model's cache
         self._prewarm_history: dict[str, list[Message]] = {}  # pending or warmed histories
+        self._quick_slots: dict[str, int] = {}
+        self._quick_used: dict[str, int] = {}
+        self._quick_clock = itertools.count()
+        self._quick_busy = [0] * PREWARM_SLOTS
+        self._quick_locks = [asyncio.Lock() for _ in range(PREWARM_SLOTS)]
+        self._quick_free = asyncio.Event()
         self._nearby: dict[str, tuple[str, float]] = {}  # human npc -> name, distance to the hero in cm
         self._svm_down: dict[str, bool] = {}  # latest known deaths, roster and snapshot health
         self._focus: str | None = None
@@ -925,8 +934,8 @@ class DialogueManager:
         try:
             async with (
                 asyncio.timeout_at(received + SVM_REPLY_S),
-                aclosing(self.quick.stream(
-                    instructions=conv.persona.instructions,
+                aclosing(self._quick_stream(
+                    conv.npc, instructions=conv.persona.instructions,
                     messages=[Message("developer", f"{self._brief(conv)}\n{hint}")],
                     tools=[], temperature=0.7,
                 )) as events,
@@ -1044,6 +1053,8 @@ class DialogueManager:
                 task.cancel()
             self._prewarms.clear()
             self._prewarm_history.clear()
+            self._quick_slots.clear()
+            self._quick_used.clear()
             self._nearby.clear()
             self._svm_down.clear()
             self._focus = None
@@ -1185,6 +1196,9 @@ class DialogueManager:
             return
         if conv.reply is not None and not conv.reply.done():
             return  # its turn is on (warming now would hold up its line): once it is over
+        slot = self._quick_slot(conv.npc)
+        if slot is None or self._quick_busy[slot]:
+            return
         for other, task in self._prewarms.items():
             if other not in candidates:
                 task.cancel()
@@ -1192,7 +1206,7 @@ class DialogueManager:
         if (old := self._prewarms.get(conv.npc)) is not None:
             old.cancel()
         self._prewarm_history[conv.npc] = conv.history
-        task = asyncio.create_task(self._prewarm(conv, warm))
+        task = asyncio.create_task(self._prewarm(conv, warm, slot))
         self._prewarms[conv.npc] = task
 
         def forget(t: asyncio.Task[None], npc: str = conv.npc) -> None:
@@ -1219,22 +1233,72 @@ class DialogueManager:
         """The conversational model's connection for the npc, opened before its turn (openai_responses.py)."""
         open_ahead(self.llm, npc)
 
-    async def _prewarm(self, conv: Conversation, warm: Callable[..., Awaitable[None]]) -> None:
+    async def _prewarm(self, conv: Conversation, warm: Callable[..., Awaitable[None]], slot: int) -> None:
         await asyncio.sleep(PREWARM_DELAY_S)
-        if conv.reply is not None and not conv.reply.done():
+        if ((conv.reply is not None and not conv.reply.done()) or self._quick_busy[slot]
+            or self._quick_slots.get(conv.npc) != slot):
             return  # a turn started during the debounce: warming waits for its reply
         started = time.monotonic()
+        token = QUICK_SLOT.set(slot)
         try:
             await warm(instructions=conv.persona.instructions, messages=conv.history)
         except LLMError as err:
             self._prewarm_history.pop(conv.npc, None)
             log.info("%s: the quick model was not warmed: %s", conv.npc, err)
             return
+        finally:
+            QUICK_SLOT.reset(token)
         log.debug("%s: the quick model warmed in %.2fs", conv.npc, time.monotonic() - started)
 
+    def _quick_slot(self, npc: str) -> int | None:
+        npc = npc.upper()
+        if npc not in self._quick_slots:
+            free = (set(range(PREWARM_SLOTS)) - set(self._quick_slots.values())
+                    - {s for s, count in enumerate(self._quick_busy) if count})
+            if free:
+                slot = min(free)
+            else:
+                idle = [n for n, s in self._quick_slots.items() if not self._quick_busy[s]]
+                if not idle:
+                    return None
+                old = min(idle, key=self._quick_used.__getitem__)
+                slot = self._quick_slots.pop(old)
+                del self._quick_used[old]
+                self._prewarm_history.pop(old, None)
+                if warm := self._prewarms.get(old):
+                    warm.cancel()
+            self._quick_slots[npc] = slot
+        self._quick_used[npc] = next(self._quick_clock)
+        return self._quick_slots[npc]
+
+    @asynccontextmanager
+    async def _quick_request(self, npc: str) -> AsyncIterator[None]:
+        while (slot := self._quick_slot(npc)) is None:
+            self._quick_free.clear()
+            await self._quick_free.wait()
+        self._quick_busy[slot] += 1  # includes requests waiting for this NPC's previous real request
+        if warm := self._prewarms.get(npc.upper()):
+            warm.cancel()  # do not wait for a prewarm or share its slot with a real request
+        try:
+            async with self._quick_locks[slot]:
+                token = QUICK_SLOT.set(slot)
+                try:
+                    yield
+                finally:
+                    QUICK_SLOT.reset(token)
+        finally:
+            self._quick_busy[slot] -= 1
+            self._quick_free.set()
+
+    async def _quick_stream(self, npc: str, **options: Any) -> AsyncIterator[LLMEvent]:
+        assert self.quick is not None
+        async with self._quick_request(npc), aclosing(self.quick.stream(**options)) as events:
+            async for event in events:
+                yield event
+
     def _yield_to(self, npc: str) -> None:
-        """The quick model's slots go to `npc`'s words: the others' warming waits. Its own goes on,
-        the words wait for it: it reads what they need (a fight's first line: the incident warmed it)."""
+        """Prioritize this NPC over other warming and SVM requests; its own warm is cancelled
+        when the real request acquires its slot."""
         for other, task in list(self._prewarms.items()):
             if other != npc:
                 task.cancel()
@@ -1271,8 +1335,9 @@ class DialogueManager:
             async with (
                 asyncio.timeout(REACTION_S),
                 aclosing(
-                    self.quick.stream(
-                        instructions=conv.persona.instructions, messages=request, tools=[], **options
+                    self._quick_stream(
+                        conv.npc, instructions=conv.persona.instructions, messages=request,
+                        tools=[], **options
                     )
                 ) as events,
             ):
@@ -2486,7 +2551,8 @@ class DialogueManager:
             state.text += " "
         try:
             try:
-                events = llm.stream(
+                stream = partial(self._quick_stream, conv.npc) if quick else llm.stream
+                events = stream(
                     instructions=conv.persona.instructions,
                     messages=request,
                     tools=[] if quick else self._request_tools(state.tools),
