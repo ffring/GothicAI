@@ -30,6 +30,10 @@ REPLY_S = 1.2
 NPC_GAP_S = 5.0
 WORLD_GAP_S = 1.5
 FIGHT_S = 20.0
+HUMILIATE_HINT = (
+    "[Сейчас: {target} сдался тебе и стоит перед тобой на коленях, а ты мочишься на него. "
+    "Скажи одну короткую издевательскую фразу до восьми слов — как сказал бы ты.]"
+)
 HINT = (
     "[Сейчас бой: {event}. Вырвется одна короткая фраза до шести слов — как у тебя, "
     "по характеру и по тому, как идёт бой. Ругнуться можно, если ты так говоришь.]"
@@ -45,10 +49,13 @@ class Fighter:
 
 
 class CombatBarks:
-    def __init__(self, dialogue: DialogueManager, *, rng: Callable[[], float] = random.random) -> None:
+    def __init__(
+        self, dialogue: DialogueManager, *, rng: Callable[[], float] = random.random, hits: bool = True,
+    ) -> None:
         self.dialogue = dialogue
         self.link = dialogue.link
         self.rng = rng
+        self.hits = hits
         self.companion: Callable[[str], bool] = lambda npc: False
         self.silenced: Callable[[str], bool] = lambda npc: False
         self.roster: dict[str, RosterEntry] = {}
@@ -84,7 +91,7 @@ class CombatBarks:
                 self.fighters.clear()
                 self.last_at = float("-inf")
             case CombatHit():
-                if self.dialogue.quick is not None:
+                if self.hits and self.dialogue.quick is not None:
                     self._hit(msg)
 
     def _eligible(self, npc: str) -> bool:
@@ -194,11 +201,19 @@ class CombatBarks:
                     or self.dialogue._to_hear(conv, line, time.monotonic()))
         return False
 
-    def _attempt(self, npc: str, reason: str, hit: CombatHit, event: str, received: float) -> None:
+    async def humiliate(self, conv: Conversation, target: str) -> None:
+        if self.dialogue.quick is not None:
+            task = self._attempt(conv.npc, "humiliate", None, target, time.monotonic())
+            if task is not None:
+                await task
+
+    def _attempt(
+        self, npc: str, reason: str, hit: CombatHit | None, event: str, received: float,
+    ) -> asyncio.Task[None] | None:
         fighter = self.fighters.setdefault(npc, Fighter())
         attempt: dict[str, Any] = {
             "type": "combat_bark", "npc": npc, "reason": reason,
-            "hit": hit.model_dump(mode="json"), "by": hit.by, "victim": hit.npc,
+            **({"hit": hit.model_dump(mode="json"), "by": hit.by, "victim": hit.npc} if hit else {}),
             "text": "", "outcome": "busy", "overlay": True,
         }
         recorded = False
@@ -217,9 +232,10 @@ class CombatBarks:
             if self.dialogue.trace is not None:
                 self.dialogue.trace.write({"t": round(time.time(), 3), **attempt})
 
-        if self._busy(npc) or self._world_busy():
+        scene = reason == "humiliate"
+        if not scene and (self._busy(npc) or self._world_busy()):
             record("busy")
-        elif self._cooldown(npc) or received - self.last_at < WORLD_GAP_S:
+        elif not scene and (self._cooldown(npc) or received - self.last_at < WORLD_GAP_S):
             record("cooldown")
         elif reason in {"hurt", "landed"} and not fighter.first and self.rng() >= 0.5:
             record("chance")
@@ -228,6 +244,8 @@ class CombatBarks:
             conv = self.dialogue.open(npc, self._name(npc), warm=False)
             self.task = asyncio.create_task(self._generate(conv, event, received, attempt, record))
             self.task.add_done_callback(lambda task: record("busy") if task.cancelled() else None)
+            return self.task
+        return None
 
     async def _generate(
         self, conv: Conversation, event: str, received: float, attempt: dict[str, Any],
@@ -236,12 +254,14 @@ class CombatBarks:
         quick = self.dialogue.quick
         assert quick is not None
         text = ""
+        scene = attempt["reason"] == "humiliate"
+        hint = HUMILIATE_HINT.format(target=event) if scene else HINT.format(event=event)
         try:
             async with asyncio.timeout_at(received + REPLY_S):
                 async with aclosing(self.dialogue._quick_stream(
                     conv.npc, instructions=conv.persona.instructions,
                     messages=[Message(
-                        "developer", f"{self.dialogue._brief(conv)}\n{HINT.format(event=event)}",
+                        "developer", f"{self.dialogue._brief(conv)}\n{hint}",
                     )],
                     tools=[], temperature=0.7,
                 )) as events:
@@ -271,9 +291,9 @@ class CombatBarks:
                 record("same")
             elif not words:
                 record("error")
-            elif not self._eligible(conv.npc) or self._busy(conv.npc):
+            elif not self._eligible(conv.npc) or (not scene and self._busy(conv.npc)):
                 record("busy")
-            elif self._cooldown(conv.npc):
+            elif not scene and self._cooldown(conv.npc):
                 record("cooldown")
             else:
                 line = await self.dialogue._say(conv, words, None, overlay=True, mood=mood, bark=record)

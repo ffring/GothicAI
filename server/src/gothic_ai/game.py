@@ -65,6 +65,7 @@ from .protocol import (
     NpcView,
     NpcViewCmd,
     PingCmd,
+    PlayerPoseCmd,
     PlayerState,
     Pong,
     RaiseDeadCmd,
@@ -94,6 +95,7 @@ log = logging.getLogger(__name__)
 # requests answered with `result`
 _Request = (
     AttachCmd
+    | PlayerPoseCmd
     | BeastCmd
     | BodyAcquireCmd
     | BodyActionCmd
@@ -436,6 +438,9 @@ class GameLink:
         if not res.ok:
             raise GameError(res.error or "request failed")
         return res
+
+    async def player_pose(self, pose: Literal["kneel", "none"], timeout: float = 5.0) -> None:
+        await self._request(PlayerPoseCmd(req=self._next_id("p"), pose=pose), timeout)
 
     async def attach(self, npc: str, timeout: float = 5.0) -> None:
         self._require_native_body(npc)

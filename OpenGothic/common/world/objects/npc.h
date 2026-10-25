@@ -605,6 +605,9 @@ class Npc final {
     bool      whirlTo(float dx, float dz, float step, uint64_t dt);
     bool      isRotationAllowed() const;
     auto      playAnimByName(std::string_view name, BodyState bs) -> const Animation::Sequence*;
+    bool      setPlayerPose(bool kneel);
+    bool      tickPlayerPose();
+    bool      isPlayerKneeling() const { return playerKneeling; }
 
     bool      checkGoToNpcdistance(const Npc& other);
 
@@ -989,6 +992,8 @@ class Npc final {
     AiQueue                        aiQueue;
     AiQueue                        aiQueueOverlay;
     Npc*                           nativeCombatQueueTarget=nullptr; // only during this actor's ZS_ATTACK callback
+    bool                           playerKneeling=false;
+    bool                           playerPoseExiting=false;
     bool                           externalCtrl=false; // transient, not serialized
     bool                           percPassThrough=false; // passPerception: no interception
     std::vector<Routine>           routines;

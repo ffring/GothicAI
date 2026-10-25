@@ -30,12 +30,19 @@ from .protocol import (
 from .turn import ToolOutcome
 
 if TYPE_CHECKING:
+    from .combat_barks import CombatBarks
     from .crime_law import CrimeLaw
     from .dialogue import Conversation, DialogueManager
     from .orders import Orders
     from .parley import Parley
+    from .places import PlaceBook
 
 log = logging.getLogger(__name__)
+
+PEE_DISTANCE_CM = 70
+PEE_HOLD_MS = 4000
+PEE_APPROACH_TIMEOUT_MS = 15000
+HUMILIATE_FORBIDDEN_GUILDS = {1, 4, 5, 14}  # PAL, KDF, NOV, KDW
 
 PARDON = "Ты проиграл бой герою и сдался; он тебя пощадил"
 YIELDING = (
@@ -59,11 +66,15 @@ ACCEPT_SURRENDER = Tool(
     "принимать ли и что брать: можно меньше или больше предложенного, либо отказаться и драться дальше. "
     "take: gold — всё золото героя; weapons — надетое ближнее и дальнее оружие; fine — только для "
     "представителя закона, точная сумма долга crimes, если золота хватает; также до пяти id предметов "
-    "из инвентаря героя, по одной штуке. Пустой take — отпустить без выкупа. gold включает fine.",
+    "из инвентаря героя, по одной штуке. Пустой take — отпустить без выкупа. gold включает fine. "
+    "humiliate — обязательный bool: передавай false для обычной сдачи, "
+    "true — унизить сдавшегося героя, обмочив его на коленях. "
+    "Решай по характеру сам или по просьбе героя; законникам, магам, паладинам и послушникам запрещено.",
     {"type": "object", "properties": {
         "take": {"type": "array", "items": {"type": "string"}},
+        "humiliate": {"type": "boolean", "default": False},
         "words": {"type": "string"},
-    }, "required": ["take", "words"], "additionalProperties": False},
+    }, "required": ["take", "humiliate", "words"], "additionalProperties": False},
 )
 
 
@@ -92,10 +103,12 @@ class Mercy:
     def __init__(
         self, dialogue: DialogueManager, chronicle: Chronicle, orders: Orders,
         parley: Parley | None, *, law: CrimeLaw | None = None,
+        barks: CombatBarks | None = None, places: PlaceBook | None = None,
     ) -> None:
         self.dialogue, self.link, self.chronicle = dialogue, dialogue.link, chronicle
         self.orders, self.parley = orders, parley
-        self.law = law
+        self.law, self.barks, self.places = law, barks, places
+        self._scene: asyncio.Task | None = None
         self.accepting: set[str] = set()
         self.battles: dict[str, Battle] = {}
         self.offering: set[str] = set()
@@ -224,6 +237,8 @@ class Mercy:
 
     def _on_message(self, msg: GameMessage) -> None:
         if isinstance(msg, (Loading, Session)):
+            if self._scene is not None:
+                self._scene.cancel()
             self._loading = isinstance(msg, Loading)
             self.battles.clear()
             self.offering.clear()
@@ -289,9 +304,14 @@ class Mercy:
         if now is not None and any(f["npc"] == npc and now < f["until"]
                                    for f in self.chronicle.facts("hero_yield")):
             lines.append(VICTOR)
+        for memory in self.chronicle.facts("humiliated"):
+            if memory["npc"] == npc:
+                lines.append("Ты помнишь, как обмочил его, когда он сдался.")
+            elif npc in memory["witnesses"]:
+                lines.append(f"Ты помнишь, как {memory['name']} обмочил его, когда он сдался.")
         if npc in self.accepting and self._hero_turn(npc):
             lines.append("Сейчас ты в бою с героем, твоя цель — герой. Он сказал тебе эту фразу. "
-                         "Если решишь принять его сдачу, вызови accept_surrender{take, words}; "
+                         "Если решишь принять его сдачу, вызови accept_surrender{take, words, humiliate}; "
                          "без вызова бой продолжается. Выкуп и решение — по твоему характеру и положению.")
         return "\n".join(lines) or None
 
@@ -384,6 +404,74 @@ class Mercy:
             gives.append(Give(item, wanted, state.get("items", {}).get(item) or item))
         return gives, community, cases
 
+    async def _humiliate(self, conv: Conversation) -> bool:
+        npc, branch = conv.npc, self.chronicle.branch
+        completed, entered, held = False, False, False
+        self._scene = asyncio.current_task()
+        try:
+            held = await self.dialogue._hold(conv, "humiliate")
+            if not held:
+                raise GameError("NPC body is unavailable")
+            await self.link.player_pose("kneel")
+            for action, args in [
+                ("go_to_npc", {"npc": "PLAYER", "radius": PEE_DISTANCE_CM, "close": True,
+                               "timeout_ms": PEE_APPROACH_TIMEOUT_MS}),
+                ("turn_to", {"npc": "PLAYER"}),
+            ]:
+                result = await self.link.act(npc, action, **args)
+                if result.status != "done":
+                    raise GameError(f"{action}: {result.status} {result.detail or ''}")
+            snap = await self.link.snapshot(npc, fresh=True)
+            if snap.player is None or not snap.player.kneeling:
+                raise GameError("the hero left the kneeling pose")
+            views = await self.link.npc_view(list(self.orders.talk.people))
+            witnesses = {
+                v.npc: v.name for v in views
+                if v.npc != npc and v.hp > 0 and v.body not in {"dead", "down"}
+                and v.hero is not None and v.hero.distance <= v.senses_range
+                and self.orders.talk.people[v.npc].guild < BEASTS
+            }
+            result = await self.link.act(npc, "play_ani", name="T_STAND_2_PEE")
+            if result.status != "done":
+                raise GameError(f"pee transition: {result.status} {result.detail or ''}")
+            entered = True
+            point = snap.npc.nearest_waypoint or snap.npc.waypoint
+            place = self.places.of(point) if self.places else None
+            where = place.ru if place else point or snap.world.name
+            self.chronicle.record({
+                "fact": "humiliated", "npc": npc, "name": conv.persona.name, "hero": "PLAYER",
+                "place": place.id if place else point or snap.world.name, "place_name": where,
+                "time": self._now(), "t": self._ticks, "witnesses": list(witnesses),
+            })
+            self.dialogue.remember(npc, conv.persona.name, f"Ты обмочил сдавшегося героя: у {where}.")
+            for witness, name in witnesses.items():
+                self.dialogue.remember(
+                    witness, name, f"{conv.persona.name} обмочил сдавшегося героя у {where}.",
+                )
+            hold = self.link.act(npc, "play_ani", name="S_PEE", hold_ms=PEE_HOLD_MS)
+            if self.barks is not None:
+                result, _ = await asyncio.gather(hold, self.barks.humiliate(conv, "герой"))
+            else:
+                result = await hold
+            if result.status != "done":
+                raise GameError(f"pee hold: {result.status} {result.detail or ''}")
+            completed = True
+        except (GameError, TimeoutError) as error:
+            log.info("humiliation scene for %s cancelled: %s", npc, error)
+        finally:
+            if not self._loading and self.chronicle.branch == branch:
+                try:
+                    if not completed:
+                        await self.link.player_pose("none")
+                    if entered:
+                        await self.link.act(npc, "play_ani", name="T_PEE_2_STAND")
+                    if held:
+                        await self.link.act(npc, "return_to_routine")
+                except (GameError, TimeoutError) as error:
+                    log.info("humiliation cleanup for %s: %s", npc, error)
+            self._scene = None
+        return completed
+
     async def _accept(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
         npc, now = conv.npc, self._now()
         if npc not in self.accepting or not self._hero_turn(npc) or not await self._hero_fight(npc):
@@ -393,6 +481,21 @@ class Mercy:
         words = call.arguments.get("words")
         if not isinstance(words, str) or not words.strip() or now is None:
             return ToolOutcome("Отклонено: нужны слова в words и известное время мира.", "rejected")
+        humiliate = call.arguments.get("humiliate", False)
+        if type(humiliate) is not bool:
+            return ToolOutcome("Отклонено: humiliate должен быть true или false.", "rejected")
+        if humiliate:
+            guild = self.orders.talk.people[npc].guild
+            metadata = {"guild": guild}
+            community = self.law.community_of(npc, metadata) if self.law else None
+            if guild in HUMILIATE_FORBIDDEN_GUILDS or (
+                self.law is not None and self.law.is_guard(npc, community, metadata)
+            ):
+                return ToolOutcome(
+                    "Отклонено: законникам, магам (KDF, KDW), послушникам (NOV) и паладинам (PAL) "
+                    "запрещено обмачивать сдавшегося героя. Прими сдачу с humiliate:false или откажись.",
+                    "rejected",
+                )
         try:
             gives, community, cases = await self._ransom(npc, call.arguments.get("take"))
             await self._native_outcome(npc, won=True)
@@ -418,8 +521,12 @@ class Mercy:
         self.dialogue.remember(npc, conv.persona.name, f"Герой сдался тебе в бою; ты взял: {taken}.")
         self.dialogue._drop_unvoiced(conv)
         await self.dialogue._say(conv, words.strip(), None, overlay=True)
+        scene = await self._humiliate(conv) if humiliate else None
         return ToolOutcome(f"Принято: бой прекращён; герой передал тебе: {taken}."
-                           + (" Долг перед законом погашен." if community else ""), "accepted")
+                           + (" Долг перед законом погашен." if community else "")
+                           + (" Унижение завершено." if scene else
+                              " Сцена унижения отменена; сдача остаётся в силе." if humiliate else ""),
+                           "accepted")
 
     async def handle(
         self, dialogue: DialogueManager, conv: Conversation, call: ToolCall, snap: Snapshot | None,
