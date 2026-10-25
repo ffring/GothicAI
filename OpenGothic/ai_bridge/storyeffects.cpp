@@ -303,8 +303,8 @@ void StoryEffect::run(zenkit::DaedalusVm& vm, Npc& npc, Npc& player, std::string
       npc.clearAiQueue();
       npc.clearState(true);
       npc.setTarget(nullptr);
-      npc.aiPush(AiQueue::aiRemoveWeapon());
       npc.resumeAiRoutine();
+      npc.aiPush(AiQueue::aiRemoveWeapon());
       }
     }
   else if(kind=="knows") {

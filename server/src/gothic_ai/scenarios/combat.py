@@ -46,7 +46,10 @@ async def mercy(
             voices.append(msg)
 
     async def health(hp: int, maximum: int) -> None:
-        attributes = await link.story_eval(LOBART, [["var", "ATR_HITPOINTS"], ["var", "ATR_HITPOINTSMAX"]])
+        attributes = await link.story_eval(LOBART, [["var", "ATR_HITPOINTS"], ["var", "ATR_HITPOINTS_MAX"]])
+        if (len(attributes) != 2 or any(type(a) is not int for a in attributes)
+                or attributes[0] == attributes[1]):
+            raise GameError(f"mercy preparation: invalid HP indices {attributes!r}")
         fields = [["field", ["inst", LOBART], "ATTRIBUTE", a] for a in attributes]
         key = f"DIR_MERCY_HP_{hp}"
         await link.patch_graph([triggers.trigger(key, triggers.STATE, [
@@ -56,7 +59,10 @@ async def mercy(
         try:
             if not await _until_async(lambda: link.story_eval(LOBART, fields),
                                       lambda values: values == [hp, maximum], 4):
-                raise GameError("mercy preparation: NPC health did not apply")
+                values = await link.story_eval(LOBART, fields)
+                raise GameError(
+                    f"mercy preparation: NPC health did not apply: {values!r}, wanted {[hp, maximum]}",
+                )
         finally:
             await link.patch_graph([triggers.removal(key)])
 
@@ -66,8 +72,18 @@ async def mercy(
         await link.detach(LOBART)
         await link.debug("player_hit", npc=LOBART)
         await link.story_effect(LOBART, [{"do": "attack", "reason": "AR_NONE"}])
-        started = await _until(lambda: fights(talk.people.get(LOBART)), 5)
-        results["fight_started"] = f"{'done' if started else 'failed'} (hits={len(hits)})"
+        combat = [
+            ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_ATTACK"]],
+            ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+             ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
+              ["call", "HLP_GETINSTANCEID", ["inst", "HERO"]]]],
+        ]
+        started = await _until_async(lambda: link.story_eval(LOBART, combat),
+                                     lambda values: values == [1, 1], 8)
+        state = await link.story_eval(LOBART, combat)
+        results["fight_started"] = (
+            f"{'done' if started else 'failed'} (hits={len(hits)}, fighting/hero_target={state})"
+        )
         if not started:
             return _logged(results)
         await health(250, 1000)
@@ -78,7 +94,11 @@ async def mercy(
         if not surrendered:
             return _logged(results)
         at = time.monotonic()
-        stopped = await _until(lambda: not fights(talk.people.get(LOBART)), 3)
+        stopped = await _until_async(
+            lambda: link.npc_view([LOBART]),
+            lambda views: bool(views) and views[0].hp > 0 and views[0].weapon == "none"
+            and not fights(talk.people.get(LOBART)), 3,
+        )
         [view] = await link.npc_view([LOBART])
         results["fight_stopped"] = (
             f"{'done' if stopped and view.weapon == 'none' else 'failed'} "
@@ -89,7 +109,8 @@ async def mercy(
         values = await link.story_eval(LOBART, [
             *(["field", ["inst", "SELF"], "AIVAR", i] for i in indices), ["var", "FIGHT_LOST"],
         ])
-        results["native_outcome"] = f"{'done' if values[:3] == [values[3], 0, 1] else 'failed'} ({values})"
+        native = all(type(i) is int for i in indices) and values[:3] == [values[3], 0, 1]
+        results["native_outcome"] = f"{'done' if native else 'failed'} (indices={indices}, values={values})"
         await _until(lambda: any(v.voiced for v in voices), 8)
         results["surrender_voice"] = f"{'done' if any(v.voiced for v in voices) else 'failed'}"
         await _m5b_player_weapon(link, "none")
