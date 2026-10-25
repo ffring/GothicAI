@@ -113,18 +113,31 @@ async def test_player_down_chooses_nearest_friend_or_companion(rig, distance, sp
 
 
 async def test_first_hit_warms_both_people_once_and_reuses_the_persona_prefix(rig):
+    friend = rig.dialogue.open("F", "Друг", warm=False)
+    rig.dialogue._start_prewarm(friend, ["F"])
+    await asyncio.gather(*list(rig.dialogue._prewarms.values()))
+    assert not rig.dialogue._prewarms
+    friend_slot = rig.dialogue._quick_slots["F"]
     # A different world's bark lets both warm-ups finish before this NPC's real request preempts one.
     occupied = asyncio.create_task(asyncio.sleep(60))
     rig.barks.task = occupied
     hit(rig, by="A")
     await asyncio.gather(*list(rig.dialogue._prewarms.values()))
+    assert rig.dialogue._prewarm_history["F"] == friend.history
+    assert rig.dialogue._quick_slots["F"] == friend_slot
+    rig.dialogue._nearby["F"] = ("Друг", 100)
+    rig.dialogue._focus = "F"
+    rig.dialogue._prewarm_focus()
+    await asyncio.gather(*list(rig.dialogue._prewarms.values()))
+    assert len(rig.quick.prewarms) == 3  # looking back at the warmed friend adds no request
+    rig.dialogue._focus = None
     occupied.cancel()
     await asyncio.gather(occupied, return_exceptions=True)
     rig.barks.task = None
     hit(rig, by="A")
     await finish(rig)
     assert {instructions for instructions, _ in rig.quick.prewarms} == {
-        rig.dialogue.conversations[npc].persona.instructions for npc in ("V", "A")
+        rig.dialogue.conversations[npc].persona.instructions for npc in ("F", "V", "A")
     }
     assert all(not messages for _, messages in rig.quick.prewarms)
     assert rig.quick.calls[0][0] in {instructions for instructions, _ in rig.quick.prewarms}
@@ -166,7 +179,7 @@ async def test_npc_cooldown_counts_svm_and_any_first_words(rig):
     await rig.dialogue._say(rig.dialogue.conversations["V"], "Эй!", None, filler=True)
     hit(rig)
     await finish(rig)
-    assert rig.rows[-1]["outcome"] in {"busy", "cooldown"}
+    assert rig.rows[-1]["outcome"] == "cooldown"
 
 
 async def test_one_world_request_and_voice_then_1500ms_gap(rig):

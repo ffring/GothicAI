@@ -124,7 +124,7 @@ class CombatBarks:
             fighter.hit_at = now
         if new_fighters and hasattr(self.dialogue.quick, "prewarm"):
             # A raw hit need not be an IncidentDesk incident: warm both human participants here.
-            candidates = [*self.dialogue._prewarms, *new_fighters]
+            candidates = [*self.dialogue._prewarm_history, *new_fighters]
             for npc in sorted(new_fighters):
                 conv = self.dialogue.open(npc, self._name(npc), warm=False)
                 if self.dialogue._prewarm_history.get(npc) != conv.history:
