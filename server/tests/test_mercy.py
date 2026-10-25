@@ -6,10 +6,13 @@ import pytest
 
 from gothic_ai.chronicle import Chronicle
 from gothic_ai.combat_barks import CombatBarks
+from gothic_ai.contracts import GOLD
+from gothic_ai.crime_law import CrimeLaw
+from gothic_ai.crimes import Crimes
 from gothic_ai.dialogue import DialogueManager
 from gothic_ai.llm import FakeBackend, FakeStep, ToolCall, ToolResult
 from gothic_ai.memory import MemoryStore
-from gothic_ai.mercy import PARDON, YIELDING, Mercy
+from gothic_ai.mercy import PARDON, VICTOR, YIELDING, Mercy
 from gothic_ai.orders import Fight, Orders, Standing
 from gothic_ai.parley import Parley
 from gothic_ai.persona import PersonaProvider
@@ -27,8 +30,12 @@ class MercyGame(FakeGame):
     def __init__(self):
         super().__init__()
         self.vars.update(AIV_LASTFIGHTAGAINSTPLAYER=1, AIV_LASTFIGHTCOMMENT=2,
-                         AIV_DEFEATEDBYPLAYER=3, FIGHT_LOST=2)
+                         AIV_DEFEATEDBYPLAYER=3, FIGHT_LOST=2, FIGHT_WON=1)
         self.target = "PC_HERO"
+        self.attack_state = True
+        self.weapons = ["ITMW_1H_BAU_MACE", "ITRW_BOW_L_01"]
+        self.hero_items.update({GOLD: 120, **dict.fromkeys(self.weapons, 1), "ITFO_BREAD": 2})
+        self.symbols.update(dict.fromkeys(self.hero_items, "item"))
         self.emit_trigger = True
         self.trigger_error = None
 
@@ -38,6 +45,12 @@ class MercyGame(FakeGame):
         return snap
 
     def evaluate(self, expr, npc=None):
+        if expr[:2] == ["call", "NPC_ISINSTATE"]:
+            return int(self.attack_state)
+        if expr[:2] == ["call", "NPC_GETEQUIPPEDMELEEWEAPON"]:
+            return self.weapons[0]
+        if expr[:2] == ["call", "NPC_GETEQUIPPEDRANGEDWEAPON"]:
+            return self.weapons[1]
         if expr[:2] == ["call", "NPC_GETTARGET"]:
             return int(self.target is not None)
         if expr[:2] == ["call", "HLP_GETINSTANCEID"]:
@@ -64,8 +77,10 @@ async def rig():
         talk = TalkDesk(link, dialogue)
         orders = talk.orders = Orders(link, talk, dialogue)
         chronicle = Chronicle(link, memory)
+        crimes = Crimes(link, chronicle)
+        law = CrimeLaw(crimes)
         parley = Parley(link, dialogue, chronicle, companion=orders.companion)
-        mercy = Mercy(dialogue, chronicle, orders, parley)
+        mercy = Mercy(dialogue, chronicle, orders, parley, law=law)
         dialogue.extensions.extend([parley, mercy])
         dialogue.guild_of = lambda npc: talk.people[npc].guild if npc in talk.people else None
         dialogue.in_fight = lambda npc: fights(talk.people.get(npc))
@@ -83,7 +98,9 @@ async def rig():
             hero=dict(id="PLAYER", name="Герой", distance=100, weapon="melee"),
         )]))
         yield SimpleNamespace(fake=fake, link=link, dialogue=dialogue, llm=llm, talk=talk,
-                              orders=orders, memory=memory, chronicle=chronicle, parley=parley, mercy=mercy)
+                              orders=orders, memory=memory, chronicle=chronicle, parley=parley, mercy=mercy,
+                              crimes=crimes, law=law)
+        await crimes.close()
         if chronicle._background:
             await asyncio.gather(*chronicle._background)
         memory.close()
@@ -270,3 +287,145 @@ def test_no_mercy_flag(monkeypatch):
         with pytest.raises(SystemExit) as exit:
             cli.main()
         assert exit.value.code == 0 and seen[-1] is expected
+
+
+async def hero_yields(rig, take):
+    rig.llm.script = [FakeStep(tool_calls=[ToolCall("accept_surrender", {
+        "take": take, "words": "Ладно, живи. Я заберу своё.",
+    })]), FakeStep()]
+    rig.dialogue.open(NPC, "Лобарт", warm=False)
+    await rig.dialogue.say_as_player(NPC, "Сдаюсь, забирай золото, только не бей", overlay=True)
+    await finish(rig)
+    return next(item.output for item in rig.llm.calls[-1][1] if isinstance(item, ToolResult))
+
+
+@pytest.mark.parametrize("state", ["fighting", "native_only", "no_fight", "other_target",
+                                   "dead", "surrendered", "ambient"])
+async def test_accept_tool_only_after_hero_phrase_in_fight(rig, state):
+    conv = rig.dialogue.open(NPC, "Лобарт", warm=False)
+    assert "accept_surrender" not in {t.name for t in rig.dialogue._offered(NPC)}
+    if state == "no_fight":
+        rig.fake.attack_state = False
+    elif state == "native_only":
+        rig.dialogue.in_fight = lambda npc: False
+    elif state == "other_target":
+        rig.fake.target = FRIEND
+    elif state == "dead":
+        hit(rig, hp=0, dead=True)
+    elif state == "surrendered":
+        hit(rig)
+        await finish(rig)
+    rig.llm.calls.clear()
+    rig.llm.script = [FakeStep("Не дождёшься!")]
+    quick = rig.dialogue.quick = FakeBackend("А ну стой!", delay=0)
+    if state == "ambient":
+        await rig.dialogue.event_turn(NPC, "[Шум рядом]", overlay=True)
+    else:
+        await rig.dialogue.say_as_player(NPC, "Пожалуйста, хватит!", overlay=True)
+    assert bool(quick.calls) is (state != "native_only")
+    eligible = state in {"fighting", "native_only"}
+    assert ("accept_surrender" in {t.name for t in rig.llm.calls[0][2]}) is eligible
+    context = str(rig.llm.calls[0][1])
+    assert ("Сейчас ты в бою с героем" in context) is eligible
+    assert not rig.chronicle.facts("hero_yield")
+    assert "accept_surrender" not in {t.name for t in rig.dialogue._offered(conv.npc)}
+
+
+@pytest.mark.parametrize("take,expected", [
+    ([], {}), (["gold"], {GOLD: 120}),
+    (["weapons"], {"ITMW_1H_BAU_MACE": 1, "ITRW_BOW_L_01": 1}),
+    (["ITFO_BREAD"], {"ITFO_BREAD": 1}),
+    (["gold", "weapons", "ITFO_BREAD"],
+     {GOLD: 120, "ITMW_1H_BAU_MACE": 1, "ITRW_BOW_L_01": 1, "ITFO_BREAD": 1}),
+])
+async def test_hero_ransom_transfers_real_items_calm_and_native_victory(rig, take, expected):
+    before = dict(rig.fake.hero_items)
+    rig.dialogue.change_intent(FRIEND, "Диего", body=False, goal="follow_hero", target="PLAYER")
+    rig.orders.fights[FRIEND] = Fight(NPC)
+    rig.orders.standing[FRIEND] = Standing("follow")
+    rig.orders._resume = AsyncMock()
+    output = await hero_yields(rig, take)
+    assert output.startswith("Принято:")
+    [fact] = rig.chronicle.facts("hero_yield")
+    assert {g["item"]: g["count"] for g in fact["take"]} == expected
+    for item, amount in expected.items():
+        assert rig.fake.hero_items.get(item, 0) == before[item] - amount
+        assert rig.fake.npc_items[NPC][item] == amount
+        assert item in output and str(amount) in output
+    assert FRIEND not in rig.orders.fights
+    assert any(op.get("do") == "calm" for row in rig.fake.story for op in row.get("effects", []))
+    [trigger] = [op for row in rig.fake.graph for op in row["ops"] if op.get("steps")]
+    assert [s["target"][-1] for s in trigger["steps"]] == [1, 2]
+    assert [s["value"] for s in trigger["steps"]] == [["var", "FIGHT_WON"], ["int", 0]]
+    assert any(s[0]["text"] == "Ладно, живи. Я заберу своё." and s[0]["overlay"] for s in rig.fake.says)
+
+
+@pytest.mark.parametrize("take,guard,debt,gold,accepted", [
+    (["fine"], True, True, 120, True), (["fine", "gold"], True, True, 120, True),
+    (["fine"], False, True, 120, False), (["fine"], True, False, 120, False),
+    (["fine"], True, True, 49, False),
+])
+async def test_hero_yield_fine_uses_law_debt(rig, take, guard, debt, gold, accepted):
+    rig.crimes.people[NPC] = {"guild": 1 if guard else 8, "npctype": 0}
+    if debt:
+        rig.chronicle.record({"fact": "crime", "id": "attack-1", "kind": "attack", "community": "city"})
+        rig.chronicle.record({"fact": "crime_known", "crime": "attack-1", "community": "city"})
+    rig.fake.hero_items[GOLD] = gold
+    output = await hero_yields(rig, take)
+    assert output.startswith("Принято:" if accepted else "Отклонено:")
+    paid = gold if "gold" in take else 50
+    assert rig.fake.hero_items[GOLD] == (gold - paid if accepted else gold)
+    assert rig.law.debt("city") == (0 if accepted or not debt else 50)
+    if accepted:
+        assert rig.fake.npc_items[NPC][GOLD] == paid and "погашен" in output
+    else:
+        assert not rig.chronicle.facts("hero_yield")
+
+
+@pytest.mark.parametrize("take", [["ITFO_BREAD"], ["gold"], [f"ITFO_ITEM_{i}" for i in range(6)]])
+async def test_unavailable_ransom_rejects_without_stopping_or_taking(rig, take):
+    rig.fake.hero_items.pop(take[0], None)
+    if take == ["gold"]:
+        rig.fake.hero_items[GOLD] = 0
+    before = dict(rig.fake.hero_items)
+    output = await hero_yields(rig, take)
+    assert output.startswith("Отклонено:") and rig.fake.hero_items == before
+    assert not rig.chronicle.facts("hero_yield")
+    assert not any(op.get("do") == "calm" for row in rig.fake.story for op in row.get("effects", []))
+
+
+@pytest.mark.parametrize("elapsed", [59999, 60000])
+async def test_hero_yield_band_truce_betrayal_and_memory_branch(rig, elapsed):
+    rig.talk.people[NPC] = rig.talk.people[NPC].model_copy(update={"guild": 9})
+    gang = "BDT_GANG"
+    snap = rig.link.snapshots[NPC]
+    rig.link.snapshots[NPC] = snap.model_copy(update={"nearby_npcs": [
+        *snap.nearby_npcs, snap.nearby_npcs[0].model_copy(update={"id": gang, "guild": 9}),
+    ]})
+    rig.dialogue.change_intent(gang, "Бандит", body=False, goal="fight", target="PLAYER")
+    await hero_yields(rig, [])
+    assert rig.parley.truce(NPC)["until"] == 1980
+    assert gang in rig.parley.truce(NPC)["members"]
+    assert rig.dialogue.conversations[gang].intent.goal != "fight"
+    assert any(row.get("npc") == gang and {"do": "calm", "attitude": "ATT_NEUTRAL"}
+               in row.get("effects", []) for row in rig.fake.story)
+    assert any("Герой сдался тебе в бою; ты взял:" in m.content
+               for m in rig.dialogue.conversations[NPC].history)
+    situation, _, _ = await rig.dialogue._situation(rig.dialogue.conversations[NPC], None)
+    assert VICTOR in situation
+    rig.link._dispatch(NpcRoster(type="npc_roster", t=1000 + elapsed,
+                                npcs=[rig.talk.people[NPC].model_dump()]))
+    hit(rig, hp=80)
+    await finish(rig)
+    assert bool(rig.chronicle.facts("yield_broken")) is (elapsed < 60000)
+    assert (rig.parley.truce(NPC) is None) is (elapsed < 60000)
+    if elapsed < 60000:
+        assert "Он сдался тебе и ударил" in rig.llm.calls[-1][1][-1].content
+    rig.mercy._minute = 4319
+    assert rig.mercy.situation(NPC) == VICTOR
+    rig.mercy._minute = 4320
+    assert rig.mercy.situation(NPC) is None
+    rig.link._dispatch(Session(type="session", branch="other", reason="new_game"))
+    rig.mercy._minute = 1920
+    assert rig.mercy.situation(NPC) is None and not rig.chronicle.facts("hero_yield")
+    assert "Герой сдался тебе" not in str(rig.dialogue.open(NPC, "Лобарт", warm=False).history)

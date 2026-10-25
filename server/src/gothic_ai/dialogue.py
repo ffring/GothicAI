@@ -2933,14 +2933,18 @@ class DialogueManager:
             listener(conv.npc)
         return "Ты напал на героя.", True
 
-    async def _calm(self, conv: Conversation, intent: Intent) -> tuple[str, bool]:
+    async def _calm(
+        self, conv: Conversation, intent: Intent, *, effects: list[dict[str, Any]] | None = None,
+    ) -> tuple[str, bool]:
         """The npc calls off its fight with the hero, after its words, and keeps to it: its attitude to him
         is set as the scripts set it (they would fall on him again otherwise), the fight ends now."""
         if conv.intent is not intent:
             return "", True  # it changed its mind before it was done talking
         attitude = CALM_ATTITUDES.get(intent.attitude, "ATT_NEUTRAL")
         try:
-            await self.link.story_effect(conv.npc, [{"do": "calm", "attitude": attitude}])
+            await self.link.story_effect(
+                conv.npc, [*(effects or []), {"do": "calm", "attitude": attitude}], check=bool(effects),
+            )
         except (GameError, TimeoutError) as err:
             return f"Тело не прекратило драку ({err})", False
         log.info("%s calls off its fight with the hero (%s)", conv.npc, attitude)
