@@ -510,6 +510,7 @@ async def test_humiliate_scene_law_memory_and_branch(rig, guild, guard, approach
         "go_to_npc", "turn_to", "play_ani", "play_ani", "play_ani", "return_to_routine",
     ]
     assert actions[0]["args"]["radius"] == PEE_DISTANCE_CM
+    assert actions[0]["args"]["close"] is True
     assert [m["args"] for m in actions if m["action"] == "play_ani"] == [
         {"name": "T_STAND_2_PEE"}, {"name": "S_PEE", "hold_ms": PEE_HOLD_MS},
         {"name": "T_PEE_2_STAND"},

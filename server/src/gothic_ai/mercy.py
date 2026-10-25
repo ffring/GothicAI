@@ -413,7 +413,7 @@ class Mercy:
                 raise GameError("NPC body is unavailable")
             await self.link.player_pose("kneel")
             for action, args in [
-                ("go_to_npc", {"npc": "PLAYER", "radius": PEE_DISTANCE_CM,
+                ("go_to_npc", {"npc": "PLAYER", "radius": PEE_DISTANCE_CM, "close": True,
                                "timeout_ms": PEE_APPROACH_TIMEOUT_MS}),
                 ("turn_to", {"npc": "PLAYER"}),
             ]:

@@ -408,6 +408,7 @@ bool NpcController::startAction(World& world, Controlled& c, Action& a, const ra
     a.target   = target->instanceSymbol();
     if(a.type=="go_to_npc") {
       a.radius    = float(integer(args,"radius",400));
+      a.closeApproach = JsonRead::boolean(args,"close",false);
       a.deadline  = 60000;
       a.updatedAt = a.start;
       planNpcWalk(world,c,a,*target,!npc.canSeeNpc(*target,true));
@@ -718,7 +719,9 @@ void NpcController::planNpcWalk(World& world, Controlled& c, Action& a, Npc& tar
     } else {
     Tempest::Log::i("[ai] ",c.symbol," go_to_npc ",a.id,step,npcId(world,target),": direct, ",a.distance/100.," m, ",seen);
     }
-  npc.aiPush(AiQueue::aiGoToNpc(&target,int(a.radius)));
+  if(a.closeApproach)
+    npc.aiPush(AiQueue::aiGoToNpc(&target,int(a.radius))); else
+    npc.aiPush(AiQueue::aiGoToNpc(&target));
   }
 
 void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
@@ -840,9 +843,9 @@ void NpcController::updateAction(World& world, Controlled& c, uint64_t now) {
       return;
       }
     const double d = std::sqrt(double(c.npc->qDistTo(*target)));
-    if(d<=a.radius && c.npc->canSeeNpc(*target,true))
+    if(d<=a.radius && (!a.closeApproach || c.npc->canSeeNpc(*target,true)))
       finishAction(c,"done","",d); else
-      finishAction(c,"failed","stopped away from target or without line of sight",d);
+      finishAction(c,"failed","stopped away from target",d);
     return;
     }
 

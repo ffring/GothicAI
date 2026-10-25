@@ -59,6 +59,7 @@ class NpcController final {
       size_t          target   = 0;     // instance of target npc
       bool            toPlayer = false;
       float           radius   = 0;     // success radius for movement, cm
+      bool            closeApproach = false; // explicit short scene approach, with a clear ray
       Tempest::Vec3    movedFrom;        // go_to_npc: last movement anchor for stuck detection
       Tempest::Vec3    plannedFrom;      // where the previous route was planned
       uint64_t        movedAt  = 0;
