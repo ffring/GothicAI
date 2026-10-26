@@ -347,7 +347,7 @@ float MoveTrigger::calcProgress(uint32_t f1, uint32_t f2) const {
   }
 
 Matrix4x4 MoveTrigger::calcTransform(uint32_t f1, uint32_t f2, float a) const {
-  zenkit::AnimationSample fr      = {};
+  asset::AnimationSample fr      = {};
   Vec3                    forward = {};
   if(lerpType==asset::MoverLerpType::LINEAR) {
     auto& pos1 = moverKeyFrames[f1].position;

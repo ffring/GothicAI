@@ -1,8 +1,7 @@
 #include "clothvisual.h"
-#include "asset/fromzenkit.h"
+#include "asset/modeltypes.h"
 
 #include <Tempest/Log>
-#include <zenkit/MorphMesh.hh>
 #include "asset/staticmesh.h"
 #include <algorithm>
 #include <cmath>
@@ -118,7 +117,7 @@ struct Geometry {
   std::vector<Vec3> sourcePositions;
   std::vector<uint32_t> sourceVertexIds;
   std::vector<ClothGeometry::SourceWeights> sourceWeights;
-  std::vector<zenkit::MorphAnimation> animations;
+  std::vector<asset::MorphAnimation> animations;
   std::vector<std::vector<int32_t>> morphIndices;
   bool coarsePhysics = false;
   bool explicitAlphaTest = false;
@@ -254,12 +253,10 @@ std::shared_ptr<Geometry> loadGeometry(std::string_view visual, const Definition
   FileExt::exchangeExt(resource,"MMS","MMB");
   asset::StaticMesh source;
   bool replaced = false;
-  std::vector<zenkit::MorphAnimation> animations;
+  std::vector<asset::MorphAnimation> animations;
   if(morph) {
-    auto reader = Resources::getFileBuffer(resource);
-    zenkit::MorphMesh mesh;
-    mesh.load(reader.get());
-    source = asset::fromZenKit(mesh.mesh);
+    auto mesh = Resources::loadMorphData(resource);
+    source = std::move(mesh.mesh);
     animations = std::move(mesh.animations);
     }
   else

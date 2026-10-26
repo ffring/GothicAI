@@ -1,6 +1,5 @@
 #include "resources.h"
 #include "basestore.h"
-#include "asset/fromzenkit.h"
 #include "commandline.h"
 
 #include <Tempest/MemReader>
@@ -14,9 +13,7 @@
 #include <Tempest/Log>
 #include <Tempest/Color>
 
-#include <zenkit/ModelHierarchy.hh>
-#include <zenkit/Model.hh>
-#include <zenkit/ModelScript.hh>
+#include <zenkit/Archive.hh>
 #include "asset/material.h"
 #include "asset/worldtypes.h"
 #include <miniz.h>
@@ -55,6 +52,7 @@
 #include "contentcensus.h"
 #include "gltfmesh.h"
 #include "basemesh.h"
+#include "modeldata.h"
 #include "worldbase.h"
 #include "utils/string_frm.h"
 
@@ -244,6 +242,8 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
     inst->baseMeshes.validate(mounted);
     inst->baseZen.validate(mounted);
     inst->baseZen.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
+    inst->baseModels.validate(mounted);
+    inst->baseModels.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
     inst->baseProgress={};
     }
   catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
@@ -385,9 +385,9 @@ const char* Resources::renderer() {
 // side, to the arrow its animations hold high over the hand. Copies of the drawn string (S_READY) and of
 // its release (S_RELAX) where the middle goes square to the limbs, back as far, to the side only as far as
 // the arrow passes the bow; the limbs bend as they do. On a layer of their own: they blend with G2's
-static void straightenString(zenkit::MorphMesh& zmm) {
-  const zenkit::MorphAnimation* ready = nullptr;
-  const zenkit::MorphAnimation* relax = nullptr;
+static void straightenString(asset::MorphMesh& zmm) {
+  const asset::MorphAnimation* ready = nullptr;
+  const asset::MorphAnimation* relax = nullptr;
   int32_t                       layer = 0;
   for(auto& a:zmm.animations) {
     if(a.name=="S_READY")
@@ -446,7 +446,7 @@ static void straightenString(zenkit::MorphMesh& zmm) {
       middle[ready->vertices[k]] = w*w*(3.f-2.f*w);
     }
 
-  auto straight = [&](zenkit::MorphAnimation a, const char* name) {
+  auto straight = [&](asset::MorphAnimation a, const char* name) {
     a.name  = name;
     a.layer = layer+1;
     const size_t n = a.vertices.size();
@@ -632,12 +632,14 @@ void Resources::indexBaseContent() {
   baseTextures.load(root,"textures");
   baseMeshes.load(root,"meshes");
   baseZen.load(root,"zen");
+  baseModels.load(root,"models");
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {
   *this = {};
   const auto folder = root/kind;
-  const char* entries = std::string_view(kind)=="zen" ? "files" : kind;
+  const auto resourceKind = std::string_view(kind);
+  const char* entries = resourceKind=="zen" || resourceKind=="models" ? "files" : kind;
   std::ifstream file(folder/(std::string(kind)+".json"),std::ios::binary);
   if(!file)
     throw std::runtime_error("base index missing: "+(folder/(std::string(kind)+".json")).string());
@@ -649,6 +651,11 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
        !table.HasMember("archives") || !table["archives"].IsArray() ||
        !table.HasMember(entries) || !table[entries].IsObject())
       throw std::runtime_error("invalid index");
+    if(resourceKind=="models" &&
+       (!table.HasMember("format") || !table["format"].IsString() ||
+        std::string_view(table["format"].GetString(),table["format"].GetStringLength())!="gothic-models" ||
+        !table.HasMember("version") || !table["version"].IsUint() || table["version"].GetUint()!=1))
+      throw std::runtime_error("unsupported model index format or version");
     for(const auto& archive:table["archives"].GetArray()) {
       if(!archive.IsObject() || !archive.HasMember("name") || !archive["name"].IsString() ||
          !archive.HasMember("size") || !archive["size"].IsUint64())
@@ -656,7 +663,7 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
       archives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
       }
     std::sort(archives.begin(),archives.end());
-    if(std::string_view(kind)=="zen" && table.HasMember("loose_files")) {
+    if((resourceKind=="zen" || resourceKind=="models") && table.HasMember("loose_files")) {
       if(!table["loose_files"].IsArray())
         throw std::runtime_error("invalid loose file list");
       for(const auto& entry:table["loose_files"].GetArray()) {
@@ -1088,12 +1095,9 @@ bool Resources::replaceModelMesh(asset::ModelMesh& model, std::unique_ptr<Skelet
     if(skeleton==nullptr) {
       auto mdhName = std::string(meshFile);
       FileExt::assignExt(mdhName,"MDH");
-      const auto* entry = vdfsIndex().find(mdhName);
-      if(entry==nullptr)
+      asset::ModelHierarchy mdh {};
+      if(!loadHierarchyData(mdhName,mdh))
         throw std::runtime_error("model has no bind hierarchy");
-      zenkit::ModelHierarchy mdh;
-      auto reader = entry->open_read();
-      mdh.load(reader.get());
       paired.reset(new Skeleton(mdh,nullptr,visual));
       }
     const auto& sk = skeleton==nullptr ? *paired : *skeleton;
@@ -1191,19 +1195,13 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
   if(FileExt::hasExt(name,"MMS") || FileExt::hasExt(name,"MMB")) {
     FileExt::exchangeExt(name,"MMS","MMB");
 
-    const auto* entry = Resources::vdfsIndex().find(name);
-    if(entry == nullptr)
-      throw std::runtime_error("failed to open resource: " + name);
-
-    zenkit::MorphMesh zmm;
-    auto reader = entry->open_read();
-    zmm.load(reader.get());
+    auto zmm = loadMorphData(name);
 
     if(zmm.mesh.sub_meshes.empty())
       return nullptr;
     straightenString(zmm);
 
-    PackedMesh packed(asset::fromZenKit(zmm.mesh),PackedMesh::PK_VisualMorph);
+    PackedMesh packed(zmm.mesh,PackedMesh::PK_VisualMorph);
     std::unique_ptr<ProtoMesh> ret{new ProtoMesh(std::move(packed),zmm.animations,name)};
     // the vertex each morph moves the most, where it rests: the string's middle of a bow
     for(size_t i=0; i<ret->morph.size() && i<zmm.animations.size(); ++i) {
@@ -1241,44 +1239,30 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
       mdhName = name;
     FileExt::assignExt(mdhName,"MDH");
 
-    if(const auto* entryMdh = Resources::vdfsIndex().find(mdhName)) {
+    asset::ModelHierarchy hierarchy {};
+    if(loadHierarchyData(mdhName,hierarchy)) {
       // Find a MDH hirarchy file and separate mesh
-      zenkit::ModelHierarchy mdh;
-      auto reader = entryMdh->open_read();
-      mdh.load(reader.get());
-
-      std::unique_ptr<Skeleton> sk{new Skeleton(mdh,anim,name)};
+      std::unique_ptr<Skeleton> sk{new Skeleton(hierarchy,anim,name)};
       std::unique_ptr<ProtoMesh> t;
 
-      if(const auto* entry = Resources::vdfsIndex().find(mesh)) {
-        auto reader = entry->open_read();
-
-        zenkit::ModelMesh mdm {};
-        mdm.load(reader.get());
-        auto own = asset::fromZenKit(mdm);
+      asset::ModelMesh own {};
+      if(loadModelMeshData(mesh,own)) {
         const bool replaced = replaceModelMesh(own,sk,name,mesh);
         t.reset(new ProtoMesh(own,std::move(sk),name,replaced));
         }
       else
-        t.reset(new ProtoMesh(mdh,std::move(sk),name));
+        t.reset(new ProtoMesh(hierarchy,std::move(sk),name));
 
       return t;
       }
 
     // MDL files contain both the hirarchy and mesh, try to find one as a fallback
     FileExt::exchangeExt(mdhName,"MDH","MDL");
-    if(const auto* entryMdl = Resources::vdfsIndex().find(mdhName)) {
-      if(entryMdl==nullptr)
-        throw std::runtime_error("failed to open resource: " + mdhName);
-
-      zenkit::Model mdm;
-      auto reader = entryMdl->open_read();
-      mdm.load(reader.get());
-
-      std::unique_ptr<Skeleton> sk{new Skeleton(mdm.hierarchy,anim,name)};
-      auto own = asset::fromZenKit(mdm.mesh);
-      const bool replaced = replaceModelMesh(own,sk,name,mdhName);
-      std::unique_ptr<ProtoMesh> t{new ProtoMesh(mdm.hierarchy,own,std::move(sk),name,replaced)};
+    asset::Model model {};
+    if(loadModelData(mdhName,model)) {
+      std::unique_ptr<Skeleton> sk{new Skeleton(model.hierarchy,anim,name)};
+      const bool replaced = replaceModelMesh(model.mesh,sk,name,mdhName);
+      std::unique_ptr<ProtoMesh> t{new ProtoMesh(model.hierarchy,model.mesh,std::move(sk),name,replaced)};
       return t;
       }
     }
@@ -1286,39 +1270,24 @@ std::unique_ptr<ProtoMesh> Resources::implLoadMeshMain(std::string name) {
   if(FileExt::hasExt(name,"MDM") || FileExt::hasExt(name,"ASC")) {
     FileExt::exchangeExt(name,"ASC","MDM");
 
-    if(!hasFile(name))
+    asset::ModelMesh own {};
+    if(!loadModelMeshData(name,own))
       return nullptr;
-
-    const auto* entry = Resources::vdfsIndex().find(name);
-    if(entry == nullptr)
-      return nullptr;
-
-    zenkit::ModelMesh mdm;
-    auto reader = entry->open_read();
-    mdm.load(reader.get());
 
     std::unique_ptr<Skeleton> sk;
-    auto own = asset::fromZenKit(mdm);
     const bool replaced = replaceModelMesh(own,sk,name,name);
     std::unique_ptr<ProtoMesh> t{new ProtoMesh(own,std::move(sk),name,replaced)};
     return t;
     }
 
   if(FileExt::hasExt(name,"MDL")) {
-    if(!hasFile(name))
+    asset::Model model {};
+    if(!loadModelData(name,model))
       return nullptr;
 
-    const auto* entry = Resources::vdfsIndex().find(name);
-    if(entry == nullptr)
-      throw std::runtime_error("failed to open resource: " + name);
-    zenkit::Model mdm;
-    auto reader = entry->open_read();
-    mdm.load(reader.get());
-
-    std::unique_ptr<Skeleton> sk{new Skeleton(mdm.hierarchy,nullptr,name)};
-    auto own = asset::fromZenKit(mdm.mesh);
-    const bool replaced = replaceModelMesh(own,sk,name,name);
-    std::unique_ptr<ProtoMesh> t{new ProtoMesh(mdm.hierarchy,own,std::move(sk),name,replaced)};
+    std::unique_ptr<Skeleton> sk{new Skeleton(model.hierarchy,nullptr,name)};
+    const bool replaced = replaceModelMesh(model.mesh,sk,name,name);
+    std::unique_ptr<ProtoMesh> t{new ProtoMesh(model.hierarchy,model.mesh,std::move(sk),name,replaced)};
     return t;
     }
 
@@ -1353,17 +1322,10 @@ PfxEmitterMesh* Resources::implLoadEmiterMesh(std::string_view name) {
     }
 
   if(FileExt::hasExt(name,"MDM")) {
-    if(!hasFile(name))
+    asset::ModelMesh mesh {};
+    if(!loadModelMeshData(cname,mesh))
       return nullptr;
-
-    const auto* entry = Resources::vdfsIndex().find(cname);
-    if(entry == nullptr)
-      throw std::runtime_error("failed to open resource: " + cname);
-    zenkit::ModelMesh mdm;
-    auto reader = entry->open_read();
-    mdm.load(reader.get());
-
-    ret = std::unique_ptr<PfxEmitterMesh>(new PfxEmitterMesh(asset::fromZenKit(mdm)));
+    ret = std::unique_ptr<PfxEmitterMesh>(new PfxEmitterMesh(mesh));
     return ret.get();
     }
 
@@ -1420,15 +1382,11 @@ std::unique_ptr<Animation> Resources::implLoadAnimation(std::string name) {
   if(Gothic::inst().version().game==2)
     FileExt::exchangeExt(name,"MDS","MSB");
 
-  const auto* entry = Resources::vdfsIndex().find(name);
-  if(entry == nullptr)
-    return nullptr;
-
   if(FileExt::hasExt(name,"MSB") || FileExt::hasExt(name,"MDS")) {
-    zenkit::ModelScript mds;
-    auto reader = entry->open_read();
-    mds.load(reader.get());
-    return std::unique_ptr<Animation>{new Animation(mds,name.substr(0,name.size()-4),false)};
+    asset::ModelScript own {};
+    if(!loadModelScriptData(name,own))
+      return nullptr;
+    return std::unique_ptr<Animation>{new Animation(own,name.substr(0,name.size()-4),false)};
     }
 
   return nullptr;
@@ -1727,6 +1685,110 @@ const Animation* Resources::loadAnimation(std::string_view name) {
   auto ret     = t.get();
   cache[cname] = std::move(t);
   return ret;
+  }
+
+std::filesystem::path Resources::baseModelFile(std::string_view name) {
+  const auto separator = name.find_last_of("/\\");
+  std::string key(separator==std::string_view::npos ? name : name.substr(separator+1));
+  for(auto& c:key)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
+  const auto found = inst->baseModels.files.find(key);
+  if(found==inst->baseModels.files.end())
+    return {};
+  return inst->baseModels.dir/found->second;
+  }
+
+bool Resources::loadHierarchyData(std::string_view name, asset::ModelHierarchy& out) {
+  const auto file = baseModelFile(name);
+  if(file.empty())
+    return false;
+  try {
+    out = ModelData::readHierarchy(file);
+    }
+  catch(const std::exception& error) {
+    if(inst->census) inst->census->missing(name,error.what());
+    throw;
+    }
+  if(inst->census) inst->census->replaced(name,"base/models/"+file.filename().string());
+  return true;
+  }
+
+bool Resources::loadModelMeshData(std::string_view name, asset::ModelMesh& out) {
+  const auto file = baseModelFile(name);
+  if(file.empty())
+    return false;
+  try {
+    out = ModelData::readMesh(file);
+    }
+  catch(const std::exception& error) {
+    if(inst->census) inst->census->missing(name,error.what());
+    throw;
+    }
+  if(inst->census) inst->census->replaced(name,"base/models/"+file.filename().string());
+  return true;
+  }
+
+bool Resources::loadModelData(std::string_view name, asset::Model& out) {
+  const auto file = baseModelFile(name);
+  if(file.empty())
+    return false;
+  try {
+    out = ModelData::readModel(file);
+    }
+  catch(const std::exception& error) {
+    if(inst->census) inst->census->missing(name,error.what());
+    throw;
+    }
+  if(inst->census) inst->census->replaced(name,"base/models/"+file.filename().string());
+  return true;
+  }
+
+bool Resources::loadModelScriptData(std::string_view name, asset::ModelScript& out) {
+  const auto file = baseModelFile(name);
+  if(file.empty())
+    return false;
+  try {
+    out = ModelData::readScript(file);
+    }
+  catch(const std::exception& error) {
+    if(inst->census) inst->census->missing(name,error.what());
+    throw;
+    }
+  if(inst->census) inst->census->replaced(name,"base/models/"+file.filename().string());
+  return true;
+  }
+
+bool Resources::loadAnimationData(std::string_view name, asset::ModelAnimation& out) {
+  const auto file = baseModelFile(name);
+  if(file.empty())
+    return false;
+  try {
+    out = ModelData::readAnimation(file);
+    }
+  catch(const std::exception& error) {
+    if(inst->census) inst->census->missing(name,error.what());
+    throw;
+    }
+  if(inst->census) inst->census->replaced(name,"base/models/"+file.filename().string());
+  return true;
+  }
+
+asset::MorphMesh Resources::loadMorphData(std::string_view name) {
+  const auto file = baseModelFile(name);
+  if(file.empty()) {
+    if(inst->census) inst->census->missing(name,"missing from base index");
+    throw std::runtime_error("failed to open resource: " + std::string(name));
+    }
+  asset::MorphMesh out;
+  try {
+    out = ModelData::readMorph(file);
+    }
+  catch(const std::exception& error) {
+    if(inst->census) inst->census->missing(name,error.what());
+    throw;
+    }
+  if(inst->census) inst->census->replaced(name,"base/models/"+file.filename().string());
+  return out;
   }
 
 Tempest::Sound Resources::loadSoundBuffer(std::string_view name) {

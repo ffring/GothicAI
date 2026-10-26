@@ -1,3 +1,6 @@
+#include "asset/fromzenkit.h"
+#include "baseimport.h"
+#include "commandline.h"
 #include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
 #include "physics/ragdoll.h"
@@ -17,18 +20,24 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 
+#include <zenkit/ModelHierarchy.hh>
+#include <zenkit/ModelScript.hh>
+#include <zenkit/Stream.hh>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unistd.h>
 #include <vector>
 
 #if defined(__GNUC__)
@@ -110,7 +119,7 @@ float scaleVolume(const Tempest::Matrix4x4& matrix) {
   }
 
 zenkit::ModelHierarchy hierarchy() {
-  zenkit::ModelHierarchy source;
+  zenkit::ModelHierarchy source{};
   struct Bone { const char* name; int16_t parent; Tempest::Vec3 offset; };
   // A small human hierarchy with actual limb chains and a nonphysical root.
   const Bone bones[] = {
@@ -142,7 +151,7 @@ zenkit::ModelHierarchy hierarchy() {
   }
 
 struct Fixture final {
-  Skeleton skeleton{hierarchy(),nullptr,"HUMANS.MDS"};
+  Skeleton skeleton{asset::fromZenKit(hierarchy()),nullptr,"HUMANS.MDS"};
   HitZones zones;
 
   Fixture() { zones.setSkeleton(&skeleton); require(zones.isValid(),"synthetic hierarchy must have hit capsules"); }
@@ -263,7 +272,7 @@ void testKinematicPoseAndInteraction() {
     CollisionWorld world;
     const auto emptyCount=world.bodyCount();
     auto thinSource=hierarchy(); thinSource.nodes.resize(1);
-    Skeleton thin(thinSource,nullptr,"NO_PHYSICAL_BONES.MDS");
+    Skeleton thin(asset::fromZenKit(thinSource),nullptr,"NO_PHYSICAL_BONES.MDS");
     HitZones thinZones; thinZones.setSkeleton(&thin);
     require(!world.createKinematicBody(thin,thinZones,thin.tr.data(),thin.tr.size(),at(0,0,0)),
             "a skeleton without compatible physical owners must safely decline a live rig");
@@ -870,7 +879,7 @@ void testAnatomicalHipAndAnkle() {
 zenkit::ModelHierarchy insectHierarchy() {
   // A Bloodfly-like insect: its root is the thorax itself and carries six
   // legs, two wing pairs, pincers and a tail directly, with no pelvis bone.
-  zenkit::ModelHierarchy source;
+  zenkit::ModelHierarchy source{};
   auto add=[&](const char* name, int16_t parent, Tempest::Vec3 offset) {
     zenkit::ModelHierarchyNode node;
     node.name=name;
@@ -908,7 +917,7 @@ zenkit::ModelHierarchy insectHierarchy() {
 void testInsectRootBody() {
   // Without a thorax part, every limb hung off the first leg segment and the
   // corpse exploded into screen-sized triangles once it landed.
-  Skeleton skeleton{insectHierarchy(),nullptr,"Bloodfly.mds"};
+  Skeleton skeleton{asset::fromZenKit(insectHierarchy()),nullptr,"Bloodfly.mds"};
   HitZones zones;
   zones.setSkeleton(&skeleton);
   require(zones.isValid(),"insect fixture must have hit capsules");
@@ -976,7 +985,7 @@ struct WaterRagdollFixture final {
   HitZones zones;
 
   explicit WaterRagdollFixture(const char* name,bool quadruped=false)
-    :skeleton(quadruped ? wolfHierarchy() : hierarchy(),nullptr,name) {
+    :skeleton(asset::fromZenKit(quadruped ? wolfHierarchy() : hierarchy()),nullptr,name) {
     zones.setSkeleton(&skeleton);
     require(zones.isValid(),"water ragdoll fixture must have valid anatomical capsules");
     }
@@ -1521,7 +1530,7 @@ void replayCreation(const char* input) {
       for(const auto& value:array.GetArray()) require(value.IsNumber() && std::isfinite(value.GetDouble()),"creation replay vector must be finite");
       return Tempest::Vec3(float(array[0].GetDouble()),float(array[1].GetDouble()),float(array[2].GetDouble()));
       };
-    zenkit::ModelHierarchy source;
+    zenkit::ModelHierarchy source{};
     // Captured Skeleton::nodes already include root_translation on the root.
     // Adding it again would change the fixture instead of replaying the input.
     source.root_translation={0,0,0};
@@ -1537,7 +1546,7 @@ void replayCreation(const char* input) {
       std::memcpy(&output.transform,&local,sizeof(local));
       source.nodes.push_back(std::move(output)); worldPose.push_back(matrix(node["world"]));
       }
-    Skeleton skeleton(source,nullptr,capture["skeleton"].GetString());
+    Skeleton skeleton(asset::fromZenKit(source),nullptr,capture["skeleton"].GetString());
     for(size_t i=0;i<skeleton.tr.size();++i) {
       const auto expected=matrix(capture["nodes"][rapidjson::SizeType(i)]["bind"]);
       for(size_t c=0;c<16;++c)
@@ -1662,7 +1671,7 @@ void testAnatomicalKneeWithLongitudinalBoneAxis() {
   auto foot=at(-40,0,0); foot.rotateOZ(-90);
   std::memcpy(&source.nodes[13].transform,&calf,sizeof(calf));
   std::memcpy(&source.nodes[14].transform,&foot,sizeof(foot));
-  Skeleton skeleton(source,nullptr,"HUMANS_LONGITUDINAL_BIND.MDS");
+  Skeleton skeleton(asset::fromZenKit(source),nullptr,"HUMANS_LONGITUDINAL_BIND.MDS");
   HitZones zones; zones.setSkeleton(&skeleton);
   auto object=at(0,700,0); object.scale(.9f,1.f,1.f);
   for(const float degrees:{-30.f,30.f}) {
@@ -1734,7 +1743,7 @@ void testPoseOverlayAndRecovery() {
 
 void testRecoveryMatchesAnimBlendAndSaves() {
   constexpr size_t count=3;
-  zenkit::AnimationSample from[count],to[count],physical[count],ordinary[count];
+  asset::AnimationSample from[count],to[count],physical[count],ordinary[count];
   for(size_t i=0;i<count;++i) {
     from[i].rotation={1,0,0,0}; from[i].position={float(i*20),float(i*13),float(i*8)};
     to[i].rotation={std::cos(.3f*float(i+1)),std::sin(.3f*float(i+1)),0,0};
@@ -1762,7 +1771,7 @@ void testRecoveryMatchesAnimBlendAndSaves() {
   for(const uint64_t saveTick:{uint64_t(2000),uint64_t(2048)}) {
     AnimBlend before,after;
     before.reset(count); before.transitionFrom(from,count,2000);
-    zenkit::AnimationSample first[count],second[count];
+    asset::AnimationSample first[count],second[count];
     std::copy_n(from,count,first);
     if(saveTick>2000) before.apply(to,first,count,saveTick);
     std::vector<uint8_t> bytes;
@@ -1918,9 +1927,22 @@ void testMalformedRecoveryArchive() {
   }
 
 void testPoseActualDriverSave() {
-  // Real MAN readers, AnimationSolver name resolution, Pose layers and its legacy ZIP entry:
+  // Imported MAN data, AnimationSolver name resolution, Pose layers and its legacy ZIP entry:
   // an ordinary offset must already be active when the physical handoff takes ownership.
-  Resources resources;
+  auto pattern=(std::filesystem::temp_directory_path()/"gothic-pose-driver-XXXXXX").string();
+  const auto* directory=mkdtemp(pattern.data());
+  require(directory!=nullptr,"pose driver fixture directory must be created");
+  const std::filesystem::path root=directory;
+  const auto base=root/"base";
+  std::filesystem::create_directories(root/"Data");
+  std::filesystem::create_directories(root/"_work/Data/Scripts/_compiled");
+  {
+    const std::byte marker {1};
+    zenkit::Vfs vfs;
+    vfs.mount(zenkit::VfsNode::file("FIXTURE.BIN",{&marker,1,false}),"/");
+    auto archive=zenkit::Write::to(root/"Data/FIXTURE.VDF");
+    vfs.save(archive.get(),zenkit::GameVersion::GOTHIC_2);
+  }
   const auto source=hierarchy();
   const size_t count=source.nodes.size();
   zenkit::ModelScript script;
@@ -1959,19 +1981,37 @@ void testPoseActualDriverSave() {
     bytes.insert(bytes.end(),header.begin(),header.end());
     append(bytes,uint16_t(0xa090)); append(bytes,uint32_t(samples.size()));
     bytes.insert(bytes.end(),samples.begin(),samples.end());
-    auto* memory=new std::byte[bytes.size()];
-    std::memcpy(memory,bytes.data(),bytes.size());
     const std::string file=std::string("POSE_RETURN-")+names[kind]+".MAN";
-    auto& vfs=const_cast<zenkit::Vfs&>(Resources::vdfsIndex());
-    vfs.mount(zenkit::VfsNode::file(file,zenkit::VfsFileDescriptor(memory,bytes.size(),true)),"/");
+    std::ofstream output(root/"_work"/file,std::ios::binary);
+    output.write(reinterpret_cast<const char*>(bytes.data()),std::streamsize(bytes.size()));
+    require(bool(output),"synthetic MAN import input must be written");
     zenkit::MdsAnimation ani{};
     ani.name=names[kind]; ani.next=names[kind]; ani.layer=0;
     ani.direction=zenkit::AnimationDirection::FORWARD;
     ani.first_frame=0; ani.last_frame=31; ani.fps=60;
     script.animations.push_back(std::move(ani));
     }
-  Animation animation(script,"POSE_RETURN",false);
-  Skeleton skeleton(source,&animation,"POSE_RETURN.MDS");
+  require(BaseImport::convertModels(root,base/"models",false)==0,"pose driver models must import into the base");
+  require(BaseImport::convertTextures(root,base/"textures",false)==0,"pose driver texture index must import");
+  require(BaseImport::convertMeshes(root,base/"meshes",false)==0,"pose driver mesh index must import");
+  require(BaseImport::convertZen(root,base/"zen",false)==0,"pose driver ZEN index must import");
+  {
+    std::ofstream output(base/"base.json",std::ios::binary);
+    output<<BaseImport::identify(root).json;
+    require(bool(output),"pose driver base identity must be written");
+  }
+  const auto* oldBase=std::getenv("OPENGOTHIC_BASE");
+  const bool hadBase=oldBase!=nullptr;
+  const std::string previousBase=hadBase ? oldBase : "";
+  setenv("OPENGOTHIC_BASE",base.c_str(),1);
+  const auto game=root.string();
+  const char* args[]={"gothic-ragdoll-contract","-g",game.c_str()};
+  CommandLine commandLine(3,args);
+  Resources resources;
+  Resources::loadVdfs({},false);
+  auto ownScript=asset::fromZenKit(script);
+  Animation animation(ownScript,"POSE_RETURN",false);
+  Skeleton skeleton(asset::fromZenKit(source),&animation,"POSE_RETURN.MDS");
   AnimationSolver solver;
   solver.setSkeleton(&skeleton);
   const auto old=solver.solveFrm(names[0]);
@@ -2040,12 +2080,15 @@ void testPoseActualDriverSave() {
              "loaded and uninterrupted poses must agree on the next ordinary transition");
       }
     }
+  if(hadBase) setenv("OPENGOTHIC_BASE",previousBase.c_str(),1);
+  else unsetenv("OPENGOTHIC_BASE");
+  std::filesystem::remove_all(root);
   }
 
 void testPoseAffineRecoveryAndSaves() {
   {
     // Stretch can be the only offset: its clock must survive even when all rigid curves are idle.
-    zenkit::AnimationSample still;
+    asset::AnimationSample still;
     still.rotation={1,0,0,0}; still.position={0,0,0};
     auto shown=still;
     AnimBlend clock;
@@ -2064,7 +2107,7 @@ void testPoseAffineRecoveryAndSaves() {
     local.rotateOY(b==1 ? 35.f : -27.f);
     std::memcpy(&source.nodes[b].transform,&local,sizeof(local));
     }
-  Skeleton skeleton(source,nullptr,"AFFINE_HUMAN.MDS");
+  Skeleton skeleton(asset::fromZenKit(source),nullptr,"AFFINE_HUMAN.MDS");
   AnimationSolver solver;
   solver.setSkeleton(&skeleton);
   auto object=at(120,-30,90); object.rotateOY(29); object.scale(.9f,1.f,1.f);
@@ -2145,7 +2188,7 @@ void testPhysicalVelocityHandoff() {
   {
     // Compare a moving physical source and moving target against the existing ordinary switch.
     // Neither side's velocity may silently become zero at the handoff.
-    zenkit::AnimationSample previous,current,target,next,shown,ordinary;
+    asset::AnimationSample previous,current,target,next,shown,ordinary;
     previous.position={19.97f,0,0}; previous.rotation={1,0,0,0};
     current=previous; current.position.x=20.f;
     target=previous; target.position.x=0.f;
@@ -2184,20 +2227,20 @@ void testPhysicalVelocityHandoff() {
         }
       }
     }
-  zenkit::ModelHierarchy source;
+  zenkit::ModelHierarchy source{};
   zenkit::ModelHierarchyNode node;
   node.name="BIP01"; node.parent_index=-1;
   const auto identity=Tempest::Matrix4x4::mkIdentity();
   std::memcpy(&node.transform,&identity,sizeof(identity)); source.nodes.push_back(node);
   source.bbox.min={-1,-1,-1}; source.bbox.max={1,1,1}; source.collision_bbox=source.bbox;
-  Skeleton skeleton(source,nullptr,"VELOCITY.MDS");
+  Skeleton skeleton(asset::fromZenKit(source),nullptr,"VELOCITY.MDS");
   AnimationSolver solver; solver.setSkeleton(&skeleton);
   Animation::Sequence target;
   target.name="moving-root-target"; target.animCls=Animation::Loop;
   target.data=std::make_shared<Animation::AnimData>();
   target.data->numFrames=32; target.data->fpsRate=10.f; target.data->nodeIndex={0};
   for(int i=0;i<32;++i) {
-    zenkit::AnimationSample sample;
+    asset::AnimationSample sample;
     sample.rotation={1,0,0,0}; sample.position={float(i)*10.f,float(i)*.6f,0};
     target.data->samples.push_back(sample);
     }
@@ -2276,7 +2319,7 @@ void testOriginReplayCopy(Pose& pose) {
 
 void testOriginReplayHierarchySeed() {
   for(const bool unordered:{false,true}) {
-    zenkit::ModelHierarchy source;
+    zenkit::ModelHierarchy source{};
     const int16_t parentsOrdered[]={-1,0,1,2,1,4};
     const int16_t parentsUnordered[]={1,-1,0,2,1,4};
     for(int16_t i=0;i<6;++i) {
@@ -2286,7 +2329,7 @@ void testOriginReplayHierarchySeed() {
       std::memcpy(&node.transform,&local,sizeof(local)); source.nodes.push_back(node);
       }
     source.bbox.min={-30,0,-30}; source.bbox.max={30,80,30}; source.collision_bbox=source.bbox;
-    Skeleton skeleton(source,nullptr,unordered ? "REPLAY_UNORDERED.MDS" : "REPLAY_FULL_SEED.MDS");
+    Skeleton skeleton(asset::fromZenKit(source),nullptr,unordered ? "REPLAY_UNORDERED.MDS" : "REPLAY_FULL_SEED.MDS");
     require(skeleton.ordered!=unordered,"origin fixture must exercise the selected hierarchy branch");
     Pose pose; pose.setSkeleton(&skeleton);
     auto object=at(23446.3984375f,1122.7470703125f,-10364.30859375f); object.rotateOY(74); object.scale(.9f,1.f,1.f);
@@ -2338,7 +2381,7 @@ void testPoseFarWorldAttachments() {
     std::memcpy(&node.transform,&local,sizeof(local)); source.nodes.push_back(node);
     return source.nodes.size()-1;
     };
-  const zenkit::AnimationSample actualRoot{{67.9932175f,11.873786f,90.8665161f},
+  const asset::AnimationSample actualRoot{{67.9932175f,11.873786f,90.8665161f},
                                          {.694189906f,-.213284492f,.381034523f,.572208703f}};
   const auto rootFrame=mkMatrix(actualRoot);
   std::memcpy(&source.nodes[0].transform,&rootFrame,sizeof(rootFrame));
@@ -2348,7 +2391,7 @@ void testPoseFarWorldAttachments() {
   const auto rightSlot=add("ZS_RIGHTHAND",11,arrow);
   const auto leftSlot=add("ZS_LEFTHAND",8,at(0,1,0));
   const auto unkeyed=add("UNKEYED_FOOT_ATTACHMENT",14,at(3,7,5));
-  Skeleton skeleton(source,nullptr,"FAR_WORLD.MDS");
+  Skeleton skeleton(asset::fromZenKit(source),nullptr,"FAR_WORLD.MDS");
   AnimationSolver solver; solver.setSkeleton(&skeleton);
   Animation::Sequence stance,steps;
   for(auto* sequence:{&stance,&steps}) {
@@ -2359,7 +2402,7 @@ void testPoseFarWorldAttachments() {
     for(size_t frame=0;frame<data.numFrames;++frame)
       for(auto b:data.nodeIndex) {
         const auto local=skeleton.nodes[b].tr;
-        zenkit::AnimationSample sample;
+        asset::AnimationSample sample;
         const auto q=IkMath::toQuat(IkMath::transpose(IkMath::rotationOf(local)));
         sample.rotation={q.w,q.x,q.y,q.z};
         sample.position={local.at(3,0),local.at(3,1),local.at(3,2)};
@@ -2525,7 +2568,7 @@ void testPoseFarWorldAttachments() {
   }
 
 void testFiniteRecoveryHierarchy() {
-  zenkit::ModelHierarchy source;
+  zenkit::ModelHierarchy source{};
   const auto identity=Tempest::Matrix4x4::mkIdentity();
   constexpr uint32_t count=8;
   for(uint32_t b=0;b<count;++b) {
@@ -2534,7 +2577,7 @@ void testFiniteRecoveryHierarchy() {
     std::memcpy(&node.transform,&identity,sizeof(identity)); source.nodes.push_back(node);
     }
   source.bbox.min={-1,-1,-1}; source.bbox.max={1,1,1}; source.collision_bbox=source.bbox;
-  Skeleton skeleton(source,nullptr,"FINITE_LOCALS.MDS");
+  Skeleton skeleton(asset::fromZenKit(source),nullptr,"FINITE_LOCALS.MDS");
   Pose pose; pose.setSkeleton(&skeleton); pose.setObjectMatrix(identity,true); pose.update(1000,true);
   const auto ordinary=std::vector<Tempest::Matrix4x4>(pose.transform(),pose.transform()+pose.boneCount());
   const AnimBlend::Sample unit{{0,0,0},{1,0,0,0}}, unused{{0,0,0},{0,0,0,0}};

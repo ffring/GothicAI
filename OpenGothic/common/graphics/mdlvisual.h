@@ -2,6 +2,8 @@
 
 #include <Tempest/Matrix4x4>
 
+#include "asset/modeltypes.h"
+
 #include "graphics/mesh/animationsolver.h"
 #include "graphics/mesh/hitzones.h"
 #include "graphics/mesh/flinch.h"
@@ -64,7 +66,7 @@ class MdlVisual final {
     void                           setSlotItem   (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           setStateItem  (MeshObjects::Mesh&& itm,  std::string_view bone);
     void                           clearSlotItem (std::string_view bone);
-    bool                           setFightMode  (zenkit::MdsFightMode mode);
+    bool                           setFightMode  (asset::MdsFightMode mode);
     void                           dropWeapon    (Npc& owner);
     void                           dropShield    (Npc& owner);
 

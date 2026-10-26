@@ -8,6 +8,7 @@
 
 #include <zenkit/Vfs.hh>
 #include "asset/staticmesh.h"
+#include "asset/modeltypes.h"
 #include "basestore.h"
 #include "asset/worldtypes.h"
 
@@ -152,6 +153,8 @@ class Resources final {
     static const PfxEmitterMesh*     loadEmiterMesh (std::string_view name);
     static const Skeleton*           loadSkeleton   (std::string_view name);
     static const Animation*          loadAnimation  (std::string_view name);
+    static bool                      loadAnimationData(std::string_view name, asset::ModelAnimation& out);
+    static asset::MorphMesh           loadMorphData(std::string_view name);
     static Tempest::Sound            loadSoundBuffer(std::string_view name);
 
     static Dx8::PatternList          loadDxMusic(std::string_view name);
@@ -221,12 +224,17 @@ class Resources final {
       void validate(const std::vector<std::pair<std::string,uintmax_t>>& mounted);
       void validateLoose(const std::filesystem::path& game);
       };
-    BaseIndex baseTextures, baseMeshes, baseZen;
+    BaseIndex baseTextures, baseMeshes, baseZen, baseModels;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     BaseStore::Selection automaticBase;
     BaseImport::Progress baseProgress;
     static std::filesystem::path baseDir();
     void indexBaseContent();
+    static std::filesystem::path baseModelFile(std::string_view name);
+    static bool loadHierarchyData(std::string_view name, asset::ModelHierarchy& out);
+    static bool loadModelMeshData(std::string_view name, asset::ModelMesh& out);
+    static bool loadModelData(std::string_view name, asset::Model& out);
+    static bool loadModelScriptData(std::string_view name, asset::ModelScript& out);
 
     struct TextureData {
       Tempest::Pixmap pixmap;

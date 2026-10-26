@@ -58,8 +58,8 @@ IkMath::Mat3 polarRotation(const Matrix4x4& matrix) {
   return result;
   }
 
-zenkit::AnimationSample physicalSample(const Matrix4x4& local) {
-  zenkit::AnimationSample out;
+asset::AnimationSample physicalSample(const Matrix4x4& local) {
+  asset::AnimationSample out;
   const auto p = IkMath::position(local);
   // MAN samples use the conjugate of the conventional column-vector rotation: mkMatrix writes
   // their rotation transposed. Use the existing post-pass conversion, then undo that convention.
@@ -70,7 +70,7 @@ zenkit::AnimationSample physicalSample(const Matrix4x4& local) {
   return out;
   }
 
-Matrix4x4 physicalStretch(const Matrix4x4& local, const zenkit::AnimationSample& sample) {
+Matrix4x4 physicalStretch(const Matrix4x4& local, const asset::AnimationSample& sample) {
   const auto rigid=mkMatrix(sample);
   double h[3][3] = {};
   for(int c=0;c<3;++c)
@@ -643,7 +643,7 @@ void Pose::clearRagdollPose(bool blendFromPhysical, uint64_t tickCount) {
       physicalStretchFrom[i] = physicalStretch(local,physicalShown[i]);
       }
     physicalBlend.reset(numBones);
-    std::vector<zenkit::AnimationSample> previous;
+    std::vector<asset::AnimationSample> previous;
     uint64_t previousTime=0;
     if(physicalPreviousWorld.size()==numBones && physicalCurrentTime>physicalPreviousTime &&
        physicalCurrentTime-physicalPreviousTime<=250 && tickCount>=physicalCurrentTime-physicalPreviousTime) {
