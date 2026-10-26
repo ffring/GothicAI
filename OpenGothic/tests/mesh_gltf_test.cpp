@@ -7,12 +7,16 @@
 #include "graphics/mesh/submesh/pfxemittermesh.h"
 #include "physics/fracture.h"
 #include "resources.h"
+#include "asset/fromzenkit.h"
+#include "baseimport.h"
+#include "basemesh.h"
 
 #include <Tempest/Device>
 #include <Tempest/Log>
 #include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
 #include <zenkit/Model.hh>
+#include <zenkit/Vfs.hh>
 #include <miniz.h>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
@@ -21,6 +25,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -294,12 +299,21 @@ struct Fixture {
       throw std::runtime_error("unable to create mesh fixture directory");
     root = directory;
     std::filesystem::create_directories(root/"meshes/test");
-    std::filesystem::create_directories(root/"_work");
+    std::filesystem::create_directories(root/"Data");
+    std::filesystem::create_directories(root/"_work/Data/Scripts/_compiled");
     originalFile(root/"_work/OWN_MESH.MRM");
     glbFile(root/"meshes/test/own.glb");
     setenv("OPENGOTHIC_CONTENT",root.c_str(),1);
     setenv("OPENGOTHIC_TEXTURES","",1);
     setenv("OPENGOTHIC_CENSUS",(root/"census.json").c_str(),1);
+    setenv("OPENGOTHIC_BASE",(root/"base").c_str(),1);
+    // The public importer requires an installation archive. Keep originals
+    // loose so the no-source-mount case still has no original MRM in its VFS.
+    const std::byte marker {1};
+    zenkit::Vfs vfs;
+    vfs.mount(zenkit::VfsNode::file("FIXTURE.BIN",{&marker,1,false}),"/");
+    auto archive=zenkit::Write::to(root/"Data/FIXTURE.VDF");
+    vfs.save(archive.get(),zenkit::GameVersion::GOTHIC_2);
     }
   ~Fixture() {
     std::error_code error;
@@ -315,6 +329,35 @@ struct Fixture {
     json.String(path.data(),rapidjson::SizeType(path.size()));
     json.EndObject(); json.EndObject();
     index(std::string_view(buffer.GetString(),buffer.GetSize()));
+    }
+  void mount(bool mountOriginal = true) const {
+    const auto base=root/"base";
+    for(const auto* kind:{"meshes","textures","zen","models"})
+      std::filesystem::create_directories(base/kind);
+    const auto archives="[{\"name\":\"FIXTURE.VDF\",\"size\":"+
+                        std::to_string(std::filesystem::file_size(root/"Data/FIXTURE.VDF"))+"}]";
+    std::string meshes="{\"format\":\"gothic-meshes\",\"version\":1,\"archives\":"+archives+",\"meshes\":{";
+    bool first=true;
+    for(const auto& file:std::filesystem::directory_iterator(root/"_work")) {
+      if(!file.is_regular_file() || file.path().extension()!=".MRM")
+        continue;
+      auto reader=zenkit::Read::from(file.path());
+      zenkit::MultiResolutionMesh source {};
+      source.load(reader.get());
+      auto name=file.path().stem().string();
+      for(auto& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
+      writeBaseMesh(asset::fromZenKit(source),name,base/"meshes"/(name+".glb"));
+      meshes+=std::string(first ? "" : ",")+"\""+name+"\":\""+name+".glb\"";
+      first=false;
+      }
+    textFile(base/"meshes/meshes.json",meshes+"}}");
+    textFile(base/"textures/textures.json","{\"format\":\"gothic-textures\",\"version\":1,\"archives\":"+archives+",\"textures\":{}}");
+    textFile(base/"zen/zen.json","{\"format\":1,\"archives\":"+archives+",\"loose_files\":[],\"files\":{}}");
+    require(BaseImport::convertModels(root,base/"models",false)==0,"synthetic models must import into their own base");
+    textFile(base/"base.json",BaseImport::identify(root).json);
+    if(mountOriginal)
+      Resources::mountWork(root/"_work");
+    Resources::loadVdfs({},false);
     }
   rapidjson::Document census() const {
     require(Resources::writeCensus(),"mesh census must be writable");
@@ -333,6 +376,7 @@ void checkCensus(const Fixture& fixture, bool own, uint64_t expectedOpens) {
   const auto document = fixture.census();
   uint64_t originalOpens = 0;
   uint64_t replacementOpens = 0;
+  uint64_t baseOpens = 0;
   for(const auto& item:document["files"].GetArray()) {
     if(std::string_view(item["name"].GetString())=="OWN_MESH.MRM") {
       require(std::string_view(item["kind"].GetString())=="mesh","original MRM census kind must be mesh");
@@ -341,12 +385,21 @@ void checkCensus(const Fixture& fixture, bool own, uint64_t expectedOpens) {
     }
   for(const auto& item:document["replacements"].GetArray()) {
     require(std::string_view(item["name"].GetString())=="OWN_MESH.MRM","mesh census must use the original visual name");
-    require(std::string_view(item["kind"].GetString())=="mesh","replacement census kind must be mesh");
-    require(std::string_view(item["replacement"].GetString())=="meshes/test/own.glb",
-            "replacement census must use its content-relative mesh path");
-    replacementOpens += item["opens"].GetUint64();
+    const auto kind=std::string_view(item["kind"].GetString());
+    if(kind=="basemesh") {
+      require(std::string_view(item["replacement"].GetString())=="base/meshes/OWN_MESH.glb",
+              "base census must name the converted original mesh");
+      baseOpens += item["opens"].GetUint64();
+      }
+    else {
+      require(kind=="mesh","content replacement census kind must be mesh");
+      require(std::string_view(item["replacement"].GetString())=="meshes/test/own.glb",
+              "replacement census must use its content-relative mesh path");
+      replacementOpens += item["opens"].GetUint64();
+      }
     }
-  require(originalOpens==(own ? 0 : expectedOpens),"only fallback may open the original MRM");
+  require(originalOpens==0,"runtime geometry must never open the original MRM");
+  require(baseOpens==(own ? 0 : expectedOpens),"fallback must use the original geometry from the base");
   require(replacementOpens==(own ? expectedOpens : 0),"only successful GLB loads may count as replacements");
   }
 
@@ -505,26 +558,36 @@ std::array<Tempest::Vec3,3> modelGlbPoints(bool twoAttachments, size_t node) {
 
 void modelCensus(const Fixture& fixture, std::string_view file, bool replaced, bool hierarchyOpened) {
   const auto document = fixture.census();
-  bool original = false,mdh = false;
+  uint64_t originalOpens = 0;
   for(const auto& item:document["files"].GetArray()) {
-    if(std::string_view(item["name"].GetString())==file) {
-      original = item["opens"].GetUint64()==1;
-      require(std::string_view(item["kind"].GetString())=="model","opened original model must retain its census kind");
-      }
-    if(std::string_view(item["name"].GetString())=="OWN_MODEL.MDH")
-      mdh = item["opens"].GetUint64()==1;
+    const auto name=std::string_view(item["name"].GetString());
+    const auto ext=std::filesystem::path(name).extension();
+    if(ext==".MRM" || ext==".MDH" || ext==".MDM" || ext==".MDL")
+      originalOpens+=item["opens"].GetUint64();
     }
-  require(original,"model replacement must still open the original model for its hierarchy or attachment names");
-  require(mdh==hierarchyOpened,"MDH must be recorded when its hierarchy was opened");
+  require(originalOpens==0,"model replacement must read hierarchy and attachment names from the base");
+  bool baseModel = false,baseHierarchy = false;
   size_t meshReplacements = 0;
   for(const auto& item:document["replacements"].GetArray()) {
-    if(std::string_view(item["kind"].GetString())!="mesh")
+    const auto kind=std::string_view(item["kind"].GetString());
+    const auto name=std::string_view(item["name"].GetString());
+    if(kind=="basemodel") {
+      require(item["opens"].GetUint64()==1,"each selected model record must be loaded once");
+      require(std::string_view(item["replacement"].GetString())=="base/models/"+std::string(name)+".json",
+              "model base census must name the converted source record");
+      if(name==file) baseModel=true;
+      if(name=="OWN_MODEL.MDH") baseHierarchy=true;
+      continue;
+      }
+    if(kind!="mesh")
       continue; // GPU fixtures also replace the named material's albedo.
     ++meshReplacements;
     require(std::string_view(item["name"].GetString())==file && item["opens"].GetUint64()==1 &&
             std::string_view(item["replacement"].GetString())=="meshes/test/own.glb",
             "model replacement census must name the MDL or MDM mesh file and content-relative GLB");
     }
+  require(baseModel,"model geometry and hierarchy must load from the selected base record");
+  require(baseHierarchy==hierarchyOpened,"paired MDH must load from the base only when needed for replacement");
   require(meshReplacements==(replaced ? 1u : 0u),"only successful model replacement may enter census once");
   }
 
@@ -532,7 +595,7 @@ void modelGeometry(const ProtoMesh& proto, const zenkit::ModelHierarchy& hierarc
                    bool own, const ModelOptions& options = {}, bool skeletonExpected = true) {
   require(proto.attach.size()==(options.twoAttachments ? 2u : 1u),"model must retain its attachment count");
   require(proto.skined.size()==(options.softSkin ? 1u : 0u),"model must retain its original soft skins on fallback");
-  const Skeleton expected(hierarchy,nullptr,"OWN_MODEL.MDL");
+  const Skeleton expected(asset::fromZenKit(hierarchy),nullptr,"OWN_MODEL.MDL");
   require((proto.skeleton!=nullptr)==skeletonExpected,"model must retain its original hierarchy-loading behavior");
   if(skeletonExpected) {
     require(proto.nodes.size()==expected.nodes.size() && proto.skeleton->nodes.size()==expected.nodes.size(),
@@ -606,7 +669,7 @@ void modelCases(const Fixture& fixture) {
   const auto load = [&](std::string_view visual, std::string_view file, bool own,
                         const ModelOptions& options = {}, bool skeletonExpected = true) {
     Resources resources;
-    Resources::mountWork(fixture.root/"_work");
+    fixture.mount();
     const auto* proto = Resources::loadMesh(visual);
     require(proto!=nullptr,"synthetic MOB model must load through real Resources");
     modelGeometry(*proto,hierarchy,own,options,skeletonExpected);
@@ -699,7 +762,7 @@ void modelGpuGeometry(const Fixture& fixture, Tempest::Device& device, std::stri
   require(proto!=nullptr && proto->attach.size()==(multi ? 2u : 1u) && proto->nodes.size()==hierarchy.nodes.size(),
           "GPU model replacement must retain its original hierarchy and attachment");
   const auto source = multi ? asset::StaticMesh{} : loadGltfMesh(glb);
-  const Skeleton expected(hierarchy,nullptr,visual);
+  const Skeleton expected(asset::fromZenKit(hierarchy),nullptr,visual);
   for(size_t attachId=0;attachId<proto->attach.size();++attachId) {
     const auto& attachment = proto->attach[attachId];
     const size_t node = expected.findNode(attachment.name);
@@ -786,7 +849,7 @@ void multiModelGpuCases(const Fixture& fixture, Tempest::Device& device) {
       Resources resources(device);
       Shaders shaders;
       shaders.waitCompiler();
-      Resources::mountWork(fixture.root/"_work");
+      fixture.mount();
       const auto* proto = Resources::loadMesh(visual);
       require(proto!=nullptr,"multi-attachment GPU model must load through real Resources");
       modelGeometry(*proto,hierarchy,true,options);
@@ -798,8 +861,10 @@ void multiModelGpuCases(const Fixture& fixture, Tempest::Device& device) {
 
 void resourcePaths(const Fixture& fixture, bool own, bool mountOriginal = true) {
   Resources resources;
-  if(mountOriginal)
-    Resources::mountWork(fixture.root/"_work");
+  fixture.mount(mountOriginal);
+  if(!mountOriginal)
+    require(Resources::vdfsIndex().find("OWN_MESH.MRM")==nullptr,
+            "content replacement must work without its original mesh in the source VFS");
   const auto* proto = Resources::loadMesh("own_mesh.3ds");
   require(proto!=nullptr,"visual mesh must load");
   const auto* bounds = proto->bbox();
@@ -958,6 +1023,7 @@ void converterCases(const Fixture& fixture) {
   require(mesh.sub_meshes.size()==2,"OPAQUE and MASK surfaces must remain separate");
   require(mesh.sub_meshes[1].mat.group==asset::MaterialGroup::UNDEFINED,"missing group must default to UNDEF");
   Resources resources;
+  fixture.mount();
   PackedMesh packed(mesh,PackedMesh::PK_Visual,true);
   ProtoMesh proto(std::move(packed),"MIXED.MRM");
   require(proto.attach[0].sub.size()==2,"mixed alpha fixture must produce both surfaces");
@@ -1106,7 +1172,7 @@ void fractureCache(const Fixture& fixture) {
   const auto expectFracture = [&](bool own, bool ownPieces = false) {
     Resources resources;
     require(!Resources::meshReplacementLoaded("own_mesh.3ds"),"an index entry alone must not count as a loaded replacement");
-    Resources::mountWork(fixture.root/"_work");
+    fixture.mount();
     // DynamicWorld::addMovableVob receives an already loaded ProtoMesh before
     // asking for its fracture cache, including when restoring saved destruction.
     const auto* proto = Resources::loadMesh("own_mesh.3ds");
@@ -1183,6 +1249,7 @@ void fractureCache(const Fixture& fixture) {
   fractureFile(sidecar,2,bytes.size(),crc);
   {
     Resources resources;
+    fixture.mount();
     const auto loaded = Resources::loadVisualMesh("OWN_MESH.MRM");
     require(!loaded.positions.empty(),"identity fixture must load its replacement");
     // A sidecar must match the bytes already parsed by the engine, even when
@@ -1290,7 +1357,7 @@ void maskBc1Policy(const Fixture& fixture) {
     Resources resources(device);
     Shaders shaders;
     shaders.waitCompiler();
-    Resources::mountWork(fixture.root/"_work");
+    fixture.mount();
     const auto* masked = Resources::loadMesh("OWN_MESH.3DS");
     require(masked!=nullptr && masked->attach.size()==1 && masked->attach[0].sub.size()==1,
             "MASK BC1 fixture must load through the ordinary ProtoMesh path");
@@ -1357,8 +1424,10 @@ void maskBc1Policy(const Fixture& fixture) {
 
 int main() {
   try {
-    CommandLine commandLine(0,nullptr);
     Fixture fixture;
+    const auto root=fixture.root.string();
+    const char* args[]={"gothic-mesh-gltf-test","-g",root.c_str()};
+    CommandLine commandLine(3,args);
     fixture.index();
     resourcePaths(fixture,true);
     resourcePaths(fixture,true,false);

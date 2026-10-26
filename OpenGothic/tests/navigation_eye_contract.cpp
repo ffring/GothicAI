@@ -1,3 +1,4 @@
+#include "asset/fromzenkit.h"
 #include "game/navigationeye.h"
 #include "physics/collisionworld.h"
 #include "physics/dynamicworld.h"
@@ -6,6 +7,8 @@
 #include "graphics/mesh/hitzones.h"
 #include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/submesh/packedmesh.h"
+
+#include <zenkit/ModelHierarchy.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -221,7 +224,7 @@ void staticAndMovingVobs() {
   }
 
 zenkit::ModelHierarchy humanoidHierarchy() {
-  zenkit::ModelHierarchy source;
+  zenkit::ModelHierarchy source{};
   struct Bone { const char* name; int16_t parent; Vec3 offset; };
   const Bone bones[] = {
     {"BIP01",-1,{0,0,0}}, {"BIP01 PELVIS",0,{0,95,0}},
@@ -253,7 +256,7 @@ zenkit::ModelHierarchy humanoidHierarchy() {
 
 void livingRigQuerySemantics() {
   constexpr size_t forearm = 7;
-  Skeleton skeleton(humanoidHierarchy(),nullptr,"HUMANS.MDS");
+  Skeleton skeleton(asset::fromZenKit(humanoidHierarchy()),nullptr,"HUMANS.MDS");
   HitZones zones;
   zones.setSkeleton(&skeleton);
   require(zones.isValid(),"humanoid fixture needs real physical hit capsules");
