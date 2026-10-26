@@ -177,6 +177,12 @@ async def test_opportunity_uses_conversational_model_once_and_sets_native_outcom
     assert fact["status"] == "pending" and fact["until"] == 4320
     assert any(op == {"do": "calm", "attitude": "ATT_FRIENDLY"}
                for row in rig.fake.story for op in row.get("effects", []))
+    conv = rig.dialogue.conversations[NPC]
+    assert conv.intent.attitude == "wary"
+    assert rig.memory.intent(conv.branch, NPC) == conv.intent.to_json()
+    assert "отношение к герою — настороженное" in conv.intent.describe()
+    situation, _, _ = await rig.dialogue._situation(conv, None)
+    assert f"Твоё намерение: {conv.intent.describe()}" in situation
     [trigger] = [op for row in rig.fake.graph for op in row["ops"] if op.get("steps")]
     assert [s["target"][-1] for s in trigger["steps"]] == [1, 2, 3]
     assert [s["value"] for s in trigger["steps"]] == [["var", "FIGHT_LOST"], ["int", 0], ["int", 1]]

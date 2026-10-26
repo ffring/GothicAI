@@ -564,10 +564,10 @@ class Mercy:
             return ToolOutcome(
                 f"Отклонено: игра не подтвердила исход сдачи ({type(error).__name__}: {error}).", "rejected",
             )
-        # C_NpcIsBotheredByWeapon ignores FIGHT_LOST, but respects ATT_FRIENDLY.
-        intent = Intent(attitude="friendly")
+        intent = Intent(attitude="wary")
         dialogue._change_intent(conv, intent, snap, body=False)
-        _, ok = await dialogue._calm(conv, intent)
+        # C_NpcIsBotheredByWeapon needs native ATT_FRIENDLY, not a friendly saved intent.
+        _, ok = await dialogue._calm(conv, intent, native_attitude="ATT_FRIENDLY")
         if not ok:
             return ToolOutcome("Отклонено: тело не смогло прекратить бой.", "rejected")
         self.chronicle.record({
