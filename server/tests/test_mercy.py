@@ -335,9 +335,9 @@ def test_no_mercy_flag(monkeypatch):
         assert exit.value.code == 0 and seen[-1] is expected
 
 
-async def hero_yields(rig, take, *, text=""):
+async def hero_yields(rig, take, *, text="", words="Ладно, живи. Я заберу своё."):
     rig.llm.script = [FakeStep(text, tool_calls=[ToolCall("accept_surrender", {
-        "take": take, "words": "Ладно, живи. Я заберу своё.", "humiliate": False,
+        "take": take, "words": words, "humiliate": False,
     })]), FakeStep()]
     rig.dialogue.open(NPC, "Лобарт", warm=False)
     await rig.dialogue.say_as_player(NPC, "Сдаюсь, забирай золото, только не бей", overlay=True)
@@ -345,11 +345,15 @@ async def hero_yields(rig, take, *, text=""):
     return next((item.output for item in rig.llm.calls[-1][1] if isinstance(item, ToolResult)), "")
 
 
-@pytest.mark.parametrize("text", ["", "Ладно, живи. Я заберу своё."])
-async def test_accept_surrender_says_words_once_with_or_without_turn_text(rig, text):
-    await hero_yields(rig, [], text=text)
+@pytest.mark.parametrize(("text", "quick"), [
+    ("", False), ("Ладно, живи", False), ("This conversational text stays silent.", True),
+])
+async def test_accept_surrender_words_only_skip_spoken_conversational_text(rig, text, quick):
+    if quick:
+        rig.dialogue.quick = FakeBackend("Сдохни!", delay=0)
+    await hero_yields(rig, [], text=text, words="Ладно, живи")
     assert len(rig.chronicle.facts("hero_yield")) == 1
-    assert " ".join(rig.fake.said) == "Ладно, живи. Я заберу своё."
+    assert rig.fake.said == (["Сдохни!"] if quick else []) + ["Ладно, живи"]
 
 
 @pytest.mark.parametrize("state", ["fighting", "native_only", "no_fight", "other_target",
@@ -409,7 +413,11 @@ async def test_hero_ransom_transfers_real_items_calm_and_native_victory(rig, tak
         assert rig.fake.npc_items[NPC][item] == amount
         assert item in output and str(amount) in output
     assert FRIEND not in rig.orders.fights
-    assert any(op.get("do") == "calm" for row in rig.fake.story for op in row.get("effects", []))
+    assert any(op == {"do": "calm", "attitude": "ATT_FRIENDLY"}
+               for row in rig.fake.story for op in row.get("effects", []))
+    conv = rig.dialogue.conversations[NPC]
+    assert conv.intent.attitude == "wary"
+    assert rig.memory.intent(conv.branch, NPC) == conv.intent.to_json()
     [trigger] = [op for row in rig.fake.graph for op in row["ops"] if op.get("steps")]
     assert [s["target"][-1] for s in trigger["steps"]] == [1, 2]
     assert [s["value"] for s in trigger["steps"]] == [["var", "FIGHT_WON"], ["int", 0]]

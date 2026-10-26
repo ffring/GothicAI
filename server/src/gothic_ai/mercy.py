@@ -505,7 +505,9 @@ class Mercy:
             return ToolOutcome(f"Отклонено: не удалось принять сдачу ({error}).", "rejected")
         intent = Intent(attitude="wary")
         self.dialogue._change_intent(conv, intent, snap, body=False)
-        output, ok = await self.dialogue._calm(conv, intent, effects=[g.effect("self") for g in gives])
+        output, ok = await self.dialogue._calm(
+            conv, intent, effects=[g.effect("self") for g in gives], native_attitude="ATT_FRIENDLY",
+        )
         if not ok:
             return ToolOutcome(f"Отклонено: {output}", "rejected")
         self.accepting.discard(npc)
@@ -521,7 +523,7 @@ class Mercy:
             await self.parley.accept_deal(npc, 1, now=now)
         taken = "; ".join(f"{g.name} ×{g.count} ({g.item})" for g in gives) or "ничего, без выкупа"
         self.dialogue.remember(npc, conv.persona.name, f"Герой сдался тебе в бою; ты взял: {taken}.")
-        if not conv.last_lines:
+        if conv.acting or not conv.last_lines:  # acting: only Gemma has spoken; the model's text is silent
             await self.dialogue._say(conv, words.strip(), None, overlay=True)
         scene = await self._humiliate(conv) if humiliate else None
         return ToolOutcome(f"Принято: бой прекращён; герой передал тебе: {taken}."
@@ -578,7 +580,7 @@ class Mercy:
         self.orders.truce(conv.npc)
         if self.parley:
             await self.parley.accept_deal(conv.npc, 1, now=now)
-        if not conv.last_lines:
+        if conv.acting or not conv.last_lines:
             await dialogue._say(conv, words.strip(), None, overlay=True)
         return ToolOutcome(
             "Принято: ты сдался, прекратил бой и убрал оружие; ждёшь решения героя.", "accepted",

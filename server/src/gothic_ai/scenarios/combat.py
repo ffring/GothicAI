@@ -209,7 +209,8 @@ async def surrender_live(
                     raise GameError(f"surrender_live: model turn failed: {turn['status']}, {turn['events']}")
                 # Weapon warnings previously restarted Lobart's fight 13 s after surrender.
                 accepted = next((t for t in current["tools"]
-                                 if t["name"] == "surrender" and t["outcome"] == "accepted"), None)
+                                 if t["name"] in {"surrender", "accept_surrender"}
+                                 and t["outcome"] == "accepted"), None)
                 await asyncio.sleep(max(5, accepted["resolved_ms"] / 1000 + 20
                                         - (time.monotonic() - started)) if accepted else 5)
                 state = await link.story_eval(npc, combat)
@@ -234,7 +235,7 @@ async def surrender_live(
                     h["npc"] == "PLAYER" and h["by"] == npc and h["ms"] > accepted["resolved_ms"]
                     for h in current["observed_hits"]
                 )):
-                    raise GameError("surrender_live: surrendered NPC resumed attacking without a new hit")
+                    raise GameError("surrender_live: combat resumed after surrender without a new hit")
                 results[case] = "done (" + json.dumps(current, ensure_ascii=False) + ")"
             except (GameError, TimeoutError) as error:
                 current["error"] = str(error)
