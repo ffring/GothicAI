@@ -215,9 +215,6 @@ async def surrender_live(
                 state = await link.story_eval(npc, combat)
                 current["fight_state"] = state
                 current["fight_continued"] = state == [1, 1]
-                current["weapon_warning"] = (await link.story_eval(npc, [
-                    ["call", "C_NPCISBOTHEREDBYWEAPON", ["inst", "SELF"], ["inst", "HERO"]],
-                ]))[0]
                 current["gold_after"] = await link.story_eval(npc, gold)
                 [view] = await link.npc_view([npc])
                 current["npc_weapon"] = view.weapon
