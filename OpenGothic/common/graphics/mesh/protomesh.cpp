@@ -68,7 +68,7 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, std::string_view fname)
   setupScheme(fname);
   }
 
-ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<zenkit::MorphAnimation>& aniList, std::string_view fname)
+ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<asset::MorphAnimation>& aniList, std::string_view fname)
   : ProtoMesh(std::move(pm),fname) {
   if(attach.size()!=1) {
     Log::d("skip animations for: ",fname);
@@ -115,7 +115,7 @@ ProtoMesh::ProtoMesh(PackedMesh&& pm, const std::vector<zenkit::MorphAnimation>&
     }
   }
 
-ProtoMesh::ProtoMesh(const zenkit::ModelHierarchy& hierarchy, const asset::ModelMesh& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest)
+ProtoMesh::ProtoMesh(const asset::ModelHierarchy& hierarchy, const asset::ModelMesh& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname, bool explicitAlphaTest)
   :skeleton(std::move(sk)), fname(fname) {
   std::vector<std::vector<Tempest::Vec3>> attachPoints;
   for(auto& m:library.attachments) {
@@ -200,7 +200,7 @@ ProtoMesh::ProtoMesh(const zenkit::ModelHierarchy& hierarchy, const asset::Model
   setupScheme(fname);
   }
 
-ProtoMesh::ProtoMesh(const zenkit::ModelHierarchy& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
+ProtoMesh::ProtoMesh(const asset::ModelHierarchy& library, std::unique_ptr<Skeleton>&& sk, std::string_view fname)
       :skeleton(std::move(sk)), fname(fname) {
   nodes.resize(skeleton == nullptr ? 0 : skeleton->nodes.size());
   for(size_t i = 0; i < nodes.size(); ++i) {
@@ -459,7 +459,7 @@ void ProtoMesh::setupScheme(std::string_view s) {
   scheme = s;
   }
 
-void ProtoMesh::remap(const zenkit::MorphAnimation& a,
+void ProtoMesh::remap(const asset::MorphAnimation& a,
                       const std::vector<uint32_t>& vertId,
                       std::vector<int32_t>&        remap,
                       std::vector<Tempest::Vec4>&  samples,
@@ -484,7 +484,7 @@ void ProtoMesh::remap(const zenkit::MorphAnimation& a,
   }
 }
 
-ProtoMesh::Morph ProtoMesh::mkAnimation(const zenkit::MorphAnimation& a) {
+ProtoMesh::Morph ProtoMesh::mkAnimation(const asset::MorphAnimation& a) {
   Morph ret;
   ret.name            = a.name;
   ret.numFrames       = a.frame_count;

@@ -539,31 +539,31 @@ void MdlVisual::clearSlotItem(std::string_view bone) {
     }
   }
 
-bool MdlVisual::setFightMode(zenkit::MdsFightMode mode) {
+bool MdlVisual::setFightMode(asset::MdsFightMode mode) {
   WeaponState f = WeaponState::NoWeapon;
 
   switch(mode) {
-    case zenkit::MdsFightMode::INVALID:
+    case asset::MdsFightMode::INVALID:
       return false;
-    case zenkit::MdsFightMode::NONE:
+    case asset::MdsFightMode::NONE:
       f=WeaponState::NoWeapon;
       break;
-    case zenkit::MdsFightMode::FIST:
+    case asset::MdsFightMode::FIST:
       f=WeaponState::Fist;
       break;
-    case zenkit::MdsFightMode::SINGLE_HANDED:
+    case asset::MdsFightMode::SINGLE_HANDED:
       f=WeaponState::W1H;
       break;
-    case zenkit::MdsFightMode::DUAL_HANDED:
+    case asset::MdsFightMode::DUAL_HANDED:
       f=WeaponState::W2H;
       break;
-    case zenkit::MdsFightMode::BOW:
+    case asset::MdsFightMode::BOW:
       f=WeaponState::Bow;
       break;
-    case zenkit::MdsFightMode::CROSSBOW:
+    case asset::MdsFightMode::CROSSBOW:
       f=WeaponState::CBow;
       break;
-    case zenkit::MdsFightMode::MAGIC:
+    case asset::MdsFightMode::MAGIC:
       f=WeaponState::Mage;
       break;
     }

@@ -8,7 +8,7 @@ import sys
 
 
 KINDS = (
-    "texture", "basetexture", "mesh", "basemesh", "model", "skeleton", "anim", "morph", "world", "worldmesh", "baseworld", "basezen",
+    "texture", "basetexture", "mesh", "basemesh", "basemodel", "model", "skeleton", "anim", "morph", "world", "worldmesh", "baseworld", "basezen",
     "sound", "speech", "music", "script", "cutscene", "font", "video", "other",
 )
 
@@ -70,9 +70,13 @@ def summarize(documents):
                 accesses[key]["opens"] += row["opens"]
         for row in document["replacements"]:
             resource = _replacement_key(row)
-            if row["kind"] in ("basetexture", "basemesh", "baseworld", "basezen", "worldmesh"):
+            if row["kind"] in ("basetexture", "basemesh", "basemodel", "baseworld", "basezen", "worldmesh"):
                 base.add(resource)
                 original_kind = "world" if resource[0] in ("basezen", "worldmesh") else resource[0].removeprefix("base")
+                if resource[0] == "basemodel":
+                    original_kind = {".mdh": "skeleton", ".man": "anim", ".mmb": "morph"}.get(
+                        Path(resource[1]).suffix, "model"
+                    )
                 original_aliases.add((original_kind, resource[1]))
             else:
                 replacements.add(resource)
@@ -111,7 +115,7 @@ def render_markdown(summary):
         "и объединяются между прогонами. Для сопоставления подмен текстуры "
         "NAME.TGA и NAME-C.TEX считаются одним ресурсом. "
         "Ресурс считается своим, только если ни один его оригинал не открывался ни в одном прогоне. "
-        "Сконвертированный оригинал учитывается отдельно как basetexture/basemesh/baseworld/basezen (прежний меш мира — worldmesh) и не считается своим.",
+        "Сконвертированный оригинал учитывается отдельно как basetexture/basemesh/basemodel/baseworld/basezen (прежний меш мира — worldmesh) и не считается своим.",
         "",
         "| Вид | Оригинальных файлов | Подменено своими | Из базы | Доля своих |",
         "|---|---:|---:|---:|---:|",
