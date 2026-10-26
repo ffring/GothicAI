@@ -1602,7 +1602,7 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
                 exit_code = 1 if bad else 0
-            elif args.scenario in {"mercy", "hero_yield", "humiliate"}:
+            elif args.scenario in {"mercy", "hero_yield", "humiliate", "surrender_live"}:
                 assert state.dialogue is not None and state.mercy is not None and state.talk is not None
                 scenario = getattr(scenarios, args.scenario)
                 results = await scenario(link, state.dialogue, state.talk, state.mercy)
@@ -3037,6 +3037,7 @@ def main() -> None:
             "mercy",
             "hero_yield",
             "humiliate",
+            "surrender_live",
             "orders",
             "fight_reactions_wolf",
             "fight_reactions_sight",

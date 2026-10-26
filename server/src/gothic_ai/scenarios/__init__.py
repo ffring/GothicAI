@@ -19,6 +19,7 @@ from .combat import combat_barks as combat_barks
 from .combat import hero_yield as hero_yield
 from .combat import humiliate as humiliate
 from .combat import mercy as mercy
+from .combat import surrender_live as surrender_live
 from .companions import calm_scenario as calm_scenario
 from .companions import companion_scenario as companion_scenario
 from .companions import neural_companion_scenario as neural_companion_scenario

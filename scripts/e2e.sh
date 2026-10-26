@@ -26,6 +26,9 @@
 #       accept_surrender stops attacks within 3 s, transfers all real gold and sets victory AIV
 #   humiliate: hero_yield with humiliate:true; checks native S_PRAY/S_PEE, distance, said bark,
 #       held kneeling and native exit after real Back input; records positions and game/wall times
+#   surrender_live: new game, LLM=chatgpt and live QUICK_URL (defaults to settings.toml);
+#       six independent Lobart/bandit/guard scenes record real surrender decisions, tools, speech,
+#       transfers, humiliation and timings in surrender_live.json; any completed decision passes
 #   svm_lines: new game, no SAVE, LLM=fake; QUICK_URL supplies ten live Gemma SVM lines, their native
 #       text and voice delays, then Cavalorn kills a beast and speaks its native script SVM.
 #       An unavailable QUICK_URL falls back after three errors; TTS=fake|inworld.
@@ -399,6 +402,7 @@ if [[ "${GOTHIC_SOAK_CONTROL:-0}" == 1 && "$SCENARIO" != neural-soak ]]; then
 fi
 E2E_DEFAULT_TIMEOUT=240
 if [[ "$SCENARIO" == memprobe ]]; then E2E_DEFAULT_TIMEOUT=1200; fi
+if [[ "$SCENARIO" == surrender_live ]]; then E2E_DEFAULT_TIMEOUT=1200; fi
 TIMEOUT="${TIMEOUT:-$E2E_DEFAULT_TIMEOUT}"
 if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
   echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
@@ -413,6 +417,10 @@ if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = ne
   [ -z "${SAVE:-}" ] || { echo "scenario $SCENARIO requires a new game (unset SAVE)" >&2; exit 2; }
 fi
 LLM="${LLM:-fake}"
+if [[ "$SCENARIO" == surrender_live && ( "$LLM" == fake || -n "${SAVE:-}" ) ]]; then
+  echo 'scenario surrender_live requires a non-fake LLM and a new game (unset SAVE)' >&2
+  exit 2
+fi
 if [[ ( "$SCENARIO" == bandit_parley || "$SCENARIO" == bandit_bounty || "$SCENARIO" == bandit_hold || "$SCENARIO" == death_load ) && ( "$LLM" != fake || -n "${SAVE:-}" ) ]]; then
   echo "scenario $SCENARIO requires LLM=fake and a new game (unset SAVE)" >&2
   exit 2
@@ -458,6 +466,23 @@ if [ -n "${DECIDER_URL:-}" ]; then
 fi
 # lines in a fight come from the quick model only when given (QUICK_URL=http://<gpu-host>:47834/v1; m5)
 QUICK_ARGS=(--no-quick)
+if [[ "$SCENARIO" == surrender_live && -z "${QUICK_URL:-}" ]]; then
+  QUICK_URL="$(python3 - <<'PY'
+import os
+import tomllib
+from pathlib import Path
+from urllib.parse import urlsplit
+
+path = Path.home() / '.config/gothic-ai/settings.toml'
+settings = tomllib.loads(path.read_text()).get('llm', {}) if path.is_file() else {}
+url = os.environ.get('GOTHIC_QUICK_LLM_URL') or settings.get('quick_url')
+decider = os.environ.get('GOTHIC_DECIDER_URL') or settings.get('decider_url')
+host = urlsplit(decider).hostname if decider else None
+print(url or (f'http://{host}:47834/v1' if host else ''))
+PY
+)"
+  [[ -n "$QUICK_URL" ]] || { echo 'surrender_live: no quick model in settings or QUICK_URL' >&2; exit 2; }
+fi
 if [ -n "${QUICK_URL:-}" ]; then
   QUICK_ARGS=(--quick-url "$QUICK_URL")
 fi
@@ -470,7 +495,7 @@ ASR_PID=""
 TTS_PID=""
 VOICE_ARGS=(--no-voice)
 TTS_ARGS=(--no-tts)
-if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "svm_lines" ] || [ "$SCENARIO" = "combat_barks" ] || [ "$SCENARIO" = "mercy" ] || [ "$SCENARIO" = "hero_yield" ] || [ "$SCENARIO" = "humiliate" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ] || [ "${SCENARIO#fight_reactions_}" != "$SCENARIO" ]; then
+if [ "$SCENARIO" = "tts" ] || [ "$SCENARIO" = "svm_lines" ] || [ "$SCENARIO" = "combat_barks" ] || [ "$SCENARIO" = "mercy" ] || [ "$SCENARIO" = "hero_yield" ] || [ "$SCENARIO" = "humiliate" ] || [ "$SCENARIO" = "surrender_live" ] || [ "$SCENARIO" = "gossip" ] || [ "$SCENARIO" = "day" ] || [ "$SCENARIO" = "group" ] || [ "$SCENARIO" = "interject" ] || [ "$SCENARIO" = "programs" ] || [ "${SCENARIO#errand}" != "$SCENARIO" ] || [ "${SCENARIO#fight_reactions_}" != "$SCENARIO" ]; then
   (cd "$ROOT/tts-service" && exec uv run gothic-tts serve --port "$TTS_PORT" --provider "$TTS" --fallback none) >"$LOG_DIR/tts.log" 2>&1 &
   TTS_PID=$!
   TTS_ARGS=(--tts-url "ws://127.0.0.1:$TTS_PORT")
