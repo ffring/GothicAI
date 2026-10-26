@@ -18,6 +18,7 @@ from ..protocol import CombatHit, GameMessage, LineStarted, Session, Snapshot
 from ..talk import TalkDesk, fights
 from ..trace import read as read_trace
 from ..turn import ToolOutcome
+from .bandit_parley import BRAGO, CAVALORN, PARK
 from .common import (
     LOBART,
     ClaimScript,
@@ -34,7 +35,7 @@ from .common import (
 async def surrender_live(
     link: GameLink, dialogue: DialogueManager, talk: TalkDesk, mercy: Mercy,
 ) -> dict[str, str]:
-    """Observe six independent live decisions without scripting either model or its tools."""
+    """Observe seven independent live decisions without scripting either model or its tools."""
     if dialogue.llm.name == "fake" or dialogue.quick is None or dialogue.quick.name == "fake":
         raise GameError("scenario surrender_live requires a non-fake LLM and a live quick model")
     if dialogue.trace is None:
@@ -48,6 +49,7 @@ async def surrender_live(
         ("A_lobart", LOBART, None), ("A_bandit", bandit, None),
         ("B_lobart", LOBART, phrase), ("B_bandit", bandit, phrase),
         ("B_guard", guard, phrase), ("C_bandit", bandit, "Пацаны, обоссыте, но не бейте"),
+        ("C_brago", BRAGO, "Браго, сдаюсь! Обоссы, но не бей"),
     ]
     results: dict[str, str] = {}
     observations: list[dict[str, Any]] = []
@@ -65,7 +67,8 @@ async def surrender_live(
             current["tools"].append(row)
         outcome = await original_tool(conv, call, state)
         if row is not None:
-            row.update(outcome=outcome.status, result=outcome.output)
+            row.update(outcome=outcome.status, result=outcome.output,
+                       resolved_ms=round((time.monotonic() - started) * 1000))
         return outcome
 
     def record(msg: GameMessage) -> None:
@@ -128,13 +131,16 @@ async def surrender_live(
                     await asyncio.gather(loading, return_exceptions=True)
                 await link.wait_world(timeout=60)
                 await link.debug("skip_important", near=npc)
-                if npc == bandit:
+                if npc in {bandit, BRAGO}:
                     # The existing bandit setups park Cavalorn away from the road fight.
-                    await link.debug("skip_important", near="BAU_4300_ADDON_CAVALORN")
-                    await link.debug("npc_goto", npc="BAU_4300_ADDON_CAVALORN",
-                                     waypoint="NW_XARDAS_TOWER_IN1_26")
+                    await link.debug("skip_important", near=CAVALORN)
+                    await link.debug("npc_goto", npc=CAVALORN, waypoint=PARK)
                 await attach_when_free(link, npc)
-                await link.debug("teleport", near=npc, distance=200)
+                if npc == BRAGO:
+                    await link.debug("skip_important", near="BDT_1015_BANDIT_L")
+                    await link.debug("player_goto", to=BRAGO, distance=200)
+                else:
+                    await link.debug("teleport", near=npc, distance=200)
                 await link.act(npc, "stop")
                 await link.debug("player_hp", hp=2000)
                 sword = "ITMW_SHORTSWORD1"
@@ -160,7 +166,7 @@ async def surrender_live(
                 await link.detach(npc)
                 hits.clear()
                 # The gate guard's setup hit caused no damage; stage its native attack directly.
-                if npc != guard:
+                if npc not in {guard, BRAGO}:
                     await link.debug("player_hit", npc=npc)
                 await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
                 if not await _until_async(lambda npc=npc: link.story_eval(npc, combat),
@@ -195,16 +201,23 @@ async def surrender_live(
                     raise GameError("surrender_live: no completed model turn within 120 s")
                 turn = turns()[0]
                 current["turn_id"], current["turn_status"] = turn["id"], turn["status"]
+                current["speech_model"] = turn["steps"][0].get("llm")
                 current["turn_ms"] = round((turn["t"] + turn["total_s"] - wall_started) * 1000)
                 if turn["status"] not in {"completed", "step_cap"} or any(
                     e["kind"] in {"quick_failed", "act_failed"} for e in turn["events"]
                 ):
                     raise GameError(f"surrender_live: model turn failed: {turn['status']}, {turn['events']}")
-                # Observe the outcome for five seconds, including delayed native attacks and speech.
-                await asyncio.sleep(5)
+                # Weapon warnings previously restarted Lobart's fight 13 s after surrender.
+                accepted = next((t for t in current["tools"]
+                                 if t["name"] == "surrender" and t["outcome"] == "accepted"), None)
+                await asyncio.sleep(max(5, accepted["resolved_ms"] / 1000 + 20
+                                        - (time.monotonic() - started)) if accepted else 5)
                 state = await link.story_eval(npc, combat)
                 current["fight_state"] = state
                 current["fight_continued"] = state == [1, 1]
+                current["weapon_warning"] = (await link.story_eval(npc, [
+                    ["call", "C_NPCISBOTHEREDBYWEAPON", ["inst", "SELF"], ["inst", "HERO"]],
+                ]))[0]
                 current["gold_after"] = await link.story_eval(npc, gold)
                 [view] = await link.npc_view([npc])
                 current["npc_weapon"] = view.weapon
@@ -220,6 +233,11 @@ async def surrender_live(
                              if t["name"] in {"surrender", "accept_surrender", "set_intent"}]
                 current["decision_ms"] = min(decisions) if decisions else current["turn_ms"]
                 current["first_words_ms"] = next((w["ms"] for w in current["words"]), None)
+                if accepted and (current["fight_continued"] or any(
+                    h["npc"] == "PLAYER" and h["by"] == npc and h["ms"] > accepted["resolved_ms"]
+                    for h in current["observed_hits"]
+                )):
+                    raise GameError("surrender_live: surrendered NPC resumed attacking without a new hit")
                 results[case] = "done (" + json.dumps(current, ensure_ascii=False) + ")"
             except (GameError, TimeoutError) as error:
                 current["error"] = str(error)

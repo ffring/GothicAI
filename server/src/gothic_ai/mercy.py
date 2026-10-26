@@ -67,9 +67,11 @@ ACCEPT_SURRENDER = Tool(
     "take: gold — всё золото героя; weapons — надетое ближнее и дальнее оружие; fine — только для "
     "представителя закона, точная сумма долга crimes, если золота хватает; также до пяти id предметов "
     "из инвентаря героя, по одной штуке. Пустой take — отпустить без выкупа. gold включает fine. "
-    "humiliate — обязательный bool: передавай false для обычной сдачи, "
+    "humiliate — обязательный bool: false для обычной сдачи, "
     "true — унизить сдавшегося героя, обмочив его на коленях. "
-    "Решай по характеру сам или по просьбе героя; законникам, магам, паладинам и послушникам запрещено.",
+    "Это обычный исход для грубого, злого или мстительного характера, "
+    "особенно если герой сам об этом просит. "
+    "Решай по характеру; законникам, магам, паладинам и послушникам запрещено.",
     {"type": "object", "properties": {
         "take": {"type": "array", "items": {"type": "string"}},
         "humiliate": {"type": "boolean", "default": False},
@@ -519,8 +521,8 @@ class Mercy:
             await self.parley.accept_deal(npc, 1, now=now)
         taken = "; ".join(f"{g.name} ×{g.count} ({g.item})" for g in gives) or "ничего, без выкупа"
         self.dialogue.remember(npc, conv.persona.name, f"Герой сдался тебе в бою; ты взял: {taken}.")
-        self.dialogue._drop_unvoiced(conv)
-        await self.dialogue._say(conv, words.strip(), None, overlay=True)
+        if not conv.last_lines:
+            await self.dialogue._say(conv, words.strip(), None, overlay=True)
         scene = await self._humiliate(conv) if humiliate else None
         return ToolOutcome(f"Принято: бой прекращён; герой передал тебе: {taken}."
                            + (" Долг перед законом погашен." if community else "")
@@ -562,7 +564,8 @@ class Mercy:
             return ToolOutcome(
                 f"Отклонено: игра не подтвердила исход сдачи ({type(error).__name__}: {error}).", "rejected",
             )
-        intent = Intent(attitude="wary")
+        # C_NpcIsBotheredByWeapon ignores FIGHT_LOST, but respects ATT_FRIENDLY.
+        intent = Intent(attitude="friendly")
         dialogue._change_intent(conv, intent, snap, body=False)
         _, ok = await dialogue._calm(conv, intent)
         if not ok:
@@ -575,8 +578,8 @@ class Mercy:
         self.orders.truce(conv.npc)
         if self.parley:
             await self.parley.accept_deal(conv.npc, 1, now=now)
-        dialogue._drop_unvoiced(conv)
-        await dialogue._say(conv, words.strip(), None, overlay=True)
+        if not conv.last_lines:
+            await dialogue._say(conv, words.strip(), None, overlay=True)
         return ToolOutcome(
             "Принято: ты сдался, прекратил бой и убрал оружие; ждёшь решения героя.", "accepted",
         )

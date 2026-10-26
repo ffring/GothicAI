@@ -27,7 +27,7 @@
 #   humiliate: hero_yield with humiliate:true; checks native S_PRAY/S_PEE, distance, said bark,
 #       held kneeling and native exit after real Back input; records positions and game/wall times
 #   surrender_live: new game, LLM=chatgpt and live QUICK_URL (defaults to settings.toml);
-#       six independent Lobart/bandit/guard scenes record real surrender decisions, tools, speech,
+#       seven independent Lobart/bandit/guard/Brago scenes record real surrender decisions, tools, speech,
 #       transfers, humiliation and timings in surrender_live.json; any completed decision passes
 #   svm_lines: new game, no SAVE, LLM=fake; QUICK_URL supplies ten live Gemma SVM lines, their native
 #       text and voice delays, then Cavalorn kills a beast and speaks its native script SVM.
@@ -467,18 +467,17 @@ fi
 # lines in a fight come from the quick model only when given (QUICK_URL=http://<gpu-host>:47834/v1; m5)
 QUICK_ARGS=(--no-quick)
 if [[ "$SCENARIO" == surrender_live && -z "${QUICK_URL:-}" ]]; then
-  QUICK_URL="$(python3 - <<'PY'
+  QUICK_URL="$(cd "$ROOT/server" && uv run python - <<'PY'
 import os
 import tomllib
 from pathlib import Path
-from urllib.parse import urlsplit
+from gothic_ai.llm import quick_url
 
 path = Path.home() / '.config/gothic-ai/settings.toml'
 settings = tomllib.loads(path.read_text()).get('llm', {}) if path.is_file() else {}
 url = os.environ.get('GOTHIC_QUICK_LLM_URL') or settings.get('quick_url')
 decider = os.environ.get('GOTHIC_DECIDER_URL') or settings.get('decider_url')
-host = urlsplit(decider).hostname if decider else None
-print(url or (f'http://{host}:47834/v1' if host else ''))
+print(quick_url(url, decider) or '')
 PY
 )"
   [[ -n "$QUICK_URL" ]] || { echo 'surrender_live: no quick model in settings or QUICK_URL' >&2; exit 2; }

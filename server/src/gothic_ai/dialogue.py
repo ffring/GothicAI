@@ -1141,7 +1141,8 @@ class DialogueManager:
     def _fighting(self, conv: Conversation) -> bool:
         """The npc's lines are the quick model's: there is one, and the npc is in a fight."""
         return self.quick is not None and (
-            self.in_fight(conv.npc) or conv.intent.goal in executor.INCIDENT_GOALS
+            self.in_fight(conv.npc) or self.fights_hero(conv.npc)
+            or conv.intent.goal in executor.INCIDENT_GOALS
         )
 
     def _listening(self, conv: Conversation) -> bool:
