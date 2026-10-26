@@ -994,8 +994,7 @@ class Npc final {
     AiQueue                        aiQueueOverlay;
     Npc*                           nativeCombatQueueTarget=nullptr; // only during this actor's ZS_ATTACK callback
     bool                           playerKneeling=false;
-    bool                           peeStreaming=false;
-    static constexpr int32_t       PeeEffectSlot=0x7E57;
+    std::unique_ptr<Effect>        peeStream;
     bool                           playerPoseExiting=false;
     bool                           externalCtrl=false; // transient, not serialized
     bool                           percPassThrough=false; // passPerception: no interception

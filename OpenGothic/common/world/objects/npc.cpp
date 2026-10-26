@@ -5245,29 +5245,36 @@ void Npc::emitSoundSVM(std::string_view svm) {
   }
 
 void Npc::tickPeeStream() {
-  // a man relieving himself (the native S_PEE: a routine's TA_PEE, mercy.py's humiliation) shows the stream
-  const bool on = !isPlayer() && guild()<GIL_SEPERATOR_HUM && !isDown() && !isDead() && visual.pose().isInAnim("S_PEE");
-  if(on==peeStreaming)
-    return;
-  peeStreaming = on;
-  Log::i("pee stream ",on ? "on" : "off",": ",displayName());
-  if(!on) {
-    visual.stopEffect(PeeEffectSlot);
-    return;
+  // a man relieving himself in front of the kneeling hero (mercy.py's humiliation): the game's own stream
+  // (PEE of S_PEE) is aimed at him. Not bound to a bone, whose axes turn with the pose: the emitter stands
+  // at the pelvis and faces where the npc faces
+  const auto* hero   = owner.player();
+  const bool  peeing = visual.pose().isInAnim("S_PEE") || visual.pose().isInAnim("T_STAND_2_PEE");
+  bool        aim    = false;
+  if(peeing && hero!=nullptr && hero!=this && hero->playerKneeling && !isDown() && !isDead()) {
+    const float dx = hero->x-x, dz = hero->z-z;
+    const float d  = std::sqrt(dx*dx+dz*dz);
+    const float da = std::fmod(angleDir(dx,dz)-rotation()+540.f,360.f)-180.f;
+    aim = d<200.f && std::abs(da)<45.f;
     }
-  if(std::getenv("GAI_PEE_AXES")!=nullptr) {
-    for(int i=0; i<4; ++i) {
-      Effect a(PfxEmitter(owner,"PFX_GAI_AXIS_"+std::to_string(i)),"BIP01 PELVIS");
-      a.setActive(true);
-      a.setLooped(true);
-      visual.startEffect(owner,std::move(a),PeeEffectSlot+1+i,false);
+  visual.setMutedPfx(aim ? "PEE" : "");
+  const bool on = aim && visual.pose().isInAnim("S_PEE");
+  if(on!=bool(peeStream)) {
+    peeStream.reset();
+    if(on) {
+      peeStream = std::make_unique<Effect>(PfxEmitter(owner,"PFX_GAI_PEE"),"");
+      peeStream->setActive(true);
+      peeStream->setLooped(true);
       }
-    return;
     }
-  Effect e(PfxEmitter(owner,"PFX_GAI_PEE"),"BIP01 PELVIS");
-  e.setActive(true);
-  e.setLooped(true);
-  visual.startEffect(owner,std::move(e),PeeEffectSlot,false);
+  if(!peeStream)
+    return;
+  Matrix4x4  mt = transform();
+  const Vec3 at = mapBone("BIP01 PELVIS");
+  mt.set(3,0,at.x);
+  mt.set(3,1,at.y);
+  mt.set(3,2,at.z);
+  peeStream->setObjMatrix(mt);
   }
 
 void Npc::startEffect(Npc& to, const VisualFx& vfx) {
