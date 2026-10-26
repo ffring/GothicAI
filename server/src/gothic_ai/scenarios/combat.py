@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import time
@@ -8,15 +9,234 @@ from typing import Any
 from .. import triggers
 from ..combat_barks import CombatBarks
 from ..contracts import GOLD
-from ..dialogue import DialogueManager
+from ..dialogue import Conversation, DialogueManager, TurnState
 from ..game import GameError, GameLink
 from ..llm import ToolCall
 from ..llm.fake import FakeBackend, FakeStep
 from ..mercy import PARDON, PEE_DISTANCE_CM, Mercy
-from ..protocol import CombatHit, GameMessage, LineStarted, Snapshot
+from ..protocol import CombatHit, GameMessage, LineStarted, Session, Snapshot
 from ..talk import TalkDesk, fights
 from ..trace import read as read_trace
-from .common import LOBART, ClaimScript, _logged, _m5b_player_weapon, _until, _until_async, attach_when_free
+from ..turn import ToolOutcome
+from .common import (
+    LOBART,
+    ClaimScript,
+    _logged,
+    _m5b_player_weapon,
+    _save_or_fail,
+    _until,
+    _until_async,
+    attach_when_free,
+    wait_message,
+)
+
+
+async def surrender_live(
+    link: GameLink, dialogue: DialogueManager, talk: TalkDesk, mercy: Mercy,
+) -> dict[str, str]:
+    """Observe six independent live decisions without scripting either model or its tools."""
+    if dialogue.llm.name == "fake" or dialogue.quick is None or dialogue.quick.name == "fake":
+        raise GameError("scenario surrender_live requires a non-fake LLM and a live quick model")
+    if dialogue.trace is None:
+        raise GameError("scenario surrender_live requires a trace directory")
+    trace = dialogue.trace
+    await link.wait_world()
+    await _save_or_fail(link, 8)
+    bandit, guard = "BDT_1013_BANDIT_L", "MIL_310_STADTWACHE"
+    phrase = "Сдаюсь, забирай золото, только не бей"
+    cases = [
+        ("A_lobart", LOBART, None), ("A_bandit", bandit, None),
+        ("B_lobart", LOBART, phrase), ("B_bandit", bandit, phrase),
+        ("B_guard", guard, phrase), ("C_bandit", bandit, "Пацаны, обоссыте, но не бейте"),
+    ]
+    results: dict[str, str] = {}
+    observations: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    started = 0.0
+    hits: list[CombatHit] = []
+    original_tool = dialogue._tool
+
+    async def record_tool(conv: Conversation, call: ToolCall, state: TurnState) -> ToolOutcome:
+        # Observe the real dispatcher; arguments and results pass through unchanged.
+        row = None
+        if current is not None and conv.npc == current["npc"] and started:
+            row = {"ms": round((time.monotonic() - started) * 1000),
+                   "name": call.name, "arguments": call.arguments}
+            current["tools"].append(row)
+        outcome = await original_tool(conv, call, state)
+        if row is not None:
+            row.update(outcome=outcome.status, result=outcome.output)
+        return outcome
+
+    def record(msg: GameMessage) -> None:
+        if isinstance(msg, CombatHit):
+            hits.append(msg)
+        if current is None or not started:
+            return
+        elapsed = round((time.monotonic() - started) * 1000)
+        if isinstance(msg, CombatHit) and current["npc"] in {msg.npc, msg.by}:
+            current["observed_hits"].append({"ms": elapsed, **msg.model_dump()})
+        elif isinstance(msg, LineStarted) and msg.npc == current["npc"]:
+            line = dialogue._lines.get(msg.line)
+            current["words"].append({"ms": elapsed, "text": line[0] if line else None,
+                                     "voiced": msg.voiced})
+        elif isinstance(msg, Snapshot) and msg.npc.id == current["npc"] and msg.player:
+            if msg.player.kneeling and "S_PEE" in msg.npc.animations:
+                current["humiliation_played"] = True
+
+    async def health(npc: str, hp: int) -> None:
+        indices = await link.story_eval(npc, [["var", name] for name in (
+            "ATR_HITPOINTS", "ATR_HITPOINTS_MAX",
+        )])
+        if len(indices) != 2 or any(type(i) is not int for i in indices) or indices[0] == indices[1]:
+            raise GameError(f"surrender_live preparation: invalid HP indices {indices!r}")
+        fields = [["field", ["inst", npc], "ATTRIBUTE", i] for i in indices]
+        key = f"DIR_SURRENDER_LIVE_HP_{hp}"
+        await link.patch_graph([triggers.trigger(key, triggers.STATE, [
+            {"do": "set", "target": field, "value": ["int", value]}
+            for field, value in zip(fields, [hp, 1000], strict=True)
+        ])])
+        try:
+            if not await _until_async(lambda: link.story_eval(npc, fields),
+                                      lambda values: values == [hp, 1000], 4):
+                raise GameError("surrender_live preparation: NPC health did not apply")
+        finally:
+            await link.patch_graph([triggers.removal(key)])
+
+    combat = [
+        ["call", "NPC_ISINSTATE", ["inst", "SELF"], ["sym", "ZS_ATTACK"]],
+        ["&&", ["call", "NPC_GETTARGET", ["inst", "SELF"]],
+         ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
+          ["call", "HLP_GETINSTANCEID", ["inst", "HERO"]]]],
+    ]
+    dialogue._tool = record_tool  # type: ignore[method-assign]
+    link.listeners.append(record)
+    try:
+        for case, npc, text in cases:
+            current = {"case": case, "npc": npc, "player_text": text, "tools": [], "words": [],
+                       "observed_hits": [], "humiliation_played": False}
+            observations.append(current)
+            started = 0.0
+            try:
+                loading = asyncio.create_task(wait_message(link, Session, lambda m: m.reason == "load", 60))
+                await asyncio.sleep(0)
+                try:
+                    await link.debug("load", 8)
+                    await loading
+                finally:
+                    loading.cancel()
+                    await asyncio.gather(loading, return_exceptions=True)
+                await link.wait_world(timeout=60)
+                await link.debug("skip_important", near=npc)
+                if npc == bandit:
+                    # The existing bandit setups park Cavalorn away from the road fight.
+                    await link.debug("skip_important", near="BAU_4300_ADDON_CAVALORN")
+                    await link.debug("npc_goto", npc="BAU_4300_ADDON_CAVALORN",
+                                     waypoint="NW_XARDAS_TOWER_IN1_26")
+                await attach_when_free(link, npc)
+                await link.debug("teleport", near=npc, distance=200)
+                await link.act(npc, "stop")
+                await link.debug("player_hp", hp=2000)
+                sword = "ITMW_SHORTSWORD1"
+                await link.debug("player_equip", item=sword)
+                if not await _until_async(lambda npc=npc: link.story_eval(npc, [
+                    ["call", "NPC_GETEQUIPPEDMELEEWEAPON", ["inst", "HERO"]],
+                ]), lambda values, sword=sword: values == [sword], 4):
+                    raise GameError("surrender_live preparation: hero sword was not equipped")
+                await _m5b_player_weapon(link, "melee")
+                gold = [["call", "NPC_HASITEMS", ["inst", who], ["sym", GOLD]]
+                        for who in ("HERO", "SELF")]
+                [hero_gold, _] = await link.story_eval(npc, gold)
+                if hero_gold != 100:
+                    effects: list[dict[str, Any]] = []
+                    if hero_gold < 100:
+                        effects.append({"do": "create", "item": GOLD, "count": 100 - hero_gold})
+                    effects.append({"do": "give", "item": GOLD, "count": abs(100 - hero_gold),
+                                    "to": "hero" if hero_gold < 100 else "self"})
+                    await link.story_effect(npc, effects)
+                current["gold_before"] = await link.story_eval(npc, gold)
+                if text is None:
+                    await health(npc, 1000)
+                await link.detach(npc)
+                hits.clear()
+                # The gate guard's setup hit caused no damage; stage its native attack directly.
+                if npc != guard:
+                    await link.debug("player_hit", npc=npc)
+                await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
+                if not await _until_async(lambda npc=npc: link.story_eval(npc, combat),
+                                          lambda v: v == [1, 1], 8):
+                    raise GameError("surrender_live preparation: native fight did not start")
+                if not await _until(lambda npc=npc: fights(talk.people.get(npc)), 4):
+                    raise GameError("surrender_live preparation: fight missing from roster")
+                current["name"] = talk.people[npc].name
+                if text is not None and not await _until(
+                    lambda npc=npc: any(h.npc == "PLAYER" and h.by == npc for h in hits), 30,
+                ):
+                    raise GameError("surrender_live preparation: NPC did not hit the hero")
+                if text is None:
+                    await health(npc, 250)
+                started, wall_started = time.monotonic(), time.time()
+                current["started_at"] = wall_started
+                if text is None:
+                    await link.debug("player_hit", npc=npc)
+                    if not any(h.npc == npc and 0 < h.hp < h.hp_max * 0.3 for h in hits):
+                        raise GameError("surrender_live preparation: no living low-health hit")
+                else:
+                    await link.debug("type", text=text)
+
+                def turns(npc: str = npc, text: str | None = text,
+                          wall_started: float = wall_started) -> list[dict[str, Any]]:
+                    return [row for row in read_trace(trace.path()) if row.get("type") == "turn"
+                            and row.get("npc") == npc and row["t"] >= wall_started - 0.01
+                            and (row["trigger"]["kind"] == "mercy" if text is None
+                                 else row["trigger"] == {"kind": "player", "text": text})]
+
+                if not await _until(lambda: trace.path().exists() and bool(turns()), 120):
+                    raise GameError("surrender_live: no completed model turn within 120 s")
+                turn = turns()[0]
+                current["turn_id"], current["turn_status"] = turn["id"], turn["status"]
+                current["turn_ms"] = round((turn["t"] + turn["total_s"] - wall_started) * 1000)
+                if turn["status"] not in {"completed", "step_cap"} or any(
+                    e["kind"] in {"quick_failed", "act_failed"} for e in turn["events"]
+                ):
+                    raise GameError(f"surrender_live: model turn failed: {turn['status']}, {turn['events']}")
+                # Observe the outcome for five seconds, including delayed native attacks and speech.
+                await asyncio.sleep(5)
+                state = await link.story_eval(npc, combat)
+                current["fight_state"] = state
+                current["fight_continued"] = state == [1, 1]
+                current["gold_after"] = await link.story_eval(npc, gold)
+                [view] = await link.npc_view([npc])
+                current["npc_weapon"] = view.weapon
+                snap = await link.snapshot(npc, fresh=True)
+                current["npc_hp"] = snap.npc.hp
+                current["hero_hp"] = snap.player.hp if snap.player else None
+                current["hits"] = [h.model_dump() for h in hits]
+                current["taken"] = [f["take"] for f in mercy.chronicle.facts("hero_yield") if f["npc"] == npc]
+                current["humiliation_recorded"] = any(
+                    f["npc"] == npc for f in mercy.chronicle.facts("humiliated")
+                )
+                decisions = [t["ms"] for t in current["tools"]
+                             if t["name"] in {"surrender", "accept_surrender", "set_intent"}]
+                current["decision_ms"] = min(decisions) if decisions else current["turn_ms"]
+                current["first_words_ms"] = next((w["ms"] for w in current["words"]), None)
+                results[case] = "done (" + json.dumps(current, ensure_ascii=False) + ")"
+            except (GameError, TimeoutError) as error:
+                current["error"] = str(error)
+                results[case] = "failed (" + json.dumps(current, ensure_ascii=False) + ")"
+                break
+            finally:
+                (trace.directory.parent / "surrender_live.json").write_text(
+                    json.dumps({"llm": dialogue.llm.name, "model": getattr(dialogue.llm, "model", None),
+                                "quick_model": getattr(dialogue.quick, "model", None),
+                                "cases": observations, "results": results},
+                               ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+        return _logged(results)
+    finally:
+        dialogue._tool = original_tool  # type: ignore[method-assign]
+        link.listeners.remove(record)
 
 
 async def mercy(
