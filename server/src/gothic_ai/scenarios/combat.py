@@ -74,7 +74,9 @@ async def surrender_live(
         if current is None or not started:
             return
         elapsed = round((time.monotonic() - started) * 1000)
-        if isinstance(msg, LineStarted) and msg.npc == current["npc"]:
+        if isinstance(msg, CombatHit) and current["npc"] in {msg.npc, msg.by}:
+            current["observed_hits"].append({"ms": elapsed, **msg.model_dump()})
+        elif isinstance(msg, LineStarted) and msg.npc == current["npc"]:
             line = dialogue._lines.get(msg.line)
             current["words"].append({"ms": elapsed, "text": line[0] if line else None,
                                      "voiced": msg.voiced})
@@ -89,7 +91,7 @@ async def surrender_live(
         if len(indices) != 2 or any(type(i) is not int for i in indices) or indices[0] == indices[1]:
             raise GameError(f"surrender_live preparation: invalid HP indices {indices!r}")
         fields = [["field", ["inst", npc], "ATTRIBUTE", i] for i in indices]
-        key = "DIR_SURRENDER_LIVE_HP"
+        key = f"DIR_SURRENDER_LIVE_HP_{hp}"
         await link.patch_graph([triggers.trigger(key, triggers.STATE, [
             {"do": "set", "target": field, "value": ["int", value]}
             for field, value in zip(fields, [hp, 1000], strict=True)
@@ -112,7 +114,7 @@ async def surrender_live(
     try:
         for case, npc, text in cases:
             current = {"case": case, "npc": npc, "player_text": text, "tools": [], "words": [],
-                       "humiliation_played": False}
+                       "observed_hits": [], "humiliation_played": False}
             observations.append(current)
             started = 0.0
             try:
@@ -153,10 +155,13 @@ async def surrender_live(
                                     "to": "hero" if hero_gold < 100 else "self"})
                     await link.story_effect(npc, effects)
                 current["gold_before"] = await link.story_eval(npc, gold)
-                await health(npc, 1000)
+                if text is None:
+                    await health(npc, 1000)
                 await link.detach(npc)
                 hits.clear()
-                await link.debug("player_hit", npc=npc)
+                # The gate guard's setup hit caused no damage; stage its native attack directly.
+                if npc != guard:
+                    await link.debug("player_hit", npc=npc)
                 await link.story_effect(npc, [{"do": "attack", "reason": "AR_NONE"}])
                 if not await _until_async(lambda npc=npc: link.story_eval(npc, combat),
                                           lambda v: v == [1, 1], 8):
@@ -201,6 +206,8 @@ async def surrender_live(
                 current["fight_state"] = state
                 current["fight_continued"] = state == [1, 1]
                 current["gold_after"] = await link.story_eval(npc, gold)
+                [view] = await link.npc_view([npc])
+                current["npc_weapon"] = view.weapon
                 snap = await link.snapshot(npc, fresh=True)
                 current["npc_hp"] = snap.npc.hp
                 current["hero_hp"] = snap.player.hp if snap.player else None

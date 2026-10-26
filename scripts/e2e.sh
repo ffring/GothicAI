@@ -483,6 +483,17 @@ PY
 )"
   [[ -n "$QUICK_URL" ]] || { echo 'surrender_live: no quick model in settings or QUICK_URL' >&2; exit 2; }
 fi
+if [[ "$SCENARIO" == surrender_live ]]; then
+  python3 - "$QUICK_URL" <<'PY'
+import json
+import sys
+from urllib.request import urlopen
+
+with urlopen(sys.argv[1].rstrip('/') + '/models', timeout=10) as response:
+    if not json.load(response).get('data'):
+        raise SystemExit('surrender_live: quick server has no live model')
+PY
+fi
 if [ -n "${QUICK_URL:-}" ]; then
   QUICK_ARGS=(--quick-url "$QUICK_URL")
 fi
