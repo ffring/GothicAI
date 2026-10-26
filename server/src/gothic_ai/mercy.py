@@ -67,9 +67,11 @@ ACCEPT_SURRENDER = Tool(
     "take: gold — всё золото героя; weapons — надетое ближнее и дальнее оружие; fine — только для "
     "представителя закона, точная сумма долга crimes, если золота хватает; также до пяти id предметов "
     "из инвентаря героя, по одной штуке. Пустой take — отпустить без выкупа. gold включает fine. "
-    "humiliate — обязательный bool: передавай false для обычной сдачи, "
+    "humiliate — обязательный bool: false для обычной сдачи, "
     "true — унизить сдавшегося героя, обмочив его на коленях. "
-    "Решай по характеру сам или по просьбе героя; законникам, магам, паладинам и послушникам запрещено.",
+    "Это обычный исход для грубого, злого или мстительного характера, "
+    "особенно если герой сам об этом просит. "
+    "Решай по характеру; законникам, магам, паладинам и послушникам запрещено.",
     {"type": "object", "properties": {
         "take": {"type": "array", "items": {"type": "string"}},
         "humiliate": {"type": "boolean", "default": False},
@@ -503,7 +505,9 @@ class Mercy:
             return ToolOutcome(f"Отклонено: не удалось принять сдачу ({error}).", "rejected")
         intent = Intent(attitude="wary")
         self.dialogue._change_intent(conv, intent, snap, body=False)
-        output, ok = await self.dialogue._calm(conv, intent, effects=[g.effect("self") for g in gives])
+        output, ok = await self.dialogue._calm(
+            conv, intent, effects=[g.effect("self") for g in gives], native_attitude="ATT_FRIENDLY",
+        )
         if not ok:
             return ToolOutcome(f"Отклонено: {output}", "rejected")
         self.accepting.discard(npc)
@@ -519,8 +523,8 @@ class Mercy:
             await self.parley.accept_deal(npc, 1, now=now)
         taken = "; ".join(f"{g.name} ×{g.count} ({g.item})" for g in gives) or "ничего, без выкупа"
         self.dialogue.remember(npc, conv.persona.name, f"Герой сдался тебе в бою; ты взял: {taken}.")
-        self.dialogue._drop_unvoiced(conv)
-        await self.dialogue._say(conv, words.strip(), None, overlay=True)
+        if conv.acting or not conv.last_lines:  # acting: only Gemma has spoken; the model's text is silent
+            await self.dialogue._say(conv, words.strip(), None, overlay=True)
         scene = await self._humiliate(conv) if humiliate else None
         return ToolOutcome(f"Принято: бой прекращён; герой передал тебе: {taken}."
                            + (" Долг перед законом погашен." if community else "")
@@ -564,7 +568,8 @@ class Mercy:
             )
         intent = Intent(attitude="wary")
         dialogue._change_intent(conv, intent, snap, body=False)
-        _, ok = await dialogue._calm(conv, intent)
+        # C_NpcIsBotheredByWeapon needs native ATT_FRIENDLY, not a friendly saved intent.
+        _, ok = await dialogue._calm(conv, intent, native_attitude="ATT_FRIENDLY")
         if not ok:
             return ToolOutcome("Отклонено: тело не смогло прекратить бой.", "rejected")
         self.chronicle.record({
@@ -575,8 +580,8 @@ class Mercy:
         self.orders.truce(conv.npc)
         if self.parley:
             await self.parley.accept_deal(conv.npc, 1, now=now)
-        dialogue._drop_unvoiced(conv)
-        await dialogue._say(conv, words.strip(), None, overlay=True)
+        if conv.acting or not conv.last_lines:
+            await dialogue._say(conv, words.strip(), None, overlay=True)
         return ToolOutcome(
             "Принято: ты сдался, прекратил бой и убрал оружие; ждёшь решения героя.", "accepted",
         )

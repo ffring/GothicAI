@@ -1141,7 +1141,8 @@ class DialogueManager:
     def _fighting(self, conv: Conversation) -> bool:
         """The npc's lines are the quick model's: there is one, and the npc is in a fight."""
         return self.quick is not None and (
-            self.in_fight(conv.npc) or conv.intent.goal in executor.INCIDENT_GOALS
+            self.in_fight(conv.npc) or self.fights_hero(conv.npc)
+            or conv.intent.goal in executor.INCIDENT_GOALS
         )
 
     def _listening(self, conv: Conversation) -> bool:
@@ -2935,12 +2936,15 @@ class DialogueManager:
 
     async def _calm(
         self, conv: Conversation, intent: Intent, *, effects: list[dict[str, Any]] | None = None,
+        native_attitude: str | None = None,
     ) -> tuple[str, bool]:
         """The npc calls off its fight with the hero, after its words, and keeps to it: its attitude to him
         is set as the scripts set it (they would fall on him again otherwise), the fight ends now."""
         if conv.intent is not intent:
             return "", True  # it changed its mind before it was done talking
-        attitude = CALM_ATTITUDES.get(intent.attitude, "ATT_NEUTRAL")
+        attitude = native_attitude
+        if attitude is None:
+            attitude = CALM_ATTITUDES.get(intent.attitude, "ATT_NEUTRAL")
         try:
             await self.link.story_effect(
                 conv.npc, [*(effects or []), {"do": "calm", "attitude": attitude}], check=bool(effects),
