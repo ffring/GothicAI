@@ -8,6 +8,8 @@
 
 #include "graphics/mesh/skeleton.h"
 #include "graphics/visualfx.h"
+#include "graphics/effect.h"
+#include "world/objects/pfxemitter.h"
 #include "game/damagecalculator.h"
 #include "game/herodeed.h"
 #include "game/deedwitness.h"
@@ -4326,6 +4328,7 @@ void Npc::tick(uint64_t dt) {
     return;
     }
   tickAnimationTags();
+  tickPeeStream();
   visual.updateMouth(*this,dt);
   visual.updateGestures(*this,dt);
   visual.updateBlink(*this,dt);
@@ -5239,6 +5242,32 @@ void Npc::emitSoundSVM(std::string_view svm) {
   char name[32]={};
   std::snprintf(name,sizeof(name),frm,int(hnpc->voice));
   emitSoundEffect(name,2500,true);
+  }
+
+void Npc::tickPeeStream() {
+  // a man relieving himself (the native S_PEE: a routine's TA_PEE, mercy.py's humiliation) shows the stream
+  const bool on = !isPlayer() && guild()<GIL_SEPERATOR_HUM && !isDown() && !isDead() && visual.pose().isInAnim("S_PEE");
+  if(on==peeStreaming)
+    return;
+  peeStreaming = on;
+  Log::i("pee stream ",on ? "on" : "off",": ",displayName());
+  if(!on) {
+    visual.stopEffect(PeeEffectSlot);
+    return;
+    }
+  if(std::getenv("GAI_PEE_AXES")!=nullptr) {
+    for(int i=0; i<4; ++i) {
+      Effect a(PfxEmitter(owner,"PFX_GAI_AXIS_"+std::to_string(i)),"BIP01 PELVIS");
+      a.setActive(true);
+      a.setLooped(true);
+      visual.startEffect(owner,std::move(a),PeeEffectSlot+1+i,false);
+      }
+    return;
+    }
+  Effect e(PfxEmitter(owner,"PFX_GAI_PEE"),"BIP01 PELVIS");
+  e.setActive(true);
+  e.setLooped(true);
+  visual.startEffect(owner,std::move(e),PeeEffectSlot,false);
   }
 
 void Npc::startEffect(Npc& to, const VisualFx& vfx) {

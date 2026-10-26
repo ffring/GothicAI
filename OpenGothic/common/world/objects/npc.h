@@ -606,6 +606,7 @@ class Npc final {
     bool      isRotationAllowed() const;
     auto      playAnimByName(std::string_view name, BodyState bs) -> const Animation::Sequence*;
     bool      setPlayerPose(bool kneel);
+    void      tickPeeStream();
     bool      tickPlayerPose();
     bool      isPlayerKneeling() const { return playerKneeling; }
 
@@ -993,6 +994,8 @@ class Npc final {
     AiQueue                        aiQueueOverlay;
     Npc*                           nativeCombatQueueTarget=nullptr; // only during this actor's ZS_ATTACK callback
     bool                           playerKneeling=false;
+    bool                           peeStreaming=false;
+    static constexpr int32_t       PeeEffectSlot=0x7E57;
     bool                           playerPoseExiting=false;
     bool                           externalCtrl=false; // transient, not serialized
     bool                           percPassThrough=false; // passPerception: no interception
