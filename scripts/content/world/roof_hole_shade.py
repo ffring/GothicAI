@@ -12,7 +12,7 @@ The sides of a hole are the cavity under the shingles. In the roof's own light t
 lit them as bright as a wall; they take the timber darkened to WALL_DARK of its linear colour.
 
     uv run --no-project --with numpy --with pillow python scripts/content/world/roof_hole_shade.py <content dir> \
-        [--shade 0.55] [--wall-dark 0.3] [--wood <timber albedo.png>]
+        [--shade 0.18] [--wall-dark 0.3] [--wood <timber albedo.png>]
 """
 import argparse
 import importlib.util
@@ -76,7 +76,7 @@ def main(content, shade, wall_dark, wood):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     ap.add_argument('content')
-    ap.add_argument('--shade', type=float, default=.55)
+    ap.add_argument('--shade', type=float, default=.18)
     ap.add_argument('--wall-dark', type=float, default=.3)
     ap.add_argument('--wood', default=str(WOOD))
     a = ap.parse_args()
