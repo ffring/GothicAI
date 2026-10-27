@@ -2421,6 +2421,53 @@ async def test_surrender_probe_uses_a_separate_slot_and_leaves_the_npc_cache_int
     assert not conv.history
 
 
+async def test_surrender_probe_blocks_new_prewarming_svm_and_combat_barks(monkeypatch):
+    from gothic_ai.combat_barks import CombatBarks
+    from gothic_ai.protocol import CombatHit
+
+    quick = FakeBackend("да", delay=0)
+    rows = []
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick,
+                               trace=SimpleNamespace(write=rows.append))
+    barks = CombatBarks(dialogue, rng=lambda: 0)
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    other = dialogue.open(HILDA, "Хильда", warm=False)
+    dialogue.link.snapshots[HILDA] = Snapshot.model_validate(FakeGame().snapshot(HILDA))
+    dialogue.link._dispatch(NpcRoster(type="npc_roster", t=0, npcs=[dict(
+        id=HILDA, name="Хильда", guild=8, distance=100, activity="fight",
+    )]))
+    dialogue._quick_slot(LOBART)
+    started, release = asyncio.Event(), asyncio.Event()
+    stream = quick.stream
+
+    async def held_probe(**options):
+        started.set()
+        await release.wait()
+        async for event in stream(**options):
+            yield event
+
+    monkeypatch.setattr(quick, "stream", held_probe)
+    conv.talked_at = time.monotonic()
+    task = asyncio.create_task(dialogue._surrendering(conv, [Message("user", "Пощади!")]))
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        dialogue._start_prewarm(other, [HILDA])
+        dialogue._start_svm(SvmLine(type="svm_line", id="held", npc=HILDA,
+                                  svm="$THREATEN", text="Берегись!", overlay=True))
+        dialogue.link._dispatch(CombatHit(type="combat_hit", npc=HILDA, by="PLAYER", damage=10,
+                                         hp=90, hp_max=100, down=False, dead=False, kind="melee"))
+        assert not dialogue._prewarms and not dialogue._svm_tasks and barks.task is None
+        assert not quick.prewarms and not quick.calls
+        assert {(row["type"], row["outcome"]) for row in rows} == {
+            ("svm_line", "busy"), ("combat_bark", "busy"),
+        }
+    finally:
+        release.set()
+        accepted = await task
+    assert accepted and dialogue._surrender_probes == 0
+
+
 async def test_surrender_probe_evicts_only_the_least_recent_idle_foreign_slot():
     quick = FakeBackend("да", delay=0)
     dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
@@ -2567,7 +2614,7 @@ async def test_surrender_recognition_live_gemma():
     dialogue.link.snapshots[conv.npc] = Snapshot.model_validate(FakeGame().snapshot(conv.npc))
     history = [Message("user", "Отстань от меня."), Message("assistant", "Я тебя проучу!")]
     situation = Message("developer", dialogue._brief(conv) + "\n" + dialogue_module.QUICK_HINT)
-    observed, durations, cache_timings, overheads = [], [], [], []
+    observed, durations, cache_timings, overheads, pairs = [], [], [], [], []
 
     async def warm() -> None:
         async with dialogue._quick_request(conv.npc):
@@ -2599,16 +2646,26 @@ async def test_surrender_recognition_live_gemma():
             observed.append((phrase, expected, actual))
             assert dialogue._quick_slots[conv.npc] == owner_slot
         dialogue.surrender_context = lambda npc: None
-        for phrase, _ in SURRENDER_PHRASES[:3]:
+        for index, (phrase, _) in enumerate(SURRENDER_PHRASES[:10]):
             request = [*history, situation, Message("user", phrase)]
-            await warm()
-            baseline = await first_delta(request)
-            await warm()
-            conv.talked_at = time.monotonic()
-            _, parallel_first = await asyncio.gather(
-                dialogue._surrendering(conv, request), first_delta(request),
-            )
-            overheads.append(parallel_first - baseline)
+            order = [True, False] if index % 2 == 0 else [False, True]
+            measurements = {}
+            for probe in order:
+                await warm()
+                if probe:
+                    conv.talked_at = time.monotonic()
+                    _, elapsed = await asyncio.gather(
+                        dialogue._surrendering(conv, request), first_delta(request),
+                    )
+                else:
+                    elapsed = await first_delta(request)
+                measurements[probe] = elapsed
+            overheads.append(measurements[True] - measurements[False])
+            pairs.append({
+                "probe_first": order[0],
+                "baseline_ms": round(measurements[False] * 1000, 1),
+                "parallel_ms": round(measurements[True] * 1000, 1),
+            })
     finally:
         await quick.aclose()
     positives = sum(expected for _, expected, _ in observed)
@@ -2620,9 +2677,14 @@ async def test_surrender_recognition_live_gemma():
         "probe_median_ms": round(statistics.median(durations) * 1000, 1),
         "probe_max_ms": round(max(durations) * 1000, 1),
         "first_words_overhead_ms": [round(value * 1000, 1) for value in overheads],
+        "first_words_overhead_median_ms": round(statistics.median(overheads) * 1000, 1),
+        "first_words_overhead_p90_ms": round(sorted(overheads)[8] * 1000, 1),
+        "first_words_overhead_max_ms": round(max(overheads) * 1000, 1),
+        "first_words_pairs": pairs,
         "cache_timings": cache_timings,
         "mismatches": [row for row in observed if row[1] != row[2]],
     }, ensure_ascii=False))
     assert false_yes == 0, observed
     assert correct_yes / positives >= 0.9, observed
-    assert max(overheads) <= 0.3, overheads
+    assert len(overheads) >= 10
+    assert statistics.median(overheads) <= 0.2, overheads

@@ -453,6 +453,42 @@ async def test_no_surrender_signal_keeps_native_combat_running(rig, monkeypatch)
     await end_hero_hold(rig, conv)
 
 
+async def test_surrender_probe_cancels_the_active_combat_bark_first(rig, monkeypatch):
+    quick = rig.dialogue.quick = FakeBackend("Не дождёшься!", delay=0)
+    barks = rig.mercy.barks = CombatBarks(rig.dialogue)
+    rig.link._dispatch(NpcRoster(type="npc_roster", t=1000, npcs=[rig.talk.people[NPC]]))
+    started, cancelled = asyncio.Event(), asyncio.Event()
+    stream = quick.stream
+
+    async def held_bark(**options):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        async for event in stream(**options):
+            yield event
+
+    monkeypatch.setattr(quick, "stream", held_bark)
+    barks._attempt(NPC, "landed", None, "Ты попал по герою", time.monotonic())
+    await asyncio.wait_for(started.wait(), 1)
+    conv = rig.dialogue.conversations[NPC]
+    conv.trigger = Message("user", "Пощади!")
+    conv.talked_at = time.monotonic()
+    conv.reply = asyncio.create_task(asyncio.Event().wait())
+
+    async def probe(*args, **kwargs):
+        assert cancelled.is_set() and barks.task.cancelled()
+        assert not any(rig.dialogue._quick_busy)
+        return False
+
+    monkeypatch.setattr(rig.dialogue, "_surrendering", AsyncMock(side_effect=probe))
+    await rig.mercy.hold_surrender(conv, [conv.trigger])
+    rig.dialogue._surrendering.assert_awaited_once()
+    assert rig.dialogue._surrender_probes == 0 and rig.fake.attack_state
+    await end_hero_hold(rig, conv)
+
+
 async def test_player_turn_probes_then_accepts_surrender_from_hold(rig, monkeypatch):
     words = rig.dialogue.quick = FakeBackend("Ладно!", delay=0)
     recognition = FakeBackend("да", delay=0)
