@@ -3,7 +3,7 @@
 get_filename_component(BASE_ROOT "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 set(BASE_SOURCES
   common/sha256.cpp common/baseimport.cpp common/basesources.cpp common/basemusic.c common/worldchunks.cpp common/worlddata.cpp common/modeldata.cpp common/fontdata.cpp
-  common/basemesh.cpp common/gothicglb.cpp common/gltfmesh.cpp common/asset/fromzenkit.cpp common/asset/worldfromzenkit.cpp common/asset/modelfromzenkit.cpp
+  common/programdata.cpp common/basemesh.cpp common/gothicglb.cpp common/gltfmesh.cpp common/asset/fromzenkit.cpp common/asset/worldfromzenkit.cpp common/asset/modelfromzenkit.cpp
   # The game's own path helpers, Dx8 file search and Dx8 parsers, owned here once.
   common/utils/fileutil.cpp common/dmusic/sourcefile.cpp common/dmusic/riff.cpp common/dmusic/segment.cpp common/dmusic/track.cpp
   common/dmusic/style.cpp common/dmusic/band.cpp common/dmusic/reference.cpp common/dmusic/info.cpp common/dmusic/pattern.cpp)
@@ -21,7 +21,7 @@ file(GLOB_RECURSE BASE_FORMAT_INPUTS CONFIGURE_DEPENDS RELATIVE "${BASE_ROOT}"
   "${BASE_ROOT}/lib/Tempest/Engine/io/*" "${BASE_ROOT}/lib/Tempest/Engine/utility/*" "${BASE_ROOT}/lib/Tempest/Engine/exceptions/*")
 # One list for every build topology: the format digest never depends on which targets exist.
 list(APPEND BASE_FORMAT_INPUTS ${BASE_SOURCES} ${BASE_NATIVE_IO}
-  common/sha256.h common/baseimport.h common/basemusic.h common/worldchunks.h common/worlddata.h common/modeldata.h common/fontdata.h common/basemesh.h
+  common/sha256.h common/baseimport.h common/basemusic.h common/worldchunks.h common/worlddata.h common/modeldata.h common/fontdata.h common/programdata.h common/basemesh.h
   common/gothicglb.h common/gltfmesh.h common/utils/fileutil.h common/dmusic/sourcefile.h common/dmusic/riff.h common/dmusic/segment.h
   common/dmusic/track.h common/dmusic/style.h common/dmusic/band.h common/dmusic/reference.h common/dmusic/info.h common/dmusic/pattern.h
   common/dmusic/structs.h lib/Tempest/Engine/system/platform.h lib/Tempest/Engine/include/Tempest/File lib/Tempest/Engine/include/Tempest/Dir

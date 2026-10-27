@@ -42,6 +42,10 @@ int convertModels(const std::filesystem::path& gothic, const std::filesystem::pa
 // P11: fonts/fonts.json and one record per selected FNT basename (common/fontdata.h),
 // selected through the engine's runtime VFS (mountRuntime).
 int convertFonts(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
+// P12: programs/programs.json and one record per distinct program (common/programdata.h) for every
+// .DAT of the runtime VFS, below the nine _compiled directories and the server's GOTHIC.DAT.
+// An installation without programs gives an empty index.
+int convertPrograms(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
 // P10: sources/sources.json, the selected inputs of the not yet migrated families
 // (FNT, audio, BIK, SGT/STY/DLS, the eight DATs, OU, server readers) with origin and SHA-256.
 int convertSources(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);

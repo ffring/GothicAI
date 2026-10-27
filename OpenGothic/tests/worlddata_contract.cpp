@@ -24,6 +24,7 @@
 #include <fstream>
 #include <iomanip>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <typeinfo>
@@ -154,6 +155,10 @@ struct WorldDataContract {
     return count;
     }
   static void runtimeSources(const fs::path& census, const fs::path& gothicDir, Resources& resources, Gothic& gothic) {
+    // The existing headless session constructs the six definition programs and
+    // the game program. Cover the menu input without starting another VM/world.
+    const auto menu=gothic.loadScript("MENU.DAT",ScriptLang::NONE);
+    require(!menu.symbols().empty(),"native menu program must contain symbols");
     require(Resources::writeCensus(),"cannot write runtime source census");
     const auto doc=json(census);
     const auto& profile=doc["active_profile"];
@@ -164,6 +169,61 @@ struct WorldDataContract {
     const auto& sources=doc["runtime_sources"];
     require(std::string_view(sources["coverage"].GetString())=="observed_successful_parses" &&
             !sources["complete_corpus"].GetBool(),"runtime census must distinguish observed parses from the declared corpus");
+    const auto& programs=doc["runtime_programs"];
+    require(std::string_view(programs["coverage"].GetString())=="loaded_base_records" &&
+            !programs["complete_corpus"].GetBool(),"runtime native programs must not claim original parses or full corpus coverage");
+    bool game=false;
+    std::set<std::string> loaded;
+    for(const auto& row:programs["selections"].GetArray()) {
+      const std::string request=row["request"].GetString(),branch=row["branch"].GetString();
+      require(std::string_view(row["consumer"].GetString())=="Gothic::loadScript",request+": native program consumer");
+      const bool gameRequest=request==gothic.defaultGameDatFile();
+      game|=gameRequest;
+      loaded.insert(request);
+      require(row["language"].GetInt()==(gameRequest ? language : int(ScriptLang::NONE)),
+              request+": native census must retain the language argument");
+      const auto& imported=row["imported_source"];
+      const ProgramData::Source* selected=nullptr;
+      if(branch=="vfs_find_request" || branch=="vfs_find_basename") {
+        std::string_view selectedBranch;
+        selected=resources.basePrograms.findVfs(request,&selectedBranch);
+        require(selectedBranch==branch,request+": native VFS branch differs from the index");
+        const auto lookup=branch=="vfs_find_basename" ? fs::path(request).filename().string() : request;
+        const auto* node=Resources::vdfsIndex().resolve(imported["path"].GetString());
+        require(node!=nullptr && node==Resources::vdfsIndex().find(lookup),
+                request+": native provenance must retain the full selected VFS path");
+        }
+      else {
+        require(branch=="host_ordinary" || branch=="host_localized_full" || branch=="host_localized_basename",
+                request+": unexpected native host branch");
+        selected=resources.basePrograms.findHost(imported["path"].GetString());
+        }
+      require(selected!=nullptr && selected->origin==imported["origin"].GetString() &&
+              selected->path==imported["path"].GetString() && selected->size==imported["size"].GetUint64() &&
+              selected->sha256==imported["sha256"].GetString(),request+": imported program identity differs from the index");
+      require(selected->archive.empty() ? imported["archive"].IsNull() :
+              imported["archive"].IsString() && selected->archive==imported["archive"].GetString(),
+              request+": native provenance archive differs from the index");
+      const auto file=resources.basePrograms.path(*selected);
+      auto bin=file; bin.replace_extension(".bin");
+      const auto& record=row["record"];
+      require(std::string(record["json"].GetString())=="base/programs/"+file.filename().string() &&
+              std::string(record["bin"].GetString())=="base/programs/"+bin.filename().string(),
+              request+": native census must identify the loaded JSON and BIN");
+      const auto read=[](const fs::path& path) {
+        std::ifstream input(path,std::ios::binary);
+        require(bool(input),"cannot read native program oracle: "+path.string());
+        return std::string(std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>());
+        };
+      const auto digest=Sha256::hash(read(file)+read(bin));
+      require(digest==record["sha256"].GetString() && digest==selected->recordSha256,
+              request+": native census SHA-256 differs from actual JSON+BIN bytes");
+      }
+    require(game,"existing GameSession construction must load the actual game program");
+    for(const auto* name:{"Camera.dat","Fight.dat","Sfx.dat","Music.dat","ParticleFx.dat","VisualFx.dat","MENU.DAT"})
+      require(loaded.count(name)==1,std::string(name)+": all eight inputs must load native programs");
+    for(const auto& row:doc["files"].GetArray())
+      require(std::string_view(row["kind"].GetString())!="script","native runtime must add zero original DAT opens");
     const auto& selections=sources["selections"];
     const auto basename=[](const char* path) {
       auto name=fs::path(path).filename().string();
@@ -193,23 +253,16 @@ struct WorldDataContract {
               std::string(row["request"].GetString())+": runtime source identity differs from actual bytes");
       };
     std::vector<BaseImport::RuntimeArchive> archives;
-    bool game=false,ou=false;
+    bool ou=false;
     for(const auto& row:selections.GetArray()) {
       const std::string request=row["request"].GetString(),source=row["source"].GetString();
       const fs::path path=row["path"].GetString();
       require(source!="unknown" && path!="unknown" && relative(source) && relative(path),
               request+": runtime source paths must be known and installation-relative");
-      if(std::string_view(row["consumer"].GetString())=="Gothic::loadScript") {
-        if(request==gothic.defaultGameDatFile()) game=true;
-        require(row["language"].GetInt()==(request==gothic.defaultGameDatFile() ? language : int(ScriptLang::NONE)),
-                request+": DAT census did not retain the language argument");
-        }
-      else {
-        require(std::string_view(row["consumer"].GetString())=="GameScript::loadDialogOU" &&
-                (request==std::string(gothic.defaultOutputUnits())+".BIN" || request==std::string(gothic.defaultOutputUnits())+".DAT") &&
-                row["language"].GetInt()==language,"OU census did not retain the successful request and language");
-        ou=true;
-        }
+      require(std::string_view(row["consumer"].GetString())=="GameScript::loadDialogOU" &&
+              (request==std::string(gothic.defaultOutputUnits())+".BIN" || request==std::string(gothic.defaultOutputUnits())+".DAT") &&
+              row["language"].GetInt()==language,"only successful OU parses belong in runtime_sources");
+      ou=true;
       if(std::string_view(row["location"].GetString())=="vfs") {
         const auto& vfs=Resources::vdfsIndex();
         const auto* node=vfs.resolve(path.generic_string());
@@ -243,12 +296,8 @@ struct WorldDataContract {
         checkBytes(*reader,row);
         }
       }
-    require(game && ou,"existing GameSession construction must observe the actual game DAT and successful OU");
-    for(const auto* name:{"Camera.dat","Fight.dat","Sfx.dat","Music.dat","ParticleFx.dat","VisualFx.dat"})
-      require(std::any_of(selections.Begin(),selections.End(),[&](const auto& row) {
-        return std::string_view(row["request"].GetString())==name;
-        }),std::string(name)+": existing global script construction must observe the definition DAT");
-    std::puts("Runtime census: active profile, DAT/OU selected nodes, source bytes and unchanged original-open counts verified");
+    require(ou,"existing GameSession construction must observe successful OU parsing");
+    std::puts("Runtime census: active profile, all eight native programs with actual JSON+BIN identities, zero DAT opens, and successful OU source bytes verified");
     }
   static void write(const fs::path& path, const rapidjson::Document& doc) {
     rapidjson::StringBuffer text; rapidjson::Writer<rapidjson::StringBuffer> writer(text); doc.Accept(writer);

@@ -1996,6 +1996,7 @@ void testPoseActualDriverSave() {
   require(BaseImport::convertMeshes(root,base/"meshes",false)==0,"pose driver mesh index must import");
   require(BaseImport::convertZen(root,base/"zen",false)==0,"pose driver ZEN index must import");
   require(BaseImport::convertFonts(root,base/"fonts",false)==0,"pose driver font index must import");
+  require(BaseImport::convertPrograms(root,base/"programs",false)==0,"pose driver program index must import");
   {
     // Synthetic installation without remaining-family inputs: a labelled empty manifest.
     std::filesystem::create_directories(base/"sources");

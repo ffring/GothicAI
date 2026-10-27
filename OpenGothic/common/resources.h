@@ -10,6 +10,7 @@
 #include "asset/staticmesh.h"
 #include "asset/modeltypes.h"
 #include "basestore.h"
+#include "programdata.h"
 #include "asset/worldtypes.h"
 
 #include <tuple>
@@ -199,6 +200,8 @@ class Resources final {
     static std::unique_ptr<zenkit::Read> getFileBuffer(std::string_view name, CensusSource* source = nullptr);
     static auto                      openReader(std::string_view name, std::unique_ptr<zenkit::Read>& read, CensusSource* source = nullptr) -> std::unique_ptr<zenkit::ReadArchive>;
     static bool                      hasFile    (std::string_view fname);
+    static zenkit::DaedalusScript     loadBaseProgram(std::string_view request, int language,
+                                                     std::string_view branch, std::u16string_view hostPath = {});
 
     static const zenkit::Vfs&        vdfsIndex();
     static std::filesystem::path      worldBaseDir(std::string_view world);
@@ -234,6 +237,7 @@ class Resources final {
       void validateLoose(const std::filesystem::path& game);
       };
     BaseIndex baseTextures, baseMeshes, baseZen, baseModels, baseFonts;
+    ProgramData::Index basePrograms;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     BaseStore::Selection automaticBase;
     BaseImport::Progress baseProgress;

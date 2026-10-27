@@ -1,6 +1,6 @@
 """The story layer of the game as a graph: dialogs, choices, quests and the variables between them.
 
-`storygraph` (OpenGothic/ai_bridge/storygraph) lifts it out of GOTHIC.DAT into JSON, see
+`storygraph` (OpenGothic/ai_bridge/storygraph) lifts the imported program record into JSON, see
 docs/story-graph.md. Nodes are dialogs (C_INFO) and the choices they offer; a dialog has a condition
 (when it is offered) and both have effects (lines, variables, items, journal, choices...), each effect
 with the guard it runs under.
@@ -29,7 +29,6 @@ VERSION = 1
 # the converter, built in the repository (docs/story-graph.md, stage 1)
 REPO = Path(__file__).resolve().parents[4]
 TOOL = REPO / "OpenGothic" / "ai_bridge" / "storygraph" / "build" / "storygraph"
-DAT_PATH = ("_work", "Data", "Scripts", "_compiled", "GOTHIC.DAT")
 
 Expr = list
 
@@ -190,36 +189,25 @@ def load(path: Path) -> StoryGraph:
     )
 
 
-def find_dat(game_dir: Path) -> Path | None:
-    """GOTHIC.DAT of the installation (names in any case)."""
-    path = game_dir
-    for part in DAT_PATH:
-        if not path.is_dir():
-            return None
-        path = next((p for p in path.iterdir() if p.name.upper() == part.upper()), path / part)
-    return path if path.is_file() else None
-
-
 def ensure(game_dir: Path, cache: Path, tool: Path | None = None) -> Path | None:
-    """The graph of the game's scripts as JSON in `cache`, made again by the converter when the scripts or
-    the converter are newer; None if there is neither a cache nor the means to make one."""
+    """Rebuild from the selected native program and OU, publishing the graph atomically."""
     tool = tool or Path(os.environ.get("STORYGRAPH_TOOL", TOOL))
-    dat = find_dat(game_dir)
-    sources = [p for p in (dat, tool) if p is not None and p.exists()]
-    if cache.exists() and all(cache.stat().st_mtime >= p.stat().st_mtime for p in sources):
-        return cache
-    if dat is None or not tool.exists():
+    if not tool.exists():
+        if cache.exists():
+            log.warning("story graph: converter unavailable; existing cache freshness is unverified")
         return cache if cache.exists() else None
     cache.parent.mkdir(parents=True, exist_ok=True)
     tmp = cache.with_suffix(".tmp")
     try:
-        cmd = [str(tool), str(dat), "--json", str(tmp)]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+        cmd = [str(tool), str(game_dir), "--json", str(tmp)]
+        subprocess.run(cmd, check=True, capture_output=True, timeout=1800)
     except (OSError, subprocess.SubprocessError) as err:
         log.warning("story graph: %s failed: %s", tool, err)
+        if cache.exists():
+            log.warning("story graph: existing cache freshness is unverified")
         return cache if cache.exists() else None
     tmp.replace(cache)
-    log.info("story graph: %s from %s", cache, dat)
+    log.info("story graph: %s from %s", cache, game_dir)
     return cache
 
 

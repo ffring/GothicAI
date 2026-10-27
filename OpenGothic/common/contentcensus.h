@@ -10,6 +10,7 @@
 #include <vector>
 
 namespace zenkit { class Read; }
+namespace ProgramData { struct Source; }
 
 // Session-only accounting. Resources creates this object only with OPENGOTHIC_CENSUS.
 class ContentCensus final {
@@ -23,6 +24,9 @@ class ContentCensus final {
     void selected(std::string_view consumer, std::string_view request, int language,
                   std::string_view branch, std::string_view location, std::string_view path,
                   std::string_view source, zenkit::Read& read) noexcept;
+    void program(std::string_view consumer, std::string_view request, int language,
+                 std::string_view branch, std::string_view record, std::string_view sha256,
+                 const ProgramData::Source& source) noexcept;
     bool write() noexcept;
 
   private:
@@ -41,4 +45,11 @@ class ContentCensus final {
     int language = -1;
     bool hasProfile = false;
     std::vector<Selection> selections;
+    struct ProgramSelection {
+      std::string consumer, request, branch, record, sha256;
+      std::string sourceOrigin, sourcePath, sourceArchive, sourceSha256;
+      int language = -1;
+      uint64_t sourceSize = 0;
+      };
+    std::vector<ProgramSelection> programs;
   };

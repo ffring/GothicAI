@@ -1,5 +1,6 @@
 #include "contentcensus.h"
 #include "sha256.h"
+#include "programdata.h"
 
 #include <Tempest/Log>
 #include <Tempest/TextCodec>
@@ -154,6 +155,28 @@ void ContentCensus::selected(std::string_view consumer, std::string_view request
   catch(...) { Tempest::Log::e("census: unable to record parsed source"); }
   }
 
+void ContentCensus::program(std::string_view consumer, std::string_view request, int language,
+                            std::string_view branch, std::string_view record, std::string_view sha256,
+                            const ProgramData::Source& source) noexcept {
+  try {
+    ProgramSelection entry;
+    entry.consumer = consumer;
+    entry.request = request;
+    entry.language = language;
+    entry.branch = branch;
+    entry.record = record;
+    entry.sha256 = sha256;
+    entry.sourceOrigin = source.origin;
+    entry.sourcePath = source.path;
+    entry.sourceArchive = source.archive;
+    entry.sourceSha256 = source.sha256;
+    entry.sourceSize = source.size;
+    std::lock_guard<std::mutex> guard(sync);
+    programs.push_back(std::move(entry));
+    }
+  catch(...) { Tempest::Log::e("census: unable to record base program"); }
+  }
+
 bool ContentCensus::write() noexcept {
   try {
     std::lock_guard<std::mutex> guard(sync);
@@ -183,6 +206,7 @@ bool ContentCensus::write() noexcept {
                                key.second.compare(0,12,"base/meshes/")==0 ? "basemesh" :
                                key.second.compare(0,12,"base/models/")==0 ? "basemodel" :
                                key.second.compare(0,11,"base/fonts/")==0 ? "basefont" :
+                               key.second.compare(0,14,"base/programs/")==0 ? "baseprogram" :
                                key.second.compare(0,12,"base/worlds/")==0 ? "baseworld" :
                                key.second.compare(0,9,"base/zen/")==0 ? "basezen" :
                                key.second.compare(0,7,"meshes/")==0 ? "mesh" :
@@ -231,6 +255,39 @@ bool ContentCensus::write() noexcept {
       json.Key("source"); string(entry.source);
       json.Key("size"); json.Uint64(entry.size);
       json.Key("sha256"); string(entry.sha256);
+      json.EndObject();
+      }
+    json.EndArray();
+    json.EndObject();
+    json.Key("runtime_programs");
+    json.StartObject();
+    json.Key("coverage"); string("loaded_base_records");
+    json.Key("complete_corpus"); json.Bool(false);
+    json.Key("selections");
+    json.StartArray();
+    for(const auto& entry:programs) {
+      json.StartObject();
+      json.Key("consumer"); string(entry.consumer);
+      json.Key("request"); string(entry.request);
+      json.Key("language"); json.Int(entry.language);
+      json.Key("branch"); string(entry.branch);
+      json.Key("record");
+      json.StartObject();
+      json.Key("json"); string(entry.record);
+      auto binary = std::filesystem::path(entry.record);
+      binary.replace_extension(".bin");
+      json.Key("bin"); string(binary.generic_string());
+      json.Key("sha256"); string(entry.sha256);
+      json.EndObject();
+      json.Key("imported_source");
+      json.StartObject();
+      json.Key("origin"); string(entry.sourceOrigin);
+      json.Key("path"); string(entry.sourcePath);
+      json.Key("archive");
+      if(entry.sourceArchive.empty()) json.Null(); else string(entry.sourceArchive);
+      json.Key("size"); json.Uint64(entry.sourceSize);
+      json.Key("sha256"); string(entry.sourceSha256);
+      json.EndObject();
       json.EndObject();
       }
     json.EndArray();

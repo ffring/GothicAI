@@ -4,6 +4,7 @@
 #include "baseimport.h"
 #include "basemusic.h"
 #include "gothicglb.h"
+#include "programdata.h"
 #include "sha256.h"
 #include "dmusic/segment.h"
 #include "dmusic/sourcefile.h"
@@ -877,14 +878,27 @@ std::string Manifest::outputUnitsJson() {
   return "{\"prefix\":\"OU\",\"reached\":["+reached+"],\"selected\":{"+selected+"}}";
   }
 
+// The first entry of `dir` with this name in any case, as the server and storygraph look up files.
+fs::path firstChild(const fs::path& dir, const std::string& name) {
+  std::error_code ec;
+  for(const auto& e:fs::directory_iterator(dir,ec))
+    if(upper(e.path().filename().string())==upper(name))
+      return e.path();
+  return fs::path();
+  }
+
+// server/src/gothic_ai/gamedata/storygraph.py find_dat; the result may not exist.
+fs::path findDat(const fs::path& gothic) {
+  fs::path dat = gothic;
+  for(const char* part:{"_work","Data","Scripts","_compiled","GOTHIC.DAT"}) {
+    if(!fs::is_directory(dat)) { dat.clear(); break; }
+    const auto next = firstChild(dat,part);
+    dat = next.empty() ? dat/part : next;
+    }
+  return dat;
+  }
+
 std::string Manifest::serverJson() {
-  const auto firstChild = [](const fs::path& dir, const std::string& name) {
-    std::error_code ec;
-    for(const auto& e:fs::directory_iterator(dir,ec))
-      if(upper(e.path().filename().string())==upper(name))
-        return e.path();
-    return fs::path();
-    };
   const auto entry = [&](const fs::path& file, const fs::path& engine) {
     if(file.empty() || !fs::is_regular_file(file))
       return std::string("null");
@@ -899,12 +913,7 @@ std::string Manifest::serverJson() {
   if(const auto dir = gothic/"_work"/"Data"/"Scripts"/"CONTENT"/"CUTSCENE"; fs::is_directory(dir))
     ou = firstChild(dir,"OU.BIN");
   // server/src/gothic_ai/gamedata/storygraph.py find_dat
-  fs::path dat = gothic;
-  for(const char* part:{"_work","Data","Scripts","_compiled","GOTHIC.DAT"}) {
-    if(!fs::is_directory(dat)) { dat.clear(); break; }
-    const auto next = firstChild(dat,part);
-    dat = next.empty() ? dat/part : next;
-    }
+  const fs::path dat = findDat(gothic);
   // OpenGothic/ai_bridge/storygraph findOu(dat)
   fs::path graphOu;
   if(!dat.empty() && fs::is_regular_file(dat)) {
@@ -943,6 +952,320 @@ std::string readText(const fs::path& file) {
   std::ifstream f(file,std::ios::binary);
   require(bool(f),"cannot open "+file.string());
   return std::string(std::istreambuf_iterator<char>(f),std::istreambuf_iterator<char>());
+  }
+
+// zenkit::Vfs compares names ignoring ASCII case only; ProgramData::Index::findVfs folds the same way.
+std::string upperAscii(std::string s) {
+  for(auto& c:s)
+    if(c>='a' && c<='z')
+      c = char(c-'a'+'A');
+  return s;
+  }
+
+// P12: every origin Gothic::loadScript or the server can take a program from, converted to our
+// own records (common/programdata.h) and indexed by the original choices.
+class ProgramImport {
+  public:
+    explicit ProgramImport(const fs::path& root)
+      : root16(installation(fs::absolute(root))), gothic(fs::path(root16).parent_path()) {
+      vfs.set_open_observer([this](std::string_view, std::string_view source) { opened = source; });
+      archives = mountRuntime(vfs,gothic,work);
+      collectPaths(vfs.root(),"",paths);
+      }
+
+    // Converts, or with verifyOnly compares, every program; returns a summary line.
+    std::string run(const fs::path& out, bool verifyOnly);
+
+  private:
+    using Key = std::pair<std::string,std::string>; // origin, path
+
+    struct Entry {
+      std::string archive, sha256, program, recordSha256, skipped;
+      uint64_t    size = 0, trailing = 0;
+      };
+
+    struct Row {
+      std::string        request;
+      int                language = -1;
+      std::string        step, path;
+      std::optional<Key> source;
+      };
+
+    std::u16string nested(const std::initializer_list<const char16_t*>& segments, Dir::FileType type) const {
+      return FileUtil::nestedPath(root16,segments,type);
+      }
+
+    std::string relative(const fs::path& p) const {
+      return p.lexically_relative(gothic).lexically_normal().generic_string();
+      }
+
+    Key  fromNode(const zenkit::VfsNode* node);
+    Key  fromHost(const fs::path& file);
+    void add(const Key& key, const std::string& archive, const std::vector<uint8_t>& bytes, const Digest& d);
+    void convert(Entry& e, const std::vector<uint8_t>& bytes);
+    std::string json() const;
+
+    std::u16string                               root16;
+    fs::path                                     gothic, work, out;
+    bool                                         verifyOnly = false;
+    zenkit::Vfs                                  vfs;
+    std::string                                  opened;
+    std::vector<RuntimeArchive>                  archives;
+    std::map<const zenkit::VfsNode*,std::string> paths;
+    std::map<const zenkit::VfsNode*,Key>         nodeKeys;
+    std::map<Key,Entry>                          sources;
+    std::map<std::string,std::string>            programs; // record name -> identity
+    std::map<std::string,Key>                    vfsTable;
+    std::vector<Row>                             rows;
+    std::optional<Key>                           server;
+  };
+
+ProgramImport::Key ProgramImport::fromNode(const zenkit::VfsNode* node) {
+  if(auto it=nodeKeys.find(node); it!=nodeKeys.end())
+    return it->second;
+  opened.clear();
+  auto in = node->open_read();
+  std::vector<uint8_t> bytes;
+  const auto d = digest(*in,&bytes);
+  if(fs::path(opened).is_absolute()) {
+    const auto key = fromHost(fs::path(opened));
+    require(sources.at(key).sha256==d.sha256,"host file changed while reading: "+opened);
+    return nodeKeys[node] = key;
+    }
+  const Key key{"archive",paths.at(node)};
+  add(key,upper(opened),bytes,d);
+  return nodeKeys[node] = key;
+  }
+
+ProgramImport::Key ProgramImport::fromHost(const fs::path& file) {
+  Key key{"host",relative(file)};
+  // One physical file, however a lookup spelled it (case-insensitive file systems).
+  for(const auto& [k,e]:sources) {
+    std::error_code ec;
+    if(k.first=="host" && upperAscii(k.second)==upperAscii(key.second) && fs::equivalent(gothic/k.second,file,ec))
+      return k;
+    }
+  auto in = zenkit::Read::from(file);
+  require(in!=nullptr,"cannot open "+file.string());
+  std::vector<uint8_t> bytes;
+  const auto d = digest(*in,&bytes);
+  add(key,std::string(),bytes,d);
+  return key;
+  }
+
+void ProgramImport::add(const Key& key, const std::string& archive, const std::vector<uint8_t>& bytes, const Digest& d) {
+  if(sources.count(key))
+    return;
+  Entry e;
+  e.archive = archive;
+  e.size    = d.size;
+  e.sha256  = d.sha256;
+  convert(e,bytes);
+  sources.emplace(key,std::move(e));
+  }
+
+void ProgramImport::convert(Entry& e, const std::vector<uint8_t>& bytes) {
+  // OU.DAT and other ZenGin archives are not scripts: never parsed as Daedalus.
+  static const char zengin[] = "ZenGin Archive";
+  if(bytes.size()>=sizeof(zengin)-1 && std::memcmp(bytes.data(),zengin,sizeof(zengin)-1)==0) {
+    e.skipped = "zengin archive";
+    return;
+    }
+  // version u8, symbol count, sort table, text size: a corrupt count would allocate billions of symbols.
+  if(bytes.size()<9 || uint64_t(le32(bytes,1))*4+9>bytes.size()) {
+    e.skipped = "not a daedalus program";
+    return;
+    }
+  zenkit::DaedalusProgramRecord program;
+  size_t end = 0;
+  try {
+    auto read = zenkit::Read::from(reinterpret_cast<const std::byte*>(bytes.data()),bytes.size());
+    zenkit::DaedalusScript script;
+    script.load(read.get());
+    end = read->tell();
+    // Exported right after parsing: no class registration, no VM, no runtime symbol.
+    program = script.export_program();
+    }
+  catch(const std::exception& ex) {
+    e.skipped = std::string("parse failed: ")+ex.what();
+    return;
+    }
+  const auto length = program.bytecode.size();
+  if(end>bytes.size() || length>end ||
+     (length>0 && std::memcmp(bytes.data()+end-length,program.bytecode.data(),length)!=0)) {
+    e.skipped = "truncated program";
+    return;
+    }
+  require(program.symbols.size()==le32(bytes,1),"program symbol count differs from its header");
+  e.trailing = bytes.size()-end;
+
+  const auto enc = ProgramData::encodeProgram(program);
+  const auto file = out/(enc.name+".json");
+  if(!programs.count(enc.name)) {
+    if(verifyOnly) {
+      require(gothicglb::readFile(file)==std::vector<uint8_t>(enc.json.begin(),enc.json.end()),
+              "program record differs: "+file.string());
+      require(gothicglb::readFile(out/(enc.name+".bin"))==enc.bin,"program record differs: "+enc.name+".bin");
+      }
+    else {
+      require(ProgramData::writeProgram(program,out)==enc.sha256,"program record identity changed while writing");
+      }
+    std::string sha;
+    const auto back = ProgramData::readProgram(file,&sha);
+    require(sha==enc.sha256,"program record identity differs after reading: "+file.string());
+    auto diff = ProgramData::compare(program,back);
+    require(diff.empty(),"program record differs after reading: "+diff);
+    diff = ProgramData::compare(program,zenkit::DaedalusScript::from_program(back).export_program());
+    require(diff.empty(),"program differs after the native factory: "+diff);
+    programs[enc.name] = enc.sha256;
+    }
+  e.program      = enc.name;
+  e.recordSha256 = enc.sha256;
+  }
+
+std::string ProgramImport::run(const fs::path& outDir, bool verify) {
+  out        = outDir;
+  verifyOnly = verify;
+  if(!verifyOnly)
+    fs::create_directories(out);
+
+  // The runtime VFS: every .DAT basename, chosen by the engine's own Vfs::find.
+  std::set<std::string> names;
+  for(const auto& [node,path]:paths)
+    if(extension(node->name())==".DAT")
+      names.insert(upperAscii(node->name()));
+  for(const auto& name:names) {
+    const auto* node = vfs.find(name);
+    require(node!=nullptr,"VFS lost "+name);
+    vfsTable[name] = fromNode(node);
+    }
+
+  // Host programs below every _compiled directory CommandLine::scriptPath() and scriptPath(lang) name.
+  std::vector<const char16_t*> dirs = {u"Scripts"};
+  dirs.insert(dirs.end(),scriptLanguages.begin(),scriptLanguages.end());
+  for(const auto* dir:dirs) {
+    const fs::path root(nested({u"_work",u"Data",dir,u"_compiled"},Dir::FT_Dir));
+    if(!fs::is_directory(root))
+      continue;
+    std::vector<fs::path> files;
+    for(const auto& e:fs::recursive_directory_iterator(root))
+      if(e.is_regular_file() && extension(e.path().filename().string())==".DAT")
+        files.push_back(e.path());
+    std::sort(files.begin(),files.end());
+    for(const auto& f:files)
+      fromHost(f);
+    }
+
+  if(const auto dat = findDat(gothic); !dat.empty() && fs::is_regular_file(dat))
+    server = fromHost(dat);
+
+  // Gothic::loadScript for the canonical requests (Gothic::createPhoenixVm callers and the default
+  // game DAT) and every language setting; evidence, whatever the outcome.
+  const std::array<std::string,8> requests = {"Camera.dat","Fight.dat","Sfx.dat","Music.dat","ParticleFx.dat",
+                                               "VisualFx.dat","MENU.DAT","GOTHIC.DAT"};
+  const auto widened = [](const std::string& s) { return widen(s.substr(0,std::min<size_t>(s.size(),255))); };
+  const auto scripts = nested({u"_work",u"Data",u"Scripts",u"_compiled"},Dir::FT_Dir);
+  for(const auto& request:requests)
+    for(int lang=-1; lang<int(scriptLanguages.size()); ++lang) {
+      Row r;
+      r.request  = request;
+      r.language = lang;
+      const auto segment = request.find_last_of("\\/");
+      if(const auto* node = vfs.find(request)) {
+        r.step   = "vfs_find_request";
+        r.path   = paths.at(node);
+        r.source = fromNode(node);
+        }
+      else if(const auto* node = segment==std::string::npos ? nullptr : vfs.find(request.substr(segment+1))) {
+        r.step   = "vfs_find_basename";
+        r.path   = paths.at(node);
+        r.source = fromNode(node);
+        }
+      else {
+        auto path = FileUtil::caseInsensitiveSegment(scripts,widened(request).c_str(),Dir::FT_File);
+        r.step = "host_ordinary";
+        if(!FileUtil::exists(path) && lang>=0) {
+          const auto localized = nested({u"_work",u"Data",scriptLanguages[size_t(lang)],u"_compiled"},Dir::FT_Dir);
+          path   = FileUtil::caseInsensitiveSegment(localized,widened(request).c_str(),Dir::FT_File);
+          r.step = "host_localized_full";
+          if(!FileUtil::exists(path)) {
+            path   = FileUtil::caseInsensitiveSegment(localized,widened(request.substr(segment+1)).c_str(),Dir::FT_File);
+            r.step = "host_localized_basename";
+            }
+          }
+        if(FileUtil::exists(path)) {
+          r.source = fromHost(fs::path(path));
+          r.path   = r.source->second;
+          }
+        }
+      rows.push_back(std::move(r));
+      }
+
+  const auto text = json();
+  if(!verifyOnly) {
+    const auto tmp = out/"programs.json.tmp";
+    gothicglb::writeFile(tmp,text.data(),text.size());
+    fs::rename(tmp,out/"programs.json");
+    }
+  require(parse(readText(out/"programs.json"),"programs.json")==parse(text,"expected programs"),
+          "programs.json differs from the installation");
+  const auto index = ProgramData::readIndex(out);
+  require(index.sources.size()==sources.size() && index.programs.size()==programs.size(),"programs.json reads back differently");
+
+  size_t skipped = 0;
+  for(const auto& [k,e]:sources)
+    skipped += e.skipped.empty() ? 0 : 1;
+  return std::to_string(programs.size())+" program records from "+std::to_string(sources.size())+" sources, "+
+         std::to_string(skipped)+" skipped";
+  }
+
+std::string ProgramImport::json() const {
+  std::map<Key,size_t> index;
+  for(const auto& [k,e]:sources)
+    index.emplace(k,index.size());
+  const auto ref = [&](const std::optional<Key>& k) { return k ? std::to_string(index.at(*k)) : std::string("null"); };
+  const auto opt = [](const std::string& s) { return s.empty() ? std::string("null") : str(s); };
+
+  Files mounted;
+  for(const auto& a:archives)
+    mounted.emplace_back(a.name,a.size);
+  std::sort(mounted.begin(),mounted.end());
+
+  std::string s = "{\n  \"format\":\"gothic-programs\",\n  \"version\":1,\n  \"archives\":[";
+  for(size_t i=0; i<mounted.size(); ++i)
+    s += std::string(i ? "," : "")+"\n    {\"name\":"+str(mounted[i].first)+",\"size\":"+std::to_string(mounted[i].second)+"}";
+  s += "\n  ],\n  \"loose_files\":[";
+  size_t n = 0;
+  for(const auto& [k,e]:sources)
+    if(k.first=="host")
+      s += std::string(n++ ? "," : "")+"\n    {\"path\":"+str(k.second)+",\"size\":"+std::to_string(e.size)+"}";
+  s += "\n  ],\n  \"programs\":{";
+  n = 0;
+  for(const auto& [name,sha]:programs)
+    s += std::string(n++ ? "," : "")+"\n    \""+name+"\":\""+sha+"\"";
+  s += "\n  },\n  \"sources\":[";
+  n = 0;
+  for(const auto& [k,e]:sources)
+    s += std::string(n++ ? "," : "")+"\n    {\"origin\":\""+k.first+"\",\"path\":"+str(k.second)+
+         ",\"archive\":"+opt(e.archive)+",\"size\":"+std::to_string(e.size)+",\"sha256\":\""+e.sha256+
+         "\",\"program\":"+opt(e.program)+",\"trailing_bytes\":"+std::to_string(e.trailing)+
+         ",\"skipped\":"+opt(e.skipped)+"}";
+  s += "\n  ],\n  \"vfs\":{";
+  n = 0;
+  for(const auto& [name,k]:vfsTable)
+    s += std::string(n++ ? "," : "")+"\n    "+str(name)+":"+ref(k);
+  s += "\n  },\n  \"host\":{";
+  n = 0;
+  for(const auto& [k,e]:sources)
+    if(k.first=="host")
+      s += std::string(n++ ? "," : "")+"\n    "+str(k.second)+":"+ref(k);
+  s += "\n  },\n  \"selections\":[";
+  for(size_t i=0; i<rows.size(); ++i)
+    s += std::string(i ? "," : "")+"\n    {\"request\":"+str(rows[i].request)+",\"language\":"+
+         std::to_string(rows[i].language)+",\"step\":\""+rows[i].step+"\",\"path\":"+opt(rows[i].path)+
+         ",\"source\":"+ref(rows[i].source)+"}";
+  s += "\n  ],\n  \"server\":{\"storygraph_dat\":"+ref(server)+"}\n}\n";
+  return s;
   }
 }
 
@@ -1024,6 +1347,15 @@ int convertSources(const fs::path& gothic, const fs::path& out, bool verifyOnly)
           "sources.json differs from the installation");
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
   std::cout << (verifyOnly ? "verified" : "written and verified") << " source manifest (" << ms << " ms)\n";
+  return 0;
+  }
+
+int convertPrograms(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
+  const auto t0 = std::chrono::steady_clock::now();
+  ProgramImport programs(gothic);
+  const auto summary = programs.run(out,verifyOnly);
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << (verifyOnly ? "verified " : "written and verified ") << summary << " (" << ms << " ms)\n";
   return 0;
   }
 
