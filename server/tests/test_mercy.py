@@ -1,7 +1,7 @@
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -501,29 +501,58 @@ async def test_surrender_hold_resumes_native_fight_and_cannot_repeat(rig, monkey
     await end_hero_hold(rig, conv)
 
 
-async def test_hits_after_broken_hold_offer_npc_surrender_without_restarting_attacks(rig, monkeypatch):
+@pytest.mark.parametrize("first_hp", [80, 20])
+async def test_hits_after_broken_hold_offer_npc_surrender_without_restarting_attacks(
+    rig, monkeypatch, first_hp,
+):
     rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
     rig.fake.native_fights[FRIEND] = True
     rig.fake.native_targets[FRIEND] = "PC_HERO"
     conv, _ = await begin_hero_hold(rig, monkeypatch)
     offer = AsyncMock()
+    betray = Mock(wraps=rig.mercy._betray)
     monkeypatch.setattr(rig.mercy, "_offer", offer)
-    hit(rig, npc=NPC, hp=80)
+    monkeypatch.setattr(rig.mercy, "_betray", betray)
+    before_first = time.monotonic()
+    hit(rig, npc=NPC, hp=first_hp)
+    battle = rig.mercy.battles[NPC]
+    assert battle.hp == first_hp and battle.last >= before_first and len(battle.hits) == 1
+    betray.assert_called_once_with(NPC)
     await rig.mercy._resuming[NPC]
+    await asyncio.gather(*rig.dialogue._background)
+    assert offer.await_count == (1 if first_hp == 20 else 0)
     assert not conv.reply.done()
 
     before_second = time.monotonic()
     hit(rig, npc=NPC, hp=20)
-    battle = rig.mercy.battles[NPC]
     assert battle.hp == 20 and battle.last >= before_second
+    assert betray.call_count == 2
     assert not conv.reply.done()
     await asyncio.gather(*rig.dialogue._background)
-    offer.assert_awaited_once()
+    assert offer.await_count == (2 if first_hp == 20 else 1)
     assert offer.await_args.args[0] == NPC and offer.await_args.args[1] is battle
     assert offer.await_args.args[2].hp == 20 and offer.await_args.args[3] is True
     attacks = [row["npc"] for row in rig.fake.story
                if any(op.get("do") == "attack" for op in row.get("effects", []))]
     assert attacks == [NPC, FRIEND]
+    await end_hero_hold(rig, conv)
+
+
+async def test_failed_hold_resume_allows_a_new_fight_to_pause(rig, monkeypatch):
+    conv, probe = await begin_hero_hold(rig, monkeypatch)
+    with monkeypatch.context() as failed:
+        attack = AsyncMock(return_value=("Injected attack failure", False))
+        failed.setattr(rig.dialogue, "_attack_hero", attack)
+        await end_hero_hold(rig, conv)
+        attack.assert_awaited_once()
+    assert NPC not in rig.mercy._hold_used and not rig.fake.attack_state
+
+    rig.fake.attack_state, rig.fake.target = True, "PC_HERO"
+    conv.reply = asyncio.create_task(asyncio.Event().wait())
+    conv.talked_at = time.monotonic()
+    await rig.mercy.hold_surrender(conv, [conv.trigger])
+    assert probe.await_count == 2 and rig.mercy.held(NPC)
+    assert not rig.fake.attack_state
     await end_hero_hold(rig, conv)
 
 

@@ -183,6 +183,7 @@ class Mercy:
             self.dialogue._change_intent(conv, intent, self.link.snapshots.get(member), body=False)
             output, ok = await self.dialogue._attack_hero(conv, intent, resume=True)
             if not ok:
+                self._hold_used.pop(member, None)
                 log.warning("%s: surrender hold could not resume combat: %s", member, output)
 
     async def hold_surrender(self, conv: Conversation, request: list[Item]) -> None:
@@ -304,7 +305,6 @@ class Mercy:
                         if hit.dead or hit.down:
                             self._dead.add(npc)
                         self._end_hold(recipient, hold)
-                        return
         if self._ours(npc) or not self._ours(attacker):
             return
         entry = self.orders.talk.people.get(npc)
