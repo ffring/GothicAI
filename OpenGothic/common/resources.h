@@ -192,14 +192,23 @@ class Resources final {
 
     static std::vector<uint8_t>      getFileData(std::string_view name);
     static bool                      getFileData(std::string_view name, std::vector<uint8_t>& dat);
-    static std::unique_ptr<zenkit::Read> getFileBuffer(std::string_view name);
-    static auto                      openReader(std::string_view name, std::unique_ptr<zenkit::Read>& read) -> std::unique_ptr<zenkit::ReadArchive>;
+    struct CensusSource {
+      const zenkit::VfsNode* node = nullptr;
+      std::string source;
+      };
+    static std::unique_ptr<zenkit::Read> getFileBuffer(std::string_view name, CensusSource* source = nullptr);
+    static auto                      openReader(std::string_view name, std::unique_ptr<zenkit::Read>& read, CensusSource* source = nullptr) -> std::unique_ptr<zenkit::ReadArchive>;
     static bool                      hasFile    (std::string_view fname);
 
     static const zenkit::Vfs&        vdfsIndex();
     static std::filesystem::path      worldBaseDir(std::string_view world);
     static std::filesystem::path      worldOverrideDir(std::string_view world);
     static void                      censusFile(std::u16string_view path);
+    static void                      censusProfile(std::string_view game, std::string_view outputUnits, int language);
+    static void                      censusSelected(std::string_view consumer, std::string_view request, int language,
+                                                   std::string_view branch, const CensusSource& source, zenkit::Read& read) noexcept;
+    static void                      censusSelected(std::string_view consumer, std::string_view request, int language,
+                                                   std::string_view branch, std::u16string_view path, zenkit::Read& read) noexcept;
     static void                      loadWorld(WorldData::Data& world, asset::WorldMesh& worldMesh, std::string_view name);
     static bool                      loadBaseZen(std::string_view name, std::string_view kind, WorldData::ZenFile& out);
     static bool                      writeCensus();
@@ -242,13 +251,6 @@ class Resources final {
       };
     static TextureData decodeBaseTexture(const std::filesystem::path& path, bool forceMips);
 
-    struct Archive {
-      std::u16string name;
-      int64_t        time=0;
-      uint16_t       ord=0;
-      bool           isMod=false;
-      };
-
     struct DecalK {
       Material mat;
       float    sX = 1;
@@ -264,8 +266,6 @@ class Resources final {
 
     using TextureCache = std::unordered_map<std::string,std::unique_ptr<Tempest::Texture2d>>;
 
-    int64_t               vdfTimestamp(const std::u16string& name);
-    void                  detectVdf(std::vector<Archive>& ret, const std::u16string& root);
 
     void                  indexHdTextures();
     void                  indexMaterialMaps();

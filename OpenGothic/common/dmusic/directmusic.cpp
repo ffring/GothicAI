@@ -1,12 +1,10 @@
 #include "directmusic.h"
 #include "resources.h"
+#include "sourcefile.h"
 
 #include <stdexcept>
 
 #include <Tempest/File>
-#include <utils/fileutil.h>
-#include <system_error>
-#include <stdexcept>
 
 using namespace Dx8;
 
@@ -73,15 +71,8 @@ const DlsCollection &DirectMusic::dlsCollection(const std::u16string &file) {
   }
 
 Tempest::RFile DirectMusic::implOpen(const char16_t *file) {
-  for(auto& pt:path) {
-    try {
-      std::u16string filepath = FileUtil::nestedPath(pt, {file}, Tempest::Dir::FT_File);
-      Tempest::RFile fin(filepath);
-      Resources::censusFile(filepath);
-      return fin;
-      }
-    catch(std::system_error&){
-      }
-    }
-  throw std::runtime_error("file not found");
+  std::u16string filepath;
+  auto fin = openSourceFile(path,file,filepath);
+  Resources::censusFile(filepath);
+  return fin;
   }

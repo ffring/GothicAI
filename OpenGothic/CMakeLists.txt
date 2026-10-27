@@ -82,7 +82,9 @@ endif()
 
 # sources
 file(GLOB_RECURSE OPENGOTHIC_SOURCES "common/*.h" "common/*.cpp")
-foreach(source sha256 baseimport worldchunks worlddata modeldata basemesh gothicglb gltfmesh asset/fromzenkit asset/worldfromzenkit asset/modelfromzenkit)
+foreach(source sha256 baseimport basesources worldchunks worlddata modeldata basemesh gothicglb gltfmesh asset/fromzenkit asset/worldfromzenkit asset/modelfromzenkit
+               utils/fileutil dmusic/sourcefile dmusic/riff dmusic/segment dmusic/track dmusic/style dmusic/band
+               dmusic/reference dmusic/info dmusic/pattern)
   list(REMOVE_ITEM OPENGOTHIC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/common/${source}.cpp")
 endforeach()
 if(NOT OPENGOTHIC_ENABLE_FRAME_PROFILE)
@@ -413,6 +415,7 @@ if(NOT ANDROID AND NOT IOS)
   if(UNIX)
     add_executable(gothic-base-store-contract EXCLUDE_FROM_ALL tests/basestore_contract.cpp)
     target_link_libraries(gothic-base-store-contract PRIVATE OpenGothic AiBridge)
+    target_include_directories(gothic-base-store-contract SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
     target_compile_options(gothic-base-store-contract PRIVATE -Wall -Wconversion -Werror)
   endif()
   if(NOT MSVC)

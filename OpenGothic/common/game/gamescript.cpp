@@ -467,16 +467,20 @@ void GameScript::loadDialogOU() {
   for(auto& OU:names) {
     if(Resources::hasFile(OU)) {
       std::unique_ptr<zenkit::Read> read;
-      auto zen = Resources::openReader(OU, read);
+      Resources::CensusSource source;
+      auto zen = Resources::openReader(OU, read, &source);
       dialogs = std::move(*zen->read_object<zenkit::CutsceneLibrary>(version));
+      Resources::censusSelected("GameScript::loadDialogOU",OU,vmLang,"vfs_find_request",source,*read);
       return;
       }
 
     const size_t segment = OU.find_last_of("\\/");
     if(segment!=std::string::npos && Resources::hasFile(OU.substr(segment+1))) {
       std::unique_ptr<zenkit::Read> read;
-      auto zen = Resources::openReader(OU.substr(segment+1), read);
+      Resources::CensusSource source;
+      auto zen = Resources::openReader(OU.substr(segment+1), read, &source);
       dialogs = std::move(*zen->read_object<zenkit::CutsceneLibrary>(version));
+      Resources::censusSelected("GameScript::loadDialogOU",OU,vmLang,"vfs_find_basename",source,*read);
       return;
       }
 
@@ -486,9 +490,11 @@ void GameScript::loadDialogOU() {
 
     auto gcutscene = CommandLine::inst().cutscenePath();
     auto full      = FileUtil::caseInsensitiveSegment(gcutscene,str16,Dir::FT_File);
+    const char* branch = "host_ordinary";
     if(!FileUtil::exists(std::u16string(full)) && vmLang>=0) {
       gcutscene = CommandLine::inst().cutscenePath(ScriptLang(vmLang));
       full      = FileUtil::caseInsensitiveSegment(gcutscene,str16,Dir::FT_File);
+      branch = "host_localized";
       }
 
     try {
@@ -501,6 +507,7 @@ void GameScript::loadDialogOU() {
         continue;
       // auto zen = Resources::openReader(full);
       dialogs = std::move(*zen->read_object<zenkit::CutsceneLibrary>(version));
+      Resources::censusSelected("GameScript::loadDialogOU",OU,vmLang,branch,full,*buf);
       return;
       }
     catch(...){

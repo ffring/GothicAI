@@ -65,6 +65,44 @@ using namespace Tempest;
 Resources* Resources::inst=nullptr;
 
 namespace {
+thread_local std::string* censusOpenSource = nullptr;
+
+struct CensusOpenCapture {
+  explicit CensusOpenCapture(std::string* source) : previous(censusOpenSource) { censusOpenSource = source; }
+  ~CensusOpenCapture() { censusOpenSource = previous; }
+  std::string* previous;
+  };
+
+bool censusNodePath(const zenkit::VfsNode& parent, const zenkit::VfsNode* node, std::string& path) {
+  if(&parent==node)
+    return true;
+  if(parent.type()!=zenkit::VfsNodeType::DIRECTORY)
+    return false;
+  for(const auto& child:parent.children()) {
+    const auto size = path.size();
+    if(!path.empty())
+      path += '/';
+    path += child.name();
+    if(censusNodePath(child,node,path))
+      return true;
+    path.resize(size);
+    }
+  return false;
+  }
+
+std::string censusSourcePath(const std::filesystem::path& source) {
+  auto relative = source;
+  if(relative.is_absolute())
+    relative = relative.lexically_relative(std::filesystem::path(CommandLine::inst().rootPath()));
+  relative = relative.lexically_normal();
+  if(relative.empty() || relative.is_absolute())
+    return {};
+  for(const auto& part:relative)
+    if(part=="..")
+      return {};
+  return relative.generic_string();
+  }
+
 std::filesystem::path worldContentDir(const std::filesystem::path& root, std::string_view world) {
   const auto separator = world.find_last_of("/\\");
   std::string name(separator==std::string_view::npos ? world : world.substr(separator+1));
@@ -182,17 +220,16 @@ void Resources::mountWork(const std::filesystem::path& path) {
   }
 
 void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFilter) {
-  std::vector<Archive> archives;
-  inst->detectVdf(archives,Gothic::nestedPath({u"Data"},Dir::FT_Dir));
+  auto archives = BaseImport::runtimeArchives(std::filesystem::path(CommandLine::inst().rootPath()));
 
   // Remove all mod files, that are not listed in modvdfs
   if(modFilter) {
     // NOTE: apparently in CoM there is no mods list declaration. In such case - assume all modes
     archives.erase(std::remove_if(archives.begin(), archives.end(),
-                  [&modvdfs](const Archive& a){
-                    return a.isMod && modvdfs.end() == std::find_if(modvdfs.begin(), modvdfs.end(),
+                  [&modvdfs](const BaseImport::RuntimeArchive& a){
+                    return a.mod && modvdfs.end() == std::find_if(modvdfs.begin(), modvdfs.end(),
                           [&a](const std::u16string& modname) {
-                            const std::u16string_view& full_path = a.name;
+                            const std::u16string full_path = a.path.u16string();
                             const std::u16string_view& file_name = modname;
                             return (0 == full_path.compare(full_path.length() - file_name.length(),
                                                            file_name.length(), file_name));
@@ -200,33 +237,23 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
                     }), archives.end());
     }
 
-  // addon archives first!
-  std::stable_sort(archives.begin(),archives.end(),[](const Archive& a,const Archive& b){
-    int aIsMod = a.isMod ? 1 : -1;
-    int bIsMod = b.isMod ? 1 : -1;
-    return std::make_tuple(aIsMod,a.time,int(a.ord)) >
-           std::make_tuple(bIsMod,b.time,int(b.ord));
-    });
-
+  // runtimeArchives preserves the engine's timestamp and directory-order precedence.
   std::vector<std::pair<std::string,uintmax_t>> mounted;
   for(auto& i:archives) {
     try {
 #ifdef __IOS__
       // causes OOM on iPhone7
-      if(i.name.find(u"Speech")!=std::string::npos)
+      if(i.path.u16string().find(u"Speech")!=std::string::npos)
         continue;
 #endif
-      inst->gothicAssets.mount_disk(i.name, zenkit::VfsOverwriteBehavior::OLDER);
-      auto name = std::filesystem::path(i.name).filename().string();
-      for(auto& c:name)
-        c = char(std::toupper(static_cast<unsigned char>(c)));
-      mounted.emplace_back(std::move(name),std::filesystem::file_size(i.name));
+      inst->gothicAssets.mount_disk(i.path, zenkit::VfsOverwriteBehavior::OLDER);
+      mounted.emplace_back(i.name,std::filesystem::file_size(i.path));
       }
     catch(const zenkit::VfsBrokenDiskError& err) {
-      Log::e("unable to load archive: \"", TextCodec::toUtf8(i.name), "\", reason: ", err.what());
+      Log::e("unable to load archive: \"", TextCodec::toUtf8(i.path.u16string()), "\", reason: ", err.what());
       }
     catch(const std::exception& err) {
-      Log::e("unable to load archive: \"", TextCodec::toUtf8(i.name), "\", reason: ", err.what());
+      Log::e("unable to load archive: \"", TextCodec::toUtf8(i.path.u16string()), "\", reason: ", err.what());
       }
     }
 
@@ -265,6 +292,8 @@ void Resources::initCensus() {
   census = std::make_unique<ContentCensus>(path);
   gothicAssets.set_open_observer([this](std::string_view name, std::string_view source) {
     census->opened(name,source);
+    if(censusOpenSource!=nullptr)
+      *censusOpenSource = source;
     });
   }
 
@@ -273,6 +302,35 @@ void Resources::censusFile(std::u16string_view path) {
     return;
   const auto source = TextCodec::toUtf8(path);
   inst->census->opened(source,source);
+  }
+
+void Resources::censusProfile(std::string_view game, std::string_view outputUnits, int language) {
+  if(inst!=nullptr && inst->census!=nullptr)
+    inst->census->profile(game,outputUnits,language);
+  }
+
+void Resources::censusSelected(std::string_view consumer, std::string_view request, int language,
+                              std::string_view branch, const CensusSource& source, zenkit::Read& read) noexcept {
+  if(inst==nullptr || inst->census==nullptr)
+    return;
+  try {
+    std::string path;
+    if(source.node==nullptr || !censusNodePath(inst->gothicAssets.root(),source.node,path))
+      path.clear();
+    inst->census->selected(consumer,request,language,branch,"vfs",path,censusSourcePath(source.source),read);
+    }
+  catch(...) { Log::e("census: unable to identify parsed VFS source"); }
+  }
+
+void Resources::censusSelected(std::string_view consumer, std::string_view request, int language,
+                              std::string_view branch, std::u16string_view path, zenkit::Read& read) noexcept {
+  if(inst==nullptr || inst->census==nullptr)
+    return;
+  try {
+    const auto relative = censusSourcePath(std::filesystem::path(path));
+    inst->census->selected(consumer,request,language,branch,"host",relative,relative,read);
+    }
+  catch(...) { Log::e("census: unable to identify parsed host source"); }
   }
 
 void Resources::loadWorld(WorldData::Data& world, asset::WorldMesh& worldMesh, std::string_view name) {
@@ -356,18 +414,33 @@ std::vector<uint8_t> Resources::getFileData(std::string_view name) {
   return data;
   }
 
-std::unique_ptr<zenkit::Read> Resources::getFileBuffer(std::string_view name) {
+std::unique_ptr<zenkit::Read> Resources::getFileBuffer(std::string_view name, CensusSource* source) {
   const auto* entry = Resources::vdfsIndex().find(name);
   if (entry == nullptr)
     throw std::runtime_error("failed to open resource: " + std::string{name});
+  if(source!=nullptr && inst->census!=nullptr) {
+    source->node = entry;
+    source->source.clear();
+    CensusOpenCapture capture(&source->source);
+    return entry->open_read();
+    }
   return entry->open_read();
   }
 
-std::unique_ptr<zenkit::ReadArchive> Resources::openReader(std::string_view name, std::unique_ptr<zenkit::Read>& read) {
+std::unique_ptr<zenkit::ReadArchive> Resources::openReader(std::string_view name, std::unique_ptr<zenkit::Read>& read, CensusSource* source) {
   const auto* entry = Resources::vdfsIndex().find(name);
   if(entry == nullptr)
     throw std::runtime_error("failed to open resource: " + std::string{name});
-  auto buf = entry->open_read();
+  std::unique_ptr<zenkit::Read> buf;
+  if(source!=nullptr && inst->census!=nullptr) {
+    source->node = entry;
+    source->source.clear();
+    CensusOpenCapture capture(&source->source);
+    buf = entry->open_read();
+    }
+  else {
+    buf = entry->open_read();
+    }
   if(buf == nullptr)
     throw std::runtime_error("failed to open resource: " + std::string{name});
   auto zen = zenkit::ReadArchive::from(buf.get());
@@ -486,31 +559,6 @@ const Sampler& Resources::shadowSampler() {
   return smp;
   }
 
-void Resources::detectVdf(std::vector<Archive>& ret, const std::u16string &root) {
-  Dir::scan(root,[this,&root,&ret](const std::u16string& vdf, Dir::FileType t){
-    if(t==Dir::FT_File) {
-      auto file = root + vdf;
-      Archive ar;
-      ar.name  = root+vdf;
-      ar.time  = vdfTimestamp(ar.name);
-      ar.ord   = uint16_t(ret.size());
-      ar.isMod = vdf.rfind(u".mod")==vdf.size()-4;
-
-      if(std::filesystem::file_size(ar.name)>0)
-        ret.emplace_back(std::move(ar));
-      return;
-      }
-
-    // switch uses NX extension for language dependant stuff
-    if(vdf.find(u".NX.")!=std::string::npos)
-      return;
-
-    if(t==Dir::FT_Dir && vdf!=u".." && vdf!=u".") {
-      auto dir = root + vdf + u"/";
-      detectVdf(ret,dir);
-      }
-    });
-  }
 
 const GthFont& Resources::dialogFont(const float scale) {
   return font("font_old_10_white.tga",FontType::Normal,scale);
@@ -549,30 +597,6 @@ const zenkit::Vfs& Resources::vdfsIndex() {
 const Tempest::IndexBuffer<uint16_t>& Resources::cubeIbo() {
   return inst->cube;
   }
-
-int64_t Resources::vdfTimestamp(const std::u16string& name) {
-  enum {
-    VDF_COMMENT_LENGTH   = 256,
-    VDF_SIGNATURE_LENGTH = 16,
-    };
-  uint32_t count=0, timestamp=0;
-  char sign[VDF_SIGNATURE_LENGTH]={};
-
-  try {
-    RFile fin(name);
-    fin.seek(VDF_COMMENT_LENGTH);
-    fin.read(sign,VDF_SIGNATURE_LENGTH);
-    fin.read(&count,sizeof(count));
-    fin.seek(4);
-    fin.read(&timestamp,sizeof(timestamp));
-
-    return int64_t(timestamp);
-    }
-  catch(...) {
-    return -1;
-    }
-  }
-
 Tempest::Texture2d* Resources::implLoadTexture(std::string_view cname, bool forceMips) {
   if(isHeadless() || cname.empty())
     return nullptr;
