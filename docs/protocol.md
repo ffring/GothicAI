@@ -15,7 +15,7 @@
 
 Брони:
 
-Нет.
+- v53 — занято: `claude/feats-stage1` (тост достижения, [achievements.md](achievements.md)).
 
 ### Что добавила каждая версия
 
