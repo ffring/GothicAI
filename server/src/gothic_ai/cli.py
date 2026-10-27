@@ -812,8 +812,8 @@ async def serve(args: argparse.Namespace) -> int:
     } and not soak_control and (not args.body_url or not args.neural_body):
         log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
         return 2
-    if args.scenario == "neural-soak" and args.llm != "fake":
-        log.error("scenario neural-soak requires --llm fake")
+    if args.scenario in {"neural-soak", "feats"} and args.llm != "fake":
+        log.error("scenario %s requires --llm fake", args.scenario)
         return 2
     done = asyncio.Event()
     exit_code = 0
@@ -963,8 +963,8 @@ async def serve(args: argparse.Namespace) -> int:
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
         state.feats = (
-            Feats(link, state.chronicle, llm, journal=journal)
-            if not args.no_feats and args.scenario is None else None
+            Feats(link, state.chronicle, llm, journal=journal, gather_s=1 if args.scenario == "feats" else 20)
+            if not args.no_feats and args.scenario in {None, "feats"} else None
         )
         if not args.no_crimes:
             state.crimes = Crimes(
@@ -2092,6 +2092,12 @@ async def serve(args: argparse.Namespace) -> int:
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario death_load: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
+            elif args.scenario == "feats":
+                assert state.feats is not None
+                results = await scenarios.feats(link, state.feats, journal)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario feats: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
             elif args.scenario == "repair":
                 assert state.director is not None and state.story is not None
                 results = await scenarios.repair_after_death(link, state.director, state.story)
@@ -3094,6 +3100,7 @@ def main() -> None:
             "wrath",
             "repair",
             "death_load",
+            "feats",
             "authored",
             "occasions",
             "questlog",
@@ -3239,7 +3246,7 @@ def main() -> None:
     p.add_argument(
         "--no-feats",
         action="store_true",
-        help="disable the chronicler's feats (enabled by default outside scenarios)",
+        help="disable the chronicler's feats (enabled by default outside scenarios and in feats)",
     )
     p.add_argument(
         "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"
