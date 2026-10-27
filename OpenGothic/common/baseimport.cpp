@@ -902,7 +902,7 @@ void build(const fs::path& gothic, const fs::path& out, const Progress& progress
     if(progress) progress(std::string("base import: ")+world);
     require(convertWorld(gothic,std::string(world)+".ZEN",out/"worlds"/world)==0,"world import failed");
     }
-  for(const char* kind:{"zen","textures","meshes","models","fonts","sources"}) fs::remove_all(out/kind);
+  for(const char* kind:{"zen","textures","meshes","models","fonts","programs","sources"}) fs::remove_all(out/kind);
   if(progress) progress("base import: ZEN files");
   require(convertZen(gothic,out/"zen",false)==0,"ZEN import failed");
   if(progress) progress("base import: textures");
@@ -913,6 +913,8 @@ void build(const fs::path& gothic, const fs::path& out, const Progress& progress
   require(convertModels(gothic,out/"models",false)==0,"model import failed");
   if(progress) progress("base import: fonts");
   require(convertFonts(gothic,out/"fonts",false)==0,"font import failed");
+  if(progress) progress("base import: programs");
+  require(convertPrograms(gothic,out/"programs",false)==0,"program import failed");
   if(progress) progress("base import: source manifest");
   require(convertSources(gothic,out/"sources",false)==0,"source manifest failed");
   require(identify(gothic).json==identity.json,"installation changed during base import");

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from gothic_ai.authoring import ITEMS
+from gothic_ai.gamedata import storygraph
 from gothic_ai.gamedata.storygraph import is_known, load, render, variables
 
 REPO = Path(__file__).resolve().parents[2]
@@ -139,6 +140,61 @@ def graph(tmp_path):
     path = tmp_path / "story.json"
     path.write_text(json.dumps(GRAPH, ensure_ascii=False), encoding="utf-8")
     return load(path)
+
+
+def test_ensure_rebuilds_native_sources_and_publishes_atomically(tmp_path, monkeypatch):
+    game = tmp_path / "game"
+    game.mkdir()
+    tool = tmp_path / "storygraph"
+    tool.touch()
+    cache = tmp_path / "story.json"
+    cache.write_text(json.dumps(GRAPH), encoding="utf-8")
+    calls = []
+    before = cache.read_bytes()
+
+    def rebuild(cmd, **kwargs):
+        assert cmd == [str(tool), str(game), "--json", str(cache.with_suffix(".tmp"))]
+        assert kwargs == {"check": True, "capture_output": True, "timeout": 1800}
+        assert cache.read_bytes() == before
+        sources = {
+            "program_native_sha256": "a" * 64,
+            "program_source_sha256": "b" * 64,
+            "ou_sha256": ("c" if not calls else "d") * 64,
+            "converter_sha256": "e" * 64,
+        }
+        Path(cmd[-1]).write_text(json.dumps({**GRAPH, "sources": sources}), encoding="utf-8")
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(storygraph.subprocess, "run", rebuild)
+    for _ in range(2):
+        # A newer cache and unchanged converter mtime cannot hide changed native inputs or OU.
+        newer = tool.stat().st_mtime + 60
+        os.utime(cache, (newer, newer))
+        assert storygraph.ensure(game, cache, tool) == cache
+        before = cache.read_bytes()
+        assert load(cache).node("DIA_LOBART_WORKNOW").description == "Я ищу работу."
+    assert len(calls) == 2
+    assert json.loads(cache.read_text())["sources"]["ou_sha256"] == "d" * 64
+
+
+def test_ensure_failed_rebuild_preserves_existing_cache(tmp_path, monkeypatch, caplog):
+    game = tmp_path / "game"
+    game.mkdir()
+    tool = tmp_path / "storygraph"
+    tool.touch()
+    cache = tmp_path / "story.json"
+    cache.write_text(json.dumps(GRAPH), encoding="utf-8")
+    before = cache.read_bytes()
+
+    def fail(cmd, **kwargs):
+        Path(cmd[-1]).write_text("partial output", encoding="utf-8")
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(storygraph.subprocess, "run", fail)
+    assert storygraph.ensure(game, cache, tool) == cache
+    assert cache.read_bytes() == before
+    assert "cache freshness is unverified" in caplog.text
 
 
 def test_quest_and_its_nodes(graph):

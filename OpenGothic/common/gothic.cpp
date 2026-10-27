@@ -763,22 +763,12 @@ std::unique_ptr<zenkit::DaedalusVm> Gothic::createPhoenixVm(std::string_view dat
 zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const ScriptLang lang) {
   const auto request = datFile;
   if(Resources::hasFile(datFile)) {
-    Resources::CensusSource source;
-    auto buf = Resources::getFileBuffer(datFile,&source);
-    zenkit::DaedalusScript script;
-    script.load(buf.get());
-    Resources::censusSelected("Gothic::loadScript",request,int(lang),"vfs_find_request",source,*buf);
-    return script;
+    return Resources::loadBaseProgram(request,int(lang),"vfs_find_request");
     }
 
   const size_t segment = datFile.find_last_of("\\/");
   if(segment!=std::string::npos && Resources::hasFile(datFile.substr(segment+1))) {
-    Resources::CensusSource source;
-    auto buf = Resources::getFileBuffer(datFile.substr(segment+1),&source);
-    zenkit::DaedalusScript script;
-    script.load(buf.get());
-    Resources::censusSelected("Gothic::loadScript",request,int(lang),"vfs_find_basename",source,*buf);
-    return script;
+    return Resources::loadBaseProgram(request,int(lang),"vfs_find_basename");
     }
 
   char16_t str16[256] = {};
@@ -797,19 +787,13 @@ zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const Script
     datFile = datFile.substr(segment+1);
     for(size_t i=0; i<datFile.size() && i<255; ++i)
       str16[i] = char16_t(datFile[i]);
-    str16[datFile.size()] = u'\0';
+    str16[std::min(datFile.size(),size_t(255))] = u'\0';
     gscript = CommandLine::inst().scriptPath(lang);
     path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
     branch = "host_localized_basename";
     }
 
-  auto buf = zenkit::Read::from(path);
-  if(buf!=nullptr)
-    Resources::censusFile(path);
-  zenkit::DaedalusScript script;
-  script.load(buf.get());
-  Resources::censusSelected("Gothic::loadScript",request,int(lang),branch,path,*buf);
-  return script;
+  return Resources::loadBaseProgram(request,int(lang),branch,path);
   }
 
 void Gothic::setupCommonScriptClasses(zenkit::DaedalusScript& sc) {

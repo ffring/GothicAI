@@ -236,20 +236,13 @@ e2e_window_position() {
 
 source_digest() {
   # Content and paths include additions/deletions and uncommitted files, not just HEAD.
-  python3 - "$ROOT/OpenGothic" "${1:-engine}" <<'PY'
+  python3 - "$ROOT/OpenGothic" <<'PY'
 import hashlib
 import sys
 from pathlib import Path
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
-if sys.argv[2] == 'storygraph':
-    inputs = ['ai_bridge/storygraph', 'ai_bridge/textcodec.cpp', 'ai_bridge/textcodec.h',
-              'lib/ZenKit', 'lib/rapidjson/include']
-    paths = [path for name in inputs for path in
-             ((root / name).rglob('*') if (root / name).is_dir() else [root / name])]
-else:
-    paths = root.rglob('*')
-for path in sorted(paths):
+for path in sorted(root.rglob('*')):
     if 'build' in path.relative_to(root).parts:
         continue
     if path.is_file():
@@ -260,7 +253,7 @@ PY
 }
 
 storygraph_digest() {
-  source_digest storygraph
+  source_digest
 }
 
 cache_artifact() {

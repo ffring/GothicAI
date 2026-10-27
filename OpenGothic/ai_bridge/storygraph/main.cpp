@@ -1,4 +1,5 @@
-// storygraph: lifts the story layer of a compiled GOTHIC.DAT into a graph (docs/story-graph.md).
+// storygraph: lifts the imported game program into a graph (docs/story-graph.md).
+// The positional input is a game directory or a legacy DAT path used only as a source selector.
 //
 //   storygraph <GOTHIC.DAT>                         statistics of the lifted model
 //   storygraph <GOTHIC.DAT> --json story.json       the model for the AI server (--pretty: indented)
@@ -20,18 +21,26 @@
 // Subtitles come from OU.BIN next to the scripts (_work/Data/Scripts/Content/Cutscene/OU.BIN), or --ou <path>.
 
 #include "bytecode.h"
+#include "baseimport.h"
+#include "basestore.h"
 #include "check.h"
 #include "execcheck.h"
 #include "lifter.h"
 #include "model.h"
 #include "program.h"
+#include "programdata.h"
 #include "vocab.h"
 
 #include <zenkit/Archive.hh>
 #include <zenkit/CutsceneLibrary.hh>
 #include <zenkit/DaedalusVm.hh>
+#include <zenkit/Logger.hh>
 #include <zenkit/Stream.hh>
+#include <zenkit/Vfs.hh>
 #include <zenkit/addon/daedalus.hh>
+
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 
 #include <algorithm>
 #include <cctype>
@@ -39,6 +48,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -71,12 +81,57 @@ static fs::path findOu(const fs::path& dat) {
   return cut.empty() ? fs::path() : child(cut, "OU.BIN");
   }
 
-static LineTexts loadLines(const fs::path& ou) {
+static fs::path installationRoot(const fs::path& input, bool directory) {
+  const auto absolute = fs::absolute(input);
+  if(directory)
+    return absolute;
+  for(auto parent = absolute.parent_path(); !parent.empty() && parent!=parent.parent_path();
+      parent = parent.parent_path()) {
+    if(upper(parent.filename().string())=="_WORK")
+      return parent.parent_path();
+    }
+  throw std::runtime_error("input must be a game directory or a DAT source path under its _work directory");
+  }
+
+static std::string sourceMetadata(const std::string& programSha, const ProgramData::Source& source,
+                                  const std::string& ouSha, const char* executable) {
+  rapidjson::StringBuffer buffer;
+  rapidjson::Writer<rapidjson::StringBuffer> json(buffer);
+  json.StartObject();
+  json.Key("program_native_sha256"); json.String(programSha.c_str());
+  json.Key("program_source_sha256"); json.String(source.sha256.c_str());
+  json.Key("ou_sha256");
+  if(ouSha.empty())
+    json.Null();
+  else
+    json.String(ouSha.c_str());
+  json.Key("converter_sha256");
+  std::error_code error;
+  if(fs::is_regular_file(fs::path(executable),error))
+    json.String(BaseImport::sha256File(fs::path(executable)).c_str());
+  else
+    json.Null();
+  json.EndObject();
+  return std::string(buffer.GetString(),buffer.GetSize());
+  }
+
+static LineTexts loadLines(const fs::path& ou, std::string& actualSha) {
   LineTexts lines;
   auto r = zenkit::Read::from(ou);
   if(r==nullptr)
     return lines;
-  auto ar = zenkit::ReadArchive::from(r.get());
+  r->seek(0,zenkit::Whence::END);
+  std::vector<std::byte> bytes(r->tell());
+  r->seek(0,zenkit::Whence::BEG);
+  for(size_t at=0; at<bytes.size();) {
+    const auto n = r->read(bytes.data()+at,bytes.size()-at);
+    if(n==0)
+      throw std::runtime_error("short OU read");
+    at += n;
+    }
+  actualSha = BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(bytes.data()),bytes.size()));
+  auto input = zenkit::Read::from(std::move(bytes));
+  auto ar = zenkit::ReadArchive::from(input.get());
   if(ar==nullptr)
     return lines;
   auto lib = ar->read_object<zenkit::CutsceneLibrary>(zenkit::GameVersion::GOTHIC_2);
@@ -139,7 +194,7 @@ static void printStats(const Model& m, size_t lineTexts) {
     std::printf("  %6zu  %s\n", c, k.c_str());
   }
 
-int main(int argc, char** argv) {
+static int run(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IOLBF, 0);  // what was printed survives a crash
   const char* datPath = nullptr;
   const char* ouPath  = nullptr;
@@ -195,21 +250,43 @@ int main(int argc, char** argv) {
       datPath = argv[i];
     }
   if(datPath==nullptr) {
-    std::fprintf(stderr, "usage: storygraph <GOTHIC.DAT> [--ou OU.BIN] [--json out.json [--pretty]] [--node ID] "
+    std::fprintf(stderr, "usage: storygraph <game directory|DAT source path> [--ou OU.BIN] [--json out.json [--pretty]] [--node ID] "
                          "[--quest MIS_*] [--scan [--tsv out.tsv] [--top N]] [--disasm FN] "
                          "[--check <save dir>... [--verbose]] [--fuzz N] [--effects|--exec [--via-json]] [--program FN]\n");
     return 2;
     }
 
-  zenkit::DaedalusScript script;
+  const fs::path input(datPath);
+  const bool directory = fs::is_directory(input);
+  const auto gothic = installationRoot(input,directory);
+  BaseImport::Files mounted;
   {
-  auto r = zenkit::Read::from(fs::path(datPath));
-  if(r==nullptr) {
-    std::fprintf(stderr, "can't open %s\n", datPath);
-    return 1;
-    }
-  script.load(r.get());
+  zenkit::Vfs vfs;
+  fs::path work;
+  for(const auto& archive:BaseImport::mountRuntime(vfs,gothic,work))
+    mounted.emplace_back(archive.name,archive.size);
   }
+  std::sort(mounted.begin(),mounted.end());
+  zenkit::Logger::set(zenkit::LogLevel::ERROR,[](auto level, const char* component, const char* message) {
+    BaseImport::onZenkitLog(level,component,message);
+    });
+  auto base = BaseStore::resolve(gothic,mounted,[](std::string_view message) {
+    std::fprintf(stderr,"%.*s\n",int(message.size()),message.data());
+    });
+  zenkit::Logger::set(zenkit::LogLevel::INFO,{});
+  const auto index = ProgramData::readIndex(base.path/"programs");
+  if(index.archives!=mounted)
+    throw std::runtime_error("program index archives differ from the installation");
+  const auto* source = directory ? index.server() : index.findHost(fs::absolute(input).lexically_relative(gothic).generic_string());
+  if(source==nullptr || source->origin!="host")
+    throw std::runtime_error("selected host program is missing from the base");
+  const auto record = index.path(*source);
+  const auto recordPath = record.string();
+  std::string programSha;
+  auto programData = ProgramData::readProgram(record,&programSha);
+  if(programSha!=source->recordSha256)
+    throw std::runtime_error("selected program record identity differs from its index");
+  auto script = zenkit::DaedalusScript::from_program(std::move(programData));
   zenkit::register_all_script_classes(script);
   zenkit::DaedalusVm vm(std::move(script), zenkit::DaedalusVmExecutionFlag::ALLOW_NULL_INSTANCE_ACCESS);
   vm.register_default_external([](const zenkit::DaedalusSymbol&){});
@@ -242,10 +319,11 @@ int main(int argc, char** argv) {
   if(scan)
     return scanDialogs(vm, code, tsvPath, top);
 
-  fs::path ou = ouPath ? fs::path(ouPath) : findOu(datPath);
+  fs::path ou = ouPath ? fs::path(ouPath) : findOu(gothic/fs::path(source->path));
   LineTexts lines;
+  std::string ouSha;
   if(!ou.empty())
-    lines = loadLines(ou);
+    lines = loadLines(ou,ouSha);
   if(lines.empty())
     std::fprintf(stderr, "no subtitles (OU.BIN not found, use --ou): lines will have no text\n");
 
@@ -256,13 +334,13 @@ int main(int argc, char** argv) {
     auto id = node ? upper(node) : std::string();
     int  r  = 0;
     if(!saves.empty())
-      r |= checkSaves(datPath, m, saves, node ? id.c_str() : nullptr, verbose, effects, exec);
+      r |= checkSaves(recordPath.c_str(), m, saves, node ? id.c_str() : nullptr, verbose, effects, exec);
     if(fuzz>0 && exec)
-      r |= fuzzExec(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);
+      r |= fuzzExec(recordPath.c_str(), m, fuzz, node ? id.c_str() : nullptr, verbose);
     else if(fuzz>0 && effects)
-      r |= fuzzEffects(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);
+      r |= fuzzEffects(recordPath.c_str(), m, fuzz, node ? id.c_str() : nullptr, verbose);
     else if(fuzz>0)
-      r |= fuzzConditions(datPath, m, fuzz, node ? id.c_str() : nullptr, verbose);
+      r |= fuzzConditions(recordPath.c_str(), m, fuzz, node ? id.c_str() : nullptr, verbose);
     return r;
     }
   if(node!=nullptr) {
@@ -275,14 +353,29 @@ int main(int argc, char** argv) {
     }
   if(json!=nullptr) {
     auto text = toJson(m, pretty);
+    text.insert(1,"\"sources\":"+sourceMetadata(programSha,*source,ouSha,argv[0])+",");
     FILE* f = std::fopen(json, "wb");
     if(f==nullptr) {
       std::fprintf(stderr, "can't write %s\n", json);
       return 1;
       }
-    std::fwrite(text.data(), 1, text.size(), f);
-    std::fclose(f);
+    const auto written = std::fwrite(text.data(), 1, text.size(), f);
+    const auto closed = std::fclose(f);
+    if(written!=text.size() || closed!=0) {
+      std::fprintf(stderr,"can't write %s\n",json);
+      return 1;
+      }
     }
   printStats(m, lines.size());
   return 0;
+  }
+
+int main(int argc, char** argv) {
+  try {
+    return run(argc,argv);
+    }
+  catch(const std::exception& error) {
+    std::fprintf(stderr,"storygraph: %s\n",error.what());
+    return 1;
+    }
   }

@@ -10,8 +10,10 @@
 #include "physics/physicvbo.h"
 #include "resources.h"
 #include "modeldata.h"
+#include "programdata.h"
 #include "utils/gthfont.h"
 
+#include <zenkit/DaedalusVm.hh>
 #include <zenkit/Font.hh>
 #include <zenkit/Stream.hh>
 #include <zenkit/Model.hh>
@@ -801,16 +803,229 @@ struct BaseContentContract {
     std::puts("Model fixtures: complete script/MAN events, metadata, sample bits, skin weights, nested OBB and native attachment order equal");
     }
 
-  static void census(const fs::path& file, size_t meshes, size_t models, size_t fonts) {
+  static void programSymbols(zenkit::DaedalusScript& source, const zenkit::DaedalusProgramRecord& record,
+                             zenkit::DaedalusScript& loaded, const std::string& name) {
+    equal(source.symbols().size(),record.symbols.size(),name+" record symbol count");
+    equal(source.symbols().size(),loaded.symbols().size(),name+" factory symbol count");
+    equal(source.size(),loaded.size(),name+" factory bytecode size");
+    for(size_t i=0;i<record.symbols.size();++i) {
+      auto* original=source.find_symbol_by_index(uint32_t(i));
+      auto* converted=loaded.find_symbol_by_index(uint32_t(i));
+      const auto& row=record.symbols[i];
+      const auto field=name+" symbol["+std::to_string(i)+"]";
+      require(original!=nullptr && converted!=nullptr,field+": original index must resolve");
+      equal(original->index(),i,field+" source index");
+      equal(converted->index(),i,field+" native index");
+#define PROGRAM_FIELD(getter, member) \
+      modelField(original->getter(),static_cast<decltype(original->getter())>(row.member),field+" record " #member); \
+      modelField(original->getter(),converted->getter(),field+" factory " #member)
+      PROGRAM_FIELD(name,name);
+      PROGRAM_FIELD(is_generated,generated);
+      PROGRAM_FIELD(type,type);
+      PROGRAM_FIELD(count,count);
+      PROGRAM_FIELD(address,address);
+      PROGRAM_FIELD(parent,parent);
+      PROGRAM_FIELD(rtype,return_type);
+      PROGRAM_FIELD(offset_as_member,member_offset);
+      PROGRAM_FIELD(class_size,class_size);
+      PROGRAM_FIELD(file_index,file_index);
+      PROGRAM_FIELD(line_start,line_start);
+      PROGRAM_FIELD(line_count,line_count);
+      PROGRAM_FIELD(char_start,char_start);
+      PROGRAM_FIELD(char_count,char_count);
+#undef PROGRAM_FIELD
+      const auto flag=[&](uint32_t mask, bool a, bool b) {
+        equal(a,(row.flags&mask)!=0,field+" record flag "+std::to_string(mask));
+        equal(a,b,field+" factory flag "+std::to_string(mask));
+        };
+      flag(zenkit::DaedalusSymbolFlag::CONST,original->is_const(),converted->is_const());
+      flag(zenkit::DaedalusSymbolFlag::MEMBER,original->is_member(),converted->is_member());
+      flag(zenkit::DaedalusSymbolFlag::RETURN,original->has_return(),converted->has_return());
+      flag(zenkit::DaedalusSymbolFlag::EXTERNAL,original->is_external(),converted->is_external());
+      flag(zenkit::DaedalusSymbolFlag::MERGED,original->is_merged(),converted->is_merged());
+      flag(zenkit::DaedalusSymbolFlag::TRAP_ACCESS,original->has_access_trap(),converted->has_access_trap());
+      flag(zenkit::DaedalusSymbolFlag::FUNC_LOCALS,original->has_local_variables_enabled(),converted->has_local_variables_enabled());
+      const auto lookup=[&](const auto* a, const auto* b, const char* kind) {
+        require((a==nullptr)==(b==nullptr),field+": "+kind+" lookup presence differs");
+        if(a!=nullptr) equal(a->index(),b->index(),field+" "+kind+" lookup index");
+        };
+      lookup(source.find_symbol_by_name(original->name()),loaded.find_symbol_by_name(original->name()),"name");
+      lookup(source.find_symbol_by_address(original->address()),loaded.find_symbol_by_address(original->address()),"address");
+      // Only these source arrays are initialized by the DAT parser. In particular,
+      // a FUNCTION's runtime slot must never be read, even when it is nonconstant.
+      const bool values=!original->is_member();
+      equal(row.int_values.size(),values && original->type()==zenkit::DaedalusDataType::INT ? original->count() : 0u,field+" int array size");
+      equal(row.float_bits.size(),values && original->type()==zenkit::DaedalusDataType::FLOAT ? original->count() : 0u,field+" float array size");
+      equal(row.string_values.size(),values && original->type()==zenkit::DaedalusDataType::STRING ? original->count() : 0u,field+" string array size");
+      for(uint16_t j=0;j<original->count() && values;++j) {
+        if(original->type()==zenkit::DaedalusDataType::INT) {
+          equal(original->get_int(j),row.int_values[j],field+" record int");
+          equal(original->get_int(j),converted->get_int(j),field+" factory int");
+          }
+        else if(original->type()==zenkit::DaedalusDataType::FLOAT) {
+          equal(std::bit_cast<uint32_t>(original->get_float(j)),row.float_bits[j],field+" record float bits");
+          equal(std::bit_cast<uint32_t>(original->get_float(j)),std::bit_cast<uint32_t>(converted->get_float(j)),field+" factory float bits");
+          }
+        else if(original->type()==zenkit::DaedalusDataType::STRING) {
+          modelField(original->get_string(j),row.string_values[j],field+" record string bytes");
+          modelField(original->get_string(j),converted->get_string(j),field+" factory string bytes");
+          }
+        }
+      if(values && original->type()==zenkit::DaedalusDataType::INSTANCE)
+        require(original->get_instance()==nullptr && converted->get_instance()==nullptr,field+": fresh instances must be null");
+      }
+    require(source.find_symbol_by_index(uint32_t(record.symbols.size()))==nullptr &&
+            loaded.find_symbol_by_index(uint32_t(record.symbols.size()))==nullptr,name+": out-of-range index must stay absent");
+    // class_offset and the unnamed flag bit have no public symbol getter. Keep
+    // this complete record check in addition to the independent public checks.
+    const auto difference=ProgramData::compare(source.export_program(),record);
+    require(difference.empty(),name+": "+difference);
+    const auto factoryDifference=ProgramData::compare(record,loaded.export_program());
+    require(factoryDifference.empty(),name+" factory: "+factoryDifference);
+    for(uint32_t address=0;address<source.size();) {
+      const auto a=source.instruction_at(address),b=loaded.instruction_at(address);
+      require(a.op==b.op && a.address==b.address && a.symbol==b.symbol && a.immediate==b.immediate &&
+              a.index==b.index && a.size==b.size,name+": public bytecode decoding differs at "+std::to_string(address));
+      require(a.size>0 && uint64_t(address)+a.size<=source.size(),name+": source instruction bounds");
+      address+=a.size;
+      }
+    }
+
+  static size_t programs(const fs::path& base, const fs::path& censusPath) {
+    const auto index=ProgramData::readIndex(base/"programs");
+    const auto gothic=fs::path(CommandLine::inst().rootPath());
+    require(!index.programs.empty(),"program corpus must contain native records");
+    size_t parsed=0,symbols=0,code=0;
+    std::set<std::string> records;
+    std::map<std::pair<std::string,std::string>,size_t> originalOpens;
+    for(const auto& source:index.sources) {
+      const auto field=source.origin+":"+source.path;
+      auto basename=fs::path(source.path).filename().string();
+      for(auto& c:basename) if(c>='a' && c<='z') c=char(c-'a'+'A');
+      std::unique_ptr<zenkit::Read> input;
+      if(source.origin=="host") {
+        require(source.archive.empty() && !fs::path(source.path).is_absolute(),field+": host provenance");
+        input=zenkit::Read::from(gothic/source.path);
+        Resources::censusFile((gothic/source.path).u16string());
+        ++originalOpens[{basename,source.path}];
+        }
+      else {
+        require(source.origin=="archive" && !source.archive.empty(),field+": archive provenance");
+        const auto* node=Resources::vdfsIndex().resolve(source.path);
+        require(node!=nullptr,field+": full source VFS path missing");
+        Resources::CensusSource opened;
+        input=Resources::getFileBuffer(fs::path(source.path).filename().string(),&opened);
+        auto archive=opened.source;
+        for(auto& c:archive) if(c>='a' && c<='z') c=char(c-'a'+'A');
+        require(opened.node==node && archive==source.archive,field+": actual mounted node/archive differs from provenance");
+        ++originalOpens[{basename,opened.source}];
+        }
+      require(input!=nullptr,field+": original source cannot be opened");
+      input->seek(0,zenkit::Whence::END);
+      std::vector<std::byte> raw(input->tell());
+      input->seek(0,zenkit::Whence::BEG);
+      require(input->read(raw.data(),raw.size())==raw.size(),field+": incomplete original source");
+      equal(raw.size(),source.size,field+" original size");
+      require(BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(raw.data()),raw.size()))==source.sha256,
+              field+": original SHA-256 differs from imported provenance");
+      if(!source.skipped.empty()) {
+        require(source.program.empty() && source.recordSha256.empty(),field+": skipped source cannot name a program");
+        const std::string_view rawText(reinterpret_cast<const char*>(raw.data()),raw.size());
+        if(rawText.starts_with("ZenGin Archive") || raw.size()<9) continue;
+        auto header=zenkit::Read::from(&raw);
+        (void)header->read_ubyte();
+        const auto count=header->read_uint();
+        if(uint64_t(count)*4+9>raw.size()) continue;
+        bool valid=false;
+        try {
+          auto reader=zenkit::Read::from(&raw);
+          zenkit::DaedalusScript oracle;
+          oracle.load(reader.get());
+          const auto end=reader->tell();
+          const auto program=oracle.export_program();
+          valid=end<=raw.size() && program.bytecode.size()<=end && program.symbols.size()==count &&
+                std::equal(program.bytecode.begin(),program.bytecode.end(),raw.begin()+std::ptrdiff_t(end-program.bytecode.size()));
+          }
+        catch(const std::exception&) {}
+        require(!valid,field+": importer skipped a source that independently parses as a complete program");
+        continue;
+        }
+      auto reader=zenkit::Read::from(&raw);
+      zenkit::DaedalusScript original;
+      original.load(reader.get());
+      const auto end=reader->tell();
+      std::string digest;
+      const auto record=ProgramData::readProgram(index.path(source),&digest);
+      records.insert(source.program);
+      require(digest==source.recordSha256 && index.programs.at(source.program)==digest,field+": actual native record digest");
+      auto header=zenkit::Read::from(&raw);
+      equal(header->read_ubyte(),record.version,field+" original version byte");
+      equal(header->read_uint(),record.symbols.size(),field+" original symbol header");
+      equal(record.bytecode.size(),original.size(),field+" original code size");
+      require(end>=record.bytecode.size()+4 && end<=raw.size(),field+": original parser code bounds");
+      auto codeHeader=zenkit::Read::from(raw.data()+end-record.bytecode.size()-4,4);
+      equal(codeHeader->read_uint(),record.bytecode.size(),field+" original code header");
+      bytes(raw.data()+end-record.bytecode.size(),record.bytecode.data(),record.bytecode.size(),field+" original bytecode");
+      equal(raw.size()-end,source.trailingBytes,field+" trailing bytes");
+      auto native=zenkit::DaedalusScript::from_program(record);
+      programSymbols(original,record,native,field);
+      const auto count=original.symbols().size();
+      const auto* first=count==0 ? nullptr : native.find_symbol_by_index(0);
+      zenkit::DaedalusVm sourceVm(std::move(original)),nativeVm(std::move(native));
+      equal(sourceVm.symbols().size(),count+1,field+" source VM temporary symbol");
+      equal(nativeVm.symbols().size(),count+1,field+" native VM temporary symbol");
+      require(first==nullptr || first==nativeVm.find_symbol_by_index(0),field+": VM setup must preserve source symbol addresses");
+      auto* a=sourceVm.find_symbol_by_index(uint32_t(count));
+      auto* b=nativeVm.find_symbol_by_index(uint32_t(count));
+      require(a!=nullptr && b!=nullptr && a->index()==count && b->index()==count &&
+              a->name()==b->name() && a->type()==b->type() && a->count()==b->count() &&
+              a->get_string()==b->get_string(),field+": VM temporary strings must retain defined behavior");
+      ++parsed; symbols+=count; code+=record.bytecode.size();
+      }
+    require(parsed>0,"program corpus must contain parsed sources");
+    equal(records.size(),index.programs.size(),"every indexed native program must have a checked source");
+    require(Resources::writeCensus(),"cannot write program oracle census");
+    const auto before=json(censusPath);
+    for(const auto& row:before["files"].GetArray()) {
+      const auto found=originalOpens.find({row["name"].GetString(),row["source"].GetString()});
+      if(found==originalOpens.end()) continue;
+      equal(row["opens"].GetUint64(),found->second,std::string(row["name"].GetString())+": only independent program oracle opens the source");
+      originalOpens.erase(found);
+      }
+    require(originalOpens.empty(),"every independent original program read must appear once in the census");
+    size_t selected=0;
+    for(const auto& row:index.selections) {
+      if(row.language!=-1 || !row.source) continue;
+      const auto& source=index.sources.at(*row.source);
+      const auto host=row.step.starts_with("host_") ? (gothic/source.path).u16string() : std::u16string{};
+      const auto script=Resources::loadBaseProgram(row.request,row.language,row.step,host);
+      equal(script.symbols().size(),ProgramData::readProgram(index.path(source)).symbols.size(),row.request+" selected symbol count");
+      ++selected;
+      }
+    equal(selected,8u,"all eight default scripts must select native records");
+    require(Resources::writeCensus(),"cannot write native program census");
+    const auto after=json(censusPath);
+    require(before["files"]==after["files"],"native program loading must add zero original source opens");
+    equal(after["runtime_programs"]["selections"].Size(),selected,"actual native program census selections");
+    std::printf("Programs: %zu sources, %zu symbols and %zu bytecode bytes match independent DAT reads; all eight native selections add zero DAT opens\n",parsed,symbols,code);
+    return selected;
+    }
+
+  static void census(const fs::path& file, size_t meshes, size_t models, size_t fonts, size_t programs) {
     const auto data=json(file);
-    equal(data["replacements"].Size(),meshes+models,"census base mesh/model count");
-    size_t selectedMeshes=0,selectedModels=0,sourceModels=0,sourceFonts=0;
+    equal(data["replacements"].Size(),meshes+models+programs,"census base mesh/model/program count");
+    size_t selectedMeshes=0,selectedModels=0,selectedPrograms=0,sourceModels=0,sourceFonts=0;
     for(const auto& row:data["replacements"].GetArray()) {
       const std::string_view kind=row["kind"].GetString(),path=row["replacement"].GetString();
       if(kind=="basemodel") {
         ++selectedModels;
         require(path.starts_with("base/models/"),"base model census path");
         equal(row["opens"].GetUint64(),1u,"base model selected once");
+        }
+      else if(kind=="baseprogram") {
+        ++selectedPrograms;
+        require(path.starts_with("base/programs/"),"base program census path");
+        equal(row["opens"].GetUint64(),1u,"base program selected once");
         }
       else {
         ++selectedMeshes;
@@ -820,6 +1035,7 @@ struct BaseContentContract {
       }
     equal(selectedMeshes,meshes,"census selected mesh count");
     equal(selectedModels,models,"census selected model count");
+    equal(selectedPrograms,programs,"census selected program count");
     for(const auto& row:data["files"].GetArray()) {
       const std::string_view kind=row["kind"].GetString();
       if(kind=="font") {
@@ -1095,7 +1311,7 @@ struct BaseContentContract {
     const auto censusPath=temporary/"census.json";
     setenv("OPENGOTHIC_CENSUS",censusPath.c_str(),1);
     std::string meshKey;
-    size_t textureCount=0,meshCount=0,modelCount=0,fontCount=0,dds=0,png=0,tga=0,vertices=0,indices=0,meshlets=0;
+    size_t textureCount=0,meshCount=0,modelCount=0,fontCount=0,programCount=0,dds=0,png=0,tga=0,vertices=0,indices=0,meshlets=0;
     {
     Resources resources;
     require(!resources.baseTextures.enabled && !resources.baseMeshes.enabled && !resources.baseModels.enabled && !resources.baseFonts.enabled,
@@ -1107,6 +1323,7 @@ struct BaseContentContract {
             "texture, mesh, model and font indices must contain files");
     modelCount=models(base);
     fontCount=fonts(base,resources);
+    programCount=programs(base,censusPath);
     modelFixtures(temporary);
     for(const auto& [key,file]:resources.baseTextures.files) {
       auto* entry=Resources::vdfsIndex().find(key+"-C.TEX");
@@ -1148,7 +1365,7 @@ struct BaseContentContract {
       }
     meshKey=resources.baseMeshes.files.begin()->first;
     }
-    census(censusPath,meshCount,modelCount,fontCount);
+    census(censusPath,meshCount,modelCount,fontCount,programCount);
     // Keep parser regression reads separate from the runtime-open census.
     {
     Resources resources;
@@ -1179,11 +1396,11 @@ struct BaseContentContract {
     catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
     require(rejected,"invalid explicit base must fail with recovery instructions");
 
-    for(const std::string kind:{"models","fonts"}) {
+    for(const std::string kind:{"models","fonts","programs"}) {
       const auto incomplete=temporary/("missing-"+kind+"-index");
       fs::create_directories(incomplete/kind);
       fs::copy_file(base/"base.json",incomplete/"base.json");
-      for(const auto* part:{"textures","meshes","zen","models","fonts","sources"})
+      for(const auto* part:{"textures","meshes","zen","models","fonts","programs","sources"})
         if(part!=kind) fs::create_directory_symlink(base/part,incomplete/part);
       setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
       std::string missingIndexError;
@@ -1192,10 +1409,60 @@ struct BaseContentContract {
         Resources::loadVdfs({},true);
         }
       catch(const BaseStore::Error& error) { missingIndexError=error.what(); }
-      require(missingIndexError.find("base index missing: "+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
+      const auto prefix=kind=="programs" ? "program data: " : "base index missing: ";
+      require(missingIndexError.find(prefix+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
               missingIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
               "base without "+kind+"/"+kind+".json must fail with recovery instructions");
       }
+    {
+    const auto broken=temporary/"broken-program-record";
+    fs::create_directories(broken/"programs");
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","sources"})
+      fs::create_symlink(base/part,broken/part);
+    for(const auto& file:fs::directory_iterator(base/"programs"))
+      fs::create_symlink(file.path(),broken/"programs"/file.path().filename());
+    const auto index=ProgramData::readIndex(broken/"programs");
+    const auto selected=std::find_if(index.selections.begin(),index.selections.end(),[](const auto& row) {
+      return row.language==-1 && row.source.has_value();
+      });
+    require(selected!=index.selections.end(),"missing program record check needs a default selection");
+    const auto& source=index.sources.at(*selected->source);
+    const auto file=index.path(source);
+    auto bin=file; bin.replace_extension(".bin");
+    fs::remove(bin);
+    setenv("OPENGOTHIC_BASE",broken.c_str(),1);
+    {
+    Resources resources;
+    Resources::loadVdfs({},true);
+    Resources::mountWork(CommandLine::inst().nestedPath({u"_work"},Tempest::Dir::FT_Dir));
+    const auto host=selected->step.starts_with("host_") ?
+      (fs::path(CommandLine::inst().rootPath())/source.path).u16string() : std::u16string{};
+    const auto fails=[&](const std::string& description, const std::string& reason=std::string{}) {
+      bool failed=false;
+      try { (void)Resources::loadBaseProgram(selected->request,selected->language,selected->step,host); }
+      catch(const BaseStore::Error& error) {
+        const std::string message=error.what();
+        failed=message.find("program "+selected->request+":")!=std::string::npos &&
+               (reason.empty() || message.find(reason)!=std::string::npos);
+        }
+      require(failed,description+": selected native failure must be fatal");
+      };
+    fails("missing BIN");
+    fs::create_symlink(base/"programs"/bin.filename(),bin);
+    fs::remove(file);
+    const std::string invalid="{broken";
+    gothicglb::writeFile(file,invalid.data(),invalid.size());
+    fails("corrupt JSON");
+    auto changed=gothicglb::readFile(base/"programs"/file.filename());
+    changed.push_back(' '); // Valid JSON with a different identity from the imported record.
+    gothicglb::writeFile(file,changed.data(),changed.size());
+    fails("changed native identity","program record identity differs from base index");
+    }
+    const auto failed=json(censusPath);
+    require(failed["files"].Empty() && failed["replacements"].Empty() &&
+            failed["runtime_programs"]["selections"].Empty() && failed["base_misses"].Size()==3,
+            "failed native records must record misses without original opens or successful selections");
+    }
     setenv("OPENGOTHIC_BASE",base.c_str(),1);
     {
     Resources resources;

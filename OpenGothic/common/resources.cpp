@@ -46,6 +46,7 @@
 #include "graphics/material.h"
 #include "dmusic/directmusic.h"
 #include "utils/fileext.h"
+#include "utils/fileutil.h"
 #include "utils/gthfont.h"
 
 #include "gothic.h"
@@ -274,6 +275,15 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
     inst->baseModels.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
     inst->baseFonts.validate(mounted);
     inst->baseFonts.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
+    if(inst->basePrograms.archives!=mounted)
+      throw std::runtime_error("mounted archives differ from program base index: "+inst->basePrograms.dir.string());
+    for(const auto& [path,size]:inst->basePrograms.looseFiles) {
+      std::error_code error;
+      const auto actual = std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/path,error);
+      if(error || actual!=size)
+        throw std::runtime_error("loose file differs from program base index: "+path);
+      }
+    Log::i("base: ",inst->basePrograms.programs.size()," programs from \"",inst->basePrograms.dir.string(),"\"");
     inst->baseProgress={};
     }
   catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
@@ -391,6 +401,43 @@ Tempest::Device& Resources::device() {
 bool Resources::hasFile(std::string_view name) {
   std::lock_guard<std::recursive_mutex> g(inst->sync);
   return inst->gothicAssets.find(name) != nullptr;
+  }
+
+zenkit::DaedalusScript Resources::loadBaseProgram(std::string_view request, int language,
+                                                std::string_view branch, std::u16string_view hostPath) {
+  try {
+    const auto& index = inst->basePrograms;
+    const ProgramData::Source* source = nullptr;
+    if(hostPath.empty()) {
+      std::string_view selectedBranch;
+      source = index.findVfs(request,&selectedBranch);
+      if(source==nullptr || selectedBranch!=branch)
+        throw std::runtime_error("selected VFS source missing from program base index");
+      }
+    else {
+      if(!FileUtil::exists(std::u16string(hostPath)))
+        throw std::runtime_error("selected host program source not found");
+      source = index.findHost(censusSourcePath(std::filesystem::path(hostPath)));
+      if(source==nullptr)
+        throw std::runtime_error("selected host source missing from program base index");
+      }
+    const auto file = index.path(*source);
+    std::string actualSha256;
+    auto program = ProgramData::readProgram(file,&actualSha256);
+    if(actualSha256!=source->recordSha256)
+      throw std::runtime_error("program record identity differs from base index");
+    auto script = zenkit::DaedalusScript::from_program(std::move(program));
+    if(inst->census) {
+      const auto record = "base/programs/"+file.filename().generic_string();
+      inst->census->replaced(request,record);
+      inst->census->program("Gothic::loadScript",request,language,branch,record,actualSha256,*source);
+      }
+    return script;
+    }
+  catch(const std::exception& error) {
+    if(inst->census) inst->census->missing(request,error.what());
+    throw BaseStore::Error("program "+std::string(request)+": "+error.what());
+    }
   }
 
 bool Resources::getFileData(std::string_view name, std::vector<uint8_t> &dat) {
@@ -661,6 +708,7 @@ void Resources::indexBaseContent() {
   baseZen.load(root,"zen");
   baseModels.load(root,"models");
   baseFonts.load(root,"fonts");
+  basePrograms = ProgramData::readIndex(root/"programs");
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {

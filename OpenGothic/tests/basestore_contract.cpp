@@ -1,6 +1,7 @@
 #include "baseimport.h"
 #include "basestore.h"
 #include "commandline.h"
+#include "programdata.h"
 #include "resources.h"
 #include <zenkit/Archive.hh>
 #include <zenkit/CutsceneLibrary.hh>
@@ -157,13 +158,15 @@ rapidjson::Document manifest(const fs::path& game, const fs::path& out) {
 // OU parse semantics, the GothicKit music trace, and content/order binding of the identity.
 void syntheticSources(const fs::path& game) {
   const std::string sfx="RIFF-sfx", speech="RIFF-speech-copy", loose="RIFF-loose-sfx";
+  const std::string dat("\x32\0\0\0\0\0\0\0\0",9); // version, no symbols, no code
+  const auto archiveDat=std::string(1,'\x33')+le32(0)+le32(1)+std::string(1,'\x3c');
   const auto archives=[&](time_t a, time_t b) {
-    writeVdf(game/"Data/A.VDF",{{"/_WORK/DATA/SOUND/SFX/SVM_X.WAV",sfx},{"/_WORK/DATA/SOUND/SPEECH/SVM_X.WAV",speech}},a);
+    writeVdf(game/"Data/A.VDF",{{"/_WORK/DATA/SOUND/SFX/SVM_X.WAV",sfx},{"/_WORK/DATA/SOUND/SPEECH/SVM_X.WAV",speech},
+                              {"/_WORK/DATA/SCRIPTS/_COMPILED/GOTHIC.DAT",archiveDat},{"/_WORK/DATA/SCRIPTS/_COMPILED/BAD.DAT","not a program"}},a);
     writeVdf(game/"Data/B.VDF",{{"/_WORK/DATA/SOUND/SFX/OTHER.WAV",sfx}},b);
     };
   archives(1000000000,1100000000);
   write(game/"_work/Data/Sound/SFX/SVM_X.WAV",loose);
-  const std::string dat("\x32\0\0\0\0\0\0\0\0",9); // version, no symbols, no code
   for(const char* name:{"CAMERA","FIGHT","SFX","MUSIC","PARTICLEFX","VISUALFX","MENU","GOTHIC"})
     write(game/"_work/Data/Scripts/_compiled"/(std::string(name)+".DAT"),dat);
   const auto ou=game/"_work/Data/Scripts/content/CUTSCENE/OU.BIN";
@@ -316,6 +319,43 @@ void syntheticSources(const fs::path& game) {
     }
   write(ou,valid);
   std::cout << "synthetic OU: wrong type, bad body and bad header rejected\n";
+
+  const auto programs=game.parent_path()/"synthetic-programs";
+  require(BaseImport::convertPrograms(game,programs,false)==0,"synthetic programs must import");
+  require(BaseImport::convertPrograms(game,programs,true)==0,"synthetic program import must be reproducible");
+  const auto index=ProgramData::readIndex(programs);
+  std::string_view branch;
+  const auto* engine=index.findVfs("gothic.dat \t",&branch);
+  require(engine!=nullptr && branch=="vfs_find_request" && engine->origin=="archive" && engine->archive=="A.VDF" &&
+          engine->path=="_WORK/DATA/SCRIPTS/_COMPILED/GOTHIC.DAT" && engine->sha256==BaseImport::sha256(archiveDat),
+          "program index must retain the full archive path and actual selected provenance");
+  require(index.findVfs("missing\\gothic.dat \t",&branch)==engine && branch=="vfs_find_basename",
+          "program basename fallback must retain the selected source and branch");
+  const auto* server=index.server();
+  require(server!=nullptr && server->origin=="host" && server->archive.empty() &&
+          server->path=="_work/Data/Scripts/_compiled/GOTHIC.DAT" && server->sha256==BaseImport::sha256(dat) &&
+          server->program!=engine->program && index.findHost("_WORK/DATA/SCRIPTS/_COMPILED/gothic.dat")==server,
+          "server physical GOTHIC.DAT must remain separate from the engine archive winner");
+  std::string digest;
+  const auto record=ProgramData::readProgram(index.path(*engine),&digest);
+  auto script=zenkit::DaedalusScript::from_program(record);
+  require(record.version==0x33 && record.symbols.empty() && record.bytecode.size()==1 &&
+          uint8_t(record.bytecode[0])==0x3c && script.symbols().empty() && script.size()==1 &&
+          script.instruction_at(0).op==zenkit::DaedalusOpcode::RSR && digest==engine->recordSha256,
+          "native program must preserve the independent synthetic header and return opcode");
+  bool rejected=false;
+  try { (void)index.findVfs("BAD.DAT"); }
+  catch(const std::runtime_error& error) { rejected=std::string(error.what()).find("not an importable program")!=std::string::npos; }
+  require(rejected,"a selected nonprogram DAT must fail without falling through");
+  auto binary=index.path(*engine); binary.replace_extension(".bin");
+  const auto payload=read(binary);
+  fs::remove(binary);
+  rejected=false;
+  try { (void)ProgramData::readProgram(index.path(*engine)); }
+  catch(const std::runtime_error& error) { rejected=std::string(error.what()).find("program data:")!=std::string::npos; }
+  require(rejected,"missing selected native program BIN must fail");
+  write(binary,payload);
+  std::cout << "synthetic programs: native roundtrip, archive/host provenance, basename selection and missing/nonprogram failures verified\n";
 
   const auto base=BaseImport::identify(game);
   auto music=read(game/"_work/Data/Music/newworld/TEST.sgt");
