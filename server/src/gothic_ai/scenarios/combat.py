@@ -150,10 +150,6 @@ async def surrender_live(
                     await link.debug("skip_important", near=CAVALORN)
                     await link.debug("npc_goto", npc=CAVALORN, waypoint=PARK)
                 await attach_when_free(link, npc)
-                # Cold original lines for the opponent or a witness must not block combat RPCs.
-                prepared = await link.snapshot(npc)
-                for person in [prepared.npc, *prepared.nearby_npcs]:
-                    await asyncio.to_thread(dialogue.personas.get, person.id, person.name)
                 if npc == BRAGO:
                     await link.debug("skip_important", near="BDT_1015_BANDIT_L")
                     await link.debug("player_goto", to=BRAGO, distance=200)
@@ -252,6 +248,13 @@ async def surrender_live(
                 current["decision_ms"] = min(decisions) if decisions else current["turn_ms"]
                 current["first_words_ms"] = next((w["ms"] for w in current["words"]), None)
                 if text is not None:
+                    records = [r for r in read_trace(trace.path())
+                               if r.get("npc") == npc and r["t"] >= wall_started - 0.01]
+                    current["surrender_probe"] = next(
+                        (r for r in records if r["type"] == "surrender_probe"), None,
+                    )
+                    current["hold_effects"] = [r for r in records if r["type"] == "surrender_hold"]
+                    current["quick_requests"] = [r for r in records if r["type"] == "quick_request"]
                     if attack_watch is not None and attack_watch.done():
                         attack_watch.result()
                     hero_hits = [h for h in current["observed_hits"]
@@ -265,6 +268,14 @@ async def surrender_live(
                     )
                     current["hero_hits_after_hold"] = None if exited is None else sum(
                         h["ms"] > exited for h in hero_hits
+                    )
+                    own_calm = next((r for r in current["hold_effects"]
+                                     if r["member"] == npc and r["ok"]), None)
+                    applied = (round((own_calm["received_at"] - wall_started) * 1000
+                                     + own_calm["applied_ms"]) if own_calm else None)
+                    current["hold_applied_ms"] = applied
+                    current["hero_hits_after_calm_until_decision"] = None if applied is None else sum(
+                        applied < h["ms"] <= current["decision_ms"] for h in hero_hits
                     )
                 if accepted and (current["fight_continued"] or any(
                     h["npc"] == "PLAYER" and h["by"] == npc and h["ms"] > accepted["resolved_ms"]
@@ -302,9 +313,6 @@ async def mercy(
     await link.wait_world()
     await link.debug("skip_important", near=LOBART)
     await attach_when_free(link, LOBART)
-    prepared = await link.snapshot(LOBART)
-    for person in [prepared.npc, *prepared.nearby_npcs]:
-        await asyncio.to_thread(dialogue.personas.get, person.id, person.name)
     await link.debug("teleport", near=LOBART, distance=200)
     await link.act(LOBART, "stop")
     await link.debug("player_hp", hp=2000)
@@ -423,9 +431,6 @@ async def hero_yield(
     await link.wait_world()
     await link.debug("skip_important", near=LOBART)
     await attach_when_free(link, LOBART)
-    prepared = await link.snapshot(LOBART)
-    for person in [prepared.npc, *prepared.nearby_npcs]:
-        await asyncio.to_thread(dialogue.personas.get, person.id, person.name)
     await link.debug("teleport", near=LOBART, distance=200)
     await link.act(LOBART, "stop")
     await link.debug("player_hp", hp=2000)

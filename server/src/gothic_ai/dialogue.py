@@ -781,6 +781,7 @@ class DialogueManager:
         self._quick_busy = [0] * PREWARM_SLOTS
         self._quick_locks = [asyncio.Lock() for _ in range(PREWARM_SLOTS)]
         self._quick_free = asyncio.Event()
+        self._surrender_probes = 0
         self._nearby: dict[str, tuple[str, float]] = {}  # human npc -> name, distance to the hero in cm
         self._svm_down: dict[str, bool] = {}  # latest known deaths, roster and snapshot health
         self._focus: str | None = None
@@ -883,7 +884,7 @@ class DialogueManager:
             attempt["outcome"] = "far"
         elif (
             npc == "PLAYER" or npc in self._svm_tasks or len(self._svm_tasks) >= PREWARM_SLOTS
-            or self._svm_busy(npc)
+            or self._surrender_probes or self._svm_busy(npc)
         ):
             pass
         else:
@@ -1199,6 +1200,8 @@ class DialogueManager:
             self._start_prewarm(conv, candidates)
 
     def _start_prewarm(self, conv: Conversation, candidates: list[str]) -> None:
+        if self._surrender_probes:
+            return
         self._open_ahead(conv.npc)
         warm = getattr(self.quick, "prewarm", None)
         if warm is None:
@@ -1282,14 +1285,26 @@ class DialogueManager:
 
     @asynccontextmanager
     async def _quick_request(self, npc: str) -> AsyncIterator[None]:
+        started, requested_at = time.monotonic(), time.time()
         while (slot := self._quick_slot(npc)) is None:
             self._quick_free.clear()
             await self._quick_free.wait()
+        slotted = time.monotonic()
         self._quick_busy[slot] += 1  # includes requests waiting for this NPC's previous real request
         if warm := self._prewarms.get(npc.upper()):
             warm.cancel()  # do not wait for a prewarm or share its slot with a real request
         try:
             async with self._quick_locks[slot]:
+                conv = self.conversations.get(npc.upper())
+                if self.trace is not None and conv is not None and conv.trigger is not None and (
+                    conv.trigger.role == "user" and conv.reply is not None and not conv.reply.done()
+                ):
+                    self.trace.write({
+                        "type": "quick_request", "t": round(time.time(), 3), "npc": npc,
+                        "requested_at": requested_at, "slot": slot,
+                        "slot_wait_ms": round((slotted - started) * 1000, 1),
+                        "lock_wait_ms": round((time.monotonic() - slotted) * 1000, 1),
+                    })
                 token = QUICK_SLOT.set(slot)
                 try:
                     yield
@@ -1310,53 +1325,84 @@ class DialogueManager:
     ) -> bool:
         """Classify outside the persona on an idle slot other than the speaking NPC's.
 
-        Reuse an unbound slot or evict the least recently used idle NPC and forget its warmed
-        prefix. Never touch the speaker's slot or an active request; no spare slot means no hold.
+        Cancel warming and SVM generation before selecting an idle foreign LRU slot. Never
+        touch the speaker's prefix or another foreground request; no spare slot means no hold.
         """
-        if (self.quick is None or getattr(self.quick, "_id_slot_supported", True) is False
-                or time.monotonic() >= conv.talked_at + 1.5):
-            return False
-        own = self._quick_slots.get(conv.npc)
-        slots = [s for s in range(PREWARM_SLOTS)
-                 if s != own and not self._quick_busy[s] and not self._quick_locks[s].locked()
-                 and not any(self._quick_slots.get(n) == s and not task.done()
-                             for n, task in self._prewarms.items())]
-        if not slots:
-            return False
-        owners = {s: n for n, s in self._quick_slots.items()}
-        slot = min(slots, key=lambda s: self._quick_used.get(owners.get(s), -1))
-        if old := owners.get(slot):
-            del self._quick_slots[old]
-            self._quick_used.pop(old, None)
-            self._prewarm_history.pop(old, None)
-            self._prewarms.pop(old, None)
-        phrase = next(m.content for m in reversed(request) if isinstance(m, Message) and m.role == "user")
-        context = self.surrender_context(conv.npc) if opponent is None else opponent
-        text_in = (f"Перед этим противник сказал: «{context}»\n" if context else "")
-        text_in += f"Реплика игрока: «{phrase}»"
-        text = ""
-        started = time.monotonic()
-        self._quick_busy[slot] += 1
-        token = QUICK_SLOT.set(slot)
+        entered, wall = time.monotonic(), time.time()
+        attempt: dict[str, Any] = {
+            "type": "surrender_probe", "t": round(wall, 3), "npc": conv.npc,
+            "received_at": wall - (entered - conv.talked_at),
+            "entered_ms": round((entered - conv.talked_at) * 1000, 1),
+            "slot_wait_ms": 0.0, "outcome": "unavailable",
+        }
+        self._surrender_probes += 1
         try:
+            if (self.quick is None or getattr(self.quick, "_id_slot_supported", True) is False
+                    or entered >= conv.talked_at + 1.5):
+                return False
             async with asyncio.timeout_at(conv.talked_at + 1.5):
-                async with self._quick_locks[slot], aclosing(self.quick.stream(
-                    instructions=SURRENDER_CLASSIFIER, messages=[Message("user", text_in)],
-                    tools=[], temperature=0, max_tokens=4, grammar='root ::= "да" | "нет"',
-                )) as events:
-                    async for event in events:
-                        if isinstance(event, TextDelta):
-                            text += event.text
+                background = {task for task in (*self._prewarms.values(), *self._svm_tasks.values())
+                              if not task.done()}
+                for task in background:
+                    task.cancel()
+                if background:
+                    await asyncio.gather(*background, return_exceptions=True)
+                attempt["cancel_ms"] = round((time.monotonic() - entered) * 1000, 1)
+                own = self._quick_slots.get(conv.npc)
+                slots = [s for s in range(PREWARM_SLOTS)
+                         if s != own and not self._quick_busy[s] and not self._quick_locks[s].locked()]
+                if not slots:
+                    attempt["outcome"] = "no_slot"
+                    return False
+                owners = {s: n for n, s in self._quick_slots.items()}
+                slot = min(slots, key=lambda s: self._quick_used.get(owners.get(s), -1))
+                attempt["slot"] = slot
+                if old := owners.get(slot):
+                    del self._quick_slots[old]
+                    self._quick_used.pop(old, None)
+                    self._prewarm_history.pop(old, None)
+                    self._prewarms.pop(old, None)
+                phrase = next(m.content for m in reversed(request)
+                              if isinstance(m, Message) and m.role == "user")
+                context = self.surrender_context(conv.npc) if opponent is None else opponent
+                text_in = (f"Перед этим противник сказал: «{context}»\n" if context else "")
+                text_in += f"Реплика игрока: «{phrase}»"
+                text = ""
+                self._quick_busy[slot] += 1
+                token = QUICK_SLOT.set(slot)
+                locked = time.monotonic()
+                try:
+                    async with self._quick_locks[slot]:
+                        attempt["lock_wait_ms"] = round((time.monotonic() - locked) * 1000, 1)
+                        attempt["request_ms"] = round((time.monotonic() - conv.talked_at) * 1000, 1)
+                        async with aclosing(self.quick.stream(
+                            instructions=SURRENDER_CLASSIFIER, messages=[Message("user", text_in)],
+                            tools=[], temperature=0, max_tokens=4, grammar='root ::= "да" | "нет"',
+                        )) as events:
+                            async for event in events:
+                                if isinstance(event, TextDelta):
+                                    attempt.setdefault("first_token_ms", round(
+                                        (time.monotonic() - conv.talked_at) * 1000, 1,
+                                    ))
+                                    text += event.text
+                finally:
+                    attempt["timings"] = dict(getattr(self.quick, "timings", {}).get(slot, {}))
+                    QUICK_SLOT.reset(token)
+                    self._quick_busy[slot] -= 1
+                    self._quick_free.set()
+                answer = text.strip().lower()
+                attempt.update(answer=answer, outcome="yes" if answer == "да" else "no")
+                return answer == "да"
         except (LLMError, TimeoutError) as error:
-            log.info("%s: surrender probe unavailable: %s", conv.npc, error)
+            attempt.update(outcome="late" if isinstance(error, TimeoutError) else "error",
+                           error=type(error).__name__)
             return False
         finally:
-            QUICK_SLOT.reset(token)
-            self._quick_busy[slot] -= 1
-            self._quick_free.set()
-        answer = text.strip().lower()
-        log.info("%s: surrender probe %r in %.3fs", conv.npc, answer, time.monotonic() - started)
-        return answer == "да"
+            self._surrender_probes -= 1
+            attempt["completed_ms"] = round((time.monotonic() - conv.talked_at) * 1000, 1)
+            log.info("%s: surrender probe %s", conv.npc, json.dumps(attempt, ensure_ascii=False))
+            if self.trace is not None:
+                self.trace.write(attempt)
 
     def _yield_to(self, npc: str) -> None:
         """Prioritize this NPC over other warming and SVM requests; its own warm is cancelled

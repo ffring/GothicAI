@@ -181,12 +181,21 @@ class Mercy:
         if (self.dialogue.quick is None or npc in self._hold_used or self.held(npc)
                 or not self._hero_turn(npc)):
             return
+        self.dialogue._surrender_probes += 1
         try:
-            if not await self._hero_fight(npc):
-                return
+            async with asyncio.timeout_at(conv.talked_at + 1.5):
+                if self.barks is not None and self._scene is None and (
+                    task := self.barks.task
+                ) is not None and not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if not await self._hero_fight(npc):
+                    return
         except (GameError, TimeoutError) as error:
             log.info("%s: surrender hold unavailable: %s", npc, error)
             return
+        finally:
+            self.dialogue._surrender_probes -= 1
         if not await self.dialogue._surrendering(conv, request, opponent=opponent):
             return
         if self._loading or not self._hero_turn(npc) or not self._alive(npc):
@@ -229,7 +238,15 @@ class Mercy:
             self.dialogue._change_intent(listener, intent, self.link.snapshots.get(member), body=False)
             hold.members.append(member)
             self._hold_used[member] = False
+            requested = time.monotonic()
             output, ok = await self.dialogue._calm(listener, intent, native_attitude="ATT_FRIENDLY")
+            if self.dialogue.trace is not None:
+                self.dialogue.trace.write({
+                    "type": "surrender_hold", "t": round(time.time(), 3), "npc": npc, "member": member,
+                    "received_at": time.time() - (time.monotonic() - conv.talked_at),
+                    "request_ms": round((requested - conv.talked_at) * 1000, 1),
+                    "applied_ms": round((time.monotonic() - conv.talked_at) * 1000, 1), "ok": ok,
+                })
             if not ok:
                 log.info("%s: surrender hold failed: %s", member, output)
                 self._end_hold(npc, hold)
