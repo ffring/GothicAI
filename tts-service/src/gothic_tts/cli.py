@@ -93,6 +93,12 @@ async def say(args: argparse.Namespace) -> int:
 
 async def clone_originals(args: argparse.Namespace) -> int:
     voices = load_original_voices(args.dir)
+    if not voices:
+        print(
+            f"error: no original voices in {args.dir} (run scripts/voice_snapshots.py)",
+            file=sys.stderr,
+        )
+        return 1
     selected: dict[str, Voice] = {}
     failed = False
     if args.ids:

@@ -228,6 +228,25 @@ async def test_original_voice_cache_preserves_the_designed_voice(api, tmp_path) 
     assert sum(isinstance(message, bytes) for message in messages) == 8
 
 
+@pytest.mark.parametrize("state", ["missing_dir", "missing_manifest", "empty_manifest"])
+def test_clone_originals_requires_voices(api, tmp_path, monkeypatch, capsys, state) -> None:
+    directory = tmp_path / "missing" if state == "missing_dir" else tmp_path
+    if state == "empty_manifest":
+        (directory / "manifest.json").write_text("[]")
+    monkeypatch.setattr(cli, "InworldTTS", lambda: _provider(api, tmp_path, keep_warm=0))
+    monkeypatch.setattr(cli, "load_env_file", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["gothic-tts", "clone-originals", "--dir", str(directory)])
+    with pytest.raises(SystemExit) as failed:
+        cli.main()
+    assert failed.value.code == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == (
+        f"error: no original voices in {directory} (run scripts/voice_snapshots.py)\n"
+    )
+    assert api.requests == []
+
+
 def test_clone_originals_command_reuses_sample_hash(api, tmp_path, monkeypatch, capsys) -> None:
     for cid in ("XARDAS", "VATRAS"):
         (tmp_path / f"{cid}.wav").write_bytes(f"RIFF {cid}".encode())
