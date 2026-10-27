@@ -1,4 +1,5 @@
 #include "basestore.h"
+#include "videodata.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -81,14 +82,23 @@ struct Temporary {
     }
   };
 
-void publish(const fs::path& temporary, const fs::path& destination, const BaseImport::Identity& identity) {
-  if(!BaseImport::matches(temporary,identity)) throw std::runtime_error("base.json does not match installation");
+bool publicationMatches(const fs::path& directory,const BaseImport::Identity& identity) {
+  return BaseImport::matches(directory,identity);
+  }
+bool publicationMatches(const fs::path& directory,const VideoData::Identity& identity) {
+  return VideoData::matches(directory,identity,true);
+  }
+
+template<class Identity>
+void publish(const fs::path& temporary, const fs::path& destination, const Identity& identity) {
+  if(!publicationMatches(temporary,identity)) throw std::runtime_error("base metadata or payload does not match installation");
   // The caller holds the destination lock. Valid published directories are immutable.
   if(fs::exists(destination)) fs::remove_all(destination);
   fs::rename(temporary,destination);
   }
 
-void copy(const fs::path& source, const fs::path& destination, const BaseImport::Identity& identity) {
+template<class Identity>
+void copy(const fs::path& source, const fs::path& destination, const Identity& identity) {
   Temporary temporary(destination);
   fs::copy(source,temporary.path,fs::copy_options::recursive);
   publish(temporary.path,destination,identity);
@@ -206,6 +216,131 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   log("base: importing installation");
   BaseImport::build(gothic,temporary.path,log);
   storeLock.reset();
+  publish(temporary.path,destination,identity);
+  return finish("import");
+  }
+
+BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const BaseImport::Progress& log) {
+  const auto start=std::chrono::steady_clock::now();
+  const auto identity=VideoData::identify(gothic);
+  log("video base: identified installation ("+std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now()-start).count())+" ms)");
+  fs::path cache;
+  if(const auto* env=std::getenv("OPENGOTHIC_BASE_CACHE")) cache=env;
+  else if(const auto* home=std::getenv("HOME")) cache=fs::path(home)/".cache/gothic-ai/base";
+  if(cache.empty()) throw std::runtime_error("base cache path is empty");
+  cache/="videos";
+  fs::create_directories(cache);
+  Lock cacheLock(cache/".lock");
+  removeInterrupted(cache);
+  const auto destination=cache/identity.fingerprint;
+  fs::path store;
+  if(const auto* env=std::getenv("OPENGOTHIC_BASE_STORE")) store=env;
+  else {
+#ifdef __APPLE__
+    const fs::path shared="/Volumes/shared/gothic-ai";
+#else
+    const fs::path shared="/mnt/shared/gothic-ai";
+#endif
+    std::error_code error;
+    if(fs::is_directory(shared,error)) store=shared;
+    }
+  if(!store.empty()) store/="base/videos";
+  const auto finish=[&](const char* source, bool upload=true) {
+    Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared),{}};
+    try { prune(cache,destination); }
+    catch(const std::exception& e) { log(std::string("video base cache cleanup: ")+e.what()); }
+    const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
+    log(std::string("video base: ")+source+" "+destination.string()+" ("+std::to_string(ms)+" ms)");
+    if(upload && !store.empty()) {
+      std::packaged_task<void()> publication([store,destination,identity,lease=selected.lease] {
+        const auto started=std::chrono::steady_clock::now();
+        try {
+          fs::create_directories(store);
+          std::shared_ptr<Lock> storedLease;
+          {
+          Lock cleanup(store/".lock");
+          storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared);
+          }
+          Lock lock(store/(identity.fingerprint+".lock"));
+          removeInterrupted(store,identity.fingerprint);
+          const auto stored=store/identity.fingerprint;
+          const bool present=VideoData::matches(stored,identity);
+          if(!present) {
+            if(fs::exists(stored)) {
+            Lock cleanup(store/".lock");
+            storedLease.reset();
+            storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::TryExclusive);
+            if(!storedLease->acquired()) throw std::runtime_error("cannot replace a video store part in use");
+            if(fs::exists(stored)) fs::remove_all(stored);
+            storedLease.reset();
+            storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared);
+            }
+            copy(destination,stored,identity);
+            }
+          {
+          Lock cleanup(store/".lock");
+          prune(store,stored);
+          }
+          const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
+          std::fprintf(stderr,"video base: %s %s (%lld ms, background)\n",
+                       present ? "verified store" : "published to store",stored.string().c_str(),static_cast<long long>(ms));
+          }
+        catch(const std::exception& e) { std::fprintf(stderr,"video base: store publication failed: %s\n",e.what()); }
+        });
+      selected.publication=publication.get_future();
+      std::thread(std::move(publication)).detach();
+      }
+    return selected;
+    };
+  if(VideoData::matches(destination,identity)) return finish("cache");
+  if(fs::exists(destination)) {
+    log("video base: rejected cache directory: video metadata mismatch");
+    Lock replacement(cache/(identity.fingerprint+".use"),Lock::TryExclusive);
+    if(!replacement.acquired()) throw std::runtime_error("cannot replace a video cache part in use");
+    fs::remove_all(destination);
+    }
+
+  std::unique_ptr<Lock> storeLock;
+  std::shared_ptr<Lock> storedLease;
+  fs::path stored;
+  if(!store.empty()) {
+    stored=store/identity.fingerprint;
+    try {
+      fs::create_directories(store);
+      {
+      Lock cleanup(store/".lock");
+      storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared);
+      }
+      log("video base: waiting for store lock");
+      storeLock=std::make_unique<Lock>(store/(identity.fingerprint+".lock"));
+      removeInterrupted(store,identity.fingerprint);
+      }
+    catch(const std::exception& e) {
+      log(std::string("video base: store unavailable: ")+e.what());
+      storeLock.reset();
+      }
+    try {
+      if(VideoData::matches(stored,identity)) {
+        copy(stored,destination,identity);
+        try {
+          Lock cleanup(store/".lock");
+          prune(store,stored);
+          }
+        catch(const std::exception& e) { log(std::string("video base store cleanup: ")+e.what()); }
+        return finish("store",false);
+        }
+      }
+    catch(const std::exception& e) {
+      log(std::string("video base: store unavailable: ")+e.what());
+      storeLock.reset();
+      }
+    }
+  Temporary temporary(destination);
+  log("video base: importing installation");
+  VideoData::build(gothic,temporary.path,log);
+  storeLock.reset();
+  storedLease.reset();
   publish(temporary.path,destination,identity);
   return finish("import");
   }

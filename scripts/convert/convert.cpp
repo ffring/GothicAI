@@ -48,6 +48,8 @@
 // The output is Gothic content: it never goes into git.
 
 #include "baseimport.h"
+#include "basestore.h"
+#include "videodata.h"
 #include "sha256.h"
 #include "asset/fromzenkit.h"
 #include "basemesh.h"
@@ -821,6 +823,14 @@ int main(int argc, char** argv) {
       return BaseImport::convertAudio(args[1],args[2],args[0]=="verify-audio");
     if(args.size()==3 && (args[0]=="music" || args[0]=="verify-music"))
       return BaseImport::convertMusic(args[1],args[2],args[0]=="verify-music");
+    if(args.size()==3 && (args[0]=="videos" || args[0]=="verify-videos"))
+      return VideoData::convert(args[1],args[2],args[0]=="verify-videos");
+    if(args.size()==2 && args[0]=="resolve-videos") {
+      auto selection=BaseStore::resolveVideos(args[1],[](std::string_view message) { std::cerr << message << '\n'; });
+      if(selection.publication.valid()) selection.publication.get();
+      std::cout << selection.path.string() << '\n';
+      return 0;
+      }
     if(args.size()==3 && (args[0]=="sources" || args[0]=="verify-sources"))
       return BaseImport::convertSources(args[1],args[2],args[0]=="verify-sources");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
@@ -837,6 +847,8 @@ int main(int argc, char** argv) {
                  "       content-convert outputunits-file <OU.BIN|OU.DAT> <record.json>\n"
                  "       content-convert audio|verify-audio <gothic dir> <dir>\n"
                  "       content-convert music|verify-music <gothic dir> <dir>\n"
+                 "       content-convert videos|verify-videos <gothic dir> <dir>\n"
+                 "       content-convert resolve-videos <gothic dir>\n"
                  "       content-convert sources|verify-sources <gothic dir> <dir>\n"
                  "       content-convert base <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";
