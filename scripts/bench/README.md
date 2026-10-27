@@ -331,6 +331,7 @@ game when it is done (`KEEP=1` keeps it open). Anything not listed is passed to 
 
 | Command | |
 |---|---|
+| `playvideo <name>` | Marvin command calling the game video player; case-insensitive name, optional `.bik`. Requires video enabled (omit `-nointro`). The scenario pauses during playback and resumes afterwards. |
 | `wait <ms>` | game time |
 | `waitarrive [timeout ms]` | until the player has walked where it was sent |
 | `goto <waypoint>`, `goto pos <x> <y> <z>` | teleport (`pos`: where no waypoint is, a roof, a rock) |

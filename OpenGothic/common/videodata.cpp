@@ -31,6 +31,9 @@ constexpr int CompressionLevel=6;
 constexpr uint32_t KeyframeInterval=4;
 void require(bool ok,const std::string& reason) { if(!ok) throw std::runtime_error("video data: "+reason); }
 void require(bool ok,const char* reason) { if(!ok) throw std::runtime_error(std::string("video data: ")+reason); }
+void checkCancelled(const std::atomic_bool* cancelled) {
+  require(cancelled==nullptr || !cancelled->load(),"preparation cancelled");
+  }
 uint32_t aligned(uint32_t n) { return ((n+15)/16)*16; }
 std::string upper(std::string name) { for(auto& c:name) if(c>='a' && c<='z') c=char(c-'a'+'A'); return name; }
 std::string quoted(const std::string& value) {
@@ -44,15 +47,18 @@ void put64(std::ostream& out,uint64_t value) { uint8_t b[8]; for(size_t i=0;i<8;
 void readBytes(std::istream& in,void* data,size_t size) { in.read(static_cast<char*>(data),std::streamsize(size)); require(bool(in),"truncated file"); }
 uint32_t get32(std::istream& in) { uint8_t b[4]; readBytes(in,b,4); uint32_t v=0; for(size_t i=0;i<4;++i) v|=uint32_t(b[i])<<(i*8); return v; }
 uint64_t get64(std::istream& in) { uint8_t b[8]; readBytes(in,b,8); uint64_t v=0; for(size_t i=0;i<8;++i) v|=uint64_t(b[i])<<(i*8); return v; }
-std::string hashRange(std::istream& in,uint64_t size) {
+std::string hashRange(std::istream& in,uint64_t size,const std::atomic_bool* cancelled=nullptr) {
   Sha256 hash; std::array<char,1<<16> buffer;
-  while(size) { const auto n=size_t(std::min<uint64_t>(size,buffer.size())); readBytes(in,buffer.data(),n); hash.update(buffer.data(),n); size-=n; }
+  while(size) { checkCancelled(cancelled); const auto n=size_t(std::min<uint64_t>(size,buffer.size())); readBytes(in,buffer.data(),n); hash.update(buffer.data(),n); size-=n; }
   return hash.finish();
   }
 std::string readText(const fs::path& path) {
   std::ifstream in(path,std::ios::binary); require(bool(in),"cannot open "+path.string()); return {std::istreambuf_iterator<char>(in),{}};
   }
-std::string fileHash(const fs::path& path) { return BaseImport::sha256File(path); }
+std::string fileHash(const fs::path& path,const std::atomic_bool* cancelled=nullptr) {
+  std::ifstream in(path,std::ios::binary); require(bool(in),"cannot open "+path.string());
+  return hashRange(in,fs::file_size(path),cancelled);
+  }
 std::string frameHash(uint32_t flags,std::string_view data) {
   uint8_t bytes[4]; for(size_t i=0;i<4;++i) bytes[i]=uint8_t(flags>>(i*8));
   Sha256 hash; hash.update(bytes,sizeof(bytes)); hash.update(data.data(),data.size()); return hash.finish();
@@ -64,23 +70,24 @@ void collect(const zenkit::VfsNode& node,const std::string& parent,std::map<cons
     else if(upper(fs::path(child.name()).extension().string())==".BIK") { paths[&child]=path; names.insert(upper(child.name())); }
     }
   }
-std::vector<uint8_t> bytes(const zenkit::VfsNode& node) {
+std::vector<uint8_t> bytes(const zenkit::VfsNode& node,const std::atomic_bool* cancelled=nullptr) {
   auto in=node.open_read(); std::vector<uint8_t> data; std::array<uint8_t,1<<16> buffer;
-  for(;;) { const size_t n=in->read(buffer.data(),buffer.size()); if(!n) break; data.insert(data.end(),buffer.begin(),buffer.begin()+ptrdiff_t(n)); }
+  for(;;) { checkCancelled(cancelled); const size_t n=in->read(buffer.data(),buffer.size()); if(!n) break; data.insert(data.end(),buffer.begin(),buffer.begin()+ptrdiff_t(n)); }
   return data;
   }
 struct Selected {
   zenkit::Vfs vfs;
   std::vector<Source> list;
   std::vector<const zenkit::VfsNode*> nodes;
-  explicit Selected(const fs::path& gothic) {
+  explicit Selected(const fs::path& gothic,const std::atomic_bool* cancelled=nullptr) {
     fs::path work; BaseImport::mountRuntime(vfs,gothic,work);
     std::map<const zenkit::VfsNode*,std::string> paths; std::set<std::string> names;
     collect(vfs.root(),"",paths,names);
     for(const auto& name:names) {
+      checkCancelled(cancelled);
       const auto* node=vfs.find(name); require(node!=nullptr,"unresolved BIK "+name);
       auto in=node->open_read(); Sha256 hash; uint64_t size=0; std::array<char,1<<16> buffer;
-      for(;;) { const auto n=in->read(buffer.data(),buffer.size()); if(!n) break; hash.update(buffer.data(),n); size+=n; }
+      for(;;) { checkCancelled(cancelled); const auto n=in->read(buffer.data(),buffer.size()); if(!n) break; hash.update(buffer.data(),n); size+=n; }
       list.push_back({name,paths.at(node),size,hash.finish()}); nodes.push_back(node);
       }
     }
@@ -139,13 +146,14 @@ bool encodePlane(std::ostream& out,const uint8_t* data,size_t size,uint32_t stri
   require(std::memcmp(restored.data(),data,size)==0,"decoded plane differs after compression");
   put32(out,uint32_t(compressed.size())); writeBytes(out,compressed.data(),compressed.size()); return temporal;
   }
-Entry encode(const Source& source,Bink::Video& video,const fs::path& out) {
+Entry encode(const Source& source,Bink::Video& video,const fs::path& out,const std::atomic_bool* cancelled) {
   Entry entry; entry.source=source; entry.file=source.name+".gvideo"; entry.info=infoOf(video);
   const auto file=out/entry.file; std::fstream output(file,std::ios::binary|std::ios::in|std::ios::out|std::ios::trunc); require(bool(output),"cannot write "+file.string());
   std::vector<Position> positions(entry.info.frames);
   writeInfo(output,entry.info,positions,0,std::string(64,'0'));
   Sha256 payloadHash; std::array<std::vector<uint8_t>,4> previousPlanes;
   for(uint32_t f=0;f<entry.info.frames;++f) {
+    checkCancelled(cancelled);
     const Bink::Frame* decoded=nullptr;
     try { decoded=&video.nextFrame(); }
     catch(const std::exception& e) {
@@ -169,7 +177,7 @@ Entry encode(const Source& source,Bink::Video& video,const fs::path& out) {
     positions[f]={start,encoded.size(),flags,frameHash(flags,encoded)}; writeBytes(output,encoded.data(),encoded.size());
     }
   entry.size=uint64_t(output.tellp()); const auto hash=payloadHash.finish();
-  writeInfo(output,entry.info,positions,entry.size,hash); output.close(); entry.sha256=fileHash(file); return entry;
+  writeInfo(output,entry.info,positions,entry.size,hash); output.close(); entry.sha256=fileHash(file,cancelled); return entry;
   }
 std::string infoJson(const Info& info) {
   std::string json="{\"width\":"+std::to_string(info.width)+",\"height\":"+std::to_string(info.height)+",\"frames\":"+std::to_string(info.frames)+",\"fps_num\":"+std::to_string(info.fpsNum)+",\"fps_den\":"+std::to_string(info.fpsDen)+",\"planes\":[";
@@ -234,7 +242,7 @@ void compare(const fs::path& file,Bink::Video& video) {
 
 std::string formatSha256() { return VideoFormatSha256; }
 std::vector<Source> sources(const fs::path& gothic) { return Selected(gothic).list; }
-Identity identify(const fs::path& gothic) { return identityOf(sources(gothic)); }
+Identity identify(const fs::path& gothic,const std::atomic_bool* cancelled) { return identityOf(Selected(gothic,cancelled).list); }
 std::vector<Entry> readIndex(const fs::path& dir) {
   const auto doc=document(dir/"videos.json"); require(number(doc,"version")==1,"unsupported index version"); const auto& list=member(doc,"videos"); require(list.IsArray(),"invalid video list");
   std::vector<Entry> result; std::set<std::string> names;
@@ -245,12 +253,13 @@ std::vector<Entry> readIndex(const fs::path& dir) {
     }
   return result;
   }
-bool matches(const fs::path& dir,const Identity& identity,bool verifyFiles) {
+bool matches(const fs::path& dir,const Identity& identity,bool verifyFiles,const std::atomic_bool* cancelled) {
   try {
     const auto doc=document(dir/"videos.json"); if(str(doc,"fingerprint")!=identity.fingerprint || str(doc,"identity")!=identity.json) return false;
     const auto entries=readIndex(dir); std::vector<Source> list;
     for(const auto& e:entries) {
-      if(fs::file_size(dir/e.file)!=e.size || (verifyFiles && fileHash(dir/e.file)!=e.sha256)) return false;
+      checkCancelled(cancelled);
+      if(fs::file_size(dir/e.file)!=e.size || (verifyFiles && fileHash(dir/e.file,cancelled)!=e.sha256)) return false;
       list.push_back(e.source);
       }
     return identityOf(list).json==identity.json;
@@ -311,19 +320,20 @@ Frame Reader::readFrame(uint32_t number) {
   }
 Frame Reader::nextFrame() { return readFrame(next); }
 void Reader::verifyPayload() { input.clear(); input.seekg(std::streamoff(payloadStart)); require(hashRange(input,fileSize-payloadStart)==payloadSha256,"payload SHA-256 differs"); }
-void build(const fs::path& gothic,const fs::path& out,const BaseImport::Progress& progress) {
-  const auto started=std::chrono::steady_clock::now(); Selected selected(gothic); const auto identity=identityOf(selected.list); fs::create_directories(out);
+void build(const fs::path& gothic,const fs::path& out,const BaseImport::Progress& progress,const std::atomic_bool* cancelled,size_t workerLimit) {
+  const auto started=std::chrono::steady_clock::now(); Selected selected(gothic,cancelled); const auto identity=identityOf(selected.list); fs::create_directories(out);
   struct Job { std::vector<uint8_t> bytes; std::unique_ptr<Input> input; std::unique_ptr<Bink::Video> video; };
   std::vector<Job> jobs(selected.list.size());
   // Bink constructors write global VLC and cosine tables. Complete all constructors before decoding
   // on worker threads.
-  for(size_t i=0;i<jobs.size();++i) { auto& job=jobs[i]; job.bytes=bytes(*selected.nodes[i]); require(Sha256::hash({reinterpret_cast<const char*>(job.bytes.data()),job.bytes.size()})==selected.list[i].sha256,"BIK changed while importing"); job.input=std::make_unique<Input>(job.bytes); job.video=std::make_unique<Bink::Video>(job.input.get(),selected.list[i].name); }
-  const size_t threads=std::min<size_t>(12,std::max<size_t>(1,jobs.size())); std::vector<Entry> entries(jobs.size()); std::atomic<size_t> cursor=0; std::exception_ptr error; std::mutex sync;
+  for(size_t i=0;i<jobs.size();++i) { checkCancelled(cancelled); auto& job=jobs[i]; job.bytes=bytes(*selected.nodes[i],cancelled); require(Sha256::hash({reinterpret_cast<const char*>(job.bytes.data()),job.bytes.size()})==selected.list[i].sha256,"BIK changed while importing"); job.input=std::make_unique<Input>(job.bytes); job.video=std::make_unique<Bink::Video>(job.input.get(),selected.list[i].name); }
+  const size_t threads=std::max<size_t>(1,std::min(workerLimit,jobs.size())); std::vector<Entry> entries(jobs.size()); std::atomic<size_t> cursor=0; std::exception_ptr error; std::mutex sync;
   const auto run=[&] {
-    try { for(;;) { const size_t i=cursor.fetch_add(1); if(i>=jobs.size()) break; entries[i]=encode(selected.list[i],*jobs[i].video,out); } }
+    try { for(;;) { const size_t i=cursor.fetch_add(1); if(i>=jobs.size()) break; entries[i]=encode(selected.list[i],*jobs[i].video,out,cancelled); } }
     catch(...) { std::lock_guard<std::mutex> guard(sync); if(!error) error=std::current_exception(); cursor=jobs.size(); }
     };
   std::vector<std::thread> workers; for(size_t i=0;i<threads;++i) workers.emplace_back(run); for(auto& worker:workers) worker.join(); if(error) std::rethrow_exception(error);
+  checkCancelled(cancelled);
   writeIndex(out,identity,entries);
   uint64_t total=fs::file_size(out/"videos.json");
   for(const auto& e:entries) { total+=e.size; std::cout<<"video "<<e.source.name<<" frames="<<e.info.frames<<" fps="<<e.info.fpsNum<<"/"<<e.info.fpsDen<<" dimensions="<<e.info.width<<"x"<<e.info.height<<" duration_s="<<(double(e.info.frames)*e.info.fpsDen/e.info.fpsNum)<<" bytes="<<e.size; for(size_t t=0;t<e.info.tracks.size();++t) std::cout<<" track"<<t<<"="<<e.info.tracks[t].samples<<"@"<<e.info.tracks[t].sampleRate<<"x"<<e.info.tracks[t].channels; std::cout<<"\n"; }

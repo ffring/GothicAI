@@ -6,6 +6,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <array>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
@@ -21,22 +23,28 @@ namespace fs = std::filesystem;
 class BaseStore::Lock {
   public:
     enum Mode { Exclusive, Shared, TryExclusive };
-    explicit Lock(const fs::path& path, Mode mode=Exclusive) {
+    explicit Lock(const fs::path& path, Mode mode=Exclusive, const std::atomic_bool* cancelled=nullptr) {
 #ifndef _WIN32
       fd=::open(path.c_str(),O_CREAT|O_RDWR|O_CLOEXEC,0600);
       if(fd<0) throw std::system_error(errno,std::generic_category(),"open base lock");
-      const int operation=mode==Shared ? LOCK_SH : (mode==TryExclusive ? LOCK_EX|LOCK_NB : LOCK_EX);
+      const int operation=(mode==Shared ? LOCK_SH : LOCK_EX) | ((mode==TryExclusive || cancelled!=nullptr) ? LOCK_NB : 0);
       while(::flock(fd,operation)!=0) {
         const int error=errno;
+        if(cancelled && !cancelled->load() && mode!=TryExclusive && (error==EWOULDBLOCK || error==EAGAIN)) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          continue;
+          }
         if(error==EINTR) continue;
         ::close(fd);
         fd=-1;
+        if(cancelled && cancelled->load()) throw std::runtime_error("video preparation cancelled");
         if(mode==TryExclusive && (error==EWOULDBLOCK || error==EAGAIN || error==EACCES)) return;
         throw std::system_error(error,std::generic_category(),"lock base");
         }
 #else
       (void)path;
       (void)mode;
+      (void)cancelled;
       throw std::runtime_error("automatic base import requires Unix file locks");
 #endif
       }
@@ -85,9 +93,6 @@ struct Temporary {
 bool publicationMatches(const fs::path& directory,const BaseImport::Identity& identity) {
   return BaseImport::matches(directory,identity);
   }
-bool publicationMatches(const fs::path& directory,const VideoData::Identity& identity) {
-  return VideoData::matches(directory,identity,true);
-  }
 
 template<class Identity>
 void publish(const fs::path& temporary, const fs::path& destination, const Identity& identity) {
@@ -102,6 +107,45 @@ void copy(const fs::path& source, const fs::path& destination, const Identity& i
   Temporary temporary(destination);
   fs::copy(source,temporary.path,fs::copy_options::recursive);
   publish(temporary.path,destination,identity);
+  }
+
+void checkVideoCancelled(const std::atomic_bool* cancelled) {
+  if(cancelled && cancelled->load()) throw std::runtime_error("video preparation cancelled");
+  }
+
+void publishVideo(const fs::path& temporary, const fs::path& destination,
+                  const VideoData::Identity& identity, const std::atomic_bool* cancelled) {
+  checkVideoCancelled(cancelled);
+  if(!VideoData::matches(temporary,identity,true,cancelled)) {
+    checkVideoCancelled(cancelled);
+    throw std::runtime_error("video metadata or payload does not match installation");
+    }
+  checkVideoCancelled(cancelled);
+  if(fs::exists(destination)) fs::remove_all(destination);
+  fs::rename(temporary,destination);
+  }
+
+void copyVideo(const fs::path& source, const fs::path& destination,
+               const VideoData::Identity& identity, const std::atomic_bool* cancelled) {
+  Temporary temporary(destination);
+  std::array<char,1<<20> buffer;
+  for(const auto& entry:fs::recursive_directory_iterator(source)) {
+    checkVideoCancelled(cancelled);
+    const auto target=temporary.path/fs::relative(entry.path(),source);
+    if(entry.is_directory()) { fs::create_directory(target); continue; }
+    std::ifstream input(entry.path(),std::ios::binary);
+    std::ofstream output(target,std::ios::binary);
+    if(!input || !output) throw std::runtime_error("cannot copy video part");
+    for(;;) {
+      checkVideoCancelled(cancelled);
+      input.read(buffer.data(),std::streamsize(buffer.size()));
+      const auto count=input.gcount();
+      output.write(buffer.data(),count);
+      if(!output || (!input && !input.eof())) throw std::runtime_error("cannot copy video part");
+      if(input.eof()) break;
+      }
+    }
+  publishVideo(temporary.path,destination,identity,cancelled);
   }
 
 void prune(const fs::path& cache, const fs::path& current) {
@@ -220,9 +264,10 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   return finish("import");
   }
 
-BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const BaseImport::Progress& log) {
+BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const BaseImport::Progress& log,
+                                             std::shared_ptr<std::atomic_bool> cancelled, size_t workers) {
   const auto start=std::chrono::steady_clock::now();
-  const auto identity=VideoData::identify(gothic);
+  const auto identity=VideoData::identify(gothic,cancelled.get());
   log("video base: identified installation ("+std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now()-start).count())+" ms)");
   fs::path cache;
@@ -231,7 +276,8 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
   if(cache.empty()) throw std::runtime_error("base cache path is empty");
   cache/="videos";
   fs::create_directories(cache);
-  Lock cacheLock(cache/".lock");
+  Lock cacheLock(cache/".lock",Lock::Exclusive,cancelled.get());
+  checkVideoCancelled(cancelled.get());
   removeInterrupted(cache);
   const auto destination=cache/identity.fingerprint;
   fs::path store;
@@ -247,39 +293,41 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
     }
   if(!store.empty()) store/="base/videos";
   const auto finish=[&](const char* source, bool upload=true) {
-    Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared),{}};
+    checkVideoCancelled(cancelled.get());
+    Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared,cancelled.get()),{}};
     try { prune(cache,destination); }
     catch(const std::exception& e) { log(std::string("video base cache cleanup: ")+e.what()); }
     const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
     log(std::string("video base: ")+source+" "+destination.string()+" ("+std::to_string(ms)+" ms)");
     if(upload && !store.empty()) {
-      std::packaged_task<void()> publication([store,destination,identity,lease=selected.lease] {
+      std::packaged_task<void()> publication([store,destination,identity,cancelled,lease=selected.lease] {
         const auto started=std::chrono::steady_clock::now();
         try {
           fs::create_directories(store);
           std::shared_ptr<Lock> storedLease;
           {
-          Lock cleanup(store/".lock");
-          storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared);
+          Lock cleanup(store/".lock",Lock::Exclusive,cancelled.get());
+          storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared,cancelled.get());
           }
-          Lock lock(store/(identity.fingerprint+".lock"));
+          Lock lock(store/(identity.fingerprint+".lock"),Lock::Exclusive,cancelled.get());
           removeInterrupted(store,identity.fingerprint);
           const auto stored=store/identity.fingerprint;
-          const bool present=VideoData::matches(stored,identity);
+          const bool present=VideoData::matches(stored,identity,false,cancelled.get());
+          checkVideoCancelled(cancelled.get());
           if(!present) {
             if(fs::exists(stored)) {
-            Lock cleanup(store/".lock");
+            Lock cleanup(store/".lock",Lock::Exclusive,cancelled.get());
             storedLease.reset();
             storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::TryExclusive);
             if(!storedLease->acquired()) throw std::runtime_error("cannot replace a video store part in use");
             if(fs::exists(stored)) fs::remove_all(stored);
             storedLease.reset();
-            storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared);
+            storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared,cancelled.get());
             }
-            copy(destination,stored,identity);
+            copyVideo(destination,stored,identity,cancelled.get());
             }
           {
-          Lock cleanup(store/".lock");
+          Lock cleanup(store/".lock",Lock::Exclusive,cancelled.get());
           prune(store,stored);
           }
           const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
@@ -293,7 +341,9 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
       }
     return selected;
     };
-  if(VideoData::matches(destination,identity)) return finish("cache");
+  const bool cached=VideoData::matches(destination,identity,false,cancelled.get());
+  checkVideoCancelled(cancelled.get());
+  if(cached) return finish("cache");
   if(fs::exists(destination)) {
     log("video base: rejected cache directory: video metadata mismatch");
     Lock replacement(cache/(identity.fingerprint+".use"),Lock::TryExclusive);
@@ -309,11 +359,11 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
     try {
       fs::create_directories(store);
       {
-      Lock cleanup(store/".lock");
-      storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared);
+      Lock cleanup(store/".lock",Lock::Exclusive,cancelled.get());
+      storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared,cancelled.get());
       }
       log("video base: waiting for store lock");
-      storeLock=std::make_unique<Lock>(store/(identity.fingerprint+".lock"));
+      storeLock=std::make_unique<Lock>(store/(identity.fingerprint+".lock"),Lock::Exclusive,cancelled.get());
       removeInterrupted(store,identity.fingerprint);
       }
     catch(const std::exception& e) {
@@ -321,10 +371,12 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
       storeLock.reset();
       }
     try {
-      if(VideoData::matches(stored,identity)) {
-        copy(stored,destination,identity);
+      const bool present=VideoData::matches(stored,identity,false,cancelled.get());
+      checkVideoCancelled(cancelled.get());
+      if(present) {
+        copyVideo(stored,destination,identity,cancelled.get());
         try {
-          Lock cleanup(store/".lock");
+          Lock cleanup(store/".lock",Lock::Exclusive,cancelled.get());
           prune(store,stored);
           }
         catch(const std::exception& e) { log(std::string("video base store cleanup: ")+e.what()); }
@@ -336,11 +388,12 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
       storeLock.reset();
       }
     }
+  checkVideoCancelled(cancelled.get());
   Temporary temporary(destination);
   log("video base: importing installation");
-  VideoData::build(gothic,temporary.path,log);
+  VideoData::build(gothic,temporary.path,log,cancelled.get(),workers);
   storeLock.reset();
   storedLease.reset();
-  publish(temporary.path,destination,identity);
+  publishVideo(temporary.path,destination,identity,cancelled.get());
   return finish("import");
   }

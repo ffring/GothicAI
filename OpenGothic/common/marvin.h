@@ -65,6 +65,7 @@ class Marvin {
 
       // opengothic specific
       C_Census,
+      C_PlayVideo,
       C_ToggleGI,
       C_ToggleVsm,
       C_ToggleRtsm,

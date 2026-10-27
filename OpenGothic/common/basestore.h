@@ -2,6 +2,7 @@
 
 #include "baseimport.h"
 #include <memory>
+#include <atomic>
 #include <future>
 #include <stdexcept>
 
@@ -28,5 +29,6 @@ Selection resolve(const std::filesystem::path& gothic, const BaseImport::Files& 
                   const BaseImport::Progress& log);
 // P17: the independently fingerprinted video part. OPENGOTHIC_BASE does not
 // select this part; its cache and store are below the normal cache/store roots.
-Selection resolveVideos(const std::filesystem::path& gothic, const BaseImport::Progress& log);
+Selection resolveVideos(const std::filesystem::path& gothic, const BaseImport::Progress& log,
+                        std::shared_ptr<std::atomic_bool> cancelled={}, size_t workers=12);
 }

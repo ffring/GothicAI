@@ -168,6 +168,7 @@ class Gothic final {
 
     bool         isBenchmarkMode() const;
     bool         isBenchmarkModeCi() const;
+    bool         playvideo(std::string_view name);
     void         setBenchmarkMode(Benchmark b);
 
     Tempest::Signal<void()> toggleGi, toggleVsm, toggleRtsm, togglePathtrace;
@@ -366,7 +367,6 @@ class Gothic final {
     int                                     hlp_random        (int max);
 
     void                                    introducechapter  (std::string_view title, std::string_view subtitle, std::string_view img, std::string_view sound, int time);
-    bool                                    playvideo         (std::string_view name);
     bool                                    playvideoex       (std::string_view name, bool screenBlend, bool exitSession);
     bool                                    printscreen       (std::string_view msg, int posx, int posy, std::string_view font, int timesec);
     bool                                    printdialog       (int dialognr, std::string_view msg, int posx, int posy, std::string_view font, int timesec);
