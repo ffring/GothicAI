@@ -475,7 +475,7 @@ void benchmark(const fs::path& part) {
     std::cout << "video frame benchmark: " << found->source.name << " 640x360 one_core=1 random_frames=" << count
               << " mean_ms=" << average << " p95_ms=" << timings[size_t(count)*95/100]
               << " max_ms=" << timings.back() << " consumed_bytes=" << consumed << '\n';
-    require(average<=10,"needs_decision: mean 640x360 frame read exceeds 10 ms: "+std::to_string(average));
+    require(timings.back()<=10,"needs_decision: 640x360 frame read exceeds 10 ms: "+std::to_string(timings.back()));
     }
   }
 

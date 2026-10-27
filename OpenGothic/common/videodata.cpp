@@ -28,7 +28,7 @@ namespace VideoData {
 namespace {
 constexpr uint64_t HeaderSize=128;
 constexpr int CompressionLevel=6;
-constexpr uint32_t KeyframeInterval=8;
+constexpr uint32_t KeyframeInterval=4;
 void require(bool ok,const std::string& reason) { if(!ok) throw std::runtime_error("video data: "+reason); }
 void require(bool ok,const char* reason) { if(!ok) throw std::runtime_error(std::string("video data: ")+reason); }
 uint32_t aligned(uint32_t n) { return ((n+15)/16)*16; }
