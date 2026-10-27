@@ -692,6 +692,7 @@ void meleeRemoval(Npc& victim) {
 int main(int argc,const char** argv) {
   std::FILE* result=fdopen(dup(STDOUT_FILENO),"w");
   dup2(STDERR_FILENO,STDOUT_FILENO);
+  const auto workingDirectory=std::filesystem::current_path();
   try {
     std::string save,scenario;
     for(int i=1;i<argc;++i) {
@@ -712,6 +713,8 @@ int main(int argc,const char** argv) {
     GameMusic music;
     const auto output=std::filesystem::temp_directory_path()/("gothic-body-watch-test-"+std::to_string(getpid()));
     std::filesystem::create_directories(output);
+    // The melee journal opens on the first swing, including earlier fixture cases.
+    std::filesystem::current_path(output);
     TestBench::configure(scenario,output.string(),17);
     if(save.empty()) {
       gothic.setGame(std::make_unique<GameSession>(std::string(gothic.defaultWorld())));
@@ -754,11 +757,13 @@ int main(int argc,const char** argv) {
     meleeRemoval(b);
     TestBench::flushOutput();
     gothic.clearGame().reset();
+    std::filesystem::current_path(workingDirectory);
     std::filesystem::remove_all(output);
     std::fprintf(result,"{\"type\":\"body_watch_test\",\"passed\":true,\"cases\":%zu,\"assertions\":%zu}\n",cases,assertions);
     std::fclose(result);
     return 0;
     } catch(const std::exception& error) {
+    std::filesystem::current_path(workingDirectory);
     Json d(rapidjson::kObjectType);
     d.AddMember("type","body_watch_test",d.GetAllocator());
     d.AddMember("passed",false,d.GetAllocator());
