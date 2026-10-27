@@ -9,6 +9,7 @@
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/bounds.h"
 #include "game/serialize.h"
+#include "game/damagecalculator.h"
 #include "gothic.h"
 
 #include <Tempest/MemReader>
@@ -4016,6 +4017,45 @@ namespace {
               "mesh hit must retain its sector beyond 32 segments");
       }
 
+    // The actual melee damage multiplier is bounded before cleave attenuation.
+    requireNear(DamageCalculator::meleeMultiplier(0,1000,0,0,0),.5f,.0001f,"slow grip contacts must respect the lower damage bound");
+    requireNear(DamageCalculator::meleeMultiplier(10000,1000,1,90,0),1.5f,.0001f,"fast tip contacts must respect the upper damage bound");
+    const auto full=DamageCalculator::meleeMultiplier(1000,1000,1,90,0);
+    requireNear(DamageCalculator::meleeMultiplier(1000,1000,1,90,1),full*.6f,.0001f,"second target must receive 0.6 of the physical multiplier");
+    requireNear(DamageCalculator::meleeMultiplier(1000,1000,1,90,2),full*.36f,.0001f,"third target must receive 0.36 of the physical multiplier");
+
+    {
+      CollisionWorld shadow;
+      int attackerId=0,firstId=0,secondId=0,missId=0;
+      auto* attacker=reinterpret_cast<Npc*>(&attackerId);
+      auto* first=reinterpret_cast<Npc*>(&firstId);
+      auto* second=reinterpret_cast<Npc*>(&secondId);
+      auto* miss=reinterpret_cast<Npc*>(&missId);
+      auto ground=shadow.addCollisionBody(new JPH::BoxShape({2,.01f,2}),at(0,-1,0),.7f,DynamicWorld::C_Landscape);
+      shadow.updateShadowBody(first,{{{-30,0,0},{-30,20,0},1.f,0,1}});
+      shadow.updateShadowBody(second,{{{30,0,0},{30,20,0},1.f,0,1}});
+      shadow.updateShadowBody(miss,{{{0,0,50},{0,20,50},1.f,0,1}});
+      const MeleeBladeSegment before{{-100,1,0},{-100,20,0},{1,0,0},2.f};
+      const MeleeBladeSegment after{{100,1,0},{100,20,0},{1,0,0},2.f};
+      shadow.updateShadowBlade(attacker,1,{before},0,0,100);
+      shadow.updateShadowBlade(attacker,1,{after},100,0,100);
+      shadow.flushShadowBlades();
+      const auto hits=shadow.takeShadowBladeContacts(attacker);
+      std::vector<Npc*> bodies;
+      size_t floors=0;
+      for(const auto& hit:hits) {
+        if(hit.world) {
+          require(!hit.stopsSwing && hit.normal.y>.99f,"walkable ground must not arrest the swing");
+          ++floors;
+          }
+        else bodies.push_back(hit.npc);
+        }
+      require(floors==1 && bodies==std::vector<Npc*>{first,second},"blade must hit both crossed bodies in order, miss the offset body and continue through ground");
+      shadow.updateShadowBlade(attacker,1,{before},150,0,200);
+      shadow.flushShadowBlades();
+      require(shadow.takeShadowBladeContacts(attacker).empty(),"floor and targets must not repeat during a swing");
+      }
+
     // Clip both ends of a published pose interval, including a whole window
     // between two inactive poses. A target outside that overlap stays untouched.
     for(const auto window: {std::pair(0.,240.),std::pair(240.,260.),std::pair(235.,245.)}) {
@@ -4153,7 +4193,7 @@ namespace {
       shadow.updateShadowBlade(attacker,1,{after},17,0,100);
       shadow.tick(17);
       const auto contacts=shadow.takeShadowBladeContacts(attacker);
-      require(contacts.size()==2 && contacts[0].npc==nearTarget && contacts[1].world,
+      require(contacts.size()==2 && contacts[0].npc==nearTarget && contacts[1].world && contacts[1].stopsSwing,
               "shadow contacts must be ordered and the first wall must hide the later target");
       requireNear(contacts[1].point.x,-.1f,.02f,"shadow world contact must retain the wall surface point");
       shadow.updateShadowBlade(attacker,1,{before},34,0,100);

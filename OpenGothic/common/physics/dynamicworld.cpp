@@ -2316,8 +2316,8 @@ void DynamicWorld::removeMeleeBlade(const Npc* owner) { world->removeMeleeBlade(
 void DynamicWorld::updateShadowBody(Npc* owner,const std::vector<MeleeBodyCapsule>& capsules) { world->updateShadowBody(owner,capsules); }
 void DynamicWorld::removeShadowBody(const Npc* owner) { world->removeShadowBody(owner); }
 void DynamicWorld::updateShadowBlade(const Npc* owner,uint64_t swingId,const std::vector<MeleeBladeSegment>& segments,
-                                     uint64_t timeMs,double activeBeginMs,double activeEndMs) {
-  world->updateShadowBlade(owner,swingId,segments,timeMs,activeBeginMs,activeEndMs);
+                                     uint64_t timeMs,double activeBeginMs,double activeEndMs,float walkableCos) {
+  world->updateShadowBlade(owner,swingId,segments,timeMs,activeBeginMs,activeEndMs,walkableCos);
   }
 std::vector<MeleeBladeContact> DynamicWorld::takeShadowBladeContacts(const Npc* owner) { return world->takeShadowBladeContacts(owner); }
 void DynamicWorld::removeShadowBlade(const Npc* owner) { world->removeShadowBlade(owner); }

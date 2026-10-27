@@ -112,11 +112,13 @@ struct Npc::MeleeShadow final {
     uint32_t index = 0, first = 0, optimal = 0, last = 0;
     float beginMs = 0, optimalMs = 0, endMs = 0, peakCmS = 0, thresholdCmS = 0;
     bool left = false, normalY = true;
-    float eventBoundaryMs = 0;
+    float eventBoundaryMs = 0, reachCm = 0;
     };
   struct Contact final {
     MeleeBladeContact hit;
-    std::string target, bone;
+    std::string target, bone, result = "shadow";
+    float multiplier = 0;
+    int32_t damage = 0;
     };
   std::vector<Window> windows;
   std::optional<Window> window;
@@ -127,6 +129,11 @@ struct Npc::MeleeShadow final {
   bool legacyHit = false, legacyBlock = false, legacyDodge = false;
   int32_t damage = 0;
   std::vector<Contact> contacts;
+  size_t consumed = 0, targetsHit = 0;
+  bool stopped = false, physicsHits = false;
+  Vec3 stepRemaining;
+  float stepRequestedCm = 0, stepMovedCm = 0;
+  std::string outcome = "miss";
   };
 
 // Npc::tick may intentionally return without calling MoveAlgo (for example a native attack gate).
@@ -1385,7 +1392,7 @@ void Npc::updateMeleeBenchBlade() {
 
 void Npc::syncMeleeShadowSwing() {
   const auto mode = weaponState();
-  if(meleeShadowSuspended || !Gothic::physicsFlags().meleeBladeShadow || !isHuman() || isDown() ||
+  if(meleeShadowSuspended || !(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) || !isHuman() || isDown() ||
      (mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)) {
     finishMeleeShadowSwing();
     return;
@@ -1444,8 +1451,8 @@ void Npc::syncMeleeShadowSwing() {
           }
     std::sort(optimal.begin(),optimal.end());
     optimal.erase(std::unique(optimal.begin(),optimal.end()),optimal.end());
-    std::vector<float> rightSpeed(data.numFrames,0), leftSpeed(data.numFrames,0);
-    const auto sampleSpeeds = [&](size_t hand,std::vector<float>& speeds) {
+    std::vector<float> rightSpeed(data.numFrames,0), leftSpeed(data.numFrames,0), rightReach(data.numFrames,0), leftReach(data.numFrames,0);
+    const auto sampleSpeeds = [&](size_t hand,std::vector<float>& speeds,std::vector<float>& reach) {
       Vec3 previous;
       for(uint32_t frame=0;frame<data.numFrames;++frame) {
         const float progress = float(frame)/float(data.numFrames-1);
@@ -1454,15 +1461,16 @@ void Npc::syncMeleeShadowSwing() {
           throw std::runtime_error("Cannot sample melee shadow attack hand");
         Vec3 point(mode==WeaponState::Fist ? 0.f : -length,0,0);
         matrix.project(point);
+        reach[frame] = Vec2(point.x,point.z).length();
         if(frame>0)
           speeds[frame] = (point-previous).length()*data.fpsRate;
         previous = point;
         }
       speeds[0] = speeds[1];
       };
-    sampleSpeeds(right,rightSpeed);
+    sampleSpeeds(right,rightSpeed,rightReach);
     if(mode==WeaponState::Fist && left<pose.boneCount())
-      sampleSpeeds(left,leftSpeed);
+      sampleSpeeds(left,leftSpeed,leftReach);
     for(uint32_t index=0;index<optimal.size();++index) {
       const auto opt = optimal[index];
       const uint32_t lo = index==0 ? 0 : (optimal[index-1]+opt)/2+1;
@@ -1486,7 +1494,8 @@ void Npc::syncMeleeShadowSwing() {
       const uint32_t end = seq->reverse ? std::max(last+1,opt+2) : last+1;
       shadow.windows.push_back({seq,length,index,first,opt,last,float(first)*1000.f/data.fpsRate,
                                 float(opt)*1000.f/data.fpsRate,float(end)*1000.f/data.fpsRate,
-                                peak,threshold,useLeft,normalY,float(opt+(seq->reverse ? 1u : 0u))*1000.f/data.fpsRate});
+                                peak,threshold,useLeft,normalY,float(opt+(seq->reverse ? 1u : 0u))*1000.f/data.fpsRate,
+                                *std::max_element((useLeft ? leftReach : rightReach).begin()+first,(useLeft ? leftReach : rightReach).begin()+last+1)});
       }
     }
   const MeleeShadow::Window* window = nullptr;
@@ -1518,10 +1527,34 @@ void Npc::syncMeleeShadowSwing() {
   shadow.legacyResult = "no_optimal_frame";
   shadow.legacyHit = shadow.legacyBlock = shadow.legacyDodge = false;
   shadow.damage = 0;
+  shadow.consumed = shadow.targetsHit = 0;
+  shadow.stopped = false;
+  shadow.physicsHits = Gothic::physicsFlags().meleePhysicsHits;
+  shadow.outcome = "miss";
+  shadow.stepRemaining = {};
+  shadow.stepRequestedCm = shadow.stepMovedCm = 0;
+  if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget)) {
+    // Distance to the near surface of the target's actual body capsules.
+    std::vector<HitZones::Posed> targetZones;
+    currentTarget->visual.hitZonesPosed(targetZones);
+    float distance = std::numeric_limits<float>::max();
+    for(const auto& zone:targetZones)
+      for(const auto& point: {zone.a,zone.b})
+        distance = std::min(distance,Vec2(point.x-x,point.z-z).length()-zone.r);
+    const float gap = distance-selected.reachCm;
+    if(gap>0.f && gap<=60.f) {
+      auto direction = currentTarget->position()-position();
+      direction.y = 0;
+      if(direction.length()>0.f) {
+        shadow.stepRemaining = Vec3::normalize(direction)*gap;
+        shadow.stepRequestedCm = gap;
+        }
+      }
+    }
   }
 
 void Npc::updateMeleeShadow() {
-  if(meleeShadowSuspended || !Gothic::physicsFlags().meleeBladeShadow) {
+  if(meleeShadowSuspended || !(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits)) {
     clearMeleeShadow();
     return;
     }
@@ -1569,7 +1602,10 @@ void Npc::updateMeleeShadow() {
   // including frames whose endpoint is already past the end of that window.
   const double activeBegin = double(shadow.start)+double(window.beginMs)/shadow.speed;
   const double activeEnd   = double(shadow.start)+double(window.endMs)/shadow.speed;
-  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd);
+  if(shadow.stopped)
+    return;
+  const float walkableCos = std::cos(float(owner.script().guildVal().slide_angle[guild()])*float(M_PI)/180.f);
+  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd,walkableCos);
   if(Gothic::inst().doMeleeBladeDraw()) {
     const double now = double(owner.tickCount());
     meleeShadowDrawPose   = blade;
@@ -1579,6 +1615,105 @@ void Npc::updateMeleeShadow() {
   noteMeleeShadowMarks(contacts);
   for(const auto& hit:contacts)
     shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
+  consumeMeleeContacts();
+  }
+
+auto Npc::meleeStep(uint64_t dt) -> Vec3 {
+  if(!Gothic::physicsFlags().meleePhysicsHits || !meleeShadow || !meleeShadow->window || meleeShadow->stopped)
+    return {};
+  auto& swing = *meleeShadow;
+  const double end = double(swing.start)+200.;
+  if(double(owner.tickCount())>end) {
+    swing.stepRemaining = {};
+    return {};
+    }
+  const float left = swing.stepRemaining.length();
+  const float distance = std::min(left,.3f*float(dt)); // at most 3 m/s for the first 200 ms
+  if(left<=0.f)
+    return {};
+  const auto step = swing.stepRemaining*(distance/left);
+  swing.stepRemaining -= step;
+  return step;
+  }
+
+void Npc::noteMeleeStep(float movedCm, float requestedCm) {
+  if(meleeShadow && requestedCm>0.f)
+    meleeShadow->stepMovedCm += std::min(movedCm,requestedCm);
+  }
+
+void Npc::stopMeleeSwing() {
+  meleeShadow->stepRemaining = {};
+  owner.physic()->removeShadowBlade(this);
+  visual.interrupt();
+  setAnim(Anim::StumbleB);
+  }
+
+void Npc::consumeMeleeContacts() {
+  if(!meleeShadow || !meleeShadow->window)
+    return;
+  auto& swing = *meleeShadow;
+  while(swing.consumed<swing.contacts.size()) {
+    auto& entry = swing.contacts[swing.consumed++];
+    const auto& hit = entry.hit;
+    if(swing.stopped) {
+      entry.result = "after_stop";
+      continue;
+      }
+    if(hit.world) {
+      entry.result = hit.stopsSwing ? "wall" : "ground";
+      if(!hit.stopsSwing)
+        continue;
+      swing.stopped = true;
+      swing.outcome = "wall";
+      if(Gothic::physicsFlags().meleePhysicsHits) {
+        const auto* weapon = inventory().activeWeapon();
+        Matrix4x4 at;
+        at.identity();
+        at.translate(hit.point);
+        owner.addLandHitEffect(weapon!=nullptr ? ItemMaterial(weapon->handle().material) : ItemMaterial::MAT_LEATHER,hit.material,at).play();
+        stopMeleeSwing();
+        }
+      continue;
+      }
+    auto* target = hit.npc;
+    if(target==nullptr || target->isDown()) {
+      entry.result = "target_down";
+      continue;
+      }
+    const int partyMember = Gothic::inst().version().game==2 ? 15 : 36;
+    const bool sameParty = handle().aivar[partyMember]!=0 && (target->isPlayer() || target->handle().aivar[partyMember]!=0);
+    if(!isPlayer() && (guild()==target->guild() || sameParty || !isEnemy(*target))) {
+      entry.result = "ally_skipped";
+      if(swing.outcome=="miss")
+        swing.outcome = "ally_skipped";
+      continue;
+      }
+    const auto& targetPose = target->visual.pose();
+    const bool dodge = targetPose.isJumpBack(owner.tickCount()) && target->fghAlgo.isInJumpBackAngle(*target,*this);
+    const bool block = target->fghAlgo.isInFocusAngle(*target,*this) && targetPose.isDefence(owner.tickCount());
+    entry.result = block ? "blocked" : (dodge ? "evaded" : "hit");
+    if(!block && !dodge) {
+      // The sampled MAN peak is fixed per animation/window, not learned from outcomes.
+      entry.multiplier = DamageCalculator::meleeMultiplier(hit.speedCmS,swing.window->peakCmS*.7f,
+                                                          hit.bladeFraction,hit.surfaceAngleDeg,swing.targetsHit++);
+      swing.outcome = "hit";
+      }
+    if(Gothic::physicsFlags().meleePhysicsHits) {
+      BodyObservations::noteEvent(*this,target,entry.result.c_str(),owner.tickCount());
+      if(TestBench::bodyTracing())
+        TestBench::bodyEvent(*this,target,"hit_attempt",owner.tickCount(),
+                            "\"result\":"+TestBench::bodyJson(entry.result),visual.pose().animNames());
+      const auto before = target->attribute(ATR_HITPOINTS);
+      target->takeDamage(*this,nullptr,false,entry.multiplier,&hit);
+      entry.damage = std::max(0,before-target->attribute(ATR_HITPOINTS));
+      }
+    if(block) {
+      swing.stopped = true;
+      swing.outcome = "blocked";
+      if(Gothic::physicsFlags().meleePhysicsHits)
+        stopMeleeSwing();
+      }
+    }
   }
 
 void Npc::noteMeleeShadowMarks(const std::vector<MeleeBladeContact>& contacts) {
@@ -1635,6 +1770,7 @@ void Npc::finishMeleeShadowSwing(bool remove) {
   meleeShadowDrawActive = false;
   for(const auto& hit:contacts)
     shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
+  consumeMeleeContacts();
   if(remove)
     owner.physic()->removeShadowBlade(this);
   const auto& window = *shadow.window;
@@ -1644,17 +1780,22 @@ void Npc::finishMeleeShadowSwing(bool remove) {
     const auto& contact = entry.hit;
     const auto point = meleeShadowPoint(contact.point);
     if(contact.world) {
-      worldHit = true;
-      world = "{\"point_cm\":" + point + ",\"step\":" + std::to_string(contact.step) + "}";
+      worldHit |= contact.stopsSwing;
+      world = "{\"point_cm\":" + point + ",\"normal\":" + meleeShadowPoint(contact.normal) +
+              ",\"material\":" + std::to_string(int(contact.material)) +
+              ",\"result\":" + TestBench::bodyJson(entry.result) + ",\"step\":" + std::to_string(contact.step) + "}";
       continue;
       }
-    physicalHit = true;
+    if(entry.result=="hit")
+      physicalHit = true;
     const bool same = contact.npc!=nullptr && contact.npc==shadow.legacyNpc;
-    sameTarget |= same;
-    extraTarget |= !same;
+    sameTarget |= same && entry.result=="hit";
+    extraTarget |= !same && entry.result=="hit";
     if(physical.size()>1)
       physical += ',';
-    physical += "{\"target\":" + entry.target +
+    physical += "{\"result\":" + TestBench::bodyJson(entry.result) +
+                ",\"multiplier\":" + std::to_string(entry.multiplier) + ",\"damage\":" + std::to_string(entry.damage) +
+                ",\"target\":" + entry.target +
                 ",\"part\":" + TestBench::bodyJson(HitZones::name(HitZones::Zone(contact.zone))) +
                 ",\"bone\":" + std::to_string(contact.bone) + ",\"bone_name\":" + TestBench::bodyJson(entry.bone) +
                 ",\"point_cm\":" + point +
@@ -1693,6 +1834,10 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                   ",\"dodged\":" + (shadow.legacyDodge ? "true" : "false") +
                   ",\"result\":" + TestBench::bodyJson(shadow.legacyResult) +
                   "},\"physical\":{\"targets\":" + physical + ",\"world\":" + world +
+                  "},\"decision\":{\"physics_hits\":" + (shadow.physicsHits ? "true" : "false") +
+                  ",\"outcome\":" + TestBench::bodyJson(shadow.outcome) +
+                  ",\"step_requested_cm\":" + number(shadow.stepRequestedCm) +
+                  ",\"step_moved_cm\":" + number(shadow.stepMovedCm) +
                   "},\"comparison\":" + comparison + "}");
   shadow.contacts.clear();
   shadow.window.reset();
@@ -3796,11 +3941,13 @@ void Npc::commitDamage() {
       TestBench::destructionMeleeHit(*this,affected,weaponDamage+strength);
     }
   const auto hitTrace = [&](const char* result) {
-    if(Gothic::physicsFlags().meleeBladeShadow && meleeShadow && meleeShadow->window) {
+    if((Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) && meleeShadow && meleeShadow->window) {
       meleeShadow->legacyTarget = meleeShadowWho(currentTarget);
       meleeShadow->legacyNpc = currentTarget;
       meleeShadow->legacyResult = result;
       }
+    if(isHuman() && Gothic::physicsFlags().meleePhysicsHits)
+      return;
     BodyObservations::noteEvent(*this,currentTarget,result,owner.tickCount());
     if(TestBench::bodyTracing())
       TestBench::bodyEvent(*this,currentTarget,"hit_attempt",owner.tickCount(),
@@ -3819,7 +3966,7 @@ void Npc::commitDamage() {
     return;
     }
   hitTrace("applied");
-  auto* shadow = Gothic::physicsFlags().meleeBladeShadow && meleeShadow && meleeShadow->window ? meleeShadow.get() : nullptr;
+  auto* shadow = (Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) && meleeShadow && meleeShadow->window ? meleeShadow.get() : nullptr;
   auto* shadowTarget = shadow!=nullptr ? currentTarget : nullptr;
   int32_t hpBefore = 0;
   if(shadow!=nullptr) {
@@ -3836,12 +3983,13 @@ void Npc::commitDamage() {
                                                  (shadow->legacyDodge ? "evaded" : "applied"));
     hpBefore = currentTarget->attribute(ATR_HITPOINTS);
     }
-  currentTarget->takeDamage(*this,nullptr);
+  if(!(isHuman() && Gothic::physicsFlags().meleePhysicsHits))
+    currentTarget->takeDamage(*this,nullptr);
   if(shadow!=nullptr)
     shadow->damage = std::max(0,hpBefore-shadowTarget->attribute(ATR_HITPOINTS));
   }
 
-void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence) {
+void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence, float meleeScale, const MeleeBladeContact* contact) {
   if(isDown())
     return;
 
@@ -3867,7 +4015,7 @@ void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence) {
   owner.sendPassivePerc(*this,other,*this,PERC_ASSESSFIGHTSOUND);
 
   if(!(isBlock || isJumpb) || b!=nullptr) {
-    takeDamage(other,b,COLL_DOEVERYTHING,0,false);
+    takeDamage(other,b,COLL_DOEVERYTHING,0,false,meleeScale,contact);
     } else {
     if(invent.activeWeapon()!=nullptr)
       visual.emitBlockEffect(*this,other);
@@ -3889,7 +4037,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t s
   takeDamage(other,b,bMask,splId,true);
   }
 
-void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell) {
+void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell, float meleeScale, const MeleeBladeContact* contact) {
   const int32_t traceHpBefore = attribute(ATR_HITPOINTS);
   float a  = angleDir(other.x-x,other.z-z);
   float da = a-angle;
@@ -3930,6 +4078,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   hitResult = DamageCalculator::damageValue(other,*this,b,isSpell,dmg,bMask);
+  if(contact!=nullptr && hitResult.hasHit && !hitResult.invincible)
+    hitResult.value = int32_t(std::lround(float(hitResult.value)*meleeScale));
   if(hitResult.hasHit && !isSpell && b!=nullptr)
     queueArrowPhysics(*b);
   const auto traceDamage = [&] {
@@ -3988,7 +4138,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         stumble = setAnimAngGet(lastHitType=='A' ? Anim::StumbleA  : Anim::StumbleB)!=nullptr;
       }
     if((damageType & (1<<zenkit::DamageType::FLY))==0)
-      hitReaction(other,b,hitResult.value,stumble);
+      hitReaction(other,b,hitResult.value,stumble,contact);
     }
 
   // throw enemy
@@ -4025,7 +4175,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
   traceDamage();
   }
 
-void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble) {
+void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble, const MeleeBladeContact* contact) {
   // the upper body gives way to the blow (graphics/mesh/flinch), on top of the stumble if one plays
   const Vec3  feet   = position();
   const Vec3  center = collosionCenter();
@@ -4048,6 +4198,8 @@ void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool st
     at      = center - left*(20.f*swing) - to*20.f;
     at.y    = feet.y + top*(other.isMonster() ? 0.6f : 0.85f);
     }
+  if(contact!=nullptr)
+    at = contact->point;
   // 0 the hips (half the height to the head), 1 the head
   hit.height = std::clamp((at.y - feet.y)/top*2.f - 1.f, 0.f, 1.f);
   // off the middle the blow turns the trunk: about up, by the lever
@@ -4252,7 +4404,7 @@ void Npc::tickRegen(int32_t& v, const int32_t max, const int32_t chg, const uint
   }
 
 void Npc::tickAnimationTags() {
-  if(Gothic::physicsFlags().meleeBladeShadow || (meleeShadow && meleeShadow->window))
+  if(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits || (meleeShadow && meleeShadow->window))
     syncMeleeShadowSwing();
   Animation::EvCount ev;
   const bool hasEvents = visual.processEvents(owner,lastEventTime,ev);
@@ -7971,13 +8123,11 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
                                                 float(std::max<uint64_t>(dt,1))*0.001f);
     if(syncAtt || force)
       visual.syncAttaches();
-    updateMeleeShadow();
     return;
     }
   if(ragdoll) {
     if(syncAtt || force)
       visual.syncAttaches();
-    updateMeleeShadow();
     return;
     }
   syncAtt |= visual.updateLean(*this,dt);
@@ -8001,7 +8151,6 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     syncAtt |= visual.setPhysicalPose(arrowPhysicalPose,living->reactionBones(),living->reactionWeight());
   if(syncAtt)
     visual.syncAttaches();
-  updateMeleeShadow();
   }
 
 bool Npc::updateLyingVisualHeight() {

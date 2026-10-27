@@ -95,6 +95,7 @@ class Marvin {
       C_ToggleNpcCharacterVirtual,
       C_ToggleMonsterCharacterVirtual,
       C_ToggleMeleeBladeShadow,
+      C_ToggleMeleePhysicsHits,
       };
 
     struct Cmd {

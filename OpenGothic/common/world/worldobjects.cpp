@@ -549,6 +549,15 @@ void WorldObjects::updateAnimation(uint64_t dt) {
       return;
     i->updateAnimation(dt);
     });
+  // Contacts can run damage scripts, perceptions and animation interrupts.
+  // Resolve them only after every actor's pose has finished on the workers.
+  for(auto& npc:npcArr) {
+    if(skipFar && npc->processPolicy()==NpcProcessPolicy::AiFar2 && !BodyObservations::watched(*npc))
+      continue;
+    if(frozen && npc.get()!=pl && !BodyArena::isActor(*npc))
+      continue;
+    npc->updateMeleeShadow();
+    }
   if(!frozen)
     interactiveObj.parallelFor([dt](Interactive& i){
       i.updateAnimation(dt);

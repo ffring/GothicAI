@@ -179,7 +179,7 @@ class CollisionWorld final {
     // Pose time and the half-open active window use absolute game milliseconds.
     void updateShadowBlade(const Npc* owner, uint64_t swingId,
                            const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
-                           double activeBeginMs, double activeEndMs);
+                           double activeBeginMs, double activeEndMs, float walkableCos = .7f);
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void flushShadowBlades();

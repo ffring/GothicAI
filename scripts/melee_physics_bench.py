@@ -63,8 +63,12 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     parser.add_argument("--case", action="append", help="one matrix row: count:mode:pelvis:substeps")
     parser.add_argument("--shadow-pair", action="store_true", help="stage 1: ten native animated fighters, shadow OFF then ON")
+    parser.add_argument("--hits-pair", action="store_true", help="stage 2: ten animated fighters, physics hits OFF then ON; shadow stays ON")
     args = parser.parse_args()
-    if args.shadow_pair and args.case:
+    if args.hits_pair and args.shadow_pair:
+        parser.error("choose either --hits-pair or --shadow-pair")
+    paired = args.shadow_pair or args.hits_pair
+    if paired and args.case:
         parser.error("--shadow-pair and --case are mutually exclusive")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -73,10 +77,10 @@ def main() -> int:
     cases = args.case or [f"{count}:{mode}:{pelvis}:{steps}"
                          for count in (1, 2, 4, 10) for mode in ("full", "chain")
                          for pelvis in ("kinematic", "dynamic") for steps in (1, 2)]
-    if args.case is None and not args.shadow_pair:
+    if args.case is None and not paired:
         cases = [f"{count}:base:kinematic:{steps}" for count in (0, 1, 2, 4, 10) for steps in (1, 2)] + cases
         cases += [f"10:blade:kinematic:{steps}" for steps in (1, 2)]
-    if args.shadow_pair:
+    if paired:
         cases = ["10:base:kinematic:2", "10:base:kinematic:2"]
     template = (ROOT/"scripts/bench/melee-physics.bench").read_text()
     results = []
@@ -90,20 +94,21 @@ def main() -> int:
             print("Waiting for the other Mac game: "+"; ".join(games), flush=True)
             time.sleep(5)
         count, mode, pelvis, steps = case.split(":")
-        label = f"shadow-{'on' if index else 'off'}" if args.shadow_pair else case.replace(":", "-")
+        label = f"{'hits' if args.hits_pair else 'shadow'}-{'on' if index else 'off'}" if paired else case.replace(":", "-")
         take = output/label
         take.mkdir()
         scenario = take/"melee-physics.bench"
         scenario.write_text(template.replace("setup 10 full kinematic 2", f"setup {count} {mode} {pelvis} {steps}"))
         env = {**os.environ, "BENCH_HOST": "local", "NO_BUILD": "1", "WORLD": "NEWWORLD.ZEN",
                "OPENGOTHIC_MELEE_BENCH": "fixture", "GOTHIC_AI": "0", "TIMEOUT": "180"}
-        if args.shadow_pair:
-            env["MELEE_BLADE_SHADOW"] = str(index)
+        if paired:
+            env["MELEE_BLADE_SHADOW"] = "1" if args.hits_pair else str(index)
+            env["MELEE_PHYSICS_HITS"] = str(index) if args.hits_pair else "0"
         print(f"Running {case}", flush=True)
         with (take/"launcher.log").open("w") as stream:
             subprocess.run([str(ROOT/"scripts/bench.sh"), str(scenario), str(take)],
                            cwd=ROOT, env=env, stdout=stream, stderr=subprocess.STDOUT, check=True)
-        result = {"case": label, "binary_sha256": binary_hash, **summarize(take, shadow=args.shadow_pair)}
+        result = {"case": label, "binary_sha256": binary_hash, **summarize(take, shadow=paired)}
         results.append(result)
         if mode == "blade" and (result["blades"] != int(count) or result["casts"] == 0):
             raise RuntimeError(f"missing blade bodies or casts: {case}")
@@ -114,7 +119,7 @@ def main() -> int:
             writer.writerow(result)
         print(f"{case}: step p95 {result['step_p95_ms']:.3f} ms, mean {result['step_mean_ms']:.3f} ms, "
               f"{result['fps']:.2f} FPS, pose max {result['pose_max_cm']:.2f} cm", flush=True)
-    if args.shadow_pair:
+    if paired:
         baseline, candidate = results
         loss = 100*(1-candidate["fps"]/baseline["fps"])
         comparison = {"physics_p95_ms": candidate["physics_p95_ms"], "step_p95_ms": candidate["step_p95_ms"],

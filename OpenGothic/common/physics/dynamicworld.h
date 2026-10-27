@@ -51,8 +51,11 @@ struct MeleeBladeContact final {
   size_t bone = size_t(-1);
   uint8_t zone = 0;
   Tempest::Vec3 point;
+  Tempest::Vec3 normal;
+  asset::MaterialGroup material = asset::MaterialGroup::STONE;
   float bladeFraction = 0, speedCmS = 0, surfaceAngleDeg = 0;
   bool world = false;
+  bool stopsSwing = false;
   uint64_t step = 0;
   };
 
@@ -486,7 +489,7 @@ class DynamicWorld final {
     // Pose time and the half-open active window use absolute game milliseconds.
     void updateShadowBlade(const Npc* owner, uint64_t swingId,
                            const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
-                           double activeBeginMs, double activeEndMs);
+                           double activeBeginMs, double activeEndMs, float walkableCos = .7f);
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void flushShadowBlades();

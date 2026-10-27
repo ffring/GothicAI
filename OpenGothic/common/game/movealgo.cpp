@@ -314,7 +314,11 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     const bool attackRoot = !npc.isPlayer() && !npc.isHuman() && bs==BS_HIT;
     if(state!=Slide && !attackRoot)
       dp.y = 0.f; // walking root bob cannot detach the controller from its support
+    const auto assist = npc.meleeStep(dt);
+    dp += assist;
+    const auto assistOrigin = npc.position();
     const bool moved = tickCharacterVirtual(dt,dp);
+    npc.noteMeleeStep((npc.position()-assistOrigin).length(),assist.length());
     if(impulseGeneration!=movementImpulseGeneration)
       return moved;
     guardEdgeMove();

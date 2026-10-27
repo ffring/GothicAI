@@ -61,6 +61,7 @@ class Gothic final {
       bool npcCharacterVirtual = false;
       bool monsterCharacterVirtual = false;
       bool meleeBladeShadow = true;
+      bool meleePhysicsHits = true;
 
       bool allowsMonsterCharacterVirtual(bool down, bool flying) const {
         return monsterCharacterVirtual && !down && !flying;
