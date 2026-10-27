@@ -3,11 +3,13 @@
 #include "sha256.h"
 #include "asset/fromzenkit.h"
 #include "basemesh.h"
+#include "fontdata.h"
 #include "modeldata.h"
 #include "worldchunks.h"
 #include "worlddata.h"
 #include "gothicglb.h"
 
+#include <zenkit/Font.hh>
 #include <zenkit/Logger.hh>
 #include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/Model.hh>
@@ -36,6 +38,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <atomic>
 #include <mutex>
 #include <exception>
@@ -687,6 +690,102 @@ int convertWorld(const fs::path& gothic, const std::string& name, const fs::path
       return verifyWorld(world,out,{});
   }
 
+int convertFonts(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
+  const auto t0=std::chrono::steady_clock::now();
+  auto root=fs::absolute(gothic);
+  if(!root.has_filename()) root=root.parent_path();
+  std::string openedSource;
+  zenkit::Vfs vfs;
+  vfs.set_open_observer([&](std::string_view, std::string_view source) { openedSource=source; });
+  // Resources::implLoadFont asks the runtime VFS, so ties follow the engine's mount order,
+  // not the alphabetical mountArchives of the other importers.
+  fs::path work;
+  std::vector<Archive> archives;
+  for(const auto& a:mountRuntime(vfs,root,work))
+    archives.push_back({a.name,uint64_t(a.size)});
+  // The engine compares indexes with its mounted list sorted by name and size.
+  std::sort(archives.begin(),archives.end(),[](const Archive& a, const Archive& b) {
+    return std::tie(a.name,a.size)<std::tie(b.name,b.size);
+    });
+  std::vector<const zenkit::VfsNode*> files;
+  collectFiles(vfs.root(),files);
+  std::map<std::string,const zenkit::VfsNode*> fonts;
+  for(const auto* file:files) {
+    const auto name=upper(file->name());
+    if(endsWith(name,".FNT")) fonts[name]=vfs.find(name);
+    }
+  if(!verifyOnly) {
+    fs::create_directories(out);
+    fs::remove(out/"fonts.json");
+    }
+
+  std::string entries="{", loose="[";
+  size_t count=0, looseCount=0;
+  for(const auto& [name,node]:fonts) {
+    const auto file=name+".json";
+    try {
+      require(node!=nullptr,"Vfs::find does not resolve the font");
+      openedSource.clear();
+      const auto bytes=readAll(*node);
+      // zenkit::Font reads past a short file without an error; check the table size first
+      // with ZenKit's own line reader: header lines, height, count, then 17 bytes per glyph.
+      {
+      auto header=zenkit::Read::from(bytes.data(),bytes.size());
+      header->read_line(true);
+      header->read_line(false);
+      const auto tables=header->tell();
+      require(bytes.size()>=tables+8,"truncated font header");
+      header->read_uint();
+      const uint64_t glyphs=header->read_uint();
+      const uint64_t end=uint64_t(tables)+8+glyphs*17;
+      require(bytes.size()>=end,"truncated glyph tables");
+      if(bytes.size()>end)
+        std::cout << name << ": " << (bytes.size()-end) << " trailing bytes after the glyph tables (unused)\n";
+      }
+      ImportErrors errors;
+      zenkit::Font source;
+      auto input=zenkit::Read::from(bytes.data(),bytes.size());
+      source.load(input.get());
+      errors.check();
+      const auto own=asset::fromZenKit(source);
+      require(own.name==source.name && own.height==source.height && own.glyphs.size()==source.glyphs.size(),
+              "font conversion lost the header");
+      for(size_t i=0; i<own.glyphs.size(); ++i) {
+        const auto& a=own.glyphs[i];
+        const auto& b=source.glyphs[i];
+        require(a.width==b.width && gothicglb::bits(a.uv[0].x)==gothicglb::bits(b.uv[0].x) &&
+                gothicglb::bits(a.uv[0].y)==gothicglb::bits(b.uv[0].y) && gothicglb::bits(a.uv[1].x)==gothicglb::bits(b.uv[1].x) &&
+                gothicglb::bits(a.uv[1].y)==gothicglb::bits(b.uv[1].y),"font conversion changed glyph "+std::to_string(i));
+        }
+      const auto atlas=FontData::atlasName(name);
+      if(!verifyOnly) FontData::writeFont(own,atlas,out/file);
+      std::string readAtlas;
+      const auto diff=FontData::compare(own,FontData::readFont(out/file,&readAtlas));
+      require(diff.empty(),diff);
+      require(readAtlas==atlas,"font atlas differs: "+readAtlas+" != "+atlas);
+      if(count++) entries+=",";
+      entries+="\n    "+gothicglb::jsonString(name)+":"+gothicglb::jsonString(file);
+      if(fs::path(openedSource).is_absolute()) {
+        const auto path=fs::path(openedSource).lexically_relative(root).generic_string();
+        if(looseCount++) loose+=",";
+        loose+="\n    {\"path\":"+gothicglb::jsonString(path)+",\"size\":"+std::to_string(bytes.size())+"}";
+        }
+      }
+    catch(const std::exception& e) { throw std::runtime_error(name+": "+e.what()); }
+    }
+  const auto index="{\n  \"format\":\"gothic-fonts\",\n  \"version\":1,\n  \"archives\":"+archivesJson(archives)+
+                   ",\n  \"loose_files\":"+loose+"\n  ],\n  \"fonts\":"+entries+"\n  }\n}\n";
+  if(!verifyOnly) writeHost(out/"fonts.json",index.data(),index.size());
+  const auto actual=parseJson(out/"fonts.json");
+  rapidjson::Document expected;
+  expected.Parse(index.c_str());
+  require(!expected.HasParseError(),"cannot encode fonts.json");
+  require(actual==expected,"fonts.json fonts, archives or loose files differ");
+  const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << (verifyOnly ? "verified " : "written and verified ") << count << " fonts; 0 failed (" << ms << " ms)\n";
+  return 0;
+  }
+
 int verifyWorld(const fs::path& gothic, const std::string& name, const fs::path& out, const fs::path& overrides) {
   return verifyWorld(loadWorld(gothic,name),out,overrides);
   }
@@ -803,7 +902,7 @@ void build(const fs::path& gothic, const fs::path& out, const Progress& progress
     if(progress) progress(std::string("base import: ")+world);
     require(convertWorld(gothic,std::string(world)+".ZEN",out/"worlds"/world)==0,"world import failed");
     }
-  for(const char* kind:{"zen","textures","meshes","models","sources"}) fs::remove_all(out/kind);
+  for(const char* kind:{"zen","textures","meshes","models","fonts","sources"}) fs::remove_all(out/kind);
   if(progress) progress("base import: ZEN files");
   require(convertZen(gothic,out/"zen",false)==0,"ZEN import failed");
   if(progress) progress("base import: textures");
@@ -812,6 +911,8 @@ void build(const fs::path& gothic, const fs::path& out, const Progress& progress
   require(convertMeshes(gothic,out/"meshes",false)==0,"mesh import failed");
   if(progress) progress("base import: models and animations");
   require(convertModels(gothic,out/"models",false)==0,"model import failed");
+  if(progress) progress("base import: fonts");
+  require(convertFonts(gothic,out/"fonts",false)==0,"font import failed");
   if(progress) progress("base import: source manifest");
   require(convertSources(gothic,out/"sources",false)==0,"source manifest failed");
   require(identify(gothic).json==identity.json,"installation changed during base import");

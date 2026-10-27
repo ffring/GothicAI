@@ -53,6 +53,7 @@
 #include "gltfmesh.h"
 #include "basemesh.h"
 #include "modeldata.h"
+#include "fontdata.h"
 #include "worldbase.h"
 #include "utils/string_frm.h"
 
@@ -271,6 +272,8 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
     inst->baseZen.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
     inst->baseModels.validate(mounted);
     inst->baseModels.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
+    inst->baseFonts.validate(mounted);
+    inst->baseFonts.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
     inst->baseProgress={};
     }
   catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
@@ -657,6 +660,7 @@ void Resources::indexBaseContent() {
   baseMeshes.load(root,"meshes");
   baseZen.load(root,"zen");
   baseModels.load(root,"models");
+  baseFonts.load(root,"fonts");
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {
@@ -680,6 +684,11 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
         std::string_view(table["format"].GetString(),table["format"].GetStringLength())!="gothic-models" ||
         !table.HasMember("version") || !table["version"].IsUint() || table["version"].GetUint()!=1))
       throw std::runtime_error("unsupported model index format or version");
+    if(resourceKind=="fonts" &&
+       (!table.HasMember("format") || !table["format"].IsString() ||
+        std::string_view(table["format"].GetString(),table["format"].GetStringLength())!="gothic-fonts" ||
+        !table.HasMember("version") || !table["version"].IsUint() || table["version"].GetUint()!=1))
+      throw std::runtime_error("unsupported font index format or version");
     for(const auto& archive:table["archives"].GetArray()) {
       if(!archive.IsObject() || !archive.HasMember("name") || !archive["name"].IsString() ||
          !archive.HasMember("size") || !archive["size"].IsUint64())
@@ -687,7 +696,7 @@ void Resources::BaseIndex::load(const std::filesystem::path& root, const char* k
       archives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
       }
     std::sort(archives.begin(),archives.end());
-    if((resourceKind=="zen" || resourceKind=="models") && table.HasMember("loose_files")) {
+    if((resourceKind=="zen" || resourceKind=="models" || resourceKind=="fonts") && table.HasMember("loose_files")) {
       if(!table["loose_files"].IsArray())
         throw std::runtime_error("invalid loose file list");
       for(const auto& entry:table["loose_files"].GetArray()) {
@@ -1504,9 +1513,13 @@ GthFont &Resources::implLoadFont(std::string_view name, FontType type, const flo
       break;
     }
 
-  const auto* entry = Resources::vdfsIndex().find(fnt);
-  if(entry == nullptr) {
+  std::string fntKey(fnt.begin(),fnt.end());
+  for(auto& c:fntKey)
+    c = char(std::toupper(static_cast<unsigned char>(c)));
+  const auto entry = baseFonts.files.find(fntKey);
+  if(entry == baseFonts.files.end()) {
     Log::e("failed to open resource: ", fnt);
+    if(census) census->missing(fnt,"missing from base index");
     // throw std::runtime_error("failed to open resource: " + std::string{fnt});
     auto ptr   = std::make_unique<GthFont>();
     GthFont* f = ptr.get();
@@ -1514,9 +1527,19 @@ GthFont &Resources::implLoadFont(std::string_view name, FontType type, const flo
     return *f;
     }
 
-  auto ptr   = std::make_unique<GthFont>(*entry->open_read(),tex,color);
+  asset::Font data;
+  try {
+    data = FontData::readFont(baseFonts.dir/entry->second);
+    }
+  catch(const std::exception& error) {
+    if(census) census->missing(fnt,error.what());
+    throw;
+    }
+  const auto* texture = Resources::loadTexture(tex);
+  auto ptr   = std::make_unique<GthFont>(std::move(data),texture,color);
   GthFont* f = ptr.get();
   f->setScale(scale);
+  if(census) census->replaced(fnt,"base/fonts/"+entry->second);
   gothicFnt[key] = std::move(ptr);
   return *f;
   }

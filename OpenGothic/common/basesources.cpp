@@ -239,27 +239,7 @@ class Manifest {
     explicit Manifest(const fs::path& root)
       : root16(installation(fs::absolute(root))), gothic(fs::path(root16).parent_path()) {
       vfs.set_open_observer([this](std::string_view, std::string_view source) { opened = source; });
-      // Resources::loadVdfs without a mod ini: every .mod is filtered out.
-      for(auto& a:runtimeArchives(gothic)) {
-        if(a.mod)
-          continue;
-        try {
-          vfs.mount_disk(a.path,zenkit::VfsOverwriteBehavior::OLDER);
-          }
-        catch(const std::exception& e) {
-          std::cerr << "sources: unable to load archive " << a.path.filename().string() << ": " << e.what() << "\n";
-          continue;
-          }
-        archives.push_back(std::move(a));
-        }
-      checkSupportedSet();
-      // Gothic::nestedPath({u"_work"}) ends with '/'; drop it so relative paths stay exact.
-      work = fs::path(nested({u"_work"},Dir::FT_Dir)).parent_path();
-      if(fs::is_directory(work)) {
-        // Resources::mountWork: after the archives, never replacing them.
-        vfs.mkdir("/_work");
-        vfs.mount_host(work,"/_work",zenkit::VfsOverwriteBehavior::NONE);
-        }
+      archives = mountRuntime(vfs,gothic,work);
       collectPaths(vfs.root(),"",paths);
       }
 
@@ -284,18 +264,6 @@ class Manifest {
       std::vector<std::string>        strings; // owned copies of file and name per reference
       std::vector<bool>               hasFile;
       };
-
-    void checkSupportedSet() const {
-      Files runtime, supported;
-      for(const auto& a:archives)
-        runtime.emplace_back(a.name,a.size);
-      for(const auto& e:fs::directory_iterator(gothic/"Data"))
-        if(e.is_regular_file() && upper(e.path().extension().string())==".VDF")
-          supported.emplace_back(upper(e.path().filename().string()),e.file_size());
-      std::sort(runtime.begin(),runtime.end());
-      std::sort(supported.begin(),supported.end());
-      require(runtime==supported,"runtime archive set differs from the supported Gothic II import");
-      }
 
     // Gothic::nestedPath: the game's case-insensitive path below the installation.
     std::u16string nested(const std::initializer_list<const char16_t*>& segments, Dir::FileType type) const {
@@ -1001,6 +969,42 @@ std::vector<RuntimeArchive> runtimeArchives(const fs::path& gothic) {
     out.push_back(std::move(r));
     }
   return out;
+  }
+
+std::vector<RuntimeArchive> mountRuntime(zenkit::Vfs& vfs, const fs::path& gothic, fs::path& work) {
+  // Resources::loadVdfs without a mod ini: every .mod is filtered out.
+  std::vector<RuntimeArchive> archives;
+  for(auto& a:runtimeArchives(gothic)) {
+    if(a.mod)
+      continue;
+    try {
+      vfs.mount_disk(a.path,zenkit::VfsOverwriteBehavior::OLDER);
+      }
+    catch(const std::exception& e) {
+      std::cerr << "unable to load archive " << a.path.filename().string() << ": " << e.what() << "\n";
+      continue;
+      }
+    archives.push_back(std::move(a));
+    }
+
+  Files runtime, supported;
+  for(const auto& a:archives)
+    runtime.emplace_back(a.name,a.size);
+  for(const auto& e:fs::directory_iterator(gothic/"Data"))
+    if(e.is_regular_file() && upper(e.path().extension().string())==".VDF")
+      supported.emplace_back(upper(e.path().filename().string()),e.file_size());
+  std::sort(runtime.begin(),runtime.end());
+  std::sort(supported.begin(),supported.end());
+  require(runtime==supported,"runtime archive set differs from the supported Gothic II import");
+
+  // Gothic::nestedPath({u"_work"}) ends with '/'; drop it so relative paths stay exact.
+  work = fs::path(FileUtil::nestedPath(installation(gothic),{u"_work"},Dir::FT_Dir)).parent_path();
+  if(fs::is_directory(work)) {
+    // Resources::mountWork: after the archives, never replacing them.
+    vfs.mkdir("/_work");
+    vfs.mount_host(work,"/_work",zenkit::VfsOverwriteBehavior::NONE);
+    }
+  return archives;
   }
 
 int convertSources(const fs::path& gothic, const fs::path& out, bool verifyOnly) {

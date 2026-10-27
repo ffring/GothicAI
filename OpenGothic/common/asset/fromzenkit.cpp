@@ -1,5 +1,6 @@
 #include "fromzenkit.h"
 
+#include <zenkit/Font.hh>
 #include <zenkit/Mesh.hh>
 #include <zenkit/world/BspTree.hh>
 #include <zenkit/ModelMesh.hh>
@@ -169,6 +170,19 @@ std::vector<WorldData::Room> roomVolumesFromZenKit(const zenkit::Mesh& mesh, con
         rooms.push_back(std::move(room));
         }
   return rooms;
+  }
+
+Font fromZenKit(const zenkit::Font& s) {
+  Font f;
+  f.name = s.name;
+  f.height = s.height;
+  f.glyphs.resize(s.glyphs.size());
+  for(size_t i=0; i<s.glyphs.size(); ++i) {
+    f.glyphs[i].width = s.glyphs[i].width;
+    f.glyphs[i].uv[0] = s.glyphs[i].uv[0];
+    f.glyphs[i].uv[1] = s.glyphs[i].uv[1];
+    }
+  return f;
   }
 
 }
