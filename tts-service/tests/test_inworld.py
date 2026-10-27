@@ -11,7 +11,7 @@ import pytest
 
 from gothic_tts import cli, service
 from gothic_tts.cli import load_env_file
-from gothic_tts.providers import TtsError, Voice
+from gothic_tts.providers import TtsError, Voice, inworld
 from gothic_tts.providers.fake import FakeProvider
 from gothic_tts.providers.inworld import CHECK_VOICE, PREVIEW_TEXTS, InworldTTS
 from gothic_tts.service import TtsService
@@ -189,6 +189,62 @@ async def test_voice_cloned_from_a_recording_speaks_the_providers_language(api, 
     with pytest.raises(TtsError, match="no sample"):
         await _speak(p, Voice("x", sample=str(tmp_path / "missing.wav")))
     await p.aclose()
+
+
+@pytest.mark.parametrize(("headers", "detail", "delay"), [
+    ({"Retry-After": "13"}, "Please try again in 99 seconds.", 14),
+    ({"Retry-After": "Sat, 01 Jan 2000 00:00:13 GMT"}, "Rate limited", 14),
+    ({}, "Please try again in 13 seconds, or upgrade your plan.", 14),
+    ({}, "Rate limited", 31),
+])
+async def test_clone_waits_then_repeats_the_same_request(api, tmp_path, monkeypatch, headers, detail, delay):
+    sample = tmp_path / "sample.wav"
+    sample.write_bytes(b"RIFF original")
+    requests, sleeps = [], []
+
+    def transport(request):
+        requests.append(request.content)
+        if len(requests) == 1:
+            return httpx.Response(429, headers=headers, json={"code": 8, "message": detail})
+        return api(request)
+
+    async def sleep(seconds):
+        assert not p.cache.exists()  # a rate-limited attempt must never become a cached clone
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(inworld.time, "time", lambda: 946684800)
+    monkeypatch.setattr(inworld.asyncio, "sleep", sleep)
+    p = _provider(transport, tmp_path, keep_warm=0)
+    try:
+        assert await p.clone(Voice("ORIGINAL", sample=str(sample))) == "ws__clone-voice-1"
+        assert sleeps == [delay] and len(requests) == 2 and requests[0] == requests[1]
+        assert json.loads(p.cache.read_text())["ORIGINAL"]["voice_id"] == "ws__clone-voice-1"
+    finally:
+        await p.aclose()
+
+
+async def test_clone_stops_after_six_rate_limited_attempts(api, tmp_path, monkeypatch):
+    sample = tmp_path / "sample.wav"
+    sample.write_bytes(b"RIFF original")
+    attempts, sleeps = [], []
+
+    def transport(request):
+        attempts.append(request.content)
+        return httpx.Response(429, text="Please try again in 13 seconds.")
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(inworld.asyncio, "sleep", sleep)
+    p = _provider(transport, tmp_path, keep_warm=0)
+    try:
+        with pytest.raises(TtsError) as failed:
+            await p.clone(Voice("ORIGINAL", sample=str(sample)))
+        assert str(failed.value) == "inworld returned 429: Please try again in 13 seconds."
+        assert len(attempts) == 6 and len(set(attempts)) == 1 and sleeps == [14] * 5
+        assert not p.cache.exists()
+    finally:
+        await p.aclose()
 
 
 async def test_original_voice_cache_preserves_the_designed_voice(api, tmp_path, monkeypatch) -> None:
@@ -392,7 +448,43 @@ async def test_cached_originals_are_ready_before_source_export_finishes(api, tmp
         await synth.aclose()
 
 
-@pytest.mark.parametrize("failure", ["network", "empty_voice"])
+async def test_background_clones_survive_every_third_request_rate_limit(api, tmp_path, monkeypatch, caplog):
+    characters = [f"NPC_{i}" for i in range(36)]
+    for cid in characters:
+        (tmp_path / f"{cid}.wav").write_bytes(f"RIFF {cid}".encode())
+    (tmp_path / "manifest.json").write_text(json.dumps([
+        {"id": cid, "file": f"{cid}.wav"} for cid in characters
+    ]))
+    attempts, sleeps = [], []
+
+    def transport(request):
+        attempts.append(request.content)
+        if len(attempts) % 3 == 0:
+            return httpx.Response(429, json={"message": "Please try again in 13 seconds."})
+        return api(request)
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(inworld.asyncio, "sleep", sleep)
+    caplog.set_level(logging.INFO, logger="gothic_tts")
+    p = _provider(transport, tmp_path, keep_warm=0)
+    synth = Synthesizer(p)
+    svc = TtsService(synth, original_voices_dir=tmp_path)
+    try:
+        await svc._prepare_originals()
+        assert api.cloned == 36 and len(attempts) == 53 and sleeps == [14] * 17
+        assert set(svc.original_voices) == {cid.casefold() for cid in characters}
+        assert len(json.loads(p.cache.read_text())) == 36
+        assert all(attempts[i] == attempts[i + 1] for i in range(2, len(attempts), 3))
+        assert caplog.text.count("original voices: Inworld rate limit, waiting 14 s") == 17
+        assert "original voices: 36/36 ready, 0 failed" in caplog.text
+        assert not any(r.levelno >= logging.WARNING and r.name == service.__name__ for r in caplog.records)
+    finally:
+        await synth.aclose()
+
+
+@pytest.mark.parametrize("failure", ["network", "empty_voice", "refused", 401, 402, 403, 503])
 async def test_background_clones_continue_and_retry_only_next_start(
     api, tmp_path, monkeypatch, caplog, failure
 ):
@@ -411,6 +503,12 @@ async def test_background_clones_continue_and_retry_only_next_start(
         if failing and body["displayName"] == "gothic-ai BAD@original":
             if failure == "network":
                 raise httpx.ReadTimeout("test timeout", request=request)
+            if isinstance(failure, int):
+                return httpx.Response(failure, text="test rejection")
+            if failure == "refused":
+                return httpx.Response(200, json={
+                    "audioSamplesValidated": [{"errors": [{"text": "no speech"}]}],
+                })
             return httpx.Response(200, json={"voice": {"voiceId": ""}})
         return api(request)
 
@@ -422,6 +520,12 @@ async def test_background_clones_continue_and_retry_only_next_start(
         assert attempts == ["gothic-ai FIRST@original", "gothic-ai BAD@original", "gothic-ai LAST@original"]
         assert set(svc.original_voices) == {"first", "last"}
         assert "original voices: BAD:" in caplog.text
+        if isinstance(failure, int):
+            expected = (
+                f"inworld rejected the API key ({failure})" if failure in (401, 403)
+                else f"inworld returned {failure}"
+            )
+            assert f"{expected}: test rejection" in caplog.text
         assert set(json.loads(p.cache.read_text())) == {"FIRST@original", "LAST@original"}
         failing = False
         # A new service run retries the failure, while successful sample hashes produce no requests.
@@ -486,41 +590,49 @@ def test_no_original_voices_flag_skips_snapshots_and_clones(api, tmp_path, monke
     assert stopped.value.code == 0 and api.requests == []
 
 
-async def test_pending_original_clone_does_not_delay_other_voices(api, tmp_path) -> None:
+async def test_rate_limited_original_clone_does_not_delay_other_voices(api, tmp_path, monkeypatch) -> None:
     sample = tmp_path / "original.wav"
     sample.write_bytes(b"RIFF original voice")
     original = Voice(f"{XARDAS.id}@original", sample=str(sample))
     cached_clone = Voice("VATRAS@original", sample=str(sample))
-    clone_started, clone_finished = asyncio.Event(), asyncio.Event()
+    waiting, resume = asyncio.Event(), asyncio.Event()
+    attempts = []
 
-    async def transport(request):
+    def transport(request):
         if request.url.path == "/voices/v1/voices:clone":
             body = json.loads(request.content)
             if body["displayName"] == f"gothic-ai {original.id}":
-                clone_started.set()
-                await asyncio.sleep(2.0)
-                clone_finished.set()
+                attempts.append(request.content)
+                if len(attempts) == 1:
+                    return httpx.Response(429, headers={"Retry-After": "13"})
         return api(request)
 
+    async def sleep(seconds):
+        assert seconds == 14
+        waiting.set()
+        await resume.wait()
+
+    monkeypatch.setattr(inworld.asyncio, "sleep", sleep)
     p = _provider(transport, tmp_path, keep_warm=0)
     pending = None
     try:
         await _speak(p)  # the already designed voice must keep speaking during the clone
         await p.clone(cached_clone)
         pending = asyncio.create_task(_speak(p, original))
-        await asyncio.wait_for(clone_started.wait(), 5.0)
+        await asyncio.wait_for(waiting.wait(), 2)
         for voice in (XARDAS, cached_clone, Voice("NEW_NPC", "A quiet young man")):
             first_chunk = asyncio.Event()
 
             async def on_chunk(pcm, first_chunk=first_chunk):
                 if pcm and not first_chunk.is_set():
-                    assert not clone_finished.is_set()
+                    assert not resume.is_set() and not pending.done()
                     first_chunk.set()
 
-            await p.synthesize("Да.", voice, on_chunk)
+            await asyncio.wait_for(p.synthesize("Да.", voice, on_chunk), 0.5)
             assert first_chunk.is_set()
+        resume.set()
         await pending
-        assert clone_finished.is_set()
+        assert len(attempts) == 2 and attempts[0] == attempts[1]
         assert (api.designed, api.cloned) == (2, 2)
     finally:
         if pending is not None:
@@ -554,12 +666,25 @@ def test_clone_originals_command_reuses_sample_hash(api, tmp_path, monkeypatch, 
     (tmp_path / "manifest.json").write_text(json.dumps([
         {"id": cid, "aliases": [f"{cid}_DI"], "file": f"{cid}.wav"} for cid in ("XARDAS", "VATRAS")
     ]))
-    monkeypatch.setattr(cli, "InworldTTS", lambda: _provider(api, tmp_path, keep_warm=0))
+    attempts, sleeps = [], []
+
+    def transport(request):
+        attempts.append(request.content)
+        if len(attempts) == 1:
+            return httpx.Response(429, headers={"Retry-After": "13"})
+        return api(request)
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(inworld.asyncio, "sleep", sleep)
+    monkeypatch.setattr(cli, "InworldTTS", lambda: _provider(transport, tmp_path, keep_warm=0))
     monkeypatch.setattr(cli, "load_env_file", lambda: None)
     monkeypatch.setattr(sys, "argv", ["gothic-tts", "clone-originals", "--dir", str(tmp_path)])
     with pytest.raises(SystemExit) as first:
         cli.main()
     assert first.value.code == 0 and api.cloned == 2
+    assert sleeps == [14] and len(attempts) == 3 and attempts[0] == attempts[1]
     assert capsys.readouterr().out.splitlines() == [
         "XARDAS → ws__clone-voice-1", "VATRAS → ws__clone-voice-2",
     ]
@@ -664,6 +789,34 @@ async def test_errors(api, tmp_path, monkeypatch) -> None:
     with pytest.raises(TtsError, match="INWORLD_API_KEY"):
         await _speak(p)
     await p.aclose()
+
+
+@pytest.mark.parametrize("limited_voice_list", [False, True])
+async def test_rate_limit_does_not_retry_speech_or_key_checks(api, tmp_path, monkeypatch, limited_voice_list):
+    requests = []
+
+    def transport(request):
+        requests.append(request.url.path)
+        if request.url.path == "/tts/v1/voice:stream" or limited_voice_list:
+            return httpx.Response(429, headers={"Retry-After": "13"}, text="Rate limited")
+        return api(request)
+
+    async def sleep(seconds):
+        pytest.fail("speech and key checks must not wait on rate limits")
+
+    monkeypatch.setattr(inworld.asyncio, "sleep", sleep)
+    p = _provider(transport, tmp_path, voice="Dmitry", keep_warm=0)
+    try:
+        with pytest.raises(TtsError, match="^inworld returned 429: Rate limited$"):
+            await _speak(p)
+        if limited_voice_list:
+            with pytest.raises(TtsError, match="^inworld returned 429: Rate limited$"):
+                await p.warmup()
+        else:
+            await p.warmup()  # the base behavior: an unknown check answer defers to the voice list
+        assert requests == ["/tts/v1/voice:stream", "/tts/v1/voice:stream", "/tts/v1/voices"]
+    finally:
+        await p.aclose()
 
 
 async def test_idle_connection_kept_warm(api, tmp_path, monkeypatch, caplog) -> None:
