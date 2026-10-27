@@ -389,8 +389,11 @@ class Feats:
         window += [(seq, f) for seq, f in visible if seq > occasion.seq]
         try:
             state = await self.link.story_state(vars=["KAPITEL"])
-        except GameError as error:
-            log.warning("feats: story state failed: %s", error)
+        except (GameError, TimeoutError) as error:
+            log.warning(
+                "feats: story state failed for occasion #%s: %s",
+                occasion.seq, str(error) or type(error).__name__,
+            )
             return
         if generation != self._generation:
             return

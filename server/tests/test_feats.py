@@ -1,5 +1,6 @@
 """A chronicler sees the hero's facts and spends only the current save branch's budget."""
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -325,3 +326,29 @@ async def test_while_busy_only_the_latest_occasion_waits():
         text = llm.calls[1][1][0].content
         assert f"#{latest}" in text and "truce" in text
         assert not chronicle.facts("feat")
+
+
+async def test_story_state_timeout_drops_only_the_active_occasion(monkeypatch, caplog):
+    async with world(proposal(verdict="none")) as (_, chronicle, chronicler, llm, _):
+        started, release = asyncio.Event(), asyncio.Event()
+        story_state = chronicle.link.story_state
+
+        async def timeout_once(**kwargs):
+            if not started.is_set():
+                started.set()
+                await release.wait()
+                raise TimeoutError
+            return await story_state(**kwargs)
+
+        monkeypatch.setattr(chronicle.link, "story_state", timeout_once)
+        first = chronicle.record(crime())
+        work = chronicler._work
+        await _until(started.is_set)
+        latest = chronicle.record({"fact": "truce", "npc": "N", "name": "Последний"})
+        release.set()
+        await settled(chronicler)
+        assert work.done() and work.exception() is None
+        assert chronicler._pending is None
+        assert len(llm.calls) == 1
+        assert llm.calls[0][1][0].content.startswith(f"Повод: #{latest} truce ")
+        assert f"#{first}" in caplog.text and "TimeoutError" in caplog.text
