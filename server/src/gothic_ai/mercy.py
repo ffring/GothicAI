@@ -44,7 +44,7 @@ PEE_DISTANCE_CM = 100  # judged on bench stills: room for the arc between them
 PEE_HOLD_MS = 4000
 PEE_APPROACH_TIMEOUT_MS = 15000
 HUMILIATE_FORBIDDEN_GUILDS = {1, 4, 5, 14}  # PAL, KDF, NOV, KDW
-HERO_HOLD_S = 15
+HERO_HOLD_S = 30
 
 PARDON = "Ты проиграл бой герою и сдался; он тебя пощадил"
 YIELDING = (

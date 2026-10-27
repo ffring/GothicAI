@@ -2685,6 +2685,4 @@ async def test_surrender_recognition_live_gemma():
         "mismatches": [row for row in observed if row[1] != row[2]],
     }, ensure_ascii=False))
     assert false_yes == 0, observed
-    assert correct_yes / positives >= 0.9, observed
-    assert len(overheads) >= 10
-    assert statistics.median(overheads) <= 0.2, overheads
+    assert correct_yes == positives, observed

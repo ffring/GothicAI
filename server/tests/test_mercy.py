@@ -408,6 +408,34 @@ async def test_surrender_hold_accepts_without_native_combat_and_keeps_allies_cal
     assert rig.dialogue.surrender_context(NPC) is None
 
 
+@pytest.mark.parametrize("elapsed", [20, 31])
+async def test_long_turn_keeps_surrender_hold_until_acceptance_or_thirty_second_cap(
+    rig, monkeypatch, elapsed,
+):
+    conv, _ = await begin_hero_hold(rig, monkeypatch)
+    loop = asyncio.get_running_loop()
+    clock = loop.time
+    with monkeypatch.context() as shifted:
+        shifted.setattr(loop, "time", lambda: clock() + elapsed)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not conv.reply.done()
+        if elapsed == 20:
+            assert rig.mercy.held(NPC) and not rig.fake.attack_state
+            result = await rig.mercy.handle(rig.dialogue, conv, ToolCall("accept_surrender", {
+                "take": [], "words": "Живи.", "humiliate": False,
+            }), rig.link.snapshots[NPC])
+            assert result.status == "accepted" and rig.chronicle.facts("hero_yield")
+            assert not rig.fake.attack_state
+            assert not any(op.get("do") == "attack" for row in rig.fake.story
+                           for op in row.get("effects", []))
+        else:
+            if rig.dialogue._background:
+                await asyncio.gather(*rig.dialogue._background)
+            assert not rig.mercy.held(NPC) and rig.fake.attack_state
+    await end_hero_hold(rig, conv)
+
+
 @pytest.mark.parametrize("outcome", ["refused", "hit", "expired", "ally_validation_hit"])
 async def test_surrender_hold_resumes_native_fight_and_cannot_repeat(rig, monkeypatch, outcome):
     rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
