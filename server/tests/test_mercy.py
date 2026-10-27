@@ -787,6 +787,10 @@ async def test_accept_tool_only_after_hero_phrase_in_fight(rig, state):
         await rig.dialogue.say_as_player(NPC, "Пожалуйста, хватит!", overlay=True)
     eligible = state in {"fighting", "native_only"}
     assert len(quick.calls) == (2 if eligible else 1)
+    for _ in range(100):  # the turn returns once the line is sent; the fake game reads it a moment later
+        if rig.fake.said:
+            break
+        await asyncio.sleep(0.01)
     assert rig.fake.said == ["А ну стой!"]
     assert ("accept_surrender" in {t.name for t in rig.llm.calls[0][2]}) is eligible
     context = str(rig.llm.calls[0][1])
