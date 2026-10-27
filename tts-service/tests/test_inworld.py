@@ -228,6 +228,49 @@ async def test_original_voice_cache_preserves_the_designed_voice(api, tmp_path) 
     assert sum(isinstance(message, bytes) for message in messages) == 8
 
 
+async def test_pending_original_clone_does_not_delay_other_voices(api, tmp_path) -> None:
+    sample = tmp_path / "original.wav"
+    sample.write_bytes(b"RIFF original voice")
+    original = Voice(f"{XARDAS.id}@original", sample=str(sample))
+    cached_clone = Voice("VATRAS@original", sample=str(sample))
+    clone_started, clone_finished = asyncio.Event(), asyncio.Event()
+
+    async def transport(request):
+        if request.url.path == "/voices/v1/voices:clone":
+            body = json.loads(request.content)
+            if body["displayName"] == f"gothic-ai {original.id}":
+                clone_started.set()
+                await asyncio.sleep(2.0)
+                clone_finished.set()
+        return api(request)
+
+    p = _provider(transport, tmp_path, keep_warm=0)
+    pending = None
+    try:
+        await _speak(p)  # the already designed voice must keep speaking during the clone
+        await p.clone(cached_clone)
+        pending = asyncio.create_task(_speak(p, original))
+        await asyncio.wait_for(clone_started.wait(), 5.0)
+        for voice in (XARDAS, cached_clone, Voice("NEW_NPC", "A quiet young man")):
+            first_chunk = asyncio.Event()
+
+            async def on_chunk(pcm, first_chunk=first_chunk):
+                if pcm and not first_chunk.is_set():
+                    assert not clone_finished.is_set()
+                    first_chunk.set()
+
+            await p.synthesize("Да.", voice, on_chunk)
+            assert first_chunk.is_set()
+        await pending
+        assert clone_finished.is_set()
+        assert (api.designed, api.cloned) == (2, 2)
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await p.aclose()
+
+
 @pytest.mark.parametrize("state", ["missing_dir", "missing_manifest", "empty_manifest"])
 def test_clone_originals_requires_voices(api, tmp_path, monkeypatch, capsys, state) -> None:
     directory = tmp_path / "missing" if state == "missing_dir" else tmp_path
