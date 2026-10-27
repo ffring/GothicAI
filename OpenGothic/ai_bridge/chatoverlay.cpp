@@ -337,10 +337,12 @@ void ChatOverlay::paintFeat(Painter& p) {
   auto&       line  = Resources::font(DealFont,   Resources::FontType::Normal,  scale);
   const int   pad   = std::max(10,title.pixelSize()*2/3);
   const int   iconS = featIcon!=nullptr ? int(96*scale) : 0;
-  const int   boxW  = std::min(w()-16, int(420*scale) + iconS);
+  const int   boxW  = std::min(w()-16, int(480*scale) + iconS);
   const int   textX = pad + (iconS>0 ? iconS + pad : 0);
   const int   textW = boxW - textX - pad;
-  const int   textH = title.pixelSize() + line.textSize(textW,f.text).h + pad/3;
+  // a long title wraps: everything below it moves down by its real height
+  const int   titleH = title.textSize(textW,f.title).h;
+  const int   textH  = titleH + line.textSize(textW,f.text).h + pad/3;
   const int   boxH  = std::max(iconS,textH) + 2*pad;
   const int   x0    = std::max(8,w()/40);
   const int   y0    = std::max(8,h()/14) - int(float(pad)*(1.f-alpha));  // it settles in from a little above
@@ -362,7 +364,7 @@ void ChatOverlay::paintFeat(Painter& p) {
     return;
   int y = y0 + pad + (boxH-2*pad-textH)/2;
   title.drawText(p,x0+textX,y+title.pixelSize(),textW,0,f.title,AlignLeft);
-  y += title.pixelSize() + pad/3;
+  y += titleH + pad/3;
   line.drawText(p,x0+textX,y+line.pixelSize(),textW,0,f.text,AlignLeft);
   }
 
