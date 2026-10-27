@@ -1992,6 +1992,90 @@ async def test_out_of_a_fight_the_quick_model_only_says_the_first_words():
     assert [m.content for m in dialogue.conversations[XARDAS].history][:2] == ["Ты старый дурак", "Не спеши."]
 
 
+@pytest.mark.parametrize("combat", [True, False])
+async def test_sol_overlaps_first_words_only_for_a_hero_combat_phrase(combat, monkeypatch):
+    fake = FakeGame()
+    quick = FakeBackend("[angry] Стой!", delay=0)
+    llm = FakeBackend("Сам справлюсь!", delay=0)
+    probe_started, probe_done = asyncio.Event(), asyncio.Event()
+    words_started, words_done = asyncio.Event(), asyncio.Event()
+    full_started = asyncio.Event()
+    stream = quick.stream
+
+    async def held_words(**kwargs):
+        words_started.set()
+        await words_done.wait()
+        async for event in stream(**kwargs):
+            yield event
+
+    async def probe(conv, request):
+        probe_started.set()
+        await probe_done.wait()
+
+    monkeypatch.setattr(quick, "stream", held_words)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None), quick=quick)
+        dialogue.fights_hero = lambda npc: combat
+        dialogue.surrender_hold = probe
+        situation = dialogue._situation
+
+        async def prepare_situation(*args, **kwargs):
+            if not kwargs.get("brief"):
+                full_started.set()
+            return await situation(*args, **kwargs)
+
+        monkeypatch.setattr(dialogue, "_situation", prepare_situation)
+        dialogue.open(XARDAS, "Ксардас", warm=False)
+        turn = dialogue.say_as_player(XARDAS, "Хватит!")
+        try:
+            if combat:
+                await asyncio.wait_for(probe_started.wait(), 2)
+                assert not words_started.is_set() and not llm.calls
+                assert full_started.is_set()  # native context preparation overlaps the probe too
+                probe_done.set()
+            await asyncio.wait_for(words_started.wait(), 2)
+            if combat:
+                await _until(lambda: bool(llm.calls))
+                assert not turn.done() and not fake.said
+            else:
+                await asyncio.sleep(0.02)
+                assert not llm.calls
+            words_done.set()
+            await turn
+            await _until(lambda: len(fake.said) == (1 if combat else 2))
+        finally:
+            words_done.set()
+            turn.cancel()
+            await asyncio.gather(turn, return_exceptions=True)
+
+    situation = _situation_of(llm.calls[0][1])
+    assert ("Ты уже сказал вслух: «Стой!»" in situation) is not combat
+    assert fake.said == (["Стой!"] if combat else ["Стой!", "Сам справлюсь!"])
+
+
+@pytest.mark.parametrize("failed", [False, True])
+async def test_empty_parallel_first_words_voice_the_buffered_sol_response_once(failed, tmp_path):
+    from gothic_ai.trace import find_turn
+
+    fake = FakeGame()
+    llm = FakeBackend("[angry] Сам справлюсь!", delay=0)
+    writer = TraceWriter(tmp_path)
+    async with connected(fake) as link:
+        dialogue = DialogueManager(link, llm, PersonaProvider(None),
+                                   quick=FailingBackend() if failed else FakeBackend("", delay=0),
+                                   trace=writer)
+        dialogue.fights_hero = lambda npc: True
+        dialogue.open(XARDAS, "Ксардас", warm=False)
+        await dialogue.say_as_player(XARDAS, "Хватит!")
+        await _until(lambda: fake.said == ["Сам справлюсь!"])
+    assert len(llm.calls) == 1
+    assert dialogue.conversations[XARDAS].history[-1].content == "Сам справлюсь!"
+    turn, _ = find_turn(writer.path(), None)
+    assert turn["status"] == "completed"
+    assert any(event["kind"] == "quick_fallback" for event in turn["events"])
+    assert any(event["kind"] == "quick_failed" for event in turn["events"]) is failed
+
+
 @pytest.mark.parametrize("reply", ["Держи свиток.", "Ишь ты! Держи свиток."])
 async def test_a_rejection_remembers_the_first_words_and_the_main_reply(reply):
     fake = FakeGame()

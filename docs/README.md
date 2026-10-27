@@ -13,18 +13,19 @@
 ## Части и машины
 
 ```
- Mac                                         dev-ubuntu (RTX 3090)
+ Mac                                         dev-ubuntu (RTX 3090, все модели)
  ┌───────────────────────────┐               ┌──────────────────────────────┐
- │ Gothic2Notr               │               │ Voxtral — ASR (по выбору)    │
- │  OpenGothic + ai_bridge   │               │ VoxCPM2 — голос (запасной)   │
- │        │ WebSocket JSON   │               │ Strands Decider 2B — решения │
- │        ▼ :47817           │   HTTP / WS   │ Gemma 4 12B — быстрые реплики│
- │ ИИ-сервер gothic-ai serve ├──────────────►└──────────────────────────────┘
- │  asr-service, tts-service │               Ryzen (3950X, RTX 3080)
- │  (клиенты к моделям)      ├──────────────►┌──────────────────────────────┐
- │ лаунчер                   │   TCP JSONL   │ body-service: политика боя   │
- └─────────────┬─────────────┘               │ P30 (ядра 0–1); тяжёлые      │
-               │                             │ прогоны через scripts/gq     │
+ │ Gothic2Notr               │               │ Strands Decider 2B — решения │
+ │  OpenGothic + ai_bridge   │               │ Gemma 4 12B — быстрые реплики│
+ │        │ WebSocket JSON   │   HTTP / WS   │ P30 — политика боя, CPU 0–1  │
+ │        ▼ :47817           │   TCP JSONL   │ (Voxtral, VoxCPM2 остановлены│
+ │ ИИ-сервер gothic-ai serve ├──────────────►│  с 23 и 27 октября)          │
+ │  asr-service, tts-service │               └──────────────────────────────┘
+ │  (клиенты к моделям)      │               Ryzen (3950X, RTX 3080)
+ │ лаунчер                   │               ┌──────────────────────────────┐
+ └─────────────┬─────────────┘               │ тяжёлые прогоны через        │
+               │                             │ scripts/gq: e2e, pytest,     │
+               │                             │ бенчи, обучение тел          │
                ▼                             └──────────────────────────────┘
  Inworld STT (основной ASR), Inworld TTS-2 (голос);
  подписка ChatGPT: gpt-6.1-sol (разговор), запасной ASR
@@ -72,7 +73,7 @@
 4. Быстрая реакция тела — `brain/reflex.Reflexes` через быстрый контур (около 0,1 с).
 5. Ответ даёт `dialogue.DialogueManager`, правила хода — в `turn.py`. Модель — gpt-6.1-sol через `llm/openai_responses.py`. Контекст собирают `persona.py`, `memory.py`, `npc_tools.render_situation` и модули знания (ниже). В бою первые слова говорит Gemma (quick-модель), разговорная продолжает.
 6. Инструменты модели — `npc_tools.TOOLS`. Их проверяет `executor.py`, а намерение превращается в действия для игры.
-7. Текст режется на предложения с тегами настроения и озвучивается через `tts-service` (Inworld TTS-2, запасной — VoxCPM2). В игру уходят `say`, `say_audio`, `say_end`.
+7. Текст режется на предложения с тегами настроения и озвучивается через `tts-service` (Inworld TTS-2, без запасного). В игру уходят `say`, `say_audio`, `say_end`.
 8. Движок двигает губы, лицо и руки по голосу (`common/graphics/mesh/lipsync.*`, `talkgestures.*`).
 9. Ход пишется в трейс (`trace.py`, `~/.local/share/gothic-ai/traces/`). `replay.py` повторяет записанный ход на другой модели или с другим промптом без игры; `replay --after-step N` продолжает после N записанных шагов, например для проверки реакции на отказ инструмента. Стенд `gothic-ai replay-first-words <traces.jsonl> [--hint-file F] [--runs N] [--temperature T] [--quick-url URL] [--npc ID] [--out FILE.jsonl]` отдельно повторяет первые слова Gemma на фразы героя; [состав запроса и результаты](npc-agent.md#лицо). Стенд `gothic-ai replay-svm-lines <traces.jsonl> --svm-file F [--npc ID] [--hint-file F] [--history] [--runs N] [--out F]` проверяет пересказ SVM в обстановке последнего хода NPC; [пример 15 входных реплик](../server/src/gothic_ai/svm_lines.jsonl), [правила](npc-agent.md#как-работает-сейчас).
 
@@ -208,10 +209,10 @@
 | Сервис | Что | Где работает | Как сервер его находит |
 |---|---|---|---|
 | `asr-service/` | распознавание речи: Inworld STT, подсказки имён; запасной — подписка ChatGPT; Voxtral (audio.cpp) выбирается явно | клиент на Mac или Ryzen, Inworld API; Voxtral остаётся на dev-ubuntu | `--asr-url`, `GOTHIC_ASR_URL` |
-| `tts-service/` | голос NPC: Inworld TTS-2, оригинальные голоса сюжетных NPC только в игре; запасной — VoxCPM2 (audio.cpp) | клиент на Mac или Ryzen, VoxCPM2 на dev-ubuntu | `--tts-url`, `GOTHIC_TTS_URL` |
+| `tts-service/` | голос NPC: Inworld TTS-2, оригинальные голоса сюжетных NPC только в игре; без запасного; VoxCPM2 (audio.cpp) выбирается явно | клиент на Mac или Ryzen; VoxCPM2 на dev-ubuntu остановлен | `--tts-url`, `GOTHIC_TTS_URL` |
 | `decider-service/` | быстрые решения NPC: Strands Decider 2B, полосы urgent и background | dev-ubuntu | `--decider-url`, `GOTHIC_DECIDER_URL` |
 | `server/deploy/gemma/` | Gemma 4 12B (llama.cpp): реплики в бою, первые слова | dev-ubuntu | `--quick-url`, `GOTHIC_QUICK_LLM_URL` |
-| `body-service/` | политика боя P30 (GRU), обучение BC и PPO | сервис — Ryzen, ядра 0–1; обучение — Ryzen и dev-ubuntu | `--body-url`, `GOTHIC_BODY_URL` |
+| `body-service/` | политика боя P30 (GRU), обучение BC и PPO | сервис — dev-ubuntu, ядра 0–1; обучение — Ryzen и dev-ubuntu | `--body-url`, `GOTHIC_BODY_URL` |
 | `launcher/` | `core/` поднимает сервисы и игру одной командой; `app/` — окно (Tauri, Svelte); на Ryzen — значок GNOME с Ptyxis | ядро — Mac и Linux, приложение — Mac | `up --continue`, временные `--no-voice` и `--smoke`; [Ryzen](launcher.md#ryzen-linux) |
 | `libs/chatgpt-auth/` | вход через ChatGPT (OAuth PKCE), общее хранилище токенов | Mac или Ryzen, отдельный вход на каждой машине | — |
 
@@ -240,7 +241,7 @@
 | SIGKILL игры при загрузке e2e на Ryzen | До маркера `scenario <name>: checks started` — до четырёх запусков с отдельными логами; четыре убийства подряд дают код 76 и времена, [правила](ryzen.md#как-работает-сейчас) |
 | Частота кадров e2e | На Ryzen и Mac по умолчанию `E2E_MAX_FPS=30`; `0` снимает лимит, `60` задаёт 60 FPS. `OPENGOTHIC_FPS_LOG=1` включён в e2e по умолчанию; bench и живая игра не меняются. [Настройки](ryzen.md), [приёмка 12 сценариев](../reports/compute/2026-10-19-e2e-fps-cap/README.md) |
 | Бенч механики | `scripts/bench.sh <имя>` → `.bench/<имя>-<время>/` (видео, метрики, отчёт); `bench.sh` / `ryzen.sh` синхронизируют явно заданный `OPENGOTHIC_CONTENT` в отдельный каталог входов прогона на Ryzen; пустое значение выключает свой контент, незаданное сохраняет выбор движка по умолчанию |
-| Очередь Ryzen | `scripts/gq status`: три слота для `--display --display-shared`, `GQ_DISPLAY_SLOT`; старый `--display` и `--display-exclusive` берут все слоты. `TEMPEST_WINDOW_POS` разводит окна, `OPENGOTHIC_FPS_LOG=1` пишет FPS, `scripts/ryzen-round.sh` — тройной замер сценария; [ресурсы и допуск](compute.md#очередь-gq), [порты и окна](ryzen.md), [проверка и приёмка](../reports/compute/2026-10-19-ryzen-three-windows/README.md) |
+| Очередь Ryzen | `scripts/gq status`: три слота для `--display --display-shared`, `GQ_DISPLAY_SLOT`; старый `--display` и `--display-exclusive` берут все слоты. `TEMPEST_WINDOW_POS` разводит окна, `OPENGOTHIC_FPS_LOG=1` пишет FPS, `scripts/ryzen-round.sh` — тройной замер сценария; [ресурсы и допуск](compute.md#очередь-gq), [порты и окна](ryzen.md), [проверка и приёмка](../reports/compute/2026-10-19-ryzen-three-windows/README.md); повторяемый `run/submit --archive DIR` переносит готовые результаты через [`nas_archive.py`](../scripts/nas_archive.py) с проверкой CIFS и SHA-256, ссылки — в `.symlinks.tsv`; [CLI и библиотека](ryzen.md#перенос-результатов-на-nas) |
 | Личная игра на Ryzen | С Mac: `scripts/ryzen-play.sh install` / `update`; `~/gothic-ai/play/` — клон `main`. Рабочий контент Mac переносится в `~/.local/share/gothic-ai/play-content` через incoming и замену под замком; Linux-ядро передаёт его игре через `OPENGOTHIC_CONTENT`. Значок **Gothic AI** открывает окно Tauri с настройками, сервисами, журналом и AppIndicator; до сборки окна доступен Ptyxis. Окно и `scripts/ryzen-play-session.sh` (`gothic-launcher play`) используют общий [`linux_session.py`](../launcher/core/src/gothic_launcher/linux_session.py): fullscreen, звук PipeWire, последнее сохранение, `gq --interactive --display-exclusive` до 6 ч с `CPUWeight=1000`; смоук без моделей через `control` или `--smoke`. [Установка, вход и микрофон](launcher.md#ryzen-linux) |
 | Общий кэш бинарников Ryzen | `scripts/ryzen.sh` использует `~/gothic-ai/engine-cache/` по хэшу исходников; `clean-cache` очищает старые записи, `RYZEN_WORKTREE` задаёт имя папки; [правила](ryzen.md) |
 | Автоочистка диска Ryzen | Перед загрузкой исходников `ryzen.sh` удаляет свободные e2e-worktree после `RYZEN_CLEAN_IDLE_HOURS=48` часов без активности (`0` отключает проход); при свободном месте меньше 60 ГиБ обрезает `uv` не чаще раза в 12 часов; [границы и метки](ryzen.md#как-работает-сейчас) |

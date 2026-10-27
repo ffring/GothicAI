@@ -717,10 +717,45 @@ async def test_accept_surrender_survives_deadline_and_resumes_on_calm_failure_or
 @pytest.mark.parametrize(("text", "quick"), [
     ("", False), ("Ладно, живи", False), ("This conversational text stays silent.", True),
 ])
-async def test_accept_surrender_words_only_skip_spoken_conversational_text(rig, text, quick):
+async def test_accept_surrender_words_only_skip_spoken_conversational_text(rig, monkeypatch, text, quick):
     if quick:
         rig.dialogue.quick = FakeBackend("Сдохни!", delay=0)
-    await hero_yields(rig, [], text=text, words="Ладно, живи")
+        rig.dialogue.fights_hero = lambda npc: npc == NPC and rig.fake.attack_state
+        monkeypatch.setattr(rig.dialogue, "_surrendering", AsyncMock(return_value=False))
+        monkeypatch.setattr("gothic_ai.dialogue.line_duration", lambda text: 0.05)
+        release, sol_done = asyncio.Event(), asyncio.Event()
+        quick_stream, sol_stream = rig.dialogue.quick.stream, rig.llm.stream
+
+        async def blocked_quick(**kwargs):
+            await release.wait()
+            async for event in quick_stream(**kwargs):
+                yield event
+
+        async def fast_sol(**kwargs):
+            async for event in sol_stream(**kwargs):
+                yield event
+            sol_done.set()
+
+        monkeypatch.setattr(rig.dialogue.quick, "stream", blocked_quick)
+        monkeypatch.setattr(rig.llm, "stream", fast_sol)
+        rig.llm.script = [FakeStep(text, tool_calls=[ToolCall("accept_surrender", {
+            "take": [], "words": "Ладно, живи", "humiliate": False,
+        })]), FakeStep()]
+        rig.dialogue.open(NPC, "Лобарт", warm=False)
+        turn = rig.dialogue.say_as_player(NPC, "Сдаюсь, забирай золото, только не бей")
+        try:
+            async with asyncio.timeout(1):
+                await sol_done.wait()
+            assert not rig.fake.said and not rig.chronicle.facts("hero_yield")
+        finally:
+            release.set()
+        await turn
+        await finish(rig)
+        (gemma, _), (accepted, words_at) = rig.fake.says
+        assert not gemma.get("overlay") and accepted["overlay"]
+        assert words_at >= rig.dialogue.started_at(gemma["line"]) + 0.05
+    else:
+        await hero_yields(rig, [], text=text, words="Ладно, живи")
     assert len(rig.chronicle.facts("hero_yield")) == 1
     assert rig.fake.said == (["Сдохни!"] if quick else []) + ["Ладно, живи"]
 
@@ -752,6 +787,10 @@ async def test_accept_tool_only_after_hero_phrase_in_fight(rig, state):
         await rig.dialogue.say_as_player(NPC, "Пожалуйста, хватит!", overlay=True)
     eligible = state in {"fighting", "native_only"}
     assert len(quick.calls) == (2 if eligible else 1)
+    for _ in range(100):  # the turn returns once the line is sent; the fake game reads it a moment later
+        if rig.fake.said:
+            break
+        await asyncio.sleep(0.01)
     assert rig.fake.said == ["А ну стой!"]
     assert ("accept_surrender" in {t.name for t in rig.llm.calls[0][2]}) is eligible
     context = str(rig.llm.calls[0][1])

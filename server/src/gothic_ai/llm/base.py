@@ -86,6 +86,7 @@ class Done:
     text: str
     items: tuple[Item, ...] = ()  # the response as request items, in order: reasoning, text, calls
     usage: Usage | None = None
+    timing: dict[str, Any] | None = None  # provider transport and raw response event timings
 
 
 LLMEvent = TextDelta | ToolCall | Done
