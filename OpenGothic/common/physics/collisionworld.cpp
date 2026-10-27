@@ -2303,6 +2303,41 @@ void CollisionWorld::flushShadowBlades() {
     }
   }
 
+float CollisionWorld::meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                                      const Tempest::Vec3& direction, float maxAdvanceCm) const {
+  const auto travel=toMeters(direction).NormalizedOr(JPH::Vec3::sZero())*(maxAdvanceCm*.01f);
+  JPH::ShapeCastSettings settings;
+  settings.mReturnDeepestPoint=true;
+  float advance=std::numeric_limits<float>::infinity();
+  for(const auto& blade:blades) {
+    const auto from=toMeters(blade.from),to=toMeters(blade.to),axis=to-from,center=(from+to)*.5f;
+    const JPH::CapsuleShape shape(std::max(axis.Length()*.5f,.00001f),blade.radiusCm*.01f);
+    const auto rotation=JPH::Quat::sFromTo(JPH::Vec3::sAxisY(),axis.NormalizedOr(JPH::Vec3::sAxisY()));
+    for(const auto& capsule:target) {
+      const auto a=toMeters(capsule.from),b=toMeters(capsule.to),targetAxis=b-a,targetCenter=(a+b)*.5f;
+      const JPH::CapsuleShape targetShape(std::max(targetAxis.Length()*.5f,.00001f),capsule.radiusCm*.01f);
+      const auto targetRotation=JPH::Quat::sFromTo(JPH::Vec3::sAxisY(),targetAxis.NormalizedOr(JPH::Vec3::sAxisY()));
+      const JPH::ShapeCast cast(&shape,JPH::Vec3::sOne(),
+          JPH::Mat44::sRotationTranslation(rotation,center-targetCenter),travel);
+      JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> hit;
+      JPH::CollisionDispatch::sCastShapeVsShapeWorldSpace(cast,settings,&targetShape,JPH::Vec3::sOne(),{},
+          JPH::Mat44::sRotation(targetRotation),{},{},hit);
+      if(hit.HadHit()) {
+        advance=std::min(advance,std::clamp(hit.mHit.mFraction,0.f,1.f)*maxAdvanceCm);
+        if(advance==0.f)
+          return 0.f;
+        }
+      }
+    }
+  return advance;
+  }
+
+void CollisionWorld::accountMeleeReachTime(float milliseconds) {
+  // Reach previews run in native AI before tick(), like CharacterVirtual queries.
+  // Charge the entire caller's pose replay and capsule casts to physics_ms.
+  impl->characterMilliseconds+=milliseconds;
+  }
+
 void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
   if(!impl->hasShadowBlades.load(std::memory_order_acquire)) return;
   std::lock_guard<std::mutex> guard(impl->shadowMutex);

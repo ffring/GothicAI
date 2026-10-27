@@ -1380,7 +1380,7 @@ bool Pose::updateFootIk(const FootIk::Input& in) {
   return true;
   }
 
-void Pose::setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir) {
+void Pose::setAnimRotate(const AnimationSolver &solver, const Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir) {
   const Animation::Sequence *sq = nullptr;
   if(dir==0) {
     if(rotation!=nullptr) {

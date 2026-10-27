@@ -2322,6 +2322,11 @@ void DynamicWorld::updateShadowBlade(const Npc* owner,uint64_t swingId,const std
 std::vector<MeleeBladeContact> DynamicWorld::takeShadowBladeContacts(const Npc* owner) { return world->takeShadowBladeContacts(owner); }
 void DynamicWorld::removeShadowBlade(const Npc* owner) { world->removeShadowBlade(owner); }
 void DynamicWorld::flushShadowBlades() { world->flushShadowBlades(); }
+float DynamicWorld::meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                                    const Tempest::Vec3& direction, float maxAdvanceCm) const {
+  return world->meleeBladeAdvance(blades,target,direction,maxAdvanceCm);
+  }
+void DynamicWorld::accountMeleeReachTime(float milliseconds) { world->accountMeleeReachTime(milliseconds); }
 void DynamicWorld::measureMeleeBench(std::string path) { world->measureMeleeBench(std::move(path)); }
 void DynamicWorld::reportMeleeBench() { world->reportMeleeBench(); }
 

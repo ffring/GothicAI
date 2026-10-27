@@ -154,6 +154,7 @@ class Npc final {
     float      qDistTo(const Interactive& p) const;
     float      qDistTo(const Item& p) const;
     auto       fightDistanceTo(const Npc& npc) const -> Tempest::Vec3;
+    float      meleeBladeAttackDistance(const Npc& target, Anim attack) const;
 
     void       updateAnimation(uint64_t dt, bool force = false);
     void       updateTransform();
@@ -890,7 +891,8 @@ class Npc final {
     MeleeBenchMode meleeBenchMode() const;
     void updateMeleeBenchBlade();
     struct MeleeShadow;
-    std::unique_ptr<MeleeShadow>   meleeShadow;
+    struct MeleeReach;
+    mutable std::unique_ptr<MeleeShadow> meleeShadow;
     bool                          meleeShadowBody = false;
     bool                          meleeShadowSuspended = false;
     struct MeleeShadowMark final {
@@ -904,6 +906,9 @@ class Npc final {
     std::vector<MeleeShadowMark>  meleeShadowMarks;
     void          noteMeleeShadowMarks(const std::vector<MeleeBladeContact>& contacts);
     void syncMeleeShadowSwing();
+    void cacheMeleeShadowWindows(const Animation::Sequence* sequence, float length, bool normalY) const;
+    const MeleeReach& previewMeleeReach(const Npc& target, Anim attack) const;
+    MeleeReach sampleMeleeReach(const Npc& target, Pose& sampled, const Pose::CombatLayer& attack) const;
     void consumeMeleeContacts();
     void stopMeleeSwing();
     void noteMeleeStep(float movedCm, float requestedCm);

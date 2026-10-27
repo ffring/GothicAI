@@ -493,6 +493,9 @@ class DynamicWorld final {
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void flushShadowBlades();
+    float meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                            const Tempest::Vec3& direction, float maxAdvanceCm) const;
+    void accountMeleeReachTime(float milliseconds);
     struct RagdollSupport {
       size_t        bone = 0;
       uint32_t      partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);

@@ -183,6 +183,10 @@ class CollisionWorld final {
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void flushShadowBlades();
+    // Pure capsule query in centimetres; infinity means no contact along the cast.
+    float meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                            const Tempest::Vec3& direction, float maxAdvanceCm) const;
+    void accountMeleeReachTime(float milliseconds);
     void setWaterSurfaceCallback(std::function<bool(const Tempest::Vec3&,float,float&)> callback);
     void setBuoyancyEnabled(bool enabled);
     bool buoyancyEnabled() const;

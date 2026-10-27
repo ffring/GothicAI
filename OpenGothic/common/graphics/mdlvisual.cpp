@@ -1491,6 +1491,21 @@ bool MdlVisual::hasAnim(AnimationSolver::Anim a, WeaponState st, WalkBit wlk) co
   return solver.solveAnim(a,st,wlk,*skInst)!=nullptr;
   }
 
+const Animation::Sequence* MdlVisual::meleeAttackSequence(AnimationSolver::Anim a, WeaponState st, WalkBit wlk) const {
+  assert(a==AnimationSolver::Attack || a==AnimationSolver::AttackL || a==AnimationSolver::AttackR);
+  return solver.solveAnim(a,st,wlk,*skInst);
+  }
+
+bool MdlVisual::previewMeleeAttack(const Npc& npc, AnimationSolver::Anim a, WeaponState st, WalkBit wlk, uint64_t now, Pose& sampled) const {
+  sampled = *skInst;
+  sampled.setBlendLog(false);
+  sampled.setAnimRotate(solver,npc,st,AnimationSolver::TurnType::Std,0);
+  const auto* sequence = solver.solveAnim(a,st,wlk,sampled);
+  if(sampled.continueCombo(solver,sequence,BS_HIT,now)!=nullptr)
+    return true;
+  return sampled.startAnim(solver,sequence,0,BS_HIT,Pose::NoHint,now);
+  }
+
 const Animation::Sequence* MdlVisual::startAnimAndGet(std::string_view name, uint64_t tickCount, bool forceAnim) {
   auto sq = solver.solveFrm(name);
   if(sq!=nullptr) {

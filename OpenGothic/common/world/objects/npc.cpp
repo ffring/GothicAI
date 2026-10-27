@@ -105,6 +105,17 @@ void writeMeleeShadow(const std::string& row) {
 
 }
 
+struct Npc::MeleeReach final {
+  const Npc* target = nullptr;
+  const Animation::Sequence* requested = nullptr;
+  const Animation::Sequence* sequence = nullptr;
+  uint64_t tick = uint64_t(-1);
+  Vec3 origin, targetOrigin;
+  float yaw = 0;
+  uint32_t window = 0;
+  float approachCm = std::numeric_limits<float>::infinity(), stepCm = 0, contactMs = 0, cpuMs = 0;
+  };
+
 struct Npc::MeleeShadow final {
   struct Window final {
     const Animation::Sequence* sequence = nullptr;
@@ -121,6 +132,9 @@ struct Npc::MeleeShadow final {
     int32_t damage = 0;
     };
   std::vector<Window> windows;
+  std::array<MeleeReach,3> reach;
+  float reachCpuMs = 0, reachCpuMaxMs = 0;
+  uint64_t reachQueries = 0;
   std::optional<Window> window;
   uint64_t id = 0, start = 0, tick = 0;
   float speed = 1;
@@ -135,11 +149,12 @@ struct Npc::MeleeShadow final {
   float stepRequestedCm = 0, stepMovedCm = 0;
   std::string outcome = "miss";
   struct Diagnostic final {
-    uint32_t target = uint32_t(-1);
+    const Npc* target = nullptr;
     std::string who = "null";
     uint64_t sample = 0;
     Vec3 targetStart, forward, nearestOffset;
     float initialGapCm = 0, minClearanceCm = std::numeric_limits<float>::max(), retreatCm = 0;
+    float previewAdvanceCm = 0, previewContactMs = 0, previewCpuMs = 0, previewApproachCm = std::numeric_limits<float>::infinity();
     bool sampled = false, jumpback = false;
     } diagnostic;
   };
@@ -215,7 +230,7 @@ Vec3 Npc::GoTo::target() const {
 
 bool Npc::GoTo::isClose(const Npc& self, float dist) const {
   if(flag==GT_Enemy)
-    return self.fghAlgo.isInWRange(self, *npc, self.owner.script()); //need to be consistent with implAttack
+    return self.fghAlgo.isInNativeWRange(self, *npc, self.owner.script()); // consistent with native approach
   if(npc!=nullptr && pointDistance>0.f && !self.canSeeNpc(*npc,true))
     return false;
   if(npc!=nullptr)
@@ -1398,6 +1413,245 @@ void Npc::updateMeleeBenchBlade() {
     }
   }
 
+void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, bool normalY) const {
+  if(!meleeShadow)
+    meleeShadow = std::make_unique<MeleeShadow>();
+  auto& shadow = *meleeShadow;
+  if(std::any_of(shadow.windows.begin(),shadow.windows.end(),[&](const MeleeShadow::Window& w) {
+       return w.sequence==seq && w.length==length && w.normalY==normalY;
+       }))
+    return;
+  const auto mode = weaponState();
+  const auto* skeleton = visual.visualSkeleton();
+  const auto& data = *seq->data;
+  // A scratch pose samples the selected MAN without changing the actor's
+  // animation clocks, events or RNG.
+  Pose sampled;
+  sampled.setSkeleton(skeleton);
+  AnimationSolver solver;
+  solver.setSkeleton(skeleton);
+  sampled.startAnim(solver,seq,0,BS_HIT,Pose::Force,0);
+  const auto& pose = sampled;
+  // Sample the actual MAN hand path in the actor's frame. Locomotion cannot
+  // open a stationary blade's window. Adjacent optimal tags partition combos.
+  const auto root = skeleton->findRootNode();
+  const auto right = skeleton->findNode(mode==WeaponState::Fist ? "BIP01 R HAND" : "ZS_RIGHTHAND");
+  const auto left = skeleton->findNode("BIP01 L HAND");
+  if(right>=pose.boneCount() || root>=pose.boneCount() || data.numFrames<2 || data.fpsRate<=0)
+    throw std::runtime_error("Melee shadow requires a sampled humanoid attack and hand bone");
+  std::vector<uint32_t> optimal;
+  for(const auto& event:data.events)
+    if(event.type==asset::MdsEventType::OPTIMAL_FRAME)
+      for(const auto frame:event.frames) {
+        // The same clamp as Sequence::processEvents, including truncated MAN ranges.
+        const auto clamped = frame<int32_t(data.firstFrame) ? 0u :
+                             (int64_t(frame)>=int64_t(data.firstFrame)+data.numFrames ? data.numFrames-1 :
+                              (frame>int32_t(data.lastFrame) ? data.lastFrame-data.firstFrame : uint32_t(frame)-data.firstFrame));
+        optimal.push_back(seq->reverse ? data.numFrames-1-clamped : clamped);
+        }
+  std::sort(optimal.begin(),optimal.end());
+  optimal.erase(std::unique(optimal.begin(),optimal.end()),optimal.end());
+  std::vector<float> rightSpeed(data.numFrames,0), leftSpeed(data.numFrames,0), rightReach(data.numFrames,0), leftReach(data.numFrames,0);
+  const auto sampleSpeeds = [&](size_t hand,std::vector<float>& speeds,std::vector<float>& reach) {
+    Vec3 previous;
+    for(uint32_t frame=0;frame<data.numFrames;++frame) {
+      const float progress = float(frame)/float(data.numFrames-1);
+      Matrix4x4 matrix;
+      if(!pose.animRelative(seq->name,seq->reverse ? 1.f-progress : progress,root,hand,matrix))
+        throw std::runtime_error("Cannot sample melee shadow attack hand");
+      Vec3 point(mode==WeaponState::Fist ? 0.f : -length,0,0);
+      matrix.project(point);
+      reach[frame] = Vec2(point.x,point.z).length();
+      if(frame>0)
+        speeds[frame] = (point-previous).length()*data.fpsRate;
+      previous = point;
+      }
+    speeds[0] = speeds[1];
+    };
+  sampleSpeeds(right,rightSpeed,rightReach);
+  if(mode==WeaponState::Fist && left<pose.boneCount())
+    sampleSpeeds(left,leftSpeed,leftReach);
+  for(uint32_t index=0;index<optimal.size();++index) {
+    const auto opt = optimal[index];
+    const uint32_t lo = index==0 ? 0 : (optimal[index-1]+opt)/2+1;
+    const uint32_t hi = index+1==optimal.size() ? data.numFrames-1 : (opt+optimal[index+1])/2;
+    const float rpeak = *std::max_element(rightSpeed.begin()+lo,rightSpeed.begin()+hi+1);
+    const float lpeak = *std::max_element(leftSpeed.begin()+lo,leftSpeed.begin()+hi+1);
+    const bool useLeft = mode==WeaponState::Fist && lpeak>rpeak;
+    const auto& speeds = useLeft ? leftSpeed : rightSpeed;
+    const float peak = std::max(rpeak,lpeak);
+    const float threshold = std::max(100.f,peak*.25f);
+    uint32_t first = opt, last = opt;
+    while(first>lo && speeds[first]>=threshold)
+      --first;
+    while(last<hi && speeds[last+1]>=threshold)
+      ++last;
+    // A low-speed optimal frame still has its own adjacent sample interval.
+    if(first==last) {
+      first = first>lo ? first-1 : first;
+      last = last<hi ? last+1 : last;
+      }
+    const uint32_t end = seq->reverse ? std::max(last+1,opt+2) : last+1;
+    shadow.windows.push_back({seq,length,index,first,opt,last,float(first)*1000.f/data.fpsRate,
+                              float(opt)*1000.f/data.fpsRate,float(end)*1000.f/data.fpsRate,
+                              peak,threshold,useLeft,normalY,float(opt+(seq->reverse ? 1u : 0u))*1000.f/data.fpsRate,
+                              *std::max_element((useLeft ? leftReach : rightReach).begin()+first,(useLeft ? leftReach : rightReach).begin()+last+1)});
+    }
+  }
+
+Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Pose::CombatLayer& attack) const {
+  MeleeReach result;
+  result.target = &target;
+  result.sequence = attack.sequence;
+  result.tick = owner.tickCount();
+  result.origin = position();
+  result.targetOrigin = target.position();
+  result.yaw = angle;
+  const auto mode = weaponState();
+  const auto* item = mode==WeaponState::Fist ? nullptr : invent.activeWeapon();
+  float length = 12.f;
+  bool normalY = true;
+  if(item!=nullptr) {
+    const auto* mesh = Resources::loadMesh(item->handle().visual);
+    if(mesh==nullptr || mesh->bbox()[0].x>=-4.f)
+      throw std::runtime_error("Physical melee reach requires a weapon mesh extending along local -X");
+    length = -mesh->bbox()[0].x;
+    const auto extent = mesh->bbox()[1]-mesh->bbox()[0];
+    normalY = extent.y<=extent.z;
+    }
+  cacheMeleeShadowWindows(attack.sequence,length,normalY);
+  const MeleeShadow::Window* selected = nullptr;
+  const auto combo = uint32_t(sampled.comboLength());
+  for(const auto& window:meleeShadow->windows)
+    if(window.sequence==attack.sequence && window.length==length && window.normalY==normalY &&
+       (selected==nullptr || (window.index<=combo && window.index>selected->index)))
+      selected = &window;
+  if(selected==nullptr)
+    throw std::runtime_error("Physical melee reach requires an active attack window");
+  const auto window = *selected;
+  result.window = window.index;
+  auto direction = target.position()-position();
+  direction.y = 0;
+  const float distance = direction.length();
+  if(distance<=0) {
+    result.approachCm = 0;
+    return result;
+    }
+  direction /= distance;
+  // Rebase both read-only copies to this tick's transforms. Animation may still
+  // carry the preceding frame's position/yaw when native movement turns to hit.
+  sampled.setObjectMatrix(mkPositionMatrix(),false);
+  sampled.setBlendLog(false);
+  Pose targetPose = target.visual.pose();
+  targetPose.setBlendLog(false);
+  const auto targetMatrix = target.mkPositionMatrix();
+  targetPose.setObjectMatrix(targetMatrix,false);
+  targetPose.update(owner.tickCount(),true);
+  std::vector<HitZones::Posed> zones;
+  const float scale = Vec3(targetMatrix.at(0,0),targetMatrix.at(0,1),targetMatrix.at(0,2)).length();
+  target.visual.hitZoneShape().posed(targetPose.transform(),targetPose.boneCount(),scale,zones);
+  std::vector<MeleeBodyCapsule> body;
+  for(const auto& zone:zones)
+    body.push_back({zone.a,zone.b,zone.r,zone.bone,uint8_t(zone.zone)});
+  const double activeBegin = double(attack.start)+double(window.beginMs)/attack.speed;
+  const double activeEnd = double(attack.start)+double(window.endMs)/attack.speed;
+  if(activeEnd<=double(owner.tickCount()))
+    return result;
+  // Half-MAN-frame samples preserve the native blend, height and lateral lane.
+  // No events, actor clocks or RNG are advanced by Pose::update on these copies.
+  const auto interval = std::max<uint64_t>(1,uint64_t(500.f/(attack.sequence->data->fpsRate*attack.speed)));
+  const auto last = uint64_t(std::ceil(activeEnd))-1;
+  const auto hand = sampled.findNode(mode==WeaponState::Fist ? (window.left ? "BIP01 L HAND" : "BIP01 R HAND") : "ZS_RIGHTHAND");
+  const auto forearm = sampled.findNode(window.left ? "BIP01 L FOREARM" : "BIP01 R FOREARM");
+  const auto finger = sampled.findNode(window.left ? "BIP01 L FINGER0" : "BIP01 R FINGER0");
+  std::vector<MeleeBladeSegment> blades;
+  const auto object = mkPositionMatrix();
+  Vec3 rootMotion;
+  auto previous = owner.tickCount();
+  for(uint64_t tick=owner.tickCount();tick<=last;) {
+    if(tick>previous) {
+      Vec3 displacement;
+      mvAlgo.applyRotation(displacement,sampled.animMoveSpeed(tick,tick-previous));
+      displacement.y = 0; // the ordinary human CharacterVirtual root policy
+      rootMotion += displacement;
+      auto moved = object;
+      moved.set(3,0,object.at(3,0)+rootMotion.x);
+      moved.set(3,2,object.at(3,2)+rootMotion.z);
+      sampled.setObjectMatrix(moved,false);
+      }
+    previous = tick;
+    sampled.update(tick,true);
+    if(double(tick)>=activeBegin && hand<sampled.boneCount()) {
+      const auto at = [&](size_t bone,Vec3 point) { sampled.bone(bone).project(point); return point; };
+      const auto grip = at(hand,{});
+      blades.clear();
+      if(mode==WeaponState::Fist) {
+        const auto knuckle = finger<sampled.boneCount() ? at(finger,{}) : grip;
+        blades.push_back({grip,knuckle,{0,1,0},6.f});
+        if(forearm<sampled.boneCount()) blades.push_back({at(forearm,{}),grip,{0,1,0},4.f});
+        }
+      else blades.push_back({grip,at(hand,{-length,0,0}),{0,1,0},2.f});
+      const float advance = owner.physic()->meleeBladeAdvance(blades,body,direction,distance+length);
+      const float elapsed = float(tick-owner.tickCount());
+      const float gap = advance-std::min(60.f,.3f*elapsed);
+      if(gap<result.approachCm) {
+        result.approachCm = gap;
+        result.stepCm = advance;
+        result.contactMs = elapsed;
+        }
+      }
+    if(tick==last) break;
+    tick = std::min(last,tick+interval);
+    }
+  return result;
+  }
+
+const Npc::MeleeReach& Npc::previewMeleeReach(const Npc& target, Anim attack) const {
+  if(!meleeShadow)
+    meleeShadow = std::make_unique<MeleeShadow>();
+  auto& shadow = *meleeShadow;
+  auto& cached = shadow.reach[size_t(attack)-size_t(Anim::Attack)];
+  const auto* requested = visual.meleeAttackSequence(attack,weaponState(),walkMode());
+  if(cached.tick==owner.tickCount() && cached.target==&target && cached.requested==requested &&
+     cached.origin==position() && cached.targetOrigin==target.position() && cached.yaw==angle)
+    return cached;
+  const auto started = std::chrono::steady_clock::now();
+  Pose sampled;
+  cached = {};
+  cached.target = &target;
+  cached.requested = requested;
+  cached.tick = owner.tickCount();
+  cached.origin = position();
+  cached.targetOrigin = target.position();
+  cached.yaw = angle;
+  if(visual.previewMeleeAttack(*this,attack,weaponState(),walkMode(),owner.tickCount(),sampled)) {
+    std::optional<Pose::CombatLayer> next;
+    for(const auto& layer:sampled.combatLayers(owner.tickCount()))
+      if(layer.sequence->isAttackAnim())
+        next = layer;
+    if(next) {
+      cached = sampleMeleeReach(target,sampled,*next);
+      cached.requested = requested;
+      }
+    }
+  else {
+    // Preserve the native animation gate while the current layer cannot yield.
+    // The real doAttack still rejects it; no physical contact is fabricated.
+    cached.approachCm = 0;
+    }
+  cached.cpuMs = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  owner.physic()->accountMeleeReachTime(cached.cpuMs);
+  shadow.reachCpuMs += cached.cpuMs;
+  shadow.reachCpuMaxMs = std::max(shadow.reachCpuMaxMs,cached.cpuMs);
+  ++shadow.reachQueries;
+  return cached;
+  }
+
+float Npc::meleeBladeAttackDistance(const Npc& target, Anim attack) const {
+  const auto& reach = previewMeleeReach(target,attack);
+  return std::isfinite(reach.approachCm) ? std::max(0.f,fightDistanceTo(target).length()-reach.approachCm) : 0.f;
+  }
+
 void Npc::syncMeleeShadowSwing() {
   const auto mode = weaponState();
   if(meleeShadowSuspended || !(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) || !isHuman() || isDown() ||
@@ -1434,78 +1688,11 @@ void Npc::syncMeleeShadowSwing() {
     meleeShadow = std::make_unique<MeleeShadow>();
   auto& shadow = *meleeShadow;
   const auto* seq = attack->sequence;
-  const auto& data = *seq->data;
   const auto combo = uint32_t(pose.comboLength());
   const auto cached = [&](const MeleeShadow::Window& w) {
     return w.sequence==seq && w.length==length && w.normalY==normalY;
     };
-  if(std::none_of(shadow.windows.begin(),shadow.windows.end(),cached)) {
-    // Sample the actual MAN hand path in the actor's frame. Locomotion cannot
-    // open a stationary blade's window. Adjacent optimal tags partition combos.
-    const auto root = skeleton->findRootNode();
-    const auto right = skeleton->findNode(mode==WeaponState::Fist ? "BIP01 R HAND" : "ZS_RIGHTHAND");
-    const auto left = skeleton->findNode("BIP01 L HAND");
-    if(right>=pose.boneCount() || root>=pose.boneCount() || data.numFrames<2 || data.fpsRate<=0)
-      throw std::runtime_error("Melee shadow requires a sampled humanoid attack and hand bone");
-    std::vector<uint32_t> optimal;
-    for(const auto& event:data.events)
-      if(event.type==asset::MdsEventType::OPTIMAL_FRAME)
-        for(const auto frame:event.frames) {
-          // The same clamp as Sequence::processEvents, including truncated MAN ranges.
-          const auto clamped = frame<int32_t(data.firstFrame) ? 0u :
-                               (int64_t(frame)>=int64_t(data.firstFrame)+data.numFrames ? data.numFrames-1 :
-                                (frame>int32_t(data.lastFrame) ? data.lastFrame-data.firstFrame : uint32_t(frame)-data.firstFrame));
-          optimal.push_back(seq->reverse ? data.numFrames-1-clamped : clamped);
-          }
-    std::sort(optimal.begin(),optimal.end());
-    optimal.erase(std::unique(optimal.begin(),optimal.end()),optimal.end());
-    std::vector<float> rightSpeed(data.numFrames,0), leftSpeed(data.numFrames,0), rightReach(data.numFrames,0), leftReach(data.numFrames,0);
-    const auto sampleSpeeds = [&](size_t hand,std::vector<float>& speeds,std::vector<float>& reach) {
-      Vec3 previous;
-      for(uint32_t frame=0;frame<data.numFrames;++frame) {
-        const float progress = float(frame)/float(data.numFrames-1);
-        Matrix4x4 matrix;
-        if(!pose.animRelative(seq->name,seq->reverse ? 1.f-progress : progress,root,hand,matrix))
-          throw std::runtime_error("Cannot sample melee shadow attack hand");
-        Vec3 point(mode==WeaponState::Fist ? 0.f : -length,0,0);
-        matrix.project(point);
-        reach[frame] = Vec2(point.x,point.z).length();
-        if(frame>0)
-          speeds[frame] = (point-previous).length()*data.fpsRate;
-        previous = point;
-        }
-      speeds[0] = speeds[1];
-      };
-    sampleSpeeds(right,rightSpeed,rightReach);
-    if(mode==WeaponState::Fist && left<pose.boneCount())
-      sampleSpeeds(left,leftSpeed,leftReach);
-    for(uint32_t index=0;index<optimal.size();++index) {
-      const auto opt = optimal[index];
-      const uint32_t lo = index==0 ? 0 : (optimal[index-1]+opt)/2+1;
-      const uint32_t hi = index+1==optimal.size() ? data.numFrames-1 : (opt+optimal[index+1])/2;
-      const float rpeak = *std::max_element(rightSpeed.begin()+lo,rightSpeed.begin()+hi+1);
-      const float lpeak = *std::max_element(leftSpeed.begin()+lo,leftSpeed.begin()+hi+1);
-      const bool useLeft = mode==WeaponState::Fist && lpeak>rpeak;
-      const auto& speeds = useLeft ? leftSpeed : rightSpeed;
-      const float peak = std::max(rpeak,lpeak);
-      const float threshold = std::max(100.f,peak*.25f);
-      uint32_t first = opt, last = opt;
-      while(first>lo && speeds[first]>=threshold)
-        --first;
-      while(last<hi && speeds[last+1]>=threshold)
-        ++last;
-      // A low-speed optimal frame still has its own adjacent sample interval.
-      if(first==last) {
-        first = first>lo ? first-1 : first;
-        last = last<hi ? last+1 : last;
-        }
-      const uint32_t end = seq->reverse ? std::max(last+1,opt+2) : last+1;
-      shadow.windows.push_back({seq,length,index,first,opt,last,float(first)*1000.f/data.fpsRate,
-                                float(opt)*1000.f/data.fpsRate,float(end)*1000.f/data.fpsRate,
-                                peak,threshold,useLeft,normalY,float(opt+(seq->reverse ? 1u : 0u))*1000.f/data.fpsRate,
-                                *std::max_element((useLeft ? leftReach : rightReach).begin()+first,(useLeft ? leftReach : rightReach).begin()+last+1)});
-      }
-    }
+  cacheMeleeShadowWindows(seq,length,normalY);
   const MeleeShadow::Window* window = nullptr;
   for(const auto& w:shadow.windows)
     if(cached(w) && (window==nullptr || (w.index<=combo && w.index>window->index)))
@@ -1543,24 +1730,41 @@ void Npc::syncMeleeShadowSwing() {
   shadow.stepRequestedCm = shadow.stepMovedCm = 0;
   shadow.diagnostic = {};
   if(TestBench::bodyTracing() && currentTarget!=nullptr) {
-    shadow.diagnostic.target = owner.npcId(currentTarget);
+    shadow.diagnostic.target = currentTarget;
     shadow.diagnostic.who = meleeShadowWho(currentTarget);
     }
   if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget)) {
-    // Distance to the near surface of the target's actual body capsules.
-    std::vector<HitZones::Posed> targetZones;
-    currentTarget->visual.hitZonesPosed(targetZones);
-    float distance = std::numeric_limits<float>::max();
-    for(const auto& zone:targetZones)
-      for(const auto& point: {zone.a,zone.b})
-        distance = std::min(distance,Vec2(point.x-x,point.z-z).length()-zone.r);
-    const float gap = distance-selected.reachCm;
-    if(gap>0.f && gap<=60.f) {
+    const MeleeReach* reach = nullptr;
+    for(const auto& cached:shadow.reach)
+      if(cached.tick==owner.tickCount() && cached.target==currentTarget && cached.sequence==seq &&
+         cached.window==selected.index && cached.origin==position() && cached.targetOrigin==currentTarget->position() && cached.yaw==angle) {
+        reach = &cached;
+        break;
+        }
+    MeleeReach active;
+    if(reach==nullptr) {
+      const auto started = std::chrono::steady_clock::now();
+      // The actor already started this attack: preview its current layer once,
+      // without restarting it or attempting another combo on the private copy.
+      Pose sampled = pose;
+      active = sampleMeleeReach(*currentTarget,sampled,*attack);
+      active.cpuMs = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+      owner.physic()->accountMeleeReachTime(active.cpuMs);
+      shadow.reachCpuMs += active.cpuMs;
+      shadow.reachCpuMaxMs = std::max(shadow.reachCpuMaxMs,active.cpuMs);
+      ++shadow.reachQueries;
+      reach = &active;
+      }
+    shadow.diagnostic.previewAdvanceCm = reach->stepCm;
+    shadow.diagnostic.previewContactMs = reach->contactMs;
+    shadow.diagnostic.previewCpuMs = reach->cpuMs;
+    shadow.diagnostic.previewApproachCm = reach->approachCm;
+    if(reach->approachCm<=0.f && reach->stepCm>0.f && reach->stepCm<=60.f) {
       auto direction = currentTarget->position()-position();
       direction.y = 0;
       if(direction.length()>0.f) {
-        shadow.stepRemaining = Vec3::normalize(direction)*gap;
-        shadow.stepRequestedCm = gap;
+        shadow.stepRemaining = Vec3::normalize(direction)*reach->stepCm;
+        shadow.stepRequestedCm = reach->stepCm;
         }
       }
     }
@@ -1617,7 +1821,7 @@ void Npc::updateMeleeShadow() {
   const double activeEnd   = double(shadow.start)+double(window.endMs)/shadow.speed;
   if(TestBench::bodyTracing() && double(owner.tickCount())>=activeBegin && double(owner.tickCount())<activeEnd) {
     auto& diagnostic = shadow.diagnostic;
-    if(const auto* target = owner.npcById(diagnostic.target)) {
+    if(const auto* target = diagnostic.target; target!=nullptr && owner.npcId(target)!=uint32_t(-1)) {
       std::vector<HitZones::Posed> targetZones;
       target->visual.hitZonesPosed(targetZones);
       const auto root = position();
@@ -1695,7 +1899,7 @@ auto Npc::meleeStep(uint64_t dt) -> Vec3 {
   if(!Gothic::physicsFlags().meleePhysicsHits || !meleeShadow || !meleeShadow->window || meleeShadow->stopped)
     return {};
   auto& swing = *meleeShadow;
-  const double end = double(swing.start)+200.;
+  const double end = double(swing.tick)+200.;
   if(double(owner.tickCount())>end) {
     swing.stepRemaining = {};
     return {};
@@ -1905,6 +2109,13 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                  ",\"sample_time_ms\":" + number(value.sample) +
                  ",\"sampled\":" + (value.sampled ? "true" : "false") +
                  ",\"reach_cm\":" + number(window.reachCm) +
+                 ",\"preview_advance_cm\":" + number(value.previewAdvanceCm) +
+                 ",\"preview_contact_ms\":" + number(value.previewContactMs) +
+                 ",\"preview_approach_cm\":" + (std::isfinite(value.previewApproachCm) ? number(value.previewApproachCm) : "null") +
+                 ",\"preview_cpu_ms\":" + number(value.previewCpuMs) +
+                 ",\"reach_queries\":" + number(shadow.reachQueries) +
+                 ",\"reach_cpu_total_ms\":" + number(shadow.reachCpuMs) +
+                 ",\"reach_cpu_max_ms\":" + number(shadow.reachCpuMaxMs) +
                  ",\"initial_gap_cm\":" + (value.sampled ? number(value.initialGapCm) : "null") +
                  ",\"min_clearance_cm\":" + (value.minClearanceCm<std::numeric_limits<float>::max() ? number(value.minClearanceCm) : "null") +
                  ",\"nearest_offset_forward_up_side_cm\":" + meleeShadowPoint(value.nearestOffset) +
@@ -3105,7 +3316,8 @@ bool Npc::implWhirlTo(const Npc &oth, uint64_t dt) {
 bool Npc::implGoTo(uint64_t dt) {
   float dist = 0;
   if(go2.npc) {
-    dist = fghAlgo.prefferedAttackDistance(*this,*go2.npc,owner.script());
+    dist = go2.nativeCombatTarget==go2.npc ? fghAlgo.nativeAttackDistance(*this,*go2.npc,owner.script()) :
+                                              fghAlgo.prefferedAttackDistance(*this,*go2.npc,owner.script());
     } else {
     // use smaller threshold, to avoid edge-looping in script
     dist = MoveAlgo::closeToPointThreshold*0.5f;
@@ -3260,7 +3472,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     // separate shared policy mask invalid. Hidden geometry never enters capture features.
     auto resolver=nativeResolution;
     resolver.focus5=fghAlgo.isInFocusAngle(*this,*currentTarget,5.f);
-    resolver.inWRange=fghAlgo.isInWRange(*this,*currentTarget,owner.script());
+    resolver.inWRange=fghAlgo.isInNativeWRange(*this,*currentTarget,owner.script());
     trajectoryEffective=FightAlgo::resolveNative(act,resolver);
     // Native TURN uses the same approach executor as MOVE outside weapon range. Inside
     // range that branch only rotates. Policy TurnToTarget uses TURN2HIT, so labels must
@@ -3314,7 +3526,20 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 #endif
 
     static const Anim ani[4] = {Anim::Attack, Anim::AttackL, Anim::AttackR};
-    if((act!=FightAlgo::MV_ATTACK && bodyState()!=BS_RUN) &&
+    const bool bladeRange = !bodyOverride && Gothic::physicsFlags().meleePhysicsHits && isHuman() &&
+                            (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H);
+    if(bladeRange && !fghAlgo.isInNativeWRange(*this,*currentTarget,owner.script(),act)) {
+      // Retain this selected attack while closing its actual forward blade gap.
+      traceCombatGate("attack_approach_blade_reach");
+      setAnim(AnimationSolver::Move);
+      go2.set(currentTarget,GT_Enemy);
+      go2.nativeCombatTarget = currentTarget;
+      mvAlgo.tick(dt,MoveAlgo::FaiMove);
+      go2.clear();
+      wayPath.clear();
+      return true;
+      }
+    if(!bladeRange && (act!=FightAlgo::MV_ATTACK && bodyState()!=BS_RUN) &&
        !fghAlgo.isInWRange(*this,*currentTarget,owner.script())) {
       consume();
       return true;
@@ -3468,7 +3693,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
       }
 
     const bool prGRange = fghAlgo.isInGRange(*this, *currentTarget, owner.script());
-    const bool prWRange = fghAlgo.isInWRange(*this, *currentTarget, owner.script());
+    const bool prWRange = fghAlgo.isInNativeWRange(*this, *currentTarget, owner.script());
     const auto prBs     = bs;
 
     const float distance = qDistTo(*currentTarget);
@@ -3514,7 +3739,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
       }
 
     const bool isGRange = fghAlgo.isInGRange(*this, *currentTarget, owner.script());
-    const bool isWRange = fghAlgo.isInWRange(*this, *currentTarget, owner.script());
+    const bool isWRange = fghAlgo.isInNativeWRange(*this, *currentTarget, owner.script());
     const bool isFocus  = fghAlgo.isInFocusAngle(*this, *currentTarget, 5.f);
 
     if((isWRange || (isGRange!=prGRange) || prBs!=bodyStateMasked()) && isFocus) {

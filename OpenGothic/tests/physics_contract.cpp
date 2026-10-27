@@ -4025,6 +4025,26 @@ namespace {
     requireNear(DamageCalculator::meleeMultiplier(1000,1000,1,90,2),full*.36f,.0001f,"third target must receive 0.36 of the physical multiplier");
 
     {
+      CollisionWorld reach;
+      const std::vector<MeleeBladeSegment> blade{{{0,100,0},{100,100,0},{0,0,1},2.f}};
+      const std::vector<MeleeBodyCapsule> target{{{130,90,0},{130,110,0},6.f,0,1}};
+      requireNear(reach.meleeBladeAdvance(blade,target,{1,0,0},40),22.f,.02f,
+                  "blade reach must retain the capsule contact distance");
+      require(!std::isfinite(reach.meleeBladeAdvance(blade,target,{1,0,0},20)),
+              "blade reach must reject a target beyond the allowed advance");
+      require(!std::isfinite(reach.meleeBladeAdvance({{{0,100,30},{100,100,30},{0,0,1},2.f}},target,{1,0,0},60)),
+              "blade reach must reject a lateral miss despite sufficient forward projection");
+      require(!std::isfinite(reach.meleeBladeAdvance({{{0,150,0},{100,150,0},{0,0,1},2.f}},target,{1,0,0},60)),
+              "blade reach must reject a height miss despite sufficient forward projection");
+      auto targets=target;
+      targets.insert(targets.begin(),{{160,90,0},{160,110,0},6.f,1,1});
+      requireNear(reach.meleeBladeAdvance(blade,targets,{1,0,0},80),22.f,.02f,
+                  "blade reach must choose the nearest actual capsule contact");
+      requireNear(reach.meleeBladeAdvance(blade,{{{100,90,0},{100,110,0},6.f,0,1}},{1,0,0},60),0.f,.0001f,
+                  "a blade already touching its target needs no advance");
+      }
+
+    {
       CollisionWorld shadow;
       int attackerId=0,firstId=0,secondId=0,missId=0;
       auto* attacker=reinterpret_cast<Npc*>(&attackerId);
