@@ -6,13 +6,14 @@
 #include "asset/worldtypes.h"
 #include <zenkit/DaedalusScript.hh>
 #include <zenkit/addon/daedalus.hh>
+#include "game/definitions/definitiontypes.h"
 
 class Material final {
   public:
     Material()=default;
     Material(const asset::Material& m, bool enableAlphaTest, bool requireAlphaTest = false);
     Material(const asset::VisualDecal& decal);
-    Material(const zenkit::IParticleEffect &src);
+    Material(const Def::ParticleEffect &src);
 
     enum AlphaFunc:uint8_t {
       Solid,

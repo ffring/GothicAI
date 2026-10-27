@@ -1,4 +1,8 @@
 #include "commandline.h"
+#include "gothic.h"
+#include "game/constants.h"
+#include "graphics/pfx/particlefx.h"
+#include "graphics/visualfx.h"
 #include "gltfmesh.h"
 #include "graphics/shaders.h"
 #include "graphics/mesh/protomesh.h"
@@ -19,6 +23,8 @@
 #include <zenkit/Font.hh>
 #include <zenkit/Model.hh>
 #include <zenkit/Vfs.hh>
+#include <zenkit/DaedalusVm.hh>
+#include <zenkit/addon/daedalus.hh>
 #include <miniz.h>
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
@@ -26,10 +32,12 @@
 
 #include <array>
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -1487,10 +1495,178 @@ void maskBc1Policy(const Fixture& fixture) {
   multiModelGpuCases(fixture,device);
   device.waitIdle();
   }
+
+// Short numeric receipt of a few derived particle and visual effects of the actual installation,
+// through public Gothic, ParticleFx and VisualFx calls only, so the same code builds before and after
+// the definition records change owner. Floats by raw bits, fixed order; no addresses or debug-name
+// pointers. Complete raw-record coverage is the CPU oracle in basecontent, not this receipt.
+std::string receiptBits(float v) {
+  char text[9] = {};
+  std::snprintf(text,sizeof(text),"%08x",std::bit_cast<uint32_t>(v));
+  return text;
+  }
+
+std::string particleReceipt(const ParticleFx& p) {
+  std::string r = p.dbgName;
+  const auto f = [&r](const char* k, float v) { r += std::string(" ")+k+"="+receiptBits(v); };
+  const auto n = [&r](const char* k, uint64_t v) { r += std::string(" ")+k+"="+std::to_string(v); };
+  const auto s = [&r](const char* k, std::string_view v) { r += std::string(" ")+k+"="+std::to_string(v.size())+":"+std::string(v); };
+  f("pps",p.ppsValue); n("ppsKeys",p.ppsScaleKeys.size());
+  if(!p.ppsScaleKeys.empty()) { f("ppsKey0",p.ppsScaleKeys.front()); f("ppsKeyN",p.ppsScaleKeys.back()); }
+  n("looping",p.ppsIsLooping); n("smooth",p.ppsIsSmooth); f("ppsFps",p.ppsFPS);
+  s("createEm",p.ppsCreateEm!=nullptr ? std::string_view(p.ppsCreateEm->dbgName) : std::string_view("-"));
+  n("createEmDelay",p.ppsCreateEmDelay);
+  n("shp",uint64_t(p.shpType)); n("shpFor",uint64_t(p.shpFOR)); f("dimX",p.shpDim.x); f("dimY",p.shpDim.y); f("dimZ",p.shpDim.z);
+  n("shpMesh",p.shpMesh!=nullptr); s("shpMeshName",p.shpMesh_S); n("shpKeys",p.shpScaleKeys.size());
+  n("dir",uint64_t(p.dirMode)); f("head",p.dirAngleHead); f("elev",p.dirAngleElev);
+  f("vel",p.velAvg); f("life",p.lspPartAvg); f("gravityY",p.flyGravity.y);
+  n("alpha",uint64_t(p.visMaterial.alpha)); n("tex",p.visMaterial.tex!=nullptr);
+  if(p.visMaterial.tex!=nullptr) { n("texW",uint64_t(p.visMaterial.tex->w())); n("texH",uint64_t(p.visMaterial.tex->h())); }
+  n("frames",p.visMaterial.frames.size()); n("aniInv",p.visMaterial.texAniFPSInv);
+  f("colorStart",p.visTexColorStart.x); f("colorEnd",p.visTexColorEnd.x);
+  f("sizeX",p.visSizeStart.x); f("sizeY",p.visSizeStart.y); f("sizeEnd",p.visSizeEndScale);
+  f("alphaStart",p.visAlphaStart); f("alphaEnd",p.visAlphaEnd);
+  n("trails",p.hasTrails()); n("decal",p.isDecal()); n("preferred",p.prefferedTime);
+  n("maxLifetime",p.maxLifetime()); n("effectPreferred",p.effectPrefferedTime());
+  f("maxPps",p.maxPps()); f("ppsAt1000",p.ppsScale(1000)); f("shpAt1000",p.shpScale(1000));
+  return r;
+  }
+
+std::string keyReceipt(const VisualFx::Key* k) {
+  if(k==nullptr)
+    return "-";
+  return (k->visName!=nullptr ? k->visName->dbgName : std::string("-"))+","+receiptBits(k->pfx_ppsValue)+","+
+         receiptBits(k->pfx_scTime)+","+receiptBits(k->pfx_visAlphaStart)+","+receiptBits(k->lightRange)+","+
+         k->sfxID+","+std::to_string(k->emCreateFXID!=nullptr)+","+std::to_string(k->emTrjMode.has_value())+","+
+         std::to_string(k->emFXLifeSpan);
+  }
+
+std::string visualReceipt(const VisualFx& v) {
+  std::string r;
+  const auto f = [&r](const char* k, float x) { r += std::string(" ")+k+"="+receiptBits(x); };
+  const auto n = [&r](const char* k, uint64_t x) { r += std::string(" ")+k+"="+std::to_string(x); };
+  const auto s = [&r](const char* k, std::string_view x) { r += std::string(" ")+k+"="+std::to_string(x.size())+":"+std::string(x); };
+  s("vis",v.visName_S); n("trj",uint64_t(v.emTrjMode)); s("origin",v.emTrjOriginNode);
+  r += " numKeys="+std::to_string(v.emTrjNumKeys); f("range",v.emTrjTargetRange); n("loop",uint64_t(v.emTrjLoopMode));
+  n("lifespan",v.emFXLifeSpan); n("investNext",v.emInvestNextKeyDuration); n("trigger",v.emFXTriggerDelay);
+  n("collDyn",uint64_t(v.emActionCollDyn)); n("collStat",uint64_t(v.emActionCollStat));
+  s("create",v.emFXCreate!=nullptr ? std::string_view(v.emFXCreate->visName_S) : std::string_view("-"));
+  if(v.emFXCreate!=nullptr) n("createLifespan",v.emFXCreate->emFXLifeSpan);
+  n("collStatFx",v.emFXCollStat!=nullptr); n("collDynFx",v.emFXCollDyn!=nullptr);
+  s("user0",v.userString[0]); s("sfx",v.sfxID); f("secsPerDamage",v.secsPerDamage);
+  n("preferred",v.effectPrefferedTime());
+  for(int type=0; type<int(SpellFxKey::Count); ++type)
+    r += " key"+std::to_string(type)+"="+keyReceipt(v.key(SpellFxKey(type)));
+  int32_t invest = 0;
+  while(v.key(SpellFxKey::Invest,invest+1)!=nullptr)
+    ++invest;
+  r += " invest="+std::to_string(invest)+" invest1="+keyReceipt(v.key(SpellFxKey::Invest,1));
+  return r;
+  }
+
+// The original records of one definition class, for choosing receipt cases only: the program as
+// Gothic::loadScript returns it, bound to the original ZenKit class in a local VM. Initializers run on
+// the CPU here; no engine effect is constructed and no engine cache changes.
+template<class T>
+std::vector<std::pair<std::string,std::shared_ptr<T>>> originalRecords(Gothic& gothic, std::string_view dat,
+                                                                       std::string_view cls) {
+  auto script = gothic.loadScript(dat,ScriptLang::NONE);
+  T::register_(script);
+  zenkit::DaedalusVm vm(std::move(script),zenkit::DaedalusVmExecutionFlag::ALLOW_NULL_INSTANCE_ACCESS);
+  gothic.setupVmCommonApi(vm);
+  std::vector<zenkit::DaedalusSymbol*> symbols;
+  vm.enumerate_instances_by_class_name(cls,[&symbols](zenkit::DaedalusSymbol& sym) { symbols.push_back(&sym); });
+  std::vector<std::pair<std::string,std::shared_ptr<T>>> records;
+  for(auto* sym:symbols) {
+    try { records.emplace_back(sym->name(),vm.init_instance<T>(sym)); }
+    catch(const zenkit::DaedalusScriptError&) {}
+    }
+  return records;
+  }
+
+// GOTHIC_DIR and the caller's OPENGOTHIC_BASE. Runs before the toy fixture exists, so its
+// CommandLine, Resources and Gothic never overlap the fixture's. Prints "p13-effect" lines.
+void effectCases(const std::string& game, const std::string& base) {
+  setenv("OPENGOTHIC_BASE",base.c_str(),1);
+  setenv("OPENGOTHIC_CONTENT","",1);
+  setenv("OPENGOTHIC_TEXTURES","",1);
+  unsetenv("OPENGOTHIC_CENSUS");
+  setenv("TEMPEST_AUDIO_LOOPBACK","48000",1);
+  const char* args[]={"gothic-mesh-gltf-test","-g",game.c_str(),"-g2"};
+  CommandLine commandLine(4,args);
+  Tempest::VulkanApi api;
+  Tempest::Device device(api);
+  {
+    Resources resources(device);
+    Shaders shaders;
+    shaders.waitCompiler();
+    Gothic gothic;
+    gothic.isNpcInDialogFn=[](const Npc*) { return false; };
+    gothic.setupGlobalScripts();
+
+    // Cases: the first original record (symbol order) with each property.
+    std::string looping, mesh, keyed, linked;
+    for(const auto& [name,pfx]:originalRecords<zenkit::IParticleEffect>(gothic,"ParticleFx.dat","C_PARTICLEFX")) {
+      if(looping.empty() && pfx->pps_is_looping!=0)
+        looping = name;
+      if(mesh.empty() && pfx->shp_type_s=="MESH" && !pfx->shp_mesh_s.empty())
+        mesh = name;
+      }
+    auto vfxScript = gothic.loadScript("VisualFx.dat",ScriptLang::NONE);
+    const auto has = [&vfxScript](const std::string& sym) { return vfxScript.find_symbol_by_name(sym)!=nullptr; };
+    std::string anyKey;
+    for(const auto& [name,fx]:originalRecords<zenkit::IEffectBase>(gothic,"VisualFx.dat","CFX_BASE")) {
+      const bool key = has(name+"_KEY_OPEN") || has(name+"_KEY_INIT") || has(name+"_KEY_CAST") ||
+                       has(name+"_KEY_INVEST") || has(name+"_KEY_COLLIDE");
+      if(anyKey.empty() && key)
+        anyKey = name;
+      if(keyed.empty() && key && has(name+"_KEY_INVEST_1"))
+        keyed = name;
+      if(linked.empty() && !fx->em_fx_create_s.empty())
+        linked = name;
+      }
+    if(keyed.empty())
+      keyed = anyKey;
+    require(!looping.empty() && !keyed.empty() && !linked.empty(),
+            "effect receipt needs a looping particle, a keyed and a linked visual effect");
+
+    size_t cases = 0;
+    const auto particle = [&](const char* label, const std::string& name) {
+      const auto* p = gothic.loadParticleFx(name);
+      require(p!=nullptr,std::string("receipt particle must load: ")+name);
+      std::cout << "p13-effect pfx " << label << ' ' << name << ' ' << particleReceipt(*p) << '\n';
+      ++cases;
+      };
+    const auto visual = [&](const char* label, const std::string& name) {
+      const auto* v = gothic.loadVisualFx(name);
+      require(v!=nullptr,std::string("receipt visual effect must load: ")+name);
+      std::cout << "p13-effect vfx " << label << ' ' << name << visualReceipt(*v) << '\n';
+      ++cases;
+      };
+    particle("looping",looping);
+    if(!mesh.empty())
+      particle("mesh",mesh);
+    else
+      std::cout << "p13-effect pfx mesh none\n";
+    particle("pee","PFX_GAI_PEE");
+    visual("keyed",keyed);
+    visual("linked",linked);
+    std::cout << "p13-effect summary cases=" << cases << std::endl;
+    }
+  device.waitIdle();
+  }
 }
 
 int main() {
   try {
+    // The effect receipt uses the caller's installation and base: read them before the fixture
+    // points the environment at its own toy installation.
+    const char* gameDir = std::getenv("GOTHIC_DIR");
+    const char* baseDir = std::getenv("OPENGOTHIC_BASE");
+    const std::string game = gameDir!=nullptr ? gameDir : "";
+    const std::string base = baseDir!=nullptr ? baseDir : "";
+    if(!game.empty() && !base.empty())
+      effectCases(game,base);
     Fixture fixture;
     const auto root=fixture.root.string();
     const char* args[]={"gothic-mesh-gltf-test","-g",root.c_str()};

@@ -15,6 +15,7 @@
 
 #include <zenkit/addon/daedalus.hh>
 
+#include "game/definitions/definitiontypes.h"
 #include "game/definitions/visualfxdefinitions.h"
 #include "game/definitions/sounddefinitions.h"
 #include "game/definitions/cameradefinitions.h"
@@ -821,15 +822,15 @@ void Gothic::setupCommonScriptClasses(zenkit::DaedalusScript& sc) {
   registerOpaque  ("C_SVM"); // structure is very customizable, so better to use type-less mapping
   registerIfExists("C_MENU",         zenkit::IMenu::register_);
   registerIfExists("C_MENU_ITEM",    zenkit::IMenuItem::register_);
-  registerIfExists("CCAMSYS",        zenkit::ICamera::register_);
+  registerIfExists("CCAMSYS",        Def::Camera::register_);
   registerIfExists("C_MUSICSYS_CFG", zenkit::IMusicSystem::register_);
-  registerIfExists("C_MUSICTHEME",   zenkit::IMusicTheme::register_);
+  registerIfExists("C_MUSICTHEME",   Def::MusicTheme::register_);
   registerIfExists("C_MUSICJINGLE",  zenkit::IMusicJingle::register_);
-  registerIfExists("C_PARTICLEFX",   zenkit::IParticleEffect::register_);
-  registerIfExists("CFX_BASE",       zenkit::IEffectBase::register_);
-  registerIfExists("C_PARTICLEFXEMITKEY", zenkit::IParticleEffectEmitKey::register_);
+  registerIfExists("C_PARTICLEFX",   Def::ParticleEffect::register_);
+  registerIfExists("CFX_BASE",       Def::EffectBase::register_);
+  registerIfExists("C_PARTICLEFXEMITKEY", Def::ParticleEffectEmitKey::register_);
   registerOpaque  ("C_FIGHTAI"); // many mods get it wrong/corrupted. Opaque binding is one is a way to get around it
-  registerIfExists("C_SFX",          zenkit::ISoundEffect::register_);
+  registerIfExists("C_SFX",          Def::SoundEffect::register_);
   registerIfExists("C_SNDSYS_CFG",   zenkit::ISoundSystem::register_);
   }
 

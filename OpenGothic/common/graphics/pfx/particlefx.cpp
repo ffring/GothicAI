@@ -36,7 +36,7 @@ ParticleFx::ParticleFx(const Material& mat, const asset::VirtualObject& vob) {
   useEmittersFOR   = true;
   }
 
-ParticleFx::ParticleFx(const zenkit::IParticleEffect& src, std::string_view name)
+ParticleFx::ParticleFx(const Def::ParticleEffect& src, std::string_view name)
   :dbgName(name) {
   ppsValue            = std::max(0.f,src.pps_value);
   ppsScaleKeys        = loadArr(src.pps_scale_keys_s);

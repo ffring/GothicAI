@@ -14,11 +14,11 @@ CameraDefinitions::CameraDefinitions() {
 
   vm->enumerate_instances_by_class_name("CCAMSYS", [this, &vm](zenkit::DaedalusSymbol& s) {
     try {
-      auto cam = vm->init_instance<zenkit::ICamera>(&s);
+      auto cam = vm->init_instance<Def::Camera>(&s);
       cameras.emplace_back(s.name(), *cam);
       }
     catch(const zenkit::DaedalusScriptError&) {
-      // There was an error initializing the ICamera. Ignore it.
+      // There was an error initializing the Def::Camera. Ignore it.
       }
     });
 
@@ -51,7 +51,7 @@ CameraDefinitions::CameraDefinitions() {
     }
   }
 
-const zenkit::ICamera& CameraDefinitions::mobsiCam(std::string_view tag, std::string_view pos) const {
+const Def::Camera& CameraDefinitions::mobsiCam(std::string_view tag, std::string_view pos) const {
   if(!pos.empty()) {
     string_frm name("CAMMODMOB",tag,'_',pos);
     if(auto* c = find(name))
@@ -66,7 +66,7 @@ const zenkit::ICamera& CameraDefinitions::mobsiCam(std::string_view tag, std::st
   return camModNormal;
   }
 
-zenkit::ICamera CameraDefinitions::getCam(std::string_view name) {
+Def::Camera CameraDefinitions::getCam(std::string_view name) {
   for(auto& i:cameras)
     if(i.first==name)
       return i.second;
@@ -74,7 +74,7 @@ zenkit::ICamera CameraDefinitions::getCam(std::string_view name) {
   return {};
   }
 
-const zenkit::ICamera* CameraDefinitions::find(std::string_view name) const {
+const Def::Camera* CameraDefinitions::find(std::string_view name) const {
   for(auto& i:cameras)
     if(i.first==name)
       return &i.second;

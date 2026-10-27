@@ -4,6 +4,8 @@
 #include "commandline.h"
 #include "contentcensus.h"
 #include "fontdata.h"
+#include "game/definitions/definitiontypes.h"
+#include "gothic.h"
 #include "gltfmesh.h"
 #include "gothicglb.h"
 #include "graphics/mesh/submesh/packedmesh.h"
@@ -27,6 +29,7 @@
 #include <zenkit/Logger.hh>
 #include <zenkit/Texture.hh>
 #include <zenkit/addon/texcvt.hh>
+#include <zenkit/addon/daedalus.hh>
 #include <Tempest/Dir>
 #include <Tempest/MemReader>
 #include <Tempest/File>
@@ -35,6 +38,7 @@
 #include <rapidjson/writer.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -48,6 +52,7 @@
 #include <stdexcept>
 #include <tuple>
 #include <type_traits>
+#include <typeinfo>
 
 namespace fs = std::filesystem;
 
@@ -1011,6 +1016,468 @@ struct BaseContentContract {
     return selected;
     }
 
+  // Each old addon field is checked explicitly against the separately bound engine record.
+#define DEFINITION_FIELD(member) modelField(a.member,b.member,field+"." #member)
+  static void definitionFields(const zenkit::ICamera& a, const Def::Camera& b, const std::string& field) {
+    DEFINITION_FIELD(best_range);
+    DEFINITION_FIELD(min_range);
+    DEFINITION_FIELD(max_range);
+    DEFINITION_FIELD(best_elevation);
+    DEFINITION_FIELD(min_elevation);
+    DEFINITION_FIELD(max_elevation);
+    DEFINITION_FIELD(best_azimuth);
+    DEFINITION_FIELD(min_azimuth);
+    DEFINITION_FIELD(max_azimuth);
+    DEFINITION_FIELD(best_rot_z);
+    DEFINITION_FIELD(min_rot_z);
+    DEFINITION_FIELD(max_rot_z);
+    DEFINITION_FIELD(rot_offset_x);
+    DEFINITION_FIELD(rot_offset_y);
+    DEFINITION_FIELD(rot_offset_z);
+    DEFINITION_FIELD(target_offset_x);
+    DEFINITION_FIELD(target_offset_y);
+    DEFINITION_FIELD(target_offset_z);
+    DEFINITION_FIELD(velo_trans);
+    DEFINITION_FIELD(velo_rot);
+    DEFINITION_FIELD(translate);
+    DEFINITION_FIELD(rotate);
+    DEFINITION_FIELD(collision);
+    }
+
+  static void definitionFields(const zenkit::ISoundEffect& a, const Def::SoundEffect& b, const std::string& field) {
+    DEFINITION_FIELD(file);
+    DEFINITION_FIELD(pitch_off);
+    DEFINITION_FIELD(pitch_var);
+    DEFINITION_FIELD(vol);
+    DEFINITION_FIELD(loop);
+    DEFINITION_FIELD(loop_start_offset);
+    DEFINITION_FIELD(loop_end_offset);
+    DEFINITION_FIELD(reverb_level);
+    DEFINITION_FIELD(pfx_name);
+    }
+
+  static void definitionFields(const zenkit::IMusicTheme& a, const Def::MusicTheme& b, const std::string& field) {
+    DEFINITION_FIELD(file);
+    DEFINITION_FIELD(vol);
+    DEFINITION_FIELD(loop);
+    DEFINITION_FIELD(reverbmix);
+    DEFINITION_FIELD(reverbtime);
+    DEFINITION_FIELD(transtype);
+    DEFINITION_FIELD(transsubtype);
+    }
+
+  static void definitionFields(const zenkit::IParticleEffect& a, const Def::ParticleEffect& b, const std::string& field) {
+    DEFINITION_FIELD(pps_value);
+    DEFINITION_FIELD(pps_scale_keys_s);
+    DEFINITION_FIELD(pps_is_looping);
+    DEFINITION_FIELD(pps_is_smooth);
+    DEFINITION_FIELD(pps_fps);
+    DEFINITION_FIELD(pps_create_em_s);
+    DEFINITION_FIELD(pps_create_em_delay);
+    DEFINITION_FIELD(shp_type_s);
+    DEFINITION_FIELD(shp_for_s);
+    DEFINITION_FIELD(shp_offset_vec_s);
+    DEFINITION_FIELD(shp_distrib_type_s);
+    DEFINITION_FIELD(shp_distrib_walk_speed);
+    DEFINITION_FIELD(shp_is_volume);
+    DEFINITION_FIELD(shp_dim_s);
+    DEFINITION_FIELD(shp_mesh_s);
+    DEFINITION_FIELD(shp_mesh_render_b);
+    DEFINITION_FIELD(shp_scale_keys_s);
+    DEFINITION_FIELD(shp_scale_is_looping);
+    DEFINITION_FIELD(shp_scale_is_smooth);
+    DEFINITION_FIELD(shp_scale_fps);
+    DEFINITION_FIELD(dir_mode_s);
+    DEFINITION_FIELD(dir_for_s);
+    DEFINITION_FIELD(dir_mode_target_for_s);
+    DEFINITION_FIELD(dir_mode_target_pos_s);
+    DEFINITION_FIELD(dir_angle_head);
+    DEFINITION_FIELD(dir_angle_head_var);
+    DEFINITION_FIELD(dir_angle_elev);
+    DEFINITION_FIELD(dir_angle_elev_var);
+    DEFINITION_FIELD(vel_avg);
+    DEFINITION_FIELD(vel_var);
+    DEFINITION_FIELD(lsp_part_avg);
+    DEFINITION_FIELD(lsp_part_var);
+    DEFINITION_FIELD(fly_gravity_s);
+    DEFINITION_FIELD(fly_colldet_b);
+    DEFINITION_FIELD(vis_name_s);
+    DEFINITION_FIELD(vis_orientation_s);
+    DEFINITION_FIELD(vis_tex_is_quadpoly);
+    DEFINITION_FIELD(vis_tex_ani_fps);
+    DEFINITION_FIELD(vis_tex_ani_is_looping);
+    DEFINITION_FIELD(vis_tex_color_start_s);
+    DEFINITION_FIELD(vis_tex_color_end_s);
+    DEFINITION_FIELD(vis_size_start_s);
+    DEFINITION_FIELD(vis_size_end_scale);
+    DEFINITION_FIELD(vis_alpha_func_s);
+    DEFINITION_FIELD(vis_alpha_start);
+    DEFINITION_FIELD(vis_alpha_end);
+    DEFINITION_FIELD(trl_fade_speed);
+    DEFINITION_FIELD(trl_texture_s);
+    DEFINITION_FIELD(trl_width);
+    DEFINITION_FIELD(mrk_fades_peed);
+    DEFINITION_FIELD(mrkt_exture_s);
+    DEFINITION_FIELD(mrk_size);
+    DEFINITION_FIELD(flock_mode);
+    DEFINITION_FIELD(flock_strength);
+    DEFINITION_FIELD(use_emitters_for);
+    DEFINITION_FIELD(time_start_end_s);
+    DEFINITION_FIELD(m_bis_ambient_pfx);
+    }
+
+  static void definitionFields(const zenkit::IEffectBase& a, const Def::EffectBase& b, const std::string& field) {
+    DEFINITION_FIELD(vis_name_s);
+    DEFINITION_FIELD(vis_size_s);
+    DEFINITION_FIELD(vis_alpha);
+    DEFINITION_FIELD(vis_alpha_blend_func_s);
+    DEFINITION_FIELD(vis_tex_ani_fps);
+    DEFINITION_FIELD(vis_tex_ani_is_looping);
+    DEFINITION_FIELD(em_trj_mode_s);
+    DEFINITION_FIELD(em_trj_origin_node);
+    DEFINITION_FIELD(em_trj_target_node);
+    DEFINITION_FIELD(em_trj_target_range);
+    DEFINITION_FIELD(em_trj_target_azi);
+    DEFINITION_FIELD(em_trj_target_elev);
+    DEFINITION_FIELD(em_trj_num_keys);
+    DEFINITION_FIELD(em_trj_num_keys_var);
+    DEFINITION_FIELD(em_trj_angle_elev_var);
+    DEFINITION_FIELD(em_trj_angle_head_var);
+    DEFINITION_FIELD(em_trj_key_dist_var);
+    DEFINITION_FIELD(em_trj_loop_mode_s);
+    DEFINITION_FIELD(em_trj_ease_func_s);
+    DEFINITION_FIELD(em_trj_ease_vel);
+    DEFINITION_FIELD(em_trj_dyn_update_delay);
+    DEFINITION_FIELD(em_trj_dyn_update_target_only);
+    DEFINITION_FIELD(em_fx_create_s);
+    DEFINITION_FIELD(em_fx_invest_origin_s);
+    DEFINITION_FIELD(em_fx_invest_target_s);
+    DEFINITION_FIELD(em_fx_trigger_delay);
+    DEFINITION_FIELD(em_fx_create_down_trj);
+    DEFINITION_FIELD(em_action_coll_dyn_s);
+    DEFINITION_FIELD(em_action_coll_stat_s);
+    DEFINITION_FIELD(em_fx_coll_stat_s);
+    DEFINITION_FIELD(em_fx_coll_dyn_s);
+    DEFINITION_FIELD(em_fx_coll_stat_align_s);
+    DEFINITION_FIELD(em_fx_coll_dyn_align_s);
+    DEFINITION_FIELD(em_fx_lifespan);
+    DEFINITION_FIELD(em_check_collision);
+    DEFINITION_FIELD(em_adjust_shp_to_origin);
+    DEFINITION_FIELD(em_invest_next_key_duration);
+    DEFINITION_FIELD(em_fly_gravity);
+    DEFINITION_FIELD(em_self_rot_vel_s);
+    for(size_t i=0;i<Def::EffectBase::user_string_count;++i)
+      modelField(a.user_string[i],b.user_string[i],field+".user_string["+std::to_string(i)+"]");
+    DEFINITION_FIELD(light_preset_name);
+    DEFINITION_FIELD(sfx_id);
+    DEFINITION_FIELD(sfx_is_ambient);
+    DEFINITION_FIELD(send_assess_magic);
+    DEFINITION_FIELD(secs_per_damage);
+    DEFINITION_FIELD(em_fx_coll_dyn_perc_s);
+    }
+
+  static void definitionFields(const zenkit::IParticleEffectEmitKey& a, const Def::ParticleEffectEmitKey& b, const std::string& field) {
+    DEFINITION_FIELD(vis_name_s);
+    DEFINITION_FIELD(vis_size_scale);
+    DEFINITION_FIELD(scale_duration);
+    DEFINITION_FIELD(pfx_pps_value);
+    DEFINITION_FIELD(pfx_pps_is_smooth_chg);
+    DEFINITION_FIELD(pfx_pps_is_looping_chg);
+    DEFINITION_FIELD(pfx_sc_time);
+    DEFINITION_FIELD(pfx_fly_gravity_s);
+    DEFINITION_FIELD(pfx_shp_dim_s);
+    DEFINITION_FIELD(pfx_shp_is_volume_chg);
+    DEFINITION_FIELD(pfx_shp_scale_fps);
+    DEFINITION_FIELD(pfx_shp_distrib_walks_peed);
+    DEFINITION_FIELD(pfx_shp_offset_vec_s);
+    DEFINITION_FIELD(pfx_shp_distrib_type_s);
+    DEFINITION_FIELD(pfx_dir_mode_s);
+    DEFINITION_FIELD(pfx_dir_for_s);
+    DEFINITION_FIELD(pfx_dir_mode_target_for_s);
+    DEFINITION_FIELD(pfx_dir_mode_target_pos_s);
+    DEFINITION_FIELD(pfx_vel_avg);
+    DEFINITION_FIELD(pfx_lsp_part_avg);
+    DEFINITION_FIELD(pfx_vis_alpha_start);
+    DEFINITION_FIELD(light_preset_name);
+    DEFINITION_FIELD(light_range);
+    DEFINITION_FIELD(sfx_id);
+    DEFINITION_FIELD(sfx_is_ambient);
+    DEFINITION_FIELD(em_create_fx_id);
+    DEFINITION_FIELD(em_fly_gravity);
+    DEFINITION_FIELD(em_self_rot_vel_s);
+    DEFINITION_FIELD(em_trj_mode_s);
+    DEFINITION_FIELD(em_trj_ease_vel);
+    DEFINITION_FIELD(em_check_collision);
+    DEFINITION_FIELD(em_fx_lifespan);
+    }
+
+#undef DEFINITION_FIELD
+  static void definitionFields(const zenkit::IFightAi& a, const Def::FightAi& b, const std::string& field) {
+    for(size_t i=0;i<Def::FightAi::move_count;++i)
+      modelField(a.move[i],b.move[i],field+".move["+std::to_string(i)+"]");
+    }
+
+  static void definitionSourceClasses(zenkit::DaedalusScript& sc) {
+    auto registerIfExists = [&](std::string_view sym, auto d) {
+      if(sc.find_symbol_by_name(sym) != nullptr) {
+        d(sc);
+        }
+      };
+
+    auto registerOpaque = [&](std::string_view sym){
+      if(auto ptr = sc.find_symbol_by_name(sym)) {
+        sc.register_as_opaque(ptr);
+        }
+      };
+
+    registerIfExists("C_GILVALUES",    zenkit::IGuildValues::register_);
+    registerIfExists("C_NPC",          zenkit::INpc::register_);
+    registerIfExists("C_MISSION",      zenkit::IMission::register_);
+    registerIfExists("C_ITEM",         zenkit::IItem::register_);
+    registerIfExists("C_FOCUS",        zenkit::IFocus::register_);
+    registerIfExists("C_INFO",         zenkit::IInfo::register_);
+    registerIfExists("C_ITEMREACT",    zenkit::IItemReact::register_);
+    registerIfExists("C_SPELL",        zenkit::ISpell::register_);
+    registerOpaque  ("C_SVM"); // structure is very customizable, so better to use type-less mapping
+    registerIfExists("C_MENU",         zenkit::IMenu::register_);
+    registerIfExists("C_MENU_ITEM",    zenkit::IMenuItem::register_);
+    registerIfExists("CCAMSYS",        zenkit::ICamera::register_);
+    registerIfExists("C_MUSICSYS_CFG", zenkit::IMusicSystem::register_);
+    registerIfExists("C_MUSICTHEME",   zenkit::IMusicTheme::register_);
+    registerIfExists("C_MUSICJINGLE",  zenkit::IMusicJingle::register_);
+    registerIfExists("C_PARTICLEFX",   zenkit::IParticleEffect::register_);
+    registerIfExists("CFX_BASE",       zenkit::IEffectBase::register_);
+    registerIfExists("C_PARTICLEFXEMITKEY", zenkit::IParticleEffectEmitKey::register_);
+    registerOpaque  ("C_FIGHTAI"); // many mods get it wrong/corrupted. Opaque binding is one is a way to get around it
+    registerIfExists("C_SFX",          zenkit::ISoundEffect::register_);
+    registerIfExists("C_SNDSYS_CFG",   zenkit::ISoundSystem::register_);
+    }
+
+  static std::unique_ptr<zenkit::DaedalusVm> definitionSourceVm(const ProgramData::Index& index,
+                                                              std::string_view request, Gothic& gothic) {
+    const auto row=std::find_if(index.selections.begin(),index.selections.end(),[&](const auto& selection) {
+      return selection.request==request && selection.language==-1;
+      });
+    require(row!=index.selections.end() && row->source.has_value(),std::string(request)+": definition source selection missing");
+    const auto& source=index.sources.at(*row->source);
+    require(source.skipped.empty(),std::string(request)+": definition source was skipped");
+    std::unique_ptr<zenkit::Read> input;
+    if(source.origin=="host") {
+      const auto path=fs::path(CommandLine::inst().rootPath())/source.path;
+      input=zenkit::Read::from(path);
+      Resources::censusFile(path.u16string());
+      }
+    else {
+      Resources::CensusSource opened;
+      input=Resources::getFileBuffer(fs::path(source.path).filename().string(),&opened);
+      require(opened.node!=nullptr && opened.node==Resources::vdfsIndex().resolve(source.path),
+              std::string(request)+": definition oracle selected a different source node");
+      }
+    require(input!=nullptr,std::string(request)+": definition source cannot be opened");
+    input->seek(0,zenkit::Whence::END);
+    std::vector<std::byte> raw(input->tell());
+    input->seek(0,zenkit::Whence::BEG);
+    require(input->read(raw.data(),raw.size())==raw.size(),std::string(request)+": incomplete definition source");
+    require(raw.size()==source.size &&
+            BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(raw.data()),raw.size()))==source.sha256,
+            std::string(request)+": original definition identity differs");
+    auto reader=zenkit::Read::from(&raw);
+    zenkit::DaedalusScript script;
+    script.load(reader.get());
+    // Replay the original registrations, including opaque Fight, before constructing the oracle VM.
+    definitionSourceClasses(script);
+    auto vm=std::make_unique<zenkit::DaedalusVm>(std::move(script),zenkit::DaedalusVmExecutionFlag::ALLOW_NULL_INSTANCE_ACCESS);
+    gothic.setupVmCommonApi(*vm);
+    return vm;
+    }
+
+  static std::vector<std::pair<uint32_t,std::string>> definitionNames(zenkit::DaedalusVm& vm, std::string_view className) {
+    std::vector<std::pair<uint32_t,std::string>> result;
+    vm.enumerate_instances_by_class_name(className,[&](zenkit::DaedalusSymbol& symbol) {
+      result.emplace_back(symbol.index(),symbol.name());
+      });
+    return result;
+    }
+
+  template<class T>
+  static std::pair<std::shared_ptr<T>,std::string> definitionInstance(zenkit::DaedalusVm& vm, zenkit::DaedalusSymbol* symbol) {
+    try {
+      auto result=std::make_shared<T>();
+      if constexpr(std::is_same_v<T,zenkit::IParticleEffect> || std::is_same_v<T,Def::ParticleEffect>)
+        result->vis_tex_is_quadpoly=1;
+      vm.init_instance(result,symbol);
+      return {std::move(result),{}};
+      }
+    catch(const zenkit::DaedalusScriptError& error) {
+      return {nullptr,std::string(typeid(error).name())+": "+error.what()};
+      }
+    }
+
+  template<class Source, class Native>
+  static void definitionInstances(zenkit::DaedalusVm& source, zenkit::DaedalusVm& native, std::string_view className) {
+    const auto names=definitionNames(source,className);
+    modelField(names,definitionNames(native,className),std::string(className)+" ordered instances");
+    const auto* sourceClass=source.find_symbol_by_name(className);
+    const auto* nativeClass=native.find_symbol_by_name(className);
+    require((sourceClass==nullptr)==(nativeClass==nullptr),std::string(className)+": class presence differs");
+    if(sourceClass!=nullptr)
+      equal(sourceClass->index(),nativeClass->index(),std::string(className)+" source class index");
+    size_t initialized=0,failed=0;
+    for(const auto& [index,name]:names) {
+      const auto field=std::string(className)+":"+name;
+      auto* a=source.find_symbol_by_index(index);
+      auto* b=native.find_symbol_by_index(index);
+      require(a!=nullptr && b!=nullptr && a->name()==b->name(),field+": source instance index changed");
+      const auto* lookupA=source.find_symbol_by_name(name);
+      const auto* lookupB=native.find_symbol_by_name(name);
+      require(lookupA!=nullptr && lookupB!=nullptr,field+": named instance lookup missing");
+      equal(lookupA->index(),lookupB->index(),field+" named lookup index");
+      auto original=definitionInstance<Source>(source,a);
+      auto loaded=definitionInstance<Native>(native,b);
+      require(original.second==loaded.second,field+": initializer exception differs: "+original.second+" vs "+loaded.second);
+      require(bool(original.first)==bool(loaded.first),field+": initializer result differs");
+      if(!original.first) { ++failed; continue; }
+      equal(original.first->symbol_index(),index,field+" original bound symbol");
+      equal(loaded.first->symbol_index(),index,field+" native bound symbol");
+      equal(source.find_symbol_by_instance(original.first)->index(),native.find_symbol_by_instance(loaded.first)->index(),
+            field+" instance lookup index");
+      definitionFields(*original.first,*loaded.first,field);
+      ++initialized;
+      }
+    std::printf("Definitions %.*s: %zu ordered instances, %zu initialized and %zu matching initialization errors\n",
+                int(className.size()),className.data(),names.size(),initialized,failed);
+    }
+
+  template<class T>
+  static std::pair<T,std::string> definitionFight(zenkit::DaedalusVm& vm, zenkit::DaedalusSymbol* symbol) {
+    T result{};
+    if(symbol==nullptr) return {result,"missing instance"};
+    auto* move=vm.find_symbol_by_name("C_FIGHTAI.MOVE");
+    if(move==nullptr) return {result,"missing MOVE"};
+    try {
+      auto instance=vm.init_opaque_instance(symbol);
+      equal(instance->symbol_index(),symbol->index(),symbol->name()+" opaque bound symbol");
+      for(size_t i=0;i<T::move_count && i<move->count();++i)
+        result.move[i]=std::remove_cvref_t<decltype(result.move[i])>(move->get_int(uint16_t(i),instance.get()));
+      return {result,{}};
+      }
+    catch(const zenkit::DaedalusScriptError& error) {
+      return {T{},std::string(typeid(error).name())+": "+error.what()};
+      }
+    }
+
+  static void definitionFights(zenkit::DaedalusVm& source, zenkit::DaedalusVm& native) {
+    const auto names=definitionNames(source,"C_FIGHTAI");
+    modelField(names,definitionNames(native,"C_FIGHTAI"),"Fight ordered instances");
+    const auto* a=source.find_symbol_by_name("MAX_FIGHTAI");
+    const auto* b=native.find_symbol_by_name("MAX_FIGHTAI");
+    require((a==nullptr)==(b==nullptr),"Fight MAX_FIGHTAI presence differs");
+    const int count=a!=nullptr ? a->get_int() : 0;
+    equal(count,b!=nullptr ? b->get_int() : 0,"Fight MAX_FIGHTAI");
+    const std::array<std::string_view,17> prefixes={
+      "FA_ENEMY_PREHIT_","FA_ENEMY_STORMPREHIT_","FA_MY_W_COMBO_","FA_MY_W_RUNTO_","FA_MY_W_STRAFE_",
+      "FA_MY_W_FOCUS_","FA_MY_W_NOFOCUS_","FA_MY_G_COMBO_","FA_MY_G_RUNTO_","FA_MY_G_STRAFE_",
+      "FA_MY_G_FOCUS_","FA_MY_FK_FOCUS_","FA_MY_G_FK_NOFOCUS_","FA_MY_FK_FOCUS_FAR_",
+      "FA_MY_FK_NOFOCUS_FAR_","FA_MY_FK_FOCUS_MAG_","FA_MY_FK_NOFOCUS_MAG_"};
+    std::set<uint32_t> checked;
+    size_t groups=0;
+    const auto compare=[&](zenkit::DaedalusSymbol* a,zenkit::DaedalusSymbol* b,const std::string& name) {
+      require((a==nullptr)==(b==nullptr),name+": Fight instance presence differs");
+      if(a!=nullptr) {
+        equal(a->index(),b->index(),name+" Fight source index");
+        checked.insert(a->index());
+        }
+      const auto old=definitionFight<zenkit::IFightAi>(source,a);
+      const auto own=definitionFight<Def::FightAi>(native,b);
+      require(old.second==own.second,name+": Fight initializer outcome differs");
+      definitionFields(old.first,own.first,name);
+      ++groups;
+      };
+    // Runtime's row zero is left value-initialized; rows 1..MAX_FIGHTAI-1 use these exact 17 groups.
+    definitionFields(zenkit::IFightAi{},Def::FightAi{},"Fight row zero");
+    for(int id=1;id<std::max(0,count);++id)
+      for(const auto prefix:prefixes) {
+        const auto name=std::string(prefix)+std::to_string(id);
+        compare(source.find_symbol_by_name(name),native.find_symbol_by_name(name),name);
+        }
+    // Also cover declared records outside the runtime's groups, without changing production laziness.
+    for(const auto& [index,name]:names)
+      if(!checked.count(index))
+        compare(source.find_symbol_by_index(index),native.find_symbol_by_index(index),name);
+    for(const auto& [index,name]:names)
+      require(checked.count(index)!=0,name+": Fight declaration was not checked");
+    std::printf("Definitions C_FIGHTAI: %zu ordered instances and %zu runtime/extra groups; opaque six-move values match\n",
+                names.size(),groups);
+    }
+
+  static void definitionRecords(const fs::path& base, const fs::path& censusPath) {
+    static_assert(std::is_same_v<std::underlying_type_t<Def::FightMove>,std::underlying_type_t<zenkit::FightAiMove>>);
+    static_assert(uint32_t(Def::FightMove::NOP)==uint32_t(zenkit::FightAiMove::NOP));
+    static_assert(uint32_t(Def::FightMove::RUN)==uint32_t(zenkit::FightAiMove::RUN));
+    static_assert(uint32_t(Def::FightMove::RUN_BACK)==uint32_t(zenkit::FightAiMove::RUN_BACK));
+    static_assert(uint32_t(Def::FightMove::JUMP_BACK)==uint32_t(zenkit::FightAiMove::JUMP_BACK));
+    static_assert(uint32_t(Def::FightMove::TURN)==uint32_t(zenkit::FightAiMove::TURN));
+    static_assert(uint32_t(Def::FightMove::STRAFE)==uint32_t(zenkit::FightAiMove::STRAFE));
+    static_assert(uint32_t(Def::FightMove::ATTACK)==uint32_t(zenkit::FightAiMove::ATTACK));
+    static_assert(uint32_t(Def::FightMove::ATTACK_SIDE)==uint32_t(zenkit::FightAiMove::ATTACK_SIDE));
+    static_assert(uint32_t(Def::FightMove::ATTACK_FRONT)==uint32_t(zenkit::FightAiMove::ATTACK_FRONT));
+    static_assert(uint32_t(Def::FightMove::ATTACK_TRIPLE)==uint32_t(zenkit::FightAiMove::ATTACK_TRIPLE));
+    static_assert(uint32_t(Def::FightMove::ATTACK_WHIRL)==uint32_t(zenkit::FightAiMove::ATTACK_WHIRL));
+    static_assert(uint32_t(Def::FightMove::ATTACK_MASTER)==uint32_t(zenkit::FightAiMove::ATTACK_MASTER));
+    static_assert(uint32_t(Def::FightMove::TURN_TO_HIT)==uint32_t(zenkit::FightAiMove::TURN_TO_HIT));
+    static_assert(uint32_t(Def::FightMove::PARRY)==uint32_t(zenkit::FightAiMove::PARRY));
+    static_assert(uint32_t(Def::FightMove::STAND_UP)==uint32_t(zenkit::FightAiMove::STAND_UP));
+    static_assert(uint32_t(Def::FightMove::WAIT)==uint32_t(zenkit::FightAiMove::WAIT));
+    static_assert(uint32_t(Def::FightMove::WAIT_LONGER)==uint32_t(zenkit::FightAiMove::WAIT_LONGER));
+    static_assert(uint32_t(Def::FightMove::WAIT_EXT)==uint32_t(zenkit::FightAiMove::WAIT_EXT));
+    static_assert(std::is_same_v<std::underlying_type_t<Def::MusicTransitionEffect>,std::underlying_type_t<zenkit::MusicTransitionEffect>>);
+    static_assert(uint32_t(Def::MusicTransitionEffect::UNKNOWN)==uint32_t(zenkit::MusicTransitionEffect::UNKNOWN));
+    static_assert(uint32_t(Def::MusicTransitionEffect::NONE)==uint32_t(zenkit::MusicTransitionEffect::NONE));
+    static_assert(uint32_t(Def::MusicTransitionEffect::GROOVE)==uint32_t(zenkit::MusicTransitionEffect::GROOVE));
+    static_assert(uint32_t(Def::MusicTransitionEffect::FILL)==uint32_t(zenkit::MusicTransitionEffect::FILL));
+    static_assert(uint32_t(Def::MusicTransitionEffect::BREAK)==uint32_t(zenkit::MusicTransitionEffect::BREAK));
+    static_assert(uint32_t(Def::MusicTransitionEffect::INTRO)==uint32_t(zenkit::MusicTransitionEffect::INTRO));
+    static_assert(uint32_t(Def::MusicTransitionEffect::END)==uint32_t(zenkit::MusicTransitionEffect::END));
+    static_assert(uint32_t(Def::MusicTransitionEffect::END_AND_INTO)==uint32_t(zenkit::MusicTransitionEffect::END_AND_INTO));
+    static_assert(std::is_same_v<std::underlying_type_t<Def::MusicTransitionType>,std::underlying_type_t<zenkit::MusicTransitionType>>);
+    static_assert(uint32_t(Def::MusicTransitionType::UNKNOWN)==uint32_t(zenkit::MusicTransitionType::UNKNOWN));
+    static_assert(uint32_t(Def::MusicTransitionType::IMMEDIATE)==uint32_t(zenkit::MusicTransitionType::IMMEDIATE));
+    static_assert(uint32_t(Def::MusicTransitionType::BEAT)==uint32_t(zenkit::MusicTransitionType::BEAT));
+    static_assert(uint32_t(Def::MusicTransitionType::MEASURE)==uint32_t(zenkit::MusicTransitionType::MEASURE));
+    static_assert(Def::FightAi::move_count==zenkit::IFightAi::move_count);
+    static_assert(Def::EffectBase::user_string_count==zenkit::IEffectBase::user_string_count);
+    definitionFields(zenkit::ICamera{},Def::Camera{},"Camera value initialization");
+    definitionFields(zenkit::ISoundEffect{},Def::SoundEffect{},"SoundEffect value initialization");
+    definitionFields(zenkit::IMusicTheme{},Def::MusicTheme{},"MusicTheme value initialization");
+    definitionFields(zenkit::IParticleEffect{},Def::ParticleEffect{},"ParticleEffect value initialization");
+    definitionFields(zenkit::IEffectBase{},Def::EffectBase{},"EffectBase value initialization");
+    definitionFields(zenkit::IParticleEffectEmitKey{},Def::ParticleEffectEmitKey{},"ParticleEffectEmitKey value initialization");
+    const auto index=ProgramData::readIndex(base/"programs");
+    Gothic gothic;
+    for(const std::string request:{"Fight.dat","Camera.dat","Sfx.dat","ParticleFx.dat","VisualFx.dat","Music.dat"}) {
+      auto source=definitionSourceVm(index,request,gothic);
+      require(Resources::writeCensus(),"cannot write definition source census");
+      const auto before=json(censusPath);
+      auto native=gothic.createPhoenixVm(request);
+      require(Resources::writeCensus(),"cannot write native definition census");
+      require(before["files"]==json(censusPath)["files"],request+": own definition VM added an original DAT open");
+      const auto rejectRandom=[](int)->int {
+        throw std::runtime_error("definition oracle encountered HLP_RANDOM; initializer parity requires investigation");
+        };
+      source->register_external("hlp_random",rejectRandom);
+      native->register_external("hlp_random",rejectRandom);
+      if(request=="Camera.dat") definitionInstances<zenkit::ICamera,Def::Camera>(*source,*native,"CCAMSYS");
+      if(request=="Fight.dat") definitionFights(*source,*native);
+      if(request=="Sfx.dat") definitionInstances<zenkit::ISoundEffect,Def::SoundEffect>(*source,*native,"C_SFX");
+      if(request=="Music.dat") definitionInstances<zenkit::IMusicTheme,Def::MusicTheme>(*source,*native,"C_MusicTheme");
+      if(request=="ParticleFx.dat") definitionInstances<zenkit::IParticleEffect,Def::ParticleEffect>(*source,*native,"C_PARTICLEFX");
+      if(request=="VisualFx.dat") {
+        definitionInstances<zenkit::IEffectBase,Def::EffectBase>(*source,*native,"CFX_BASE");
+        definitionInstances<zenkit::IParticleEffectEmitKey,Def::ParticleEffectEmitKey>(*source,*native,"C_PARTICLEFXEMITKEY");
+        }
+      }
+    }
+
   static void census(const fs::path& file, size_t meshes, size_t models, size_t fonts, size_t programs) {
     const auto data=json(file);
     equal(data["replacements"].Size(),meshes+models+programs,"census base mesh/model/program count");
@@ -1370,6 +1837,7 @@ struct BaseContentContract {
     {
     Resources resources;
     Resources::loadVdfs({},true);
+    definitionRecords(base,censusPath);
     legacyModelBounds();
     modelTagBoundary();
     }
