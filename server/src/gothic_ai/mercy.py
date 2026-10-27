@@ -215,8 +215,16 @@ class Mercy:
         self._hold_turns[npc] = hold
         hold.timer = asyncio.get_running_loop().call_later(HERO_HOLD_S, self._end_hold, npc, hold)
         assert conv.reply is not None
+        talked_at = conv.talked_at
 
-        def finished_turn(_: asyncio.Task) -> None:
+        def finished_turn(done: asyncio.Task) -> None:
+            nonlocal talked_at
+            if (done.cancelled() and self.holds.get(npc) is hold and conv.reply is not done
+                    and conv.talked_at > talked_at and self._hero_turn(npc)):
+                talked_at = conv.talked_at
+                assert conv.reply is not None
+                conv.reply.add_done_callback(finished_turn)
+                return
             self._end_hold(npc, hold)
             if self._hold_turns.get(npc) is hold:
                 del self._hold_turns[npc]

@@ -617,6 +617,59 @@ async def test_player_turn_probes_then_accepts_surrender_from_hold(rig, monkeypa
     assert rig.fake.said == ["Ладно!", "Ладно, живи. Я заберу своё."]
 
 
+async def test_second_hero_phrase_keeps_the_hold_until_the_replacement_turn_finishes(rig, monkeypatch):
+    rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    quick = rig.dialogue.quick = FakeBackend(script=[
+        FakeStep("да"), FakeStep("Слушаю."), FakeStep("Говори."),
+    ], delay=0)
+    rig.llm.script = [FakeStep()]
+    entered, release = asyncio.Event(), asyncio.Event()
+    stream = rig.llm.stream
+
+    async def delayed(**options):
+        entered.set()
+        await release.wait()
+        async for event in stream(**options):
+            yield event
+
+    monkeypatch.setattr(rig.llm, "stream", delayed)
+    conv = rig.dialogue.open(NPC, "Лобарт", warm=False)
+    first = rig.dialogue.say_as_player(NPC, "Сдаюсь, не бей", overlay=True)
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        hold = rig.mercy.holds[NPC]
+        timer, deadline = hold.timer, hold.timer.when()
+        assert rig.mercy.held(FRIEND) and not rig.fake.native_fights[FRIEND]
+
+        entered.clear()
+        second = rig.dialogue.say_as_player(NPC, "Пощади!", overlay=True)
+        await asyncio.gather(first, return_exceptions=True)
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert first.cancelled() and not second.done()
+        assert rig.mercy.holds[NPC] is rig.mercy._hold_turns[NPC] is hold
+        assert hold.timer is timer and timer.when() == deadline and not timer.cancelled()
+        assert rig.mercy.held(FRIEND) and not rig.fake.attack_state and not rig.fake.native_fights[FRIEND]
+        assert quick.temperatures.count(0) == 1
+        assert "accept_surrender" in {tool.name for tool in rig.mercy.tools(NPC)}
+        assert not any(op.get("do") == "attack" for row in rig.fake.story
+                       for op in row.get("effects", []))
+
+        release.set()
+        await second
+        await finish(rig)
+        assert not rig.mercy.holds and NPC not in rig.mercy._hold_turns
+        attacks = [row["npc"] for row in rig.fake.story
+                   if any(op.get("do") == "attack" for op in row.get("effects", []))]
+        assert attacks == [NPC, FRIEND]
+    finally:
+        release.set()
+        await end_hero_hold(rig, conv)
+
+
 @pytest.mark.parametrize("race", ["calm_error", "validation_hit", "expired_accept", "expired_ally_hit"])
 async def test_accept_surrender_survives_deadline_and_resumes_on_calm_failure_or_hit(rig, monkeypatch, race):
     rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
