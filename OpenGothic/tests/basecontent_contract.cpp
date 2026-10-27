@@ -1,4 +1,5 @@
 #include "asset/fromzenkit.h"
+#include "audiodata.h"
 #include "baseimport.h"
 #include "basemesh.h"
 #include "commandline.h"
@@ -11,6 +12,7 @@
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "physics/physicvbo.h"
 #include "resources.h"
+#include "sha256.h"
 #include "modeldata.h"
 #include "programdata.h"
 #include "outputunits.h"
@@ -35,6 +37,7 @@
 #include <Tempest/Dir>
 #include <Tempest/MemReader>
 #include <Tempest/File>
+#include <Tempest/Sound>
 #include <Tempest/Texture2d>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
@@ -1685,6 +1688,279 @@ struct BaseContentContract {
                 libraries,skipped,roots,nodes,messages,probes);
     }
 
+  static void audioCorpus(const fs::path& base) {
+    const auto index=AudioData::readIndex(base/"audio");
+    const auto nativeJson=json(base/"audio/audio.json");
+    const auto sources=json(base/"sources/sources.json");
+    std::map<std::string,const rapidjson::Value*> sourceRows;
+    for(const auto& row:sources["files"].GetArray()) sourceRows.emplace(gothicglb::jsonToString(row["request"],"request"),&row);
+    const auto upper=[](std::string s) {
+      for(auto& c:s) if(c>='a' && c<='z') c=char(c-'a'+'A');
+      return s;
+      };
+    zenkit::Vfs oracle;
+    std::string opened;
+    oracle.set_open_observer([&](std::string_view,std::string_view source) { opened=source; });
+    const auto gothic=fs::path(CommandLine::inst().rootPath());
+    fs::path work;
+    const auto archives=BaseImport::mountRuntime(oracle,gothic,work);
+    BaseImport::Files mounted;
+    for(const auto& archive:archives) mounted.emplace_back(archive.name,archive.size);
+    std::sort(mounted.begin(),mounted.end());
+    require(mounted==index.archives,"audio archives differ from independent runtime mount");
+    std::set<std::string> requests;
+    std::map<const zenkit::VfsNode*,std::string> paths;
+    std::function<void(const zenkit::VfsNode&,const std::string&)> collect=[&](const auto& node,const auto& path) {
+      if(node.type()==zenkit::VfsNodeType::DIRECTORY) {
+        for(const auto& child:node.children()) collect(child,path.empty() ? child.name() : path+"/"+child.name());
+        return;
+        }
+      paths.emplace(&node,path);
+      const auto extension=upper(fs::path(node.name()).extension().string());
+      if(extension==".WAV" || extension==".OGG") requests.insert(upper(node.name()));
+      };
+    collect(oracle.root(),"");
+    equal(requests.size(),index.sounds.size(),"every selected WAV/OGG request must be indexed");
+    require(!requests.empty(),"audio corpus must contain selected requests");
+    const auto decode=[](const std::vector<uint8_t>& bytes) -> std::pair<Tempest::Sound,std::string> {
+      try {
+        Tempest::MemReader reader(bytes.data(),bytes.size());
+        return {Tempest::Sound(reader),std::string{}};
+        }
+      catch(const std::exception& error) { return {Tempest::Sound{},std::string(typeid(error).name())+": "+error.what()}; }
+      };
+    std::map<std::string,std::array<uint64_t,8>> totals; // requests, bytes, decoded16, samples, frames, milliseconds, empty, failures
+    std::map<std::string,Sha256> originalSamples,nativeSamples;
+    std::map<std::string,std::string> payloadFiles;
+    size_t speech=0;
+    uint64_t totalBytes=0,uniqueBytes=0;
+    for(const auto& request:requests) {
+      const auto found=index.sounds.find(request);
+      require(found!=index.sounds.end(),request+": native audio request missing");
+      const auto& sound=found->second;
+      const auto* winner=oracle.find(request);
+      require(winner!=nullptr,request+": independent VFS winner missing");
+      opened.clear();
+      auto input=winner->open_read();
+      input->seek(0,zenkit::Whence::END);
+      std::vector<uint8_t> raw(input->tell());
+      input->seek(0,zenkit::Whence::BEG);
+      require(input->read(raw.data(),raw.size())==raw.size(),request+": incomplete original audio read");
+      const bool host=fs::path(opened).is_absolute();
+      const auto path=host ? fs::path(opened).lexically_relative(gothic).lexically_normal().generic_string() : paths.at(winner);
+      require(sound.origin==(host ? "host" : "archive") && sound.path==path &&
+              sound.archive==(host ? std::string{} : upper(opened)),request+": actual selected origin/path/archive differs");
+      const auto digest=BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(raw.data()),raw.size()));
+      require(sound.size==raw.size() && sound.sourceSha256==digest && sound.payload==digest,
+              request+": original size/SHA-256 differs from payload or imported provenance");
+      std::string cls="sound";
+      for(const auto& part:fs::path(path)) if(upper(part.generic_string())=="SPEECH") cls="speech";
+      require(sound.cls==cls,request+": audio class differs from the selected source path");
+      speech+=cls=="speech";
+      const auto old=sourceRows.find(request);
+      require(old!=sourceRows.end(),request+": preserved P10 source manifest lacks audio request");
+      const auto& row=*old->second;
+      require(row["size"].GetUint64()==raw.size() && row["sha256"].GetString()==digest &&
+              gothicglb::jsonToString(row["path"],"path")==paths.at(winner) &&
+              gothicglb::jsonToString(row["source"],"source")==(host ? path : sound.archive),
+              request+": selected audio differs from the preserved P10 source oracle");
+      const auto& header=nativeJson["sounds"][row["request"].GetString()]["header"];
+      require(header==row["audio"],request+": native header facts differ from the preserved source header");
+      auto group=std::string(header["container"].GetString());
+      if(header.HasMember("format_tag") && header["format_tag"].IsUint()) group+="/tag="+std::to_string(header["format_tag"].GetUint());
+      if(header.HasMember("bits_per_sample")) group+="/bits="+std::to_string(header["bits_per_sample"].GetUint());
+      const auto [file,first]=payloadFiles.emplace(sound.payload,sound.file);
+      require(file->second==sound.file,request+": identical audio bytes must share one payload file");
+      if(first) {
+        const auto extension=upper(fs::path(request).extension().string())==".OGG" ? ".ogg" : ".wav";
+        require(sound.file==digest.substr(0,2)+"/"+digest+extension,request+": first request must deterministically name its payload");
+        uniqueBytes+=raw.size();
+        }
+      totalBytes+=raw.size();
+      std::vector<uint8_t> payload;
+      AudioData::readPayload(index,sound,request,payload);
+      require(raw==payload,request+": native payload bytes differ from the actual VFS winner");
+      require(BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(payload.data()),payload.size()))==digest,
+              request+": actual native payload SHA-256 differs");
+      // Both byte buffers and owning Sounds stay alive until all sample comparisons/hashes end.
+      auto original=decode(raw),native=decode(payload);
+      require(original.second==native.second,request+": decoder exception outcome differs");
+      auto& stats=totals[group];
+      ++stats[0]; stats[1]+=raw.size();
+      if(!original.second.empty()) {
+        ++stats[7];
+        std::printf("Audio decoder outcome: %s: %s\n",request.c_str(),original.second.c_str());
+        continue;
+        }
+      equal(original.first.isEmpty(),native.first.isEmpty(),request+" decoder empty outcome");
+      equal(original.first.timeLength(),native.first.timeLength(),request+" returned duration");
+      stats[5]+=original.first.timeLength();
+      size_t aCount=0,bCount=0;
+      uint16_t aChannels=0,bChannels=0;
+      uint32_t aRate=0,bRate=0;
+      const auto* a=original.first.samples16(aCount,aChannels,aRate);
+      const auto* b=native.first.samples16(bCount,bChannels,bRate);
+      equal(aCount,bCount,request+" interleaved int16 sample count");
+      require(bool(a)==bool(b),request+": decoded sample availability differs");
+      if(original.first.isEmpty()) { ++stats[6]; continue; }
+      require(a!=nullptr,request+": nonempty decoded sound has no 16-bit sample buffer (unsupported corpus)");
+      equal(aChannels,bChannels,request+" decoded channels");
+      equal(aRate,bRate,request+" decoded sample rate");
+      require(aChannels>0,request+": decoded sample channel count is zero");
+      if(aCount!=0) {
+        bytes(a,b,aCount*sizeof(int16_t),request+" complete decoded samples");
+        originalSamples[group].update(a,aCount*sizeof(int16_t));
+        nativeSamples[group].update(b,bCount*sizeof(int16_t));
+        }
+      ++stats[2]; stats[3]+=aCount; stats[4]+=aCount/aChannels;
+      }
+    equal(payloadFiles.size(),nativeJson["payloads"].MemberCount(),"every native audio payload must be selected");
+    std::printf("Audio corpus: %zu selected requests (%zu speech), %zu unique payloads, %llu selected bytes, %llu unique bytes\n",
+                requests.size(),speech,payloadFiles.size(),static_cast<unsigned long long>(totalBytes),static_cast<unsigned long long>(uniqueBytes));
+    for(const auto& [group,stats]:totals) {
+      const auto sourceHash=originalSamples[group].finish(),nativeHash=nativeSamples[group].finish();
+      require(sourceHash==nativeHash,group+": complete decoded sample SHA-256 differs");
+      std::printf("Audio %s: %llu requests, %llu bytes, %llu decoded16, %llu interleaved samples, %llu frames, %llu ms, %llu empty, %llu exceptions; samples SHA-256 %s\n",
+                  group.c_str(),static_cast<unsigned long long>(stats[0]),static_cast<unsigned long long>(stats[1]),
+                  static_cast<unsigned long long>(stats[2]),static_cast<unsigned long long>(stats[3]),
+                  static_cast<unsigned long long>(stats[4]),static_cast<unsigned long long>(stats[5]),
+                  static_cast<unsigned long long>(stats[6]),static_cast<unsigned long long>(stats[7]),sourceHash.c_str());
+      }
+    }
+
+  static void audioRuntime(const fs::path& base, const fs::path& temporary, const fs::path& censusPath) {
+    // A valid base index with no audio payloads must mount before lazy integrity checks run.
+    const auto fixtureBase=temporary/"audio-runtime-base";
+    fs::create_directories(fixtureBase/"audio");
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","outputunits","sources"})
+      fs::create_symlink(base/part,fixtureBase/part);
+    fs::create_symlink(base/"audio/audio.json",fixtureBase/"audio/audio.json");
+    setenv("OPENGOTHIC_BASE",fixtureBase.c_str(),1);
+    Resources resources;
+    Resources::loadVdfs({},true);
+    Gothic gothic;
+    require(Resources::isHeadless(),"audio integration must remain CPU-only");
+    const auto pcm=[](uint16_t channels,const std::vector<int16_t>& samples) {
+      std::vector<uint8_t> data{
+        'R','I','F','F',0,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,1,0,0,0,
+        0xE8,0x03,0,0,0,0,0,0,0,0,16,0,'d','a','t','a',0,0,0,0};
+      data[22]=uint8_t(channels);
+      const uint32_t rate=1000*channels*2;
+      for(size_t i=0;i<4;++i) {
+        data[4+i]=uint8_t((36+2*samples.size())>>(8*i));
+        data[28+i]=uint8_t(rate>>(8*i));
+        data[40+i]=uint8_t((2*samples.size())>>(8*i));
+        }
+      data[32]=uint8_t(2*channels);
+      for(const auto sample:samples) {
+        data.push_back(uint8_t(uint16_t(sample)));
+        data.push_back(uint8_t(uint16_t(sample)>>8));
+        }
+      return data;
+      };
+    const auto nativePcm=pcm(2,{-32768,32767,-1,1,4660,-4660});
+    const auto externalPcm=pcm(1,{123,-456});
+    const auto zeroPcm=pcm(2,{});
+    const std::vector<uint8_t> tiny={'b','a','d'};
+    // Mount intact originals in a tiny isolated VDF so any accidental fallback is observable.
+    const auto archiveFile=temporary/"P15.VDF";
+    {
+    zenkit::Vfs original;
+    original.mkdir("/SPEECH");
+    original.mount(zenkit::VfsNode::file("P15_PCM.WAV",{reinterpret_cast<const std::byte*>(nativePcm.data()),nativePcm.size(),false}),"/");
+    original.mount(zenkit::VfsNode::file("P15_SPEECH.WAV",{reinterpret_cast<const std::byte*>(nativePcm.data()),nativePcm.size(),false}),"/SPEECH");
+    original.mount(zenkit::VfsNode::file("P15_ZERO.WAV",{reinterpret_cast<const std::byte*>(zeroPcm.data()),zeroPcm.size(),false}),"/");
+    original.mount(zenkit::VfsNode::file("P15_TINY.WAV",{reinterpret_cast<const std::byte*>(tiny.data()),tiny.size(),false}),"/");
+    auto disk=zenkit::Write::to(archiveFile);
+    original.save(disk.get(),zenkit::GameVersion::GOTHIC_2);
+    }
+    resources.gothicAssets.mount_disk(archiveFile);
+    resources.baseAudio={};
+    resources.baseAudio.dir=fixtureBase/"audio";
+    const auto add=[&](const char* request,const std::vector<uint8_t>& raw,const char* cls,const char* path) {
+      AudioData::Sound sound;
+      sound.payload=BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(raw.data()),raw.size()));
+      sound.file=sound.payload.substr(0,2)+"/"+sound.payload+".wav";
+      sound.size=raw.size(); sound.cls=cls; sound.origin="archive"; sound.path=path; sound.archive="P15.VDF";
+      sound.sourceSha256=sound.payload;
+      const auto file=resources.baseAudio.dir/sound.file;
+      fs::create_directories(file.parent_path());
+      gothicglb::writeFile(file,raw.data(),raw.size());
+      resources.baseAudio.sounds.emplace(request,std::move(sound));
+      };
+    add("P15_PCM.WAV",nativePcm,"sound","P15_PCM.WAV");
+    add("P15_SPEECH.WAV",nativePcm,"speech","SPEECH/P15_SPEECH.WAV");
+    add("P15_ZERO.WAV",zeroPcm,"sound","P15_ZERO.WAV");
+    add("P15_TINY.WAV",tiny,"sound","P15_TINY.WAV");
+    auto previousExternal=std::move(gothic.externalSoundFn);
+    require(Resources::writeCensus(),"cannot write audio runtime baseline");
+    const auto before=json(censusPath);
+    const auto check=[](const Tempest::Sound& sound,uint16_t channels,const std::vector<int16_t>& samples,const std::string& field) {
+      require(!sound.isEmpty(),field+": valid PCM must remain nonempty");
+      size_t count=0; uint16_t actualChannels=0; uint32_t rate=0;
+      const auto* data=sound.samples16(count,actualChannels,rate);
+      require(data!=nullptr && count==samples.size() && actualChannels==channels && rate==1000,field+": decoded PCM metadata differs");
+      if(count!=0) bytes(data,samples.data(),count*sizeof(int16_t),field+" PCM samples");
+      };
+    check(Resources::loadSoundBuffer("p15_pcm.wav \t"),2,{-32768,32767,-1,1,4660,-4660},"native PCM");
+    check(Resources::loadSoundBuffer("P15_SPEECH.WAV"),2,{-32768,32767,-1,1,4660,-4660},"native speech alias");
+    size_t externalCalls=0;
+    gothic.externalSoundFn=[&](std::string_view,std::vector<uint8_t>& data) { ++externalCalls; data=externalPcm; return true; };
+    check(Resources::loadSoundBuffer("P15_PCM.WAV"),1,{123,-456},"external valid PCM priority");
+    gothic.externalSoundFn=[&](std::string_view,std::vector<uint8_t>& data) { ++externalCalls; data=tiny; return true; };
+    require(Resources::loadSoundBuffer("P15_PCM.WAV").isEmpty(),"invalid successful external audio must not fall back to native or raw PCM");
+    gothic.externalSoundFn=[&](std::string_view,std::vector<uint8_t>& data) { ++externalCalls; data=tiny; return false; };
+    check(Resources::loadSoundBuffer("P15_PCM.WAV"),2,{-32768,32767,-1,1,4660,-4660},"external false selects native PCM");
+    equal(externalCalls,3u,"external callback ordering");
+    gothic.externalSoundFn={};
+    require(Resources::loadSoundBuffer("").isEmpty() && Resources::loadSoundBuffer("P15_MISSING.WAV").isEmpty() &&
+            Resources::loadSoundBuffer("path/P15_PCM.WAV").isEmpty(),"empty, missing and path-prefixed audio requests must stay empty");
+    check(Resources::loadSoundBuffer("P15_ZERO.WAV"),2,{},"zero-data PCM nonempty outcome");
+    require(Resources::loadSoundBuffer("P15_TINY.WAV").isEmpty(),"indexed tiny WAV must keep the original decoder exception/empty result");
+    const auto& source=resources.baseAudio.sounds.at("P15_PCM.WAV");
+    const auto payloadFile=resources.baseAudio.dir/source.file;
+    fs::remove(payloadFile);
+    require(Resources::loadSoundBuffer("P15_PCM.WAV").isEmpty(),"missing native payload must not fall back to intact original PCM");
+    gothicglb::writeFile(payloadFile,tiny.data(),tiny.size());
+    require(Resources::loadSoundBuffer("P15_PCM.WAV").isEmpty(),"resized native payload must not fall back to intact original PCM");
+    auto changed=nativePcm; changed.at(44)^=1;
+    gothicglb::writeFile(payloadFile,changed.data(),changed.size());
+    require(Resources::loadSoundBuffer("P15_PCM.WAV").isEmpty(),"same-size SHA corruption must not fall back to intact original PCM");
+    gothic.externalSoundFn=std::move(previousExternal);
+    require(Resources::writeCensus(),"cannot write audio runtime census");
+    const auto after=json(censusPath);
+    require(before["files"]==after["files"],"native/external/error audio paths must add zero original resource opens");
+    const auto& audio=after["runtime_audio"];
+    require(std::string_view(audio["coverage"].GetString())=="verified_base_payload_reads" && !audio["complete_corpus"].GetBool(),
+            "audio census must describe verified payload reads without full-corpus claims");
+    equal(audio["selections"].Size(),5u,"only verified native reads, including tiny decoder failure, enter audio census");
+    for(const auto& row:audio["selections"].GetArray()) {
+      const auto* selected=resources.baseAudio.find(row["request"].GetString());
+      require(selected!=nullptr && row["class"].GetString()==selected->cls &&
+              row["payload"]["file"].GetString()=="base/audio/"+selected->file &&
+              row["payload"]["size"].GetUint64()==selected->size && row["payload"]["sha256"].GetString()==selected->payload,
+              "verified audio payload census identity differs");
+      const auto& imported=row["imported_source"];
+      require(imported["origin"].GetString()==selected->origin && imported["path"].GetString()==selected->path &&
+              imported["archive"].GetString()==selected->archive && imported["size"].GetUint64()==selected->size &&
+              imported["sha256"].GetString()==selected->sourceSha256,"audio imported provenance census differs");
+      }
+    equal(after["base_misses"].Size(),3u,"native audio integrity failures must enter census misses");
+    for(const auto& row:after["base_misses"].GetArray())
+      require(std::string(row["reason"].GetString()).find("audio data: ")!=std::string::npos,"audio misses must name the native integrity error");
+    size_t sounds=0,speech=0;
+    for(const auto& row:after["replacements"].GetArray()) {
+      const std::string_view kind=row["kind"].GetString();
+      if(kind=="basesound") ++sounds;
+      else if(kind=="basespeech") ++speech;
+      else require(false,"audio fixture produced an unrelated replacement kind");
+      }
+    equal(sounds,4u,"verified sound replacement reads");
+    equal(speech,1u,"verified speech replacement reads");
+    setenv("OPENGOTHIC_BASE",base.c_str(),1);
+    std::puts("Audio runtime: lazy payload checks, external priority, exact PCM and zero-data outcomes, integrity failures, verified identities and zero original opens checked");
+    }
+
   static void census(const fs::path& file, size_t meshes, size_t models, size_t fonts, size_t programs) {
     const auto data=json(file);
     equal(data["replacements"].Size(),meshes+models+programs,"census base mesh/model/program count");
@@ -2049,6 +2325,8 @@ struct BaseContentContract {
     legacyModelBounds();
     modelTagBoundary();
     }
+    audioCorpus(base);
+    audioRuntime(base,temporary,censusPath);
     std::printf("Meshes: %zu equal; %zu vertices, %zu indices, %zu meshlets; physics packing equal\n",
                 meshCount,vertices,indices,meshlets);
 
@@ -2072,11 +2350,11 @@ struct BaseContentContract {
     catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
     require(rejected,"invalid explicit base must fail with recovery instructions");
 
-    for(const std::string kind:{"models","fonts","programs","outputunits"}) {
+    for(const std::string kind:{"models","fonts","programs","outputunits","audio"}) {
       const auto incomplete=temporary/("missing-"+kind+"-index");
       fs::create_directories(incomplete/kind);
       fs::copy_file(base/"base.json",incomplete/"base.json");
-      for(const auto* part:{"textures","meshes","zen","models","fonts","programs","outputunits","sources"})
+      for(const auto* part:{"textures","meshes","zen","models","fonts","programs","outputunits","audio","sources"})
         if(part!=kind) fs::create_directory_symlink(base/part,incomplete/part);
       setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
       std::string missingIndexError;
@@ -2085,7 +2363,7 @@ struct BaseContentContract {
         Resources::loadVdfs({},true);
         }
       catch(const BaseStore::Error& error) { missingIndexError=error.what(); }
-      const auto prefix=kind=="programs" ? "program data: " : kind=="outputunits" ? "output units: " : "base index missing: ";
+      const auto prefix=kind=="programs" ? "program data: " : kind=="outputunits" ? "output units: " : kind=="audio" ? "audio data: " : "base index missing: ";
       require(missingIndexError.find(prefix+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
               missingIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
               "base without "+kind+"/"+kind+".json must fail with recovery instructions");
@@ -2093,7 +2371,7 @@ struct BaseContentContract {
     {
     const auto broken=temporary/"broken-program-record";
     fs::create_directories(broken/"programs");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","outputunits","sources"})
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","outputunits","audio","sources"})
       fs::create_symlink(base/part,broken/part);
     for(const auto& file:fs::directory_iterator(base/"programs"))
       fs::create_symlink(file.path(),broken/"programs"/file.path().filename());
@@ -2142,7 +2420,7 @@ struct BaseContentContract {
     {
     const auto broken=temporary/"broken-outputunits-record";
     fs::create_directories(broken/"outputunits");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","sources"})
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","audio","sources"})
       fs::create_symlink(base/part,broken/part);
     for(const auto& file:fs::directory_iterator(base/"outputunits"))
       fs::create_symlink(file.path(),broken/"outputunits"/file.path().filename());

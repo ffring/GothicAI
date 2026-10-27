@@ -4,6 +4,7 @@
 #include "baseimport.h"
 #include "basemusic.h"
 #include "gothicglb.h"
+#include "audiodata.h"
 #include "outputunits.h"
 #include "programdata.h"
 #include "asset/fromzenkit.h"
@@ -1689,6 +1690,148 @@ std::string OutputUnitsImport::json() const {
   s += "\n  ],\n  \"server\":{\"ou_py\":"+ref(serverOuPy)+"}\n}\n";
   return s;
   }
+
+// P15: every sound request of the runtime VFS (P10's selection: each distinct .WAV/.OGG basename and its
+// Vfs::find winner), copied byte for byte into the base (common/audiodata.h).
+class AudioImport {
+  public:
+    explicit AudioImport(const fs::path& root)
+      : root16(installation(fs::absolute(root))), gothic(fs::path(root16).parent_path()) {
+      vfs.set_open_observer([this](std::string_view, std::string_view source) { opened = source; });
+      archives = mountRuntime(vfs,gothic,work);
+      collectPaths(vfs.root(),"",paths);
+      }
+
+    // Writes, or with verifyOnly compares, every payload and the index; returns a summary line.
+    std::string run(const fs::path& out, bool verifyOnly);
+
+  private:
+    struct Entry {
+      std::string payload, cls, origin, path, archive, header;
+      uint64_t    size = 0;
+      };
+
+    std::string relative(const fs::path& p) const {
+      return p.lexically_relative(gothic).lexically_normal().generic_string();
+      }
+
+    std::string json() const;
+
+    std::u16string                                        root16;
+    fs::path                                              gothic, work;
+    zenkit::Vfs                                           vfs;
+    std::string                                           opened;
+    std::vector<RuntimeArchive>                           archives;
+    std::map<const zenkit::VfsNode*,std::string>          paths;
+    std::map<std::string,Entry>                           sounds;   // ASCII-upper request -> entry
+    std::map<std::string,std::pair<std::string,uint64_t>> payloads; // sha -> (file, size)
+    std::map<std::string,uint64_t>                        loose;    // host relative path -> size
+  };
+
+std::string AudioImport::run(const fs::path& out, bool verifyOnly) {
+  if(!verifyOnly)
+    fs::create_directories(out);
+
+  std::set<std::string> requests;
+  for(const auto& [node,path]:paths) {
+    const auto ext = extension(node->name());
+    if(ext==".WAV" || ext==".OGG")
+      requests.insert(upperAscii(node->name()));
+    }
+
+  uint64_t totalBytes = 0, uniqueBytes = 0;
+  size_t speech = 0;
+  for(const auto& request:requests) {
+    const auto* winner = vfs.find(request);
+    require(winner!=nullptr,"Vfs::find does not resolve "+request);
+    opened.clear();
+    auto in = winner->open_read();
+    std::vector<uint8_t> bytes;
+    const auto d = digest(*in,&bytes);
+
+    Entry e;
+    e.payload = d.sha256;
+    e.size    = d.size;
+    e.header  = audioHeader(d.head);
+    if(fs::path(opened).is_absolute()) {
+      e.origin = "host";
+      e.path   = relative(fs::path(opened));
+      loose[e.path] = d.size;
+      }
+    else {
+      e.origin  = "archive";
+      e.path    = paths.at(winner);
+      e.archive = upper(opened);
+      }
+    e.cls = "sound";
+    for(const auto& part:fs::path(e.path).lexically_normal())
+      if(upperAscii(part.generic_string())=="SPEECH")
+        e.cls = "speech";
+    speech += e.cls=="speech" ? 1 : 0;
+    totalBytes += d.size;
+
+    // The first request (in name order) with these bytes names their payload file; later ones reuse it.
+    if(!payloads.count(e.payload)) {
+      const auto ext = extension(request)==".OGG" ? std::string(".ogg") : std::string(".wav");
+      const auto file = e.payload.substr(0,2)+"/"+e.payload+ext;
+      const auto target = out/file;
+      if(verifyOnly) {
+        require(fs::is_regular_file(target) && gothicglb::readFile(target)==bytes,"audio payload differs: "+target.string());
+        }
+      else {
+        fs::create_directories(target.parent_path());
+        gothicglb::writeFile(target,bytes.data(),bytes.size());
+        require(gothicglb::readFile(target)==bytes,"audio payload differs after writing: "+target.string());
+        }
+      payloads[e.payload] = {file,d.size};
+      uniqueBytes += d.size;
+      }
+    sounds.emplace(request,std::move(e));
+    }
+
+  const auto text = json();
+  if(!verifyOnly) {
+    const auto tmp = out/"audio.json.tmp";
+    gothicglb::writeFile(tmp,text.data(),text.size());
+    fs::rename(tmp,out/"audio.json");
+    }
+  require(parse(readText(out/"audio.json"),"audio.json")==parse(text,"expected audio index"),
+          "audio.json differs from the installation");
+  const auto index = AudioData::readIndex(out);
+  require(index.sounds.size()==sounds.size(),"audio.json reads back differently");
+  return std::to_string(sounds.size())+" sounds ("+std::to_string(speech)+" speech, "+
+         std::to_string(sounds.size()-speech)+" sound), "+std::to_string(payloads.size())+" payloads, "+
+         std::to_string(uniqueBytes)+" unique of "+std::to_string(totalBytes)+" selected bytes";
+  }
+
+std::string AudioImport::json() const {
+  Files mounted;
+  for(const auto& a:archives)
+    mounted.emplace_back(a.name,a.size);
+  std::sort(mounted.begin(),mounted.end());
+
+  std::string s = "{\n  \"format\":\"gothic-audio\",\n  \"version\":1,\n  \"archives\":[";
+  for(size_t i=0; i<mounted.size(); ++i)
+    s += std::string(i ? "," : "")+"\n    {\"name\":"+str(mounted[i].first)+",\"size\":"+std::to_string(mounted[i].second)+"}";
+  s += "\n  ],\n  \"loose_files\":[";
+  size_t n = 0;
+  for(const auto& [path,size]:loose)
+    s += std::string(n++ ? "," : "")+"\n    {\"path\":"+str(path)+",\"size\":"+std::to_string(size)+"}";
+  s += "\n  ],\n  \"payloads\":{";
+  n = 0;
+  for(const auto& [sha,payload]:payloads)
+    s += std::string(n++ ? "," : "")+"\n    \""+sha+"\":{\"file\":"+str(payload.first)+",\"size\":"+
+         std::to_string(payload.second)+"}";
+  s += "\n  },\n  \"sounds\":{";
+  n = 0;
+  for(const auto& [name,e]:sounds)
+    s += std::string(n++ ? "," : "")+"\n    "+str(name)+":{\"payload\":\""+e.payload+"\",\"class\":\""+e.cls+
+         "\",\"origin\":\""+e.origin+"\",\"path\":"+str(e.path)+",\"archive\":"+
+         (e.archive.empty() ? std::string("null") : str(e.archive))+",\"source_sha256\":\""+e.payload+
+         "\",\"header\":"+e.header+"}";
+  s += "\n  }\n}\n";
+  return s;
+  }
 }
 
 std::vector<RuntimeArchive> runtimeArchives(const fs::path& gothic) {
@@ -1769,6 +1912,15 @@ int convertSources(const fs::path& gothic, const fs::path& out, bool verifyOnly)
           "sources.json differs from the installation");
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
   std::cout << (verifyOnly ? "verified" : "written and verified") << " source manifest (" << ms << " ms)\n";
+  return 0;
+  }
+
+int convertAudio(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
+  const auto t0 = std::chrono::steady_clock::now();
+  AudioImport audio(gothic);
+  const auto summary = audio.run(out,verifyOnly);
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << (verifyOnly ? "verified " : "written and verified ") << summary << " (" << ms << " ms)\n";
   return 0;
   }
 

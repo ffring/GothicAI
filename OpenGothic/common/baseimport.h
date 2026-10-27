@@ -53,6 +53,9 @@ int convertPrograms(const std::filesystem::path& gothic, const std::filesystem::
 int convertOutputUnits(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
 // One external OU.BIN/OU.DAT to a native record at `record` (import only; prints both SHA-256).
 int convertOutputUnitsFile(const std::filesystem::path& source, const std::filesystem::path& record);
+// P15: audio/audio.json and one exact copy per distinct payload (common/audiodata.h) of every .WAV/.OGG
+// request of the runtime VFS and its Vfs::find winner. An installation without sounds gives an empty index.
+int convertAudio(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
 // P10: sources/sources.json, the selected inputs of the not yet migrated families
 // (FNT, audio, BIK, SGT/STY/DLS, the eight DATs, OU, server readers) with origin and SHA-256.
 int convertSources(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);

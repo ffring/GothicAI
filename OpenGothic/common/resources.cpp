@@ -293,6 +293,15 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
         throw std::runtime_error("loose file differs from output units base index: "+path);
       }
     Log::i("base: ",inst->baseOutputUnits.records.size()," output units records from \"",inst->baseOutputUnits.dir.string(),"\"");
+    if(inst->baseAudio.archives!=mounted)
+      throw std::runtime_error("mounted archives differ from audio base index: "+inst->baseAudio.dir.string());
+    for(const auto& [path,size]:inst->baseAudio.looseFiles) {
+      std::error_code error;
+      const auto actual = std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/path,error);
+      if(error || actual!=size)
+        throw std::runtime_error("loose file differs from audio base index: "+path);
+      }
+    Log::i("base: ",inst->baseAudio.sounds.size()," sounds from \"",inst->baseAudio.dir.string(),"\"");
     inst->baseProgress={};
     }
   catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
@@ -760,6 +769,7 @@ void Resources::indexBaseContent() {
   baseFonts.load(root,"fonts");
   basePrograms = ProgramData::readIndex(root/"programs");
   baseOutputUnits = OutputUnits::readIndex(root/"outputunits");
+  baseAudio = AudioData::readIndex(root/"audio");
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {
@@ -1548,8 +1558,20 @@ Tempest::Sound Resources::implLoadSoundBuffer(std::string_view name) {
     return Tempest::Sound();
 
   auto& external = Gothic::inst().externalSoundFn;
-  if(!(external && external(name,fBuff)) && !getFileData(name,fBuff))
-    return Tempest::Sound();
+  if(!(external && external(name,fBuff))) {
+    const auto* source = baseAudio.find(name);
+    if(source==nullptr)
+      return Tempest::Sound();
+    try {
+      AudioData::readPayload(baseAudio,*source,name,fBuff);
+      }
+    catch(const std::exception& error) {
+      Log::e("base: ",error.what());
+      if(census) census->missing(name,error.what());
+      return Tempest::Sound();
+      }
+    if(census) census->audioLoaded(name,*source);
+    }
   try {
     Tempest::MemReader rd(fBuff.data(),fBuff.size());
     return Tempest::Sound(rd);

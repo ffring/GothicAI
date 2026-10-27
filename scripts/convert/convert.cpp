@@ -32,6 +32,9 @@
 //       when the server's native message view differs from its original scanner.
 //   content-convert outputunits-file <OU.BIN|OU.DAT> <record.json>
 //       One external library to a native record, e.g. for storygraph --ou. Import only.
+//   content-convert audio|verify-audio <gothic dir> <dir>
+//       Every .WAV/.OGG request of the runtime VFS copied byte for byte (common/audiodata.h);
+//       audio.json maps the request names to payloads, provenance and header facts.
 //   content-convert sources|verify-sources <gothic dir> <dir>
 //       sources.json: selected FNT/audio/BIK/music/DAT/OU inputs of the engine
 //       and server readers, their origin and SHA-256; no payload conversion.
@@ -47,6 +50,7 @@
 #include "fontdata.h"
 #include "programdata.h"
 #include "outputunits.h"
+#include "audiodata.h"
 #include "worldchunks.h"
 #include "worlddata.h"
 #include "gothicglb.h"
@@ -384,6 +388,103 @@ int selfTest() {
   require(rejected,"truncated cutscene library record must be rejected");
   }
 
+  // Sounds: a toy installation with one archive and a _work tree. Selection by request name and the
+  // engine's Vfs::find winner (archive over its _work shadow), speech class, one payload for equal bytes
+  // across extensions, a tiny .WAV copied as is, no non-audio name selected, an empty installation.
+  {
+  const auto wav = [](uint16_t tag, uint16_t bits, std::vector<uint8_t> data) {
+    std::vector<uint8_t> b;
+    const auto u32 = [&b](uint32_t v) { for(int i=0;i<4;++i) b.push_back(uint8_t(v>>(8*i))); };
+    const auto u16 = [&b](uint16_t v) { b.push_back(uint8_t(v)); b.push_back(uint8_t(v>>8)); };
+    const auto tagged = [&b](const char* t) { b.insert(b.end(),t,t+4); };
+    tagged("RIFF"); u32(uint32_t(36+data.size())); tagged("WAVE");
+    tagged("fmt "); u32(16); u16(tag); u16(1); u32(44100); u32(44100u*bits/8); u16(uint16_t(bits/8 ? bits/8 : 1)); u16(bits);
+    tagged("data"); u32(uint32_t(data.size())); b.insert(b.end(),data.begin(),data.end());
+    return b;
+    };
+  const auto pcm      = wav(1,16,{0x00,0x00,0xff,0x7f,0x00,0x80,0x01,0x00});
+  const auto ima      = wav(17,4,{0x00,0x00,0x10,0x00,0x12,0x34,0x56,0x78});
+  const std::vector<uint8_t> tiny    = {'R','I','F'};
+  const std::vector<uint8_t> shadow  = {'a','r','c','h','i','v','e',' ','c','o','p','y'};
+  const std::vector<uint8_t> riffBin = pcm;
+  const auto game = dir/"audio-game";
+  fs::create_directories(game/"Data");
+  fs::create_directories(game/"_work/Data/Sound/SFX");
+  {
+  zenkit::Vfs vdf;
+  vdf.mkdir("/_WORK/DATA/SOUND/SFX");
+  vdf.mkdir("/_WORK/DATA/SOUND/SPEECH");
+  const auto add = [&vdf](const char* dirName, const char* name, const std::vector<uint8_t>& b) {
+    vdf.mount(zenkit::VfsNode::file(name,zenkit::VfsFileDescriptor{reinterpret_cast<const std::byte*>(b.data()),b.size(),false}),dirName);
+    };
+  add("/_WORK/DATA/SOUND/SFX","A_PCM.WAV",pcm);
+  add("/_WORK/DATA/SOUND/SFX","C_SAME.OGG",pcm);
+  add("/_WORK/DATA/SOUND/SFX","TINY.WAV",tiny);
+  add("/_WORK/DATA/SOUND/SFX","SHADOW.WAV",shadow);
+  add("/_WORK/DATA/SOUND/SFX","RIFF.BIN",riffBin);
+  add("/_WORK/DATA/SOUND/SPEECH","B_IMA.WAV",ima);
+  auto archive = zenkit::Write::to(game/"Data/SOUND.VDF");
+  vdf.save(archive.get(),zenkit::GameVersion::GOTHIC_2);
+  }
+  const std::string hostCopy = "host copy", hostOnly = "host only";
+  gothicglb::writeFile(game/"_work/Data/Sound/SFX/SHADOW.WAV",hostCopy.data(),hostCopy.size());
+  gothicglb::writeFile(game/"_work/Data/Sound/SFX/HOSTONLY.WAV",hostOnly.data(),hostOnly.size());
+
+  const auto out = dir/"audio-out";
+  require(BaseImport::convertAudio(game,out,false)==0 && BaseImport::convertAudio(game,out,true)==0,"audio import and verify");
+  const auto index = AudioData::readIndex(out);
+  std::string names;
+  for(const auto& [name,s]:index.sounds) names += name+";";
+  require(names=="A_PCM.WAV;B_IMA.WAV;C_SAME.OGG;HOSTONLY.WAV;SHADOW.WAV;TINY.WAV;","audio selection by request name");
+  const auto& a = index.sounds.at("A_PCM.WAV");
+  const auto& same = index.sounds.at("C_SAME.OGG");
+  require(a.cls=="sound" && index.sounds.at("B_IMA.WAV").cls=="speech" && a.origin=="archive" && a.archive=="SOUND.VDF",
+          "audio class and origin");
+  require(same.payload==a.payload && same.file==a.file && a.file.size()>4 && a.file.substr(a.file.size()-4)==".wav",
+          "equal bytes share the first request's payload file");
+  require(index.sounds.at("HOSTONLY.WAV").origin=="host" &&
+          index.sounds.at("HOSTONLY.WAV").path=="_work/Data/Sound/SFX/HOSTONLY.WAV","host-only sound");
+  require(index.find("a_pcm.wav \t")==&a && index.find(" A_PCM.WAV")==nullptr && index.find("SFX/A_PCM.WAV")==nullptr,
+          "audio lookup trims trailing whitespace only, without a basename fallback");
+  std::vector<uint8_t> bytes;
+  AudioData::readPayload(index,index.sounds.at("SHADOW.WAV"),"SHADOW.WAV",bytes);
+  require(bytes==shadow,"the archive copy wins over its _work shadow");
+  AudioData::readPayload(index,index.sounds.at("TINY.WAV"),"TINY.WAV",bytes);
+  require(bytes==tiny,"tiny sounds are copied as they are");
+  AudioData::readPayload(index,a,"A_PCM.WAV",bytes);
+  require(bytes==pcm,"payload bytes");
+
+  const auto payload = out/a.file;
+  const auto rejectedRead = [&](const char* what) {
+    bool failed = false;
+    bytes = {1,2,3};
+    try { AudioData::readPayload(index,a,"A_PCM.WAV",bytes); }
+    catch(const std::exception& e) { failed = std::string(e.what()).find("A_PCM.WAV")!=std::string::npos; }
+    require(failed && bytes.empty(),std::string("audio payload must be rejected: ")+what);
+    };
+  auto altered = pcm;
+  altered.back() ^= 1;
+  gothicglb::writeFile(payload,altered.data(),altered.size());
+  rejectedRead("same size, different bytes");
+  gothicglb::writeFile(payload,pcm.data(),pcm.size()-1);
+  rejectedRead("resized");
+  fs::remove(payload);
+  rejectedRead("missing");
+
+  const auto empty = dir/"audio-empty";
+  fs::create_directories(empty/"Data");
+  fs::create_directories(empty/"_work");
+  {
+  zenkit::Vfs vdf;
+  const std::vector<uint8_t> marker = {1};
+  vdf.mount(zenkit::VfsNode::file("FIXTURE.BIN",zenkit::VfsFileDescriptor{reinterpret_cast<const std::byte*>(marker.data()),marker.size(),false}),"/");
+  auto archive = zenkit::Write::to(empty/"Data/EMPTY.VDF");
+  vdf.save(archive.get(),zenkit::GameVersion::GOTHIC_2);
+  }
+  require(BaseImport::convertAudio(empty,dir/"audio-empty-out",false)==0 &&
+          AudioData::readIndex(dir/"audio-empty-out").sounds.empty(),"an installation without sounds gives an empty index");
+  }
+
   WorldData::selfTest(dir/"world-data");
   fs::remove_all(dir);
   std::cout << "self-test passed\n";
@@ -421,6 +522,8 @@ int main(int argc, char** argv) {
       return BaseImport::convertOutputUnits(args[1],args[2],args[0]=="verify-outputunits");
     if(args.size()==3 && args[0]=="outputunits-file")
       return BaseImport::convertOutputUnitsFile(args[1],args[2]);
+    if(args.size()==3 && (args[0]=="audio" || args[0]=="verify-audio"))
+      return BaseImport::convertAudio(args[1],args[2],args[0]=="verify-audio");
     if(args.size()==3 && (args[0]=="sources" || args[0]=="verify-sources"))
       return BaseImport::convertSources(args[1],args[2],args[0]=="verify-sources");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
@@ -435,6 +538,7 @@ int main(int argc, char** argv) {
                  "       content-convert programs|verify-programs <gothic dir> <dir>\n"
                  "       content-convert outputunits|verify-outputunits <gothic dir> <dir>\n"
                  "       content-convert outputunits-file <OU.BIN|OU.DAT> <record.json>\n"
+                 "       content-convert audio|verify-audio <gothic dir> <dir>\n"
                  "       content-convert sources|verify-sources <gothic dir> <dir>\n"
                  "       content-convert base <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";

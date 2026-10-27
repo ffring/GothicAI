@@ -373,6 +373,7 @@ struct Fixture {
     require(BaseImport::convertFonts(root,base/"fonts",false)==0,"synthetic fonts must import into their own base");
     require(BaseImport::convertPrograms(root,base/"programs",false)==0,"synthetic program index must import into its own base");
     require(BaseImport::convertOutputUnits(root,base/"outputunits",false)==0,"synthetic output unit index must import into its own base");
+    require(BaseImport::convertAudio(root,base/"audio",false)==0,"synthetic audio index must import into its own base");
     // Synthetic installation without remaining-family inputs: a labelled empty manifest.
     std::filesystem::create_directories(base/"sources");
     textFile(base/"sources/sources.json","{\"format\":\"gothic-sources\",\"version\":1,\"synthetic\":\"mesh-gltf fixture without remaining-family inputs\"}\n");

@@ -12,6 +12,7 @@
 #include "basestore.h"
 #include "programdata.h"
 #include "outputunits.h"
+#include "audiodata.h"
 #include "asset/worldtypes.h"
 
 #include <tuple>
@@ -244,6 +245,7 @@ class Resources final {
     BaseIndex baseTextures, baseMeshes, baseZen, baseModels, baseFonts;
     ProgramData::Index basePrograms;
     OutputUnits::Index baseOutputUnits;
+    AudioData::Index baseAudio;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     BaseStore::Selection automaticBase;
     BaseImport::Progress baseProgress;
