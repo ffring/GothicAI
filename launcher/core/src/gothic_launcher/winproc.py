@@ -144,7 +144,8 @@ class Job:
         info = ExtendedLimitInformation()
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         size = ctypes.sizeof(info)
-        if not k.SetInformationJobObject(handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION, ctypes.byref(info), size):
+        limits = JOB_OBJECT_EXTENDED_LIMIT_INFORMATION
+        if not k.SetInformationJobObject(handle, limits, ctypes.byref(info), size):
             err = _error()
             k.CloseHandle(handle)
             raise err

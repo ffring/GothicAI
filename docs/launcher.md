@@ -65,6 +65,12 @@ cd ~/gothic-ai/play/launcher/core
 
 Проверка без запросов к моделям: на рабочем столе Ryzen запустить `~/gothic-ai/play/scripts/ryzen-play-session.sh --smoke`. Она вызывает `gothic-launcher play --smoke` и тот же `Control.session_start`, что окно: fake LLM, новая игра, без ASR/TTS, decider, быстрой модели и тела. Через `gothic-launcher control` этот запуск задаётся строкой `{"id":1,"method":"session.start","params":{"mode":"new","smoke":true}}`. Сохранённые настройки не меняются. Ядро сообщает адрес `/health` (`health_url` в событии сеанса); после соединения игры ответ содержит `"game": true`. Закрытие stdin `control` проверяет завершение оболочки. Дополнительно проверяются `scripts/gq status` с Mac и звуковой поток игры в `pw-dump` на Ryzen. Автотесты: `cd scripts/tests && python3 -m unittest -q test_ryzen_play test_ryzen` и `cd launcher/core && uv run pytest -q`.
 
+### Windows
+
+Статус: предварительная сборка — собирается и проходит модульные тесты в CI; игра, графика и микрофон на настоящем ПК не проверены. Окна Tauri на Windows нет, только ядро. Готовый архив делает `.github/workflows/windows-release.yml` (вручную, `windows-2022`): `scripts/build-engine.ps1` собирает MSVC игру с мостом и `storygraph.exe`, `scripts/windows/package.ps1` кладёт их с DLL сборки, C++ runtime рядом, исходниками и `uv.lock` сервисов, закреплённым `uv.exe` и лицензиями, проверяет x64 и импорт DLL; архив, манифест и `SHA256SUMS` уходят в черновик релиза, который после проверки архива публикуется как prerelease. Игрок запускает `Setup-GothicAI.cmd` (Python и колёса через uv, папка игры из Steam или выбор, `gothic-launcher setup`: ChatGPT для мозга и распознавания, Inworld TTS-2 с оригинальными голосами, без запасных, без быстрой модели и тела; ключ Inworld скрытым вводом, вход ChatGPT в браузере) и `Start-GothicAI.cmd` (`setup --check`, затем `up --continue`). [Инструкция игрока](../START_HERE.ru.md).
+
+Отличия ядра на Windows: каждый процесс стартует приостановленным в своём job object с `KILL_ON_JOB_CLOSE` (`winproc.py`); остановка завершает job целиком, а смерть лаунчера, даже из диспетчера задач, завершает все деревья. Замок `launcher.json` и замок обновления токенов ChatGPT — `msvcrt.locking`; запись токенов повторяет `os.replace`, пока файл держит читатель. Ctrl-C приходит через `signal.signal`. Логи — `%LOCALAPPDATA%\GothicAI\Logs`, база движка — `%LOCALAPPDATA%\gothic-ai\base` (`basestore.cpp` на `LockFileEx`), настройки, вход и сохранения — в тех же `~/.config/gothic-ai` и `~/.local/share/gothic-ai` профиля. Службам ядро передаёт `STORYGRAPH_TOOL` и `PYTHONUTF8=1`. Тесты: `cd launcher/core && uv run pytest -q` (Windows — `test_windows.py`, POSIX-тесты пропускаются) и `cd libs/chatgpt-auth && uv run pytest -q`.
+
 ## Цель
 
 Игра с ИИ запускается одной кнопкой, как обычное приложение. Не нужны терминалы, сборочные команды и правка `.env`. Настройки и ключи вводятся в окне, и там же видно, какие сервисы работают.
@@ -269,7 +275,7 @@ Gothic AI.app / Gothic AI Linux (Tauri, launcher/app)
   - Python-проекты объединяются в одно uv-окружение.
 - Нотаризация, раздача другим игрокам, автообновление.
 - Keychain.
-- Windows.
+- Окно Tauri на Windows: там пока ядро и терминальный запуск ([Windows](#windows)).
 
 ## Открытые вопросы
 

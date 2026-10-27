@@ -59,7 +59,7 @@ if ($problem) {
     Say 'windows_unsupported' $problem
     exit 2
 }
-Show-PathWarnings
+if (Test-Path -LiteralPath (Join-Path $Root 'OpenGothic\CMakeLists.txt')) { Show-PathWarnings }  # a build minds the path
 
 # uv brings Python and the services' libraries
 $uv = Find-Uv
@@ -79,7 +79,12 @@ if (-not $uv) {
 $game = Join-Path $Root 'OpenGothic\build\opengothic\Gothic2Notr.exe'
 $storygraph = Join-Path $Root 'OpenGothic\ai_bridge\storygraph\build\storygraph.exe'
 $built = (Test-Path -LiteralPath $game) -and (Test-Path -LiteralPath $storygraph)
-if (-not $SkipBuild -and ($Rebuild -or -not $built)) {
+$sources = Test-Path -LiteralPath (Join-Path $Root 'OpenGothic\CMakeLists.txt')
+if (-not $built -and -not $sources) {
+    Say 'package_incomplete'  # the release archive is prebuilt: without its game there is nothing to build
+    exit 2
+}
+if (-not $SkipBuild -and $sources -and ($Rebuild -or -not $built)) {
     $missing = @(Get-BuildPrerequisites)
     if ($missing.Count -gt 0) {
         Say 'build_tools_missing'

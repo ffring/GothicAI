@@ -1,4 +1,5 @@
 import stat
+import sys
 import tomllib
 
 import pytest
@@ -15,6 +16,7 @@ def test_missing_files_mean_defaults(tmp_path):
     assert config.secrets.inworld_api_key is None
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="file modes and a POSIX path; Windows: test_windows.py")
 def test_saved_settings_load_back_and_keys_stay_in_their_own_file(tmp_path):
     config = Config.load(tmp_path)
     config.set("game.dir", "/games/Gothic II")

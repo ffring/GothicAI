@@ -516,7 +516,9 @@ def main() -> None:
     sub.add_parser("login", help="sign in to ChatGPT")
     sub.add_parser("control", help="serve the launcher window: JSON lines on stdin and stdout")
 
-    p = sub.add_parser("setup", help="first run: game folder, remote-only profile, Inworld key, ChatGPT sign-in")
+    p = sub.add_parser(
+        "setup", help="first run: game folder, remote-only profile, Inworld key, ChatGPT sign-in"
+    )
     p.add_argument("--game-dir", help="the Gothic II folder (default: the one set, or found in Steam)")
     p.add_argument("--change-key", action="store_true", help="enter the Inworld key again (hidden input)")
     p.add_argument("--check", action="store_true", help="only say what is still missing before `up`")

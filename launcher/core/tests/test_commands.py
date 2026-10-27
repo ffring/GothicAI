@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +24,9 @@ from gothic_launcher.commands import (
 from gothic_launcher.settings import Config
 from gothic_launcher.state import SessionFile
 
+# POSIX path literals, symlinks and the Linux credential path; Windows has test_windows.py
+posix_only = pytest.mark.skipif(sys.platform == "win32", reason="POSIX paths")
+
 PORTS = Ports(server=50001, asr=50002, tts=50003)
 LAYOUT = Layout(
     Path("/repo"), Path("/bin/uv"), Path("/repo/Gothic2Notr"), Path("/games/G2"), Path("/home/game")
@@ -38,6 +42,7 @@ def by_name(procs):
     return {p.name: p for p in procs}
 
 
+@posix_only
 def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     config.set("voice.provider", "voxtral")
     config.set("voice.voxtral_url", "http://gpu:47830")
@@ -130,6 +135,7 @@ def test_the_quick_model_is_on_unless_turned_off(config, tmp_path):
     assert "--no-quick" in by_name(services(config, LAYOUT, PORTS, tmp_path))["server"].argv
 
 
+@posix_only
 def test_the_game_runs_in_its_home_and_finds_the_server(config):
     config.set("game.chat_scale", "1.5")
     g = game(config, LAYOUT, PORTS)
@@ -212,6 +218,7 @@ def test_the_inherited_environment_cannot_override_the_settings(monkeypatch):
     assert env["PYTHONUNBUFFERED"] == "1"
 
 
+@posix_only
 def test_find_layout_lists_everything_missing(config, tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / "server").mkdir(parents=True)
@@ -262,6 +269,7 @@ def test_platform_log_and_texture_paths(monkeypatch, platform):
         assert default_hd_textures() == home / ".local/share/gothic-ai/hd-textures/textures"
 
 
+@posix_only
 def test_linux_missing_credentials_is_a_short_cli_error(config, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli.sys, "platform", "linux")
     monkeypatch.setattr(cli.sys, "argv", ["gothic-launcher", "up", "--continue"])

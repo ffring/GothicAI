@@ -13,6 +13,9 @@ $script:Messages = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $PSSc
 $script:LogRoot = Join-Path $env:LOCALAPPDATA 'GothicAI\Logs'
 # Python children read and write UTF-8 instead of the ANSI code page: Russian paths and lines stay intact
 $env:PYTHONUTF8 = '1'
+# one interpreter for the launcher and the services (theirs is pinned by .python-version): uv downloads it
+# once, on the first setup
+$env:UV_PYTHON = '3.12'
 
 function Get-Message([string]$Key, [object[]]$Values) {
     $entry = $script:Messages.PSObject.Properties[$Key]
@@ -82,7 +85,8 @@ function Get-NativeOutput([string]$File, [string[]]$Arguments) {
 }
 
 function Find-Uv {
-    $candidates = @()
+    # the release archive's own pinned uv first (package.ps1), then an installed one
+    $candidates = @(Join-Path $script:Root 'tools\uv\uv.exe')
     $command = Get-Command uv.exe -ErrorAction SilentlyContinue
     if ($command) { $candidates += $command.Source }
     $candidates += @(

@@ -213,7 +213,7 @@
 | `decider-service/` | быстрые решения NPC: Strands Decider 2B, полосы urgent и background | dev-ubuntu | `--decider-url`, `GOTHIC_DECIDER_URL` |
 | `server/deploy/gemma/` | Gemma 4 12B (llama.cpp): реплики в бою, первые слова | dev-ubuntu | `--quick-url`, `GOTHIC_QUICK_LLM_URL` |
 | `body-service/` | политика боя P30 (GRU), обучение BC и PPO | сервис — dev-ubuntu, ядра 0–1; обучение — Ryzen и dev-ubuntu | `--body-url`, `GOTHIC_BODY_URL` |
-| `launcher/` | `core/` поднимает сервисы и игру одной командой; `app/` — окно (Tauri, Svelte); на Ryzen — значок GNOME с Ptyxis | ядро — Mac и Linux, приложение — Mac | `up --continue`, временные `--no-voice` и `--smoke`; [Ryzen](launcher.md#ryzen-linux) |
+| `launcher/` | `core/` поднимает сервисы и игру одной командой; `app/` — окно (Tauri, Svelte); на Ryzen — значок GNOME с Ptyxis; на Windows — `Setup/Start-GothicAI.cmd` и `scripts/windows/` | ядро — Mac, Linux и Windows (не проверено на игровом ПК), приложение — Mac | `up --continue`, временные `--no-voice` и `--smoke`, `setup`; [Ryzen](launcher.md#ryzen-linux), [Windows](launcher.md#windows) |
 | `libs/chatgpt-auth/` | вход через ChatGPT (OAuth PKCE), общее хранилище токенов | Mac или Ryzen, отдельный вход на каждой машине | — |
 
 Настройки сервисов — `.env` по образцу [`.env.example`](../.env.example). Развёртывание GPU-сервисов — `scripts/deploy-gpu.sh`.
@@ -341,5 +341,5 @@
 | `npc-body-*.md` (`api`, `arena`, `bc`, `combat-contract`, `headless-runner`, `observations`, `trajectories`) | боевое тело по этапам | справочники |
 | [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал до допуска и остановка 14.10 | исторические: gate пройден 15.10, итог в плане |
 | [`npc-scheduler.md`](npc-scheduler.md) | планировщик решений NPC | проект от 11.10; шаги 1–3 сделаны, планировщик работает в `brain/` |
-| [`launcher.md`](launcher.md) | окно лаунчера Mac и Ryzen (Linux) | этапы L1–L3 сделаны; сборка и установка с Mac, трей GNOME, общий сеанс ядра через `gq` |
+| [`launcher.md`](launcher.md) | окно лаунчера Mac и Ryzen (Linux), ядро на Windows | этапы L1–L3 сделаны; сборка и установка с Mac, трей GNOME, общий сеанс ядра через `gq`; Windows — готовый архив из CI, на игровом ПК не проверен |
 | [`MVP.md`](MVP.md) | первая спецификация MVP; [текущий TTS и оригинальные голоса](MVP.md#как-работает-сейчас) | TTS: сейчас + журнал; остальное историческое |
