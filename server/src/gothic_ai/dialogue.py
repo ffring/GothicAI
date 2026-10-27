@@ -1338,9 +1338,9 @@ class DialogueManager:
         self._surrender_probes += 1
         try:
             if (self.quick is None or getattr(self.quick, "_id_slot_supported", True) is False
-                    or entered >= conv.talked_at + 1.5):
+                    or entered >= conv.talked_at + 2.0):
                 return False
-            async with asyncio.timeout_at(conv.talked_at + 1.5):
+            async with asyncio.timeout_at(conv.talked_at + 2.0):
                 background = {task for task in (*self._prewarms.values(), *self._svm_tasks.values())
                               if not task.done()}
                 for task in background:
@@ -2557,26 +2557,20 @@ class DialogueManager:
         """The npc's line in a fight, from the quick model. False if it said nothing (it failed or went
         quiet first): the conversational model speaks then, as in any other turn."""
         assert self.quick is not None
-        probe: asyncio.Task[None] | None = None
         player = conv.trigger is not None and conv.trigger.role == "user"
         slot = self._quick_slot(conv.npc) if player and self.surrender_hold is not None else None
         if slot is not None:
             self._quick_busy[slot] += 1  # keep the speaker's prefix while the other slot classifies
         try:
             if slot is not None and self.surrender_hold is not None:
-                probe = asyncio.create_task(self.surrender_hold(conv, request))
+                await self.surrender_hold(conv, request)
             st = trace.step(request, None, llm=getattr(self.quick, "model", None) or self.quick.name)
             try:
                 await self._step(conv, state, request, None, st, quick=True)
             except LLMError as err:
                 log.warning("%s: the quick model failed: %s", conv.npc, err)
                 trace.event("quick_failed", error=str(err))
-            if probe is not None:
-                await probe
         finally:
-            if probe is not None:
-                probe.cancel()
-                await asyncio.gather(probe, return_exceptions=True)
             if slot is not None:
                 self._quick_busy[slot] -= 1
                 self._quick_free.set()

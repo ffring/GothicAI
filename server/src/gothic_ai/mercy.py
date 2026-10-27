@@ -143,6 +143,16 @@ class Mercy:
     def held(self, npc: str) -> bool:
         return any(npc in hold.members for hold in self.holds.values())
 
+    def _allies(self, npc: str) -> list[str]:
+        entry = self.orders.talk.people[npc]
+        band = set(self.parley.members(npc)) if self.parley and self.parley.bandit(npc) else set()
+        snap = self.link.snapshots.get(npc)
+        return [
+            other.id for other in (snap.nearby_npcs if snap else [])
+            if other.id != npc and other.id in self.orders.talk.people and other.distance <= 1000
+            and (self.orders.talk.people[other.id].guild == entry.guild or other.id in band)
+        ]
+
     def _release_hold(self, npc: str, hold: HeroHold) -> bool:
         if self.holds.get(npc) is not hold:
             return False
@@ -177,13 +187,13 @@ class Mercy:
 
     async def hold_surrender(self, conv: Conversation, request: list[Item]) -> None:
         npc = conv.npc
-        opponent = self._fight_words.get(npc, "")  # freeze before the parallel first words can start
+        opponent = self._fight_words.get(npc, "")  # preserve the combat words preceding the plea
         if (self.dialogue.quick is None or npc in self._hold_used or self.held(npc)
                 or not self._hero_turn(npc)):
             return
         self.dialogue._surrender_probes += 1
         try:
-            async with asyncio.timeout_at(conv.talked_at + 1.5):
+            async with asyncio.timeout_at(conv.talked_at + 2.0):
                 if self.barks is not None and self._scene is None and (
                     task := self.barks.task
                 ) is not None and not task.done():
@@ -212,15 +222,7 @@ class Mercy:
 
         conv.reply.add_done_callback(finished_turn)
         self.accepting.add(npc)
-        entry = self.orders.talk.people[npc]
-        band = set(self.parley.members(npc)) if self.parley and self.parley.bandit(npc) else set()
-        snap = self.link.snapshots.get(npc)
-        allies = [
-            other.id for other in (snap.nearby_npcs if snap else [])
-            if other.id != npc and other.id in self.orders.talk.people and other.distance <= 1000
-            and (self.orders.talk.people[other.id].guild == entry.guild or other.id in band)
-        ]
-        for member in [npc, *allies]:
+        for member in [npc, *self._allies(npc)]:
             if self.holds.get(npc) is not hold:
                 return
             try:
@@ -647,6 +649,8 @@ class Mercy:
         try:
             eligible = (npc in self.accepting and self._hero_turn(npc)
                         and (npc in self.holds or await self._hero_fight(npc)))
+            allies = ([member for member in self._allies(npc) if await self._hero_fight(member)]
+                      if eligible else [])
         except (GameError, TimeoutError) as error:
             return ToolOutcome(f"Отклонено: не удалось проверить бой с героем ({error}).", "rejected")
         if not eligible:
@@ -698,20 +702,23 @@ class Mercy:
                     await resume
             return ToolOutcome(f"Отклонено: {output}", "rejected")
         if hold is not None and hold.resumed:
-            for member in hold.members:
-                if member == npc or not self._alive(member):
-                    continue
-                listener = self.dialogue.conversations[member]
-                listening = Intent(attitude="wary")
-                self.dialogue._change_intent(
-                    listener, listening, self.link.snapshots.get(member), body=False,
-                )
-                output, ok = await self.dialogue._calm(listener, listening, native_attitude="ATT_FRIENDLY")
-                if not ok:
+            allies = list(dict.fromkeys([*allies, *hold.members]))
+        for member in allies:
+            if member == npc or not self._alive(member):
+                continue
+            person = self.orders.talk.people[member]
+            listener = self.dialogue.open(member, person.name, warm=False)
+            listening = Intent(attitude="wary")
+            self.dialogue._change_intent(
+                listener, listening, self.link.snapshots.get(member), body=False,
+            )
+            output, ok = await self.dialogue._calm(listener, listening, native_attitude="ATT_FRIENDLY")
+            if not ok:
+                if hold is not None:
                     self._end_hold(npc, hold, force=True)
                     if resume := self._resuming.get(npc):
                         await resume
-                    return ToolOutcome(f"Отклонено: {output}", "rejected")
+                return ToolOutcome(f"Отклонено: {output}", "rejected")
         if npc not in self.accepting:
             if resume := self._resuming.get(npc):
                 await resume
@@ -733,7 +740,7 @@ class Mercy:
         })
         self.orders.truce(npc)
         if self.parley:
-            await self.parley.accept_deal(npc, 1, now=now)
+            await self.parley.accept_deal(npc, 1, now=now, native_attitude="ATT_FRIENDLY")
         taken = "; ".join(f"{g.name} ×{g.count} ({g.item})" for g in gives) or "ничего, без выкупа"
         self.dialogue.remember(npc, conv.persona.name, f"Герой сдался тебе в бою; ты взял: {taken}.")
         if conv.acting or not conv.last_lines:  # acting: only Gemma has spoken; the model's text is silent

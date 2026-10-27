@@ -2421,6 +2421,29 @@ async def test_surrender_probe_uses_a_separate_slot_and_leaves_the_npc_cache_int
     assert not conv.history
 
 
+async def test_fight_first_words_wait_for_the_surrender_probe():
+    quick = FakeBackend("Ладно!", delay=0)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def probe(conv, request):
+        started.set()
+        await release.wait()
+
+    async with connected(FakeGame()) as link:
+        dialogue = DialogueManager(link, FakeBackend("", delay=0), PersonaProvider(None), quick=quick)
+        dialogue.in_fight = lambda npc: True
+        dialogue.surrender_hold = probe
+        conv = dialogue.open(LOBART, "Лобарт", warm=False)
+        turn = dialogue.say_as_player(LOBART, "Сдаюсь, только не бей", overlay=True)
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            assert not quick.calls
+        finally:
+            release.set()
+            await turn
+        assert quick.calls and conv.history[-1].content == "Ладно!"
+
+
 async def test_surrender_probe_blocks_new_prewarming_svm_and_combat_barks(monkeypatch):
     from gothic_ai.combat_barks import CombatBarks
     from gothic_ai.protocol import CombatHit
@@ -2539,7 +2562,7 @@ async def test_surrender_probe_failure_keeps_the_current_combat(failure):
     dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
                                PersonaProvider(None), quick=quick)
     conv = dialogue.open(LOBART, "Лобарт", warm=False)
-    conv.talked_at = time.monotonic() - (2 if failure == "expired" else 1.49)
+    conv.talked_at = time.monotonic() - (2.1 if failure == "expired" else 1.99)
     started = time.monotonic()
     assert not await dialogue._surrendering(conv, [Message("user", "Пощади!")])
     assert time.monotonic() - started < 0.1
@@ -2653,10 +2676,10 @@ async def test_surrender_recognition_live_gemma():
             for probe in order:
                 await warm()
                 if probe:
-                    conv.talked_at = time.monotonic()
-                    _, elapsed = await asyncio.gather(
-                        dialogue._surrendering(conv, request), first_delta(request),
-                    )
+                    conv.talked_at = started = time.monotonic()
+                    await dialogue._surrendering(conv, request)
+                    probe_elapsed = time.monotonic() - started
+                    elapsed = probe_elapsed + await first_delta(request)
                 else:
                     elapsed = await first_delta(request)
                 measurements[probe] = elapsed
@@ -2664,7 +2687,7 @@ async def test_surrender_recognition_live_gemma():
             pairs.append({
                 "probe_first": order[0],
                 "baseline_ms": round(measurements[False] * 1000, 1),
-                "parallel_ms": round(measurements[True] * 1000, 1),
+                "sequential_ms": round(measurements[True] * 1000, 1),
             })
     finally:
         await quick.aclose()
@@ -2672,6 +2695,7 @@ async def test_surrender_recognition_live_gemma():
     correct_yes = sum(expected and actual for _, expected, actual in observed)
     false_yes = sum(not expected and actual for _, expected, actual in observed)
     print(json.dumps({
+        "mode": "sequential",
         "phrases": len(observed), "correct_yes": correct_yes, "positive_count": positives,
         "false_yes": false_yes, "negative_count": len(observed) - positives,
         "probe_median_ms": round(statistics.median(durations) * 1000, 1),

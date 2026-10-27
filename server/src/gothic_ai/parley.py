@@ -260,7 +260,10 @@ class Parley:
         if threat and threat.get("status") == "active" and not threat.get("answered"):
             self.chronicle.record({**threat, "answered": True})
 
-    async def accept_deal(self, npc: str, hours: int | None = None, *, now: int | None = None) -> None:
+    async def accept_deal(
+        self, npc: str, hours: int | None = None, *, now: int | None = None,
+        native_attitude: str = "ATT_NEUTRAL",
+    ) -> None:
         npc = npc.upper()
         if not self.bandit(npc):
             return
@@ -298,7 +301,7 @@ class Parley:
             calm.append((conv, conv.intent))
         # The accepted truce cancels queued attacks and ends existing fights without waiting for speech.
         for conv, intent in calm:
-            await self.dialogue._calm(conv, intent)
+            await self.dialogue._calm(conv, intent, native_attitude=native_attitude)
 
     def tick(self) -> None:
         if self._loading:

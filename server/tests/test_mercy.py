@@ -378,6 +378,33 @@ async def end_hero_hold(rig, conv):
     await rig.link.story_eval(NPC, [["int", 1]])
 
 
+@pytest.mark.parametrize("guild", [8, 9])
+async def test_acceptance_without_hold_calms_allied_attackers_and_only_recipient_takes_ransom(rig, guild):
+    for npc in (NPC, FRIEND):
+        rig.talk.people[npc] = rig.talk.people[npc].model_copy(update={"guild": guild})
+    rig.fake.nearby[0]["guild"] = guild
+    snap = rig.link.snapshots[NPC]
+    rig.link.snapshots[NPC] = snap.model_copy(update={"nearby_npcs": [
+        snap.nearby_npcs[0].model_copy(update={"guild": guild}),
+    ]})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    rig.dialogue.fights_hero = lambda npc: npc in {NPC, FRIEND}  # the roster can still report the fight
+
+    result = await hero_yields(rig, ["gold"])
+
+    assert result.startswith("Принято:") and not rig.mercy.holds
+    assert not rig.fake.attack_state and not rig.fake.native_fights[FRIEND]
+    assert rig.fake.attitudes[NPC] == rig.fake.attitudes[FRIEND] == 3
+    assert rig.dialogue.conversations[FRIEND].intent.attitude == "wary"
+    assert rig.fake.hero_items[GOLD] == 0 and rig.fake.npc_items[NPC][GOLD] == 120
+    assert rig.fake.npc_items.get(FRIEND, {}).get(GOLD, 0) == 0
+    assert all(row["npc"] == NPC for row in rig.fake.story
+               if any(op.get("do") == "give" for op in row.get("effects", [])))
+    if guild == 9:
+        assert FRIEND in rig.parley.truce(NPC)["members"]
+
+
 async def test_surrender_hold_accepts_without_native_combat_and_keeps_allies_calm(rig, monkeypatch):
     rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
     rig.fake.native_fights[FRIEND] = True
@@ -731,7 +758,7 @@ async def test_hero_yield_band_truce_betrayal_and_memory_branch(rig, elapsed):
     assert rig.parley.truce(NPC)["until"] == 1980
     assert gang in rig.parley.truce(NPC)["members"]
     assert rig.dialogue.conversations[gang].intent.goal != "fight"
-    assert any(row.get("npc") == gang and {"do": "calm", "attitude": "ATT_NEUTRAL"}
+    assert any(row.get("npc") == gang and {"do": "calm", "attitude": "ATT_FRIENDLY"}
                in row.get("effects", []) for row in rig.fake.story)
     assert any("Герой сдался тебе в бою; ты взял:" in m.content
                for m in rig.dialogue.conversations[NPC].history)
