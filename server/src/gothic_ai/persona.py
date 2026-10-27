@@ -89,10 +89,10 @@ RULES = """Как отвечать:
 - Делай только то, что сделал бы {name}. Не обещай того, чего не можешь (колдовать, создавать предметы)."""
 
 
-# Voices for text-to-speech, as natural-language descriptions (VoxCPM2 voice design). Designed, not
-# cloned: the original voice actors' recordings are never used as references. Lobart, Hilda, Maleth, Vino
-# and Andre talk to each other in scenes (gossip.py); their voices differ by age and timbre on purpose, since
-# the original had one actor for Lobart and Vino (voice 05) and one for Maleth and Andre (08).
+# Descriptions for designed TTS voices: used in shorts and when no original snapshot or cloning
+# provider is available. In the game, tts-service uses Inworld clones of original story NPC recordings
+# when a snapshot exists (user decision 2026-10-27). Lobart, Hilda, Maleth, Vino and Andre have distinct
+# designed voices for their scenes (gossip.py), even where the original shared an actor.
 VOICES = {
     "NONE_100_XARDAS": "An old man with a deep, low, calm and wise voice, speaking slowly and gravely",
     "BAU_950_LOBART": (

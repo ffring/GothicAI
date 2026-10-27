@@ -11,17 +11,20 @@ def test_missing_files_mean_defaults(tmp_path):
     assert config.settings.llm.backend == "chatgpt"
     assert config.settings.voice.provider == "inworld" and config.settings.tts.provider == "inworld"
     assert config.settings.voice.fallback == "chatgpt"
+    assert config.settings.tts.original_voices is True
     assert config.secrets.inworld_api_key is None
 
 
 def test_saved_settings_load_back_and_keys_stay_in_their_own_file(tmp_path):
     config = Config.load(tmp_path)
     config.set("game.dir", "/games/Gothic II")
+    config.set("tts.original_voices", "false")
     config.set("secrets.inworld_api_key", "iw-secret")
     config.save()
 
     again = Config.load(tmp_path)
     assert str(again.settings.game.dir) == "/games/Gothic II"
+    assert again.settings.tts.original_voices is False
     assert again.secrets.inworld_api_key == "iw-secret"
     assert "iw-secret" not in config.settings_path.read_text()
     assert stat.S_IMODE(config.secrets_path.stat().st_mode) == 0o600

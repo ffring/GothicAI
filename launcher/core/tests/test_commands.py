@@ -80,6 +80,9 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     assert args[args.index("--game-dir") + 1] == "/games/G2"
     for p in procs:  # keys never in argv: they would end up in logs and `ps`
         assert not any("secret" in a for a in p.argv)
+    config.set("tts.original_voices", False)
+    disabled = by_name(services(config, LAYOUT, PORTS, tmp_path))["tts"]
+    assert "--no-original-voices" in disabled.argv
 
 
 @pytest.mark.parametrize("key", [None, "iw-secret"])

@@ -205,7 +205,7 @@
 | Сервис | Что | Где работает | Как сервер его находит |
 |---|---|---|---|
 | `asr-service/` | распознавание речи: Inworld STT, подсказки имён; запасной — подписка ChatGPT; Voxtral (audio.cpp) выбирается явно | клиент на Mac или Ryzen, Inworld API; Voxtral остаётся на dev-ubuntu | `--asr-url`, `GOTHIC_ASR_URL` |
-| `tts-service/` | голос NPC: Inworld TTS-2, запасной — VoxCPM2 (audio.cpp) | клиент на Mac или Ryzen, VoxCPM2 на dev-ubuntu | `--tts-url`, `GOTHIC_TTS_URL` |
+| `tts-service/` | голос NPC: Inworld TTS-2, оригинальные голоса сюжетных NPC только в игре; запасной — VoxCPM2 (audio.cpp) | клиент на Mac или Ryzen, VoxCPM2 на dev-ubuntu | `--tts-url`, `GOTHIC_TTS_URL` |
 | `decider-service/` | быстрые решения NPC: Strands Decider 2B, полосы urgent и background | dev-ubuntu | `--decider-url`, `GOTHIC_DECIDER_URL` |
 | `server/deploy/gemma/` | Gemma 4 12B (llama.cpp): реплики в бою, первые слова | dev-ubuntu | `--quick-url`, `GOTHIC_QUICK_LLM_URL` |
 | `body-service/` | политика боя P30 (GRU), обучение BC и PPO | сервис — Ryzen, ядра 0–1; обучение — Ryzen и dev-ubuntu | `--body-url`, `GOTHIC_BODY_URL` |
@@ -213,6 +213,8 @@
 | `libs/chatgpt-auth/` | вход через ChatGPT (OAuth PKCE), общее хранилище токенов | Mac или Ryzen, отдельный вход на каждой машине | — |
 
 Настройки сервисов — `.env` по образцу [`.env.example`](../.env.example). Развёртывание GPU-сервисов — `scripts/deploy-gpu.sh`.
+
+Оригинальные голоса TTS: [`tts-service/scripts/voice_snapshots.py`](../tts-service/scripts/voice_snapshots.py) режет снапшоты в `~/.local/share/gothic-ai/voices/original/`, `gothic-tts clone-originals [--dir DIR] [ID ...]` заранее клонирует их в Inworld. Сервис принимает `--original-voices-dir DIR` и `--no-original-voices`; лаунчер — `tts.original_voices` (по умолчанию `true`), шортсы выключают подмену. [Текущее поведение и команды](MVP.md#как-работает-сейчас).
 
 ## Флаги `gothic-ai serve`
 
@@ -336,4 +338,4 @@
 | [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал до допуска и остановка 14.10 | исторические: gate пройден 15.10, итог в плане |
 | [`npc-scheduler.md`](npc-scheduler.md) | планировщик решений NPC | проект от 11.10; шаги 1–3 сделаны, планировщик работает в `brain/` |
 | [`launcher.md`](launcher.md) | окно лаунчера Mac и Ryzen (Linux) | этапы L1–L3 сделаны; сборка и установка с Mac, трей GNOME, общий сеанс ядра через `gq` |
-| [`MVP.md`](MVP.md) | первая спецификация MVP | исторический |
+| [`MVP.md`](MVP.md) | первая спецификация MVP; [текущий TTS и оригинальные голоса](MVP.md#как-работает-сейчас) | TTS: сейчас + журнал; остальное историческое |
