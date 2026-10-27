@@ -742,6 +742,8 @@ class DialogueManager:
         # the npc fights the hero right now (the scripts' attack, talk.py; companions are not asked): talked
         # to, it may call it off (`_calm`)
         self.fights_hero: Callable[[str], bool] = lambda npc: False
+        self.surrender_hold: Callable[[Conversation, list[Item]], Awaitable[None]] | None = None
+        self.hero_fight_held: Callable[[str], bool] = lambda npc: False
         # an npc called off its fight with the hero (npc): a companion fighting it lets it be (orders.py)
         self.on_calm: list[Callable[[str], None]] = []
         # an npc turned on the hero by its own decision (npc): his companions stand up for him (orders.py)
@@ -1251,7 +1253,7 @@ class DialogueManager:
             QUICK_SLOT.reset(token)
         log.debug("%s: the quick model warmed in %.2fs", conv.npc, time.monotonic() - started)
 
-    def _quick_slot(self, npc: str) -> int | None:
+    def _quick_slot(self, npc: str, *, evict: bool = True) -> int | None:
         npc = npc.upper()
         if npc not in self._quick_slots:
             free = (set(range(PREWARM_SLOTS)) - set(self._quick_slots.values())
@@ -1259,6 +1261,8 @@ class DialogueManager:
             if free:
                 slot = min(free)
             else:
+                if not evict:
+                    return None
                 idle = [n for n, s in self._quick_slots.items() if not self._quick_busy[s]]
                 if not idle:
                     return None
@@ -1296,6 +1300,43 @@ class DialogueManager:
         async with self._quick_request(npc), aclosing(self.quick.stream(**options)) as events:
             async for event in events:
                 yield event
+
+    async def _surrendering(self, conv: Conversation, request: list[Item]) -> bool:
+        """Ask only about the hero's intent, preserving this NPC's first-words prefix and slot.
+
+        The question and four answer tokens fit within llama.cpp's SWA rollback window. Never
+        evict another NPC for this optional probe; failure leaves the ordinary fight unchanged.
+        """
+        if self.quick is None or time.monotonic() >= conv.talked_at + 1.5:
+            return False
+        if self._quick_slot(conv.npc, evict=False) is None:
+            return False
+        question = Message(
+            "developer", "Герой сдаётся/просит пощады себе? Да/нет. "
+            "Требования к NPC и угрозы — нет.",
+        )
+        text = ""
+        started = time.monotonic()
+        try:
+            async with asyncio.timeout_at(conv.talked_at + 1.5):
+                async with aclosing(self._quick_stream(
+                    conv.npc, instructions=conv.persona.instructions,
+                    messages=[*request, question], tools=[], temperature=0, max_tokens=4,
+                    response_format={"type": "json_schema", "json_schema": {
+                        "name": "surrender", "strict": True,
+                        "schema": {"type": "string", "enum": ["да", "нет"]},
+                    }},
+                    cache_key=conv.npc,
+                )) as events:
+                    async for event in events:
+                        if isinstance(event, TextDelta):
+                            text += event.text
+        except (LLMError, TimeoutError) as error:
+            log.info("%s: surrender probe unavailable: %s", conv.npc, error)
+            return False
+        answer = text.strip().strip('"').lower()
+        log.info("%s: surrender probe %r in %.3fs", conv.npc, answer, time.monotonic() - started)
+        return answer == "да"
 
     def _yield_to(self, npc: str) -> None:
         """Prioritize this NPC over other warming and SVM requests; its own warm is cancelled
@@ -2314,6 +2355,8 @@ class DialogueManager:
             else:
                 if quick and full is not None:  # the quick model said nothing: the whole situation, as usual
                     situation_text, _, state.sight = await full
+                    if self.hero_fight_held(conv.npc):
+                        situation_text, _, state.sight = await self._situation(conv, body)
                     if state.dynamic_tools:
                         state.tools = self._offered(conv.npc, state.sight)
                     if sound:
@@ -2448,12 +2491,23 @@ class DialogueManager:
         """The npc's line in a fight, from the quick model. False if it said nothing (it failed or went
         quiet first): the conversational model speaks then, as in any other turn."""
         assert self.quick is not None
-        st = trace.step(request, None, llm=getattr(self.quick, "model", None) or self.quick.name)
+        probe = conv.trigger is not None and conv.trigger.role == "user" and self.surrender_hold is not None
+        slot = self._quick_slot(conv.npc, evict=False) if probe else None
+        if slot is not None:
+            self._quick_busy[slot] += 1  # preserve the prefix while native calm effects are in flight
         try:
-            await self._step(conv, state, request, None, st, quick=True)
-        except LLMError as err:
-            log.warning("%s: the quick model failed: %s", conv.npc, err)
-            trace.event("quick_failed", error=str(err))
+            if slot is not None and self.surrender_hold is not None:
+                await self.surrender_hold(conv, request)
+            st = trace.step(request, None, llm=getattr(self.quick, "model", None) or self.quick.name)
+            try:
+                await self._step(conv, state, request, None, st, quick=True)
+            except LLMError as err:
+                log.warning("%s: the quick model failed: %s", conv.npc, err)
+                trace.event("quick_failed", error=str(err))
+        finally:
+            if slot is not None:
+                self._quick_busy[slot] -= 1
+                self._quick_free.set()
         return bool(state.text.strip())
 
     async def _act_on_line(
@@ -2471,6 +2525,8 @@ class DialogueManager:
         conv.acting = True  # the hero may speak again: a new turn, not an interruption
         await self._status(conv, "idle")
         situation_text, _, state.sight = await full
+        if self.hero_fight_held(conv.npc):
+            situation_text, _, state.sight = await self._situation(conv, None)
         if state.dynamic_tools:
             state.tools = self._offered(conv.npc, state.sight)
         said = " ".join(s for s in (sound, state.text.strip()) if s)
@@ -2911,13 +2967,17 @@ class DialogueManager:
         log.info("%s: the incident is over, intent back to %s", conv.npc, intent.goal)
         self._change_intent(conv, intent, self.link.snapshots.get(conv.npc), body=body)
 
-    async def _attack_hero(self, conv: Conversation, intent: Intent) -> tuple[str, bool]:
+    async def _attack_hero(
+        self, conv: Conversation, intent: Intent, *, resume: bool = False,
+    ) -> tuple[str, bool]:
         """The npc turns on the hero, after its words: the scripts' own attack (B_Attack), held or free, so
         the fight goes as the game's do. A bandit means to kill and its gang joins it; anyone else gives him
         a beating until he is down."""
         if conv.intent is not intent:
             return "", True  # it changed its mind before it was done talking
-        if self.fight_reason is not None:
+        if self.hero_fight_held(conv.npc):
+            return "Ты опустил оружие и слушаешь героя; решение о сдаче ещё не принято.", True
+        if not resume and self.fight_reason is not None:
             if why := self.fight_reason(conv.npc, self.link.snapshots.get(conv.npc)):
                 self._change_intent(
                     conv, conv.calm or Intent(), self.link.snapshots.get(conv.npc), body=False

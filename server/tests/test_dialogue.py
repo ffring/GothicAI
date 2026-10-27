@@ -2391,3 +2391,183 @@ async def test_a_rejection_after_the_quick_fight_line_keeps_the_next_step_silent
     assert "ничего не говори" not in result.output
     history = dialogue.conversations[XARDAS].history
     assert history[-1].content == "Держись!"
+
+
+async def test_surrender_probe_preserves_the_first_words_prefix_and_npc_slot():
+    quick = FakeBackend(script=[FakeStep("да"), FakeStep("Ладно!")], delay=0)
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    conv.talked_at = time.monotonic()
+    slot = dialogue._quick_slot(LOBART)
+    request = [Message("assistant", "Я тебя проучу!"),
+               Message("developer", dialogue._brief(conv) + "\n" + dialogue_module.QUICK_HINT),
+               Message("user", "Сдаюсь, забирай золото, только не бей")]
+    assert await dialogue._surrendering(conv, request)
+    words, _ = await dialogue._quick_words(conv, request)
+    assert words == "Ладно!"
+    assert quick.slot_ids == [slot, slot]
+    assert quick.calls[0][0] == quick.calls[1][0] == conv.persona.instructions
+    assert quick.calls[0][1][:-1] == quick.calls[1][1] == request
+    assert len(quick.calls[0][1][-1].content) < 400
+    assert quick.temperatures == [0, None]
+    assert quick.max_token_limits == [4, None]
+    assert not conv.history
+
+
+async def test_surrender_probe_does_not_evict_another_npcs_slot():
+    quick = FakeBackend("да", delay=0)
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    for npc in (XARDAS, LOBART, HILDA):
+        dialogue._quick_slot(npc)
+    slots = dict(dialogue._quick_slots)
+    conv = dialogue.open("BDT_1014_BANDIT_L", "Браго", warm=False)
+    conv.talked_at = time.monotonic()
+    assert not await dialogue._surrendering(conv, [Message("user", "Пощади!")])
+    assert dialogue._quick_slots == slots and not quick.calls
+
+
+@pytest.mark.parametrize("reply", ["нет", "Я тебя не пощажу", ""])
+async def test_surrender_probe_requires_an_affirmative_model_answer(reply):
+    quick = FakeBackend(reply, delay=0)
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    conv.talked_at = time.monotonic()
+    assert not await dialogue._surrendering(conv, [Message("user", "Сдаюсь! Не бей! Пощади!")])
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "error", "deadline", "expired"])
+async def test_surrender_probe_failure_keeps_the_current_combat(failure):
+    quick = (None if failure == "unavailable" else FailingBackend() if failure == "error"
+             else FakeBackend("да", first=0.1, delay=0))
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    conv.talked_at = time.monotonic() - (2 if failure == "expired" else 1.49)
+    started = time.monotonic()
+    assert not await dialogue._surrendering(conv, [Message("user", "Пощади!")])
+    assert time.monotonic() - started < 0.1
+    if failure == "expired":
+        assert not quick.calls
+
+
+SURRENDER_PHRASES = [
+    ("Сдаюсь, забирай золото, только не бей", True),
+    ("Пацаны, обоссыте, но не бейте", True),
+    ("Браго, сдаюсь! Обоссы, но не бей", True),
+    ("Хватит, хватит, твоя взяла", True),
+    ("Не бей, я заплачу", True),
+    ("Пощади, я все понял", True),
+    ("Ладно, сдаюсь. Больше не буду", True),
+    ("Пощади меня!", True),
+    ("Стой, я проиграл, оставь в живых", True),
+    ("Я больше не сопротивляюсь, только отпусти", True),
+    ("Возьми все, что у меня есть, и прекрати бить", True),
+    ("Опускаю меч. Твоя победа", True),
+    ("Не убивай меня, прошу", True),
+    ("Ладно, твоя взяла. Хватит драться", True),
+    ("Я не хочу умирать. Сдаюсь", True),
+    ("Сдавайся!", False),
+    ("Сдохни, тварь", False),
+    ("Я сдаюсь? Еще чего!", False),
+    ("Отдай мой меч", False),
+    ("Ты кто такой?", False),
+    ("Ты сдаёшься или мне тебя добить?", False),
+    ("На колени, сейчас же!", False),
+    ("Плати, или я тебя убью", False),
+    ("Я тебя не пощажу", False),
+    ("Клади оружие и отдай золото", False),
+    ("Я заставлю тебя просить пощады", False),
+    ("Ты пожалеешь, что связался со мной", False),
+    ("Я не сдамся", False),
+    ("Забирайся прочь, трус", False),
+    ("Ты мне за все заплатишь", False),
+]
+
+
+async def test_surrender_recognition_live_gemma():
+    import os
+    import statistics
+    import tomllib
+    from contextlib import aclosing
+    from pathlib import Path
+
+    import httpx
+
+    from gothic_ai.executor import Intent
+    from gothic_ai.llm import make_quick, quick_url
+
+    url = quick_url(os.environ.get("GOTHIC_QUICK_LLM_URL"), os.environ.get("GOTHIC_DECIDER_URL"))
+    settings = Path.home() / ".config/gothic-ai/settings.toml"
+    if url is None and settings.is_file():
+        configured = tomllib.loads(settings.read_text(encoding="utf-8")).get("llm", {})
+        url = quick_url(configured.get("quick_url"), configured.get("decider_url"))
+    if url is None:
+        pytest.skip("no quick model configured")
+    async with httpx.AsyncClient(timeout=2) as client:
+        try:
+            response = await client.get(url.rstrip("/") + "/models")
+            response.raise_for_status()
+        except httpx.HTTPError:
+            pytest.skip("the configured quick model is unavailable")
+    quick = make_quick(url)
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    conv = dialogue.open("BDT_1014_BANDIT_L", "Браго", warm=False)
+    conv.intent = Intent(goal="fight", target="PLAYER", attitude="hostile")
+    dialogue.link.snapshots[conv.npc] = Snapshot.model_validate(FakeGame().snapshot(conv.npc))
+    history = [Message("user", "Отстань от меня."), Message("assistant", "Я тебя проучу!")]
+    situation = Message("developer", dialogue._brief(conv) + "\n" + dialogue_module.QUICK_HINT)
+    observed, durations, cache_timings, overheads = [], [], [], []
+
+    async def warm() -> None:
+        async with dialogue._quick_request(conv.npc):
+            await quick.prewarm(instructions=conv.persona.instructions, messages=history)
+
+    async def first_delta(request) -> float:
+        started = time.monotonic()
+        async with aclosing(dialogue._quick_stream(
+            conv.npc, instructions=conv.persona.instructions, messages=request, tools=[], temperature=0,
+        )) as events:
+            async for event in events:
+                if isinstance(event, TextDelta) and event.text:
+                    return time.monotonic() - started
+        raise AssertionError("the live quick model produced no first words")
+
+    try:
+        for phrase, expected in SURRENDER_PHRASES:
+            await warm()
+            request = [*history, situation, Message("user", phrase)]
+            conv.talked_at = started = time.monotonic()
+            actual = await dialogue._surrendering(conv, request)
+            durations.append(time.monotonic() - started)
+            cache_timings.append(dict(quick.timings.get(dialogue._quick_slots[conv.npc], {})))
+            observed.append((phrase, expected, actual))
+        for phrase, _ in SURRENDER_PHRASES[:3]:
+            request = [*history, situation, Message("user", phrase)]
+            await warm()
+            baseline = await first_delta(request)
+            await warm()
+            conv.talked_at = started = time.monotonic()
+            await dialogue._surrendering(conv, request)
+            await first_delta(request)
+            overheads.append(time.monotonic() - started - baseline)
+    finally:
+        await quick.aclose()
+    positives = sum(expected for _, expected, _ in observed)
+    correct_yes = sum(expected and actual for _, expected, actual in observed)
+    false_yes = sum(not expected and actual for _, expected, actual in observed)
+    print(json.dumps({
+        "phrases": len(observed), "correct_yes": correct_yes, "positive_count": positives,
+        "false_yes": false_yes, "negative_count": len(observed) - positives,
+        "probe_median_ms": round(statistics.median(durations) * 1000, 1),
+        "probe_max_ms": round(max(durations) * 1000, 1),
+        "first_words_overhead_ms": [round(value * 1000, 1) for value in overheads],
+        "cache_timings": cache_timings,
+        "mismatches": [row for row in observed if row[1] != row[2]],
+    }, ensure_ascii=False))
+    assert false_yes == 0, observed
+    assert correct_yes / positives >= 0.9, observed
+    assert max(overheads) <= 0.3, overheads

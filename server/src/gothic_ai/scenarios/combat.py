@@ -77,7 +77,10 @@ async def surrender_live(
         if current is None or not started:
             return
         elapsed = round((time.monotonic() - started) * 1000)
-        if isinstance(msg, CombatHit) and current["npc"] in {msg.npc, msg.by}:
+        if isinstance(msg, CombatHit) and (
+            current["npc"] in {msg.npc, msg.by}
+            or current["player_text"] is not None and msg.npc in {"PLAYER", "PC_HERO"}
+        ):
             current["observed_hits"].append({"ms": elapsed, **msg.model_dump()})
         elif isinstance(msg, LineStarted) and msg.npc == current["npc"]:
             line = dialogue._lines.get(msg.line)
@@ -112,6 +115,16 @@ async def surrender_live(
          ["==", ["call", "HLP_GETINSTANCEID", ["inst", "OTHER"]],
           ["call", "HLP_GETINSTANCEID", ["inst", "HERO"]]]],
     ]
+
+    async def watch_attack(npc: str, observation: dict[str, Any]) -> None:
+        # The roster arrives twice a second; sample native state more closely for the 1.5 s target.
+        while True:
+            [attacking] = await link.story_eval(npc, combat[:1])
+            if attacking != 1:
+                observation["native_attack_exit_ms"] = round((time.monotonic() - started) * 1000)
+                return
+            await asyncio.sleep(0.05)
+
     dialogue._tool = record_tool  # type: ignore[method-assign]
     link.listeners.append(record)
     try:
@@ -120,6 +133,7 @@ async def surrender_live(
                        "observed_hits": [], "humiliation_played": False}
             observations.append(current)
             started = 0.0
+            attack_watch: asyncio.Task[None] | None = None
             try:
                 loading = asyncio.create_task(wait_message(link, Session, lambda m: m.reason == "load", 60))
                 await asyncio.sleep(0)
@@ -188,6 +202,8 @@ async def surrender_live(
                     if not any(h.npc == npc and 0 < h.hp < h.hp_max * 0.3 for h in hits):
                         raise GameError("surrender_live preparation: no living low-health hit")
                 else:
+                    current["native_attack_exit_ms"] = None
+                    attack_watch = asyncio.create_task(watch_attack(npc, current))
                     await link.debug("type", text=text)
 
                 def turns(npc: str = npc, text: str | None = text,
@@ -231,6 +247,21 @@ async def surrender_live(
                              if t["name"] in {"surrender", "accept_surrender", "set_intent"}]
                 current["decision_ms"] = min(decisions) if decisions else current["turn_ms"]
                 current["first_words_ms"] = next((w["ms"] for w in current["words"]), None)
+                if text is not None:
+                    if attack_watch is not None and attack_watch.done():
+                        attack_watch.result()
+                    hero_hits = [h for h in current["observed_hits"]
+                                 if h["npc"] in {"PLAYER", "PC_HERO"}]
+                    current["hero_hits_before_decision"] = sum(
+                        h["ms"] <= current["decision_ms"] for h in hero_hits
+                    )
+                    exited = current["native_attack_exit_ms"]
+                    current["hero_hits_after_hold_until_decision"] = None if exited is None else sum(
+                        exited < h["ms"] <= current["decision_ms"] for h in hero_hits
+                    )
+                    current["hero_hits_after_hold"] = None if exited is None else sum(
+                        h["ms"] > exited for h in hero_hits
+                    )
                 if accepted and (current["fight_continued"] or any(
                     h["npc"] == "PLAYER" and h["by"] == npc and h["ms"] > accepted["resolved_ms"]
                     for h in current["observed_hits"]
@@ -242,6 +273,9 @@ async def surrender_live(
                 results[case] = "failed (" + json.dumps(current, ensure_ascii=False) + ")"
                 break
             finally:
+                if attack_watch is not None:
+                    attack_watch.cancel()
+                    await asyncio.gather(attack_watch, return_exceptions=True)
                 (trace.directory.parent / "surrender_live.json").write_text(
                     json.dumps({"llm": dialogue.llm.name, "model": getattr(dialogue.llm, "model", None),
                                 "quick_model": getattr(dialogue.quick, "model", None),

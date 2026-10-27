@@ -89,6 +89,8 @@ class OpenAICompatBackend:
         allowed: Collection[str] | None = None,
         cache_key: str | None = None,
         temperature: float | None = None,
+        max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[LLMEvent]:
         chat = [{"role": "system", "content": instructions}, *chat_messages(messages)]
         kwargs: dict[str, Any] = {}
@@ -104,10 +106,13 @@ class OpenAICompatBackend:
             ]
             if tool_choice:
                 kwargs["tool_choice"] = tool_choice
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        limit = self.max_tokens if max_tokens is None else max_tokens
+        if limit is not None:
+            kwargs["max_tokens"] = limit
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if response_format is not None:
+            kwargs["response_format"] = response_format
         text = ""
         calls: dict[int, dict[str, str]] = {}
         stream = None
