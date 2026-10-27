@@ -1611,10 +1611,15 @@ void Npc::updateMeleeShadow() {
     meleeShadowDrawPose   = blade;
     meleeShadowDrawActive = now>=activeBegin && now<activeEnd;
     }
+  }
+
+void Npc::resolveMeleeContacts() {
+  if(!meleeShadow || !meleeShadow->window)
+    return;
   auto contacts = owner.physic()->takeShadowBladeContacts(this);
   noteMeleeShadowMarks(contacts);
   for(const auto& hit:contacts)
-    shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
+    meleeShadow->contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
   consumeMeleeContacts();
   }
 
@@ -1699,7 +1704,7 @@ void Npc::consumeMeleeContacts() {
       swing.outcome = "hit";
       }
     if(Gothic::physicsFlags().meleePhysicsHits) {
-      BodyObservations::noteEvent(*this,target,entry.result.c_str(),owner.tickCount());
+      BodyObservations::noteEvent(*this,target,"applied",owner.tickCount());
       if(TestBench::bodyTracing())
         TestBench::bodyEvent(*this,target,"hit_attempt",owner.tickCount(),
                             "\"result\":"+TestBench::bodyJson(entry.result),visual.pose().animNames());
@@ -1775,15 +1780,18 @@ void Npc::finishMeleeShadowSwing(bool remove) {
     owner.physic()->removeShadowBlade(this);
   const auto& window = *shadow.window;
   bool physicalHit = false, sameTarget = false, extraTarget = false, worldHit = false;
-  std::string physical = "[", world = "null";
+  std::string physical = "[", world = "null", worldContacts = "[";
   for(const auto& entry:shadow.contacts) {
     const auto& contact = entry.hit;
     const auto point = meleeShadowPoint(contact.point);
     if(contact.world) {
-      worldHit |= contact.stopsSwing;
+      worldHit |= contact.stopsSwing && entry.result!="after_stop";
       world = "{\"point_cm\":" + point + ",\"normal\":" + meleeShadowPoint(contact.normal) +
               ",\"material\":" + std::to_string(int(contact.material)) +
               ",\"result\":" + TestBench::bodyJson(entry.result) + ",\"step\":" + std::to_string(contact.step) + "}";
+      if(worldContacts.size()>1)
+        worldContacts += ',';
+      worldContacts += world;
       continue;
       }
     if(entry.result=="hit")
@@ -1805,6 +1813,7 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                 ",\"step\":" + std::to_string(contact.step) + "}";
     }
   physical += ']';
+  worldContacts += ']';
   std::string comparison = "null";
   if(worldHit && shadow.legacyHit && !sameTarget)
     comparison = "\"world_before_target\"";
@@ -1833,7 +1842,7 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                   ",\"damage\":" + number(shadow.damage) + ",\"blocked\":" + (shadow.legacyBlock ? "true" : "false") +
                   ",\"dodged\":" + (shadow.legacyDodge ? "true" : "false") +
                   ",\"result\":" + TestBench::bodyJson(shadow.legacyResult) +
-                  "},\"physical\":{\"targets\":" + physical + ",\"world\":" + world +
+                  "},\"physical\":{\"targets\":" + physical + ",\"world\":" + world + ",\"world_contacts\":" + worldContacts +
                   "},\"decision\":{\"physics_hits\":" + (shadow.physicsHits ? "true" : "false") +
                   ",\"outcome\":" + TestBench::bodyJson(shadow.outcome) +
                   ",\"step_requested_cm\":" + number(shadow.stepRequestedCm) +

@@ -558,6 +558,11 @@ void WorldObjects::updateAnimation(uint64_t dt) {
       continue;
     npc->updateMeleeShadow();
     }
+  // Query the final published interval before callers can decide a terminal
+  // combat outcome. The flush does not advance physics, animation or clocks.
+  owner.physic()->flushShadowBlades();
+  for(size_t i=0;i<npcArr.size();++i)
+    npcArr[i]->resolveMeleeContacts();
   if(!frozen)
     interactiveObj.parallelFor([dt](Interactive& i){
       i.updateAnimation(dt);

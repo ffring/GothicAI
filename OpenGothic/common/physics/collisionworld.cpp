@@ -2291,7 +2291,16 @@ void CollisionWorld::removeShadowBlade(const Npc* owner) {
 void CollisionWorld::flushShadowBlades() {
   // Consume poses published after the last physics tick without advancing any
   // native bodies, animation, game clocks or physics side effects.
+  const auto started=std::chrono::steady_clock::now();
   stepShadowBlades(1.f);
+  const float elapsed=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  impl->stepMilliseconds += elapsed;
+  // The normal frame sample has already been published by tick(). Include this
+  // query in that frame's physics budget, without inventing a fixed physics step.
+  if(!impl->meleeOutput.empty() && !impl->meleeSamples.empty()) {
+    impl->meleeSamples.back().milliseconds += elapsed;
+    impl->meleeSamples.back().castMs += elapsed;
+    }
   }
 
 void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {

@@ -100,6 +100,7 @@ class Npc final {
     // Debug overlay of the shadow melee blade: its pose during a swing and the latest contacts.
     void       drawMeleeShadow(DbgPainter& p, uint64_t now) const;
     void       updateMeleeShadow();
+    void       resolveMeleeContacts();
 
     bool       setPosition (float x,float y,float z);
     bool       setPosition (const Tempest::Vec3& pos);
