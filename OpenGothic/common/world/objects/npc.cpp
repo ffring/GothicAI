@@ -1609,10 +1609,24 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
           return;
         const float available = std::min(advance<0.f ? 40.f : 120.f,.6f*elapsed);
         const float uncovered = std::max(0.f,std::abs(advance)-available);
-        // A zero-time tangent must not defeat a later reachable contact. If
-        // nothing is reachable, retain the smallest gap after bounded feed.
-        if(uncovered<result.uncoveredCm ||
-           (uncovered==result.uncoveredCm && std::abs(advance)<std::abs(result.advanceCm))) {
+        const float delivered = std::min(std::abs(advance),available);
+        const float priorAvailable = std::min(result.advanceCm<0.f ? 40.f : 120.f,.6f*result.contactMs);
+        const float priorDelivered = std::min(std::abs(result.advanceCm),priorAvailable);
+        const bool feasible = uncovered==0.f, priorFeasible = result.uncoveredCm==0.f;
+        const bool hasFeed = elapsed>0.f && delivered>0.f;
+        const bool priorHasFeed = result.contactMs>0.f && priorDelivered>0.f;
+        bool better = false;
+        if(feasible!=priorFeasible)
+          better = feasible;
+        else if(!feasible && hasFeed!=priorHasFeed)
+          better = hasFeed;
+        else if(uncovered!=result.uncoveredCm)
+          better = uncovered<result.uncoveredCm;
+        else
+          better = feasible ? std::abs(advance)<std::abs(result.advanceCm) : delivered>priorDelivered;
+        // An unreachable t=0 cast must not suppress a later partial feed.
+        // Genuine zero-time overlap remains a feasible, unassisted contact.
+        if(better) {
           result.advanceCm = advance;
           result.contactMs = elapsed;
           result.yawDeg = yaw;
