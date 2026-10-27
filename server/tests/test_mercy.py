@@ -1,6 +1,7 @@
 import asyncio
+import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -10,13 +11,14 @@ from gothic_ai.contracts import GOLD
 from gothic_ai.crime_law import CrimeLaw
 from gothic_ai.crimes import Crimes
 from gothic_ai.dialogue import DialogueManager
-from gothic_ai.llm import FakeBackend, FakeStep, ToolCall, ToolResult
+from gothic_ai.game import GameError
+from gothic_ai.llm import FakeBackend, FakeStep, Message, ToolCall, ToolResult
 from gothic_ai.memory import MemoryStore
 from gothic_ai.mercy import PARDON, PEE_DISTANCE_CM, PEE_HOLD_MS, VICTOR, YIELDING, Mercy
 from gothic_ai.orders import Fight, Orders, Standing
 from gothic_ai.parley import Parley
 from gothic_ai.persona import PersonaProvider
-from gothic_ai.protocol import CombatHit, NpcRoster, NpcViews, Session
+from gothic_ai.protocol import CombatHit, LineStarted, NpcRoster, NpcViews, Session
 from gothic_ai.talk import TalkDesk, fights
 from tests.fake_game import FakeGame, connected
 
@@ -33,6 +35,8 @@ class MercyGame(FakeGame):
                          AIV_DEFEATEDBYPLAYER=3, FIGHT_LOST=2, FIGHT_WON=1)
         self.target = "PC_HERO"
         self.attack_state = True
+        self.native_fights = {}
+        self.native_targets = {}
         self.weapons = ["ITMW_1H_BAU_MACE", "ITRW_BOW_L_01"]
         self.hero_items.update({GOLD: 120, **dict.fromkeys(self.weapons, 1), "ITFO_BREAD": 2})
         self.symbols.update(dict.fromkeys(self.hero_items, "item"))
@@ -49,15 +53,15 @@ class MercyGame(FakeGame):
 
     def evaluate(self, expr, npc=None):
         if expr[:2] == ["call", "NPC_ISINSTATE"]:
-            return int(self.attack_state)
+            return int(self.native_fights.get(npc, self.attack_state))
         if expr[:2] == ["call", "NPC_GETEQUIPPEDMELEEWEAPON"]:
             return self.weapons[0]
         if expr[:2] == ["call", "NPC_GETEQUIPPEDRANGEDWEAPON"]:
             return self.weapons[1]
         if expr[:2] == ["call", "NPC_GETTARGET"]:
-            return int(self.target is not None)
+            return int(self.native_targets.get(npc, self.target) is not None)
         if expr[:2] == ["call", "HLP_GETINSTANCEID"]:
-            who = self.target if expr[2] == ["inst", "OTHER"] else expr[2][1]
+            who = self.native_targets.get(npc, self.target) if expr[2] == ["inst", "OTHER"] else expr[2][1]
             return {"PC_HERO": 1, FRIEND: 2}.get(who, 3)
         return super().evaluate(expr, npc)
 
@@ -79,7 +83,16 @@ class MercyGame(FakeGame):
             for effect in message["effects"]:
                 if effect["do"] == "calm":
                     self.attitudes[message["npc"]] = 3 if effect["attitude"] == "ATT_FRIENDLY" else 2
-                    self.attack_state, self.target = False, None
+                    if message["npc"] in self.native_fights:
+                        self.native_fights[message["npc"]], self.native_targets[message["npc"]] = False, None
+                    else:
+                        self.attack_state, self.target = False, None
+                elif effect["do"] == "attack":
+                    if message["npc"] in self.native_fights:
+                        self.native_fights[message["npc"]] = True
+                        self.native_targets[message["npc"]] = "PC_HERO"
+                    else:
+                        self.attack_state, self.target = True, "PC_HERO"
         if message["type"] == "graph_patch":
             for op in message["ops"]:
                 if (self.emit_trigger and op.get("steps") is not None
@@ -345,6 +358,362 @@ async def hero_yields(rig, take, *, text="", words="Ладно, живи. Я з�
     return next((item.output for item in rig.llm.calls[-1][1] if isinstance(item, ToolResult)), "")
 
 
+async def begin_hero_hold(rig, monkeypatch, *, surrendering=True):
+    rig.dialogue.quick = FakeBackend(delay=0)
+    conv = rig.dialogue.open(NPC, "Лобарт", warm=False)
+    conv.trigger = Message("user", "Сдаюсь, забирай золото, только не бей")
+    conv.talked_at = time.monotonic()
+    conv.reply = asyncio.create_task(asyncio.Event().wait())
+    probe = AsyncMock(return_value=surrendering)
+    monkeypatch.setattr(rig.dialogue, "_surrendering", probe)
+    await rig.mercy.hold_surrender(conv, [conv.trigger])
+    return conv, probe
+
+
+async def end_hero_hold(rig, conv):
+    conv.reply.cancel()
+    await asyncio.gather(conv.reply, return_exceptions=True)
+    if rig.dialogue._background:
+        await asyncio.gather(*rig.dialogue._background)
+    await rig.link.story_eval(NPC, [["int", 1]])
+
+
+@pytest.mark.parametrize("guild", [8, 9])
+async def test_acceptance_without_hold_calms_allied_attackers_and_only_recipient_takes_ransom(rig, guild):
+    for npc in (NPC, FRIEND):
+        rig.talk.people[npc] = rig.talk.people[npc].model_copy(update={"guild": guild})
+    rig.fake.nearby[0]["guild"] = guild
+    snap = rig.link.snapshots[NPC]
+    rig.link.snapshots[NPC] = snap.model_copy(update={"nearby_npcs": [
+        snap.nearby_npcs[0].model_copy(update={"guild": guild}),
+    ]})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    rig.dialogue.fights_hero = lambda npc: npc in {NPC, FRIEND}  # the roster can still report the fight
+
+    result = await hero_yields(rig, ["gold"])
+
+    assert result.startswith("Принято:") and not rig.mercy.holds
+    assert not rig.fake.attack_state and not rig.fake.native_fights[FRIEND]
+    assert rig.fake.attitudes[NPC] == rig.fake.attitudes[FRIEND] == 3
+    assert rig.dialogue.conversations[FRIEND].intent.attitude == "wary"
+    assert rig.fake.hero_items[GOLD] == 0 and rig.fake.npc_items[NPC][GOLD] == 120
+    assert rig.fake.npc_items.get(FRIEND, {}).get(GOLD, 0) == 0
+    assert all(row["npc"] == NPC for row in rig.fake.story
+               if any(op.get("do") == "give" for op in row.get("effects", [])))
+    if guild == 9:
+        assert FRIEND in rig.parley.truce(NPC)["members"]
+
+
+async def test_surrender_hold_accepts_without_native_combat_and_keeps_allies_calm(rig, monkeypatch):
+    rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    conv, probe = await begin_hero_hold(rig, monkeypatch)
+    assert probe.await_count == 1
+    assert rig.mercy.held(NPC) and rig.mercy.held(FRIEND)
+    assert not rig.fake.attack_state and not rig.fake.native_fights[FRIEND]
+    assert rig.fake.attitudes[NPC] == rig.fake.attitudes[FRIEND] == 3
+    assert conv.intent.attitude == "wary"
+    rig.dialogue._lines["previous"] = ("На колени! Проси пощады!", None)
+    rig.link._dispatch(LineStarted(type="line_started", npc=NPC, line="previous", voiced=False))
+    assert rig.dialogue.surrender_context(NPC) == "На колени! Проси пощады!"
+    await rig.mercy.prepare(NPC)
+    assert "опустил оружие и слушаешь" in rig.mercy.situation(NPC)
+    assert "без вызова бой продолжится" in rig.mercy.situation(NPC)
+    result = await rig.mercy.handle(rig.dialogue, conv, ToolCall("accept_surrender", {
+        "take": [], "words": "Живи.", "humiliate": False,
+    }), rig.link.snapshots[NPC])
+    assert result.status == "accepted" and rig.chronicle.facts("hero_yield")
+    assert not rig.mercy.holds
+    await end_hero_hold(rig, conv)
+    assert not rig.fake.attack_state and not rig.fake.native_fights[FRIEND]
+    assert not any(op.get("do") == "attack" for row in rig.fake.story for op in row.get("effects", []))
+    rig.link._dispatch(NpcRoster(type="npc_roster", t=2000, npcs=[
+        rig.talk.people[NPC].model_copy(update={"state": "ZS_STAND"}),
+    ]))
+    assert rig.dialogue.surrender_context(NPC) is None
+
+
+@pytest.mark.parametrize("elapsed", [20, 31])
+async def test_long_turn_keeps_surrender_hold_until_acceptance_or_thirty_second_cap(
+    rig, monkeypatch, elapsed,
+):
+    conv, _ = await begin_hero_hold(rig, monkeypatch)
+    loop = asyncio.get_running_loop()
+    clock = loop.time
+    with monkeypatch.context() as shifted:
+        shifted.setattr(loop, "time", lambda: clock() + elapsed)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert not conv.reply.done()
+        if elapsed == 20:
+            assert rig.mercy.held(NPC) and not rig.fake.attack_state
+            result = await rig.mercy.handle(rig.dialogue, conv, ToolCall("accept_surrender", {
+                "take": [], "words": "Живи.", "humiliate": False,
+            }), rig.link.snapshots[NPC])
+            assert result.status == "accepted" and rig.chronicle.facts("hero_yield")
+            assert not rig.fake.attack_state
+            assert not any(op.get("do") == "attack" for row in rig.fake.story
+                           for op in row.get("effects", []))
+        else:
+            if rig.dialogue._background:
+                await asyncio.gather(*rig.dialogue._background)
+            assert not rig.mercy.held(NPC) and rig.fake.attack_state
+    await end_hero_hold(rig, conv)
+
+
+@pytest.mark.parametrize("outcome", ["refused", "hit", "expired", "ally_validation_hit"])
+async def test_surrender_hold_resumes_native_fight_and_cannot_repeat(rig, monkeypatch, outcome):
+    rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    if outcome == "ally_validation_hit":
+        hero_fight = rig.mercy._hero_fight
+
+        async def ally_fight(npc):
+            fighting = await hero_fight(npc)
+            if npc == FRIEND:
+                hit(rig, hp=80)
+            return fighting
+
+        monkeypatch.setattr(rig.mercy, "_hero_fight", ally_fight)
+    conv, probe = await begin_hero_hold(rig, monkeypatch)
+    assert rig.mercy.held(NPC) is (outcome != "ally_validation_hit")
+    assert rig.mercy.held(FRIEND) is (outcome != "ally_validation_hit")
+    rig.dialogue.fight_reason = lambda npc, snap: "An unrelated agreement cannot cancel a resumed fight."
+    if outcome == "hit":
+        hit(rig, npc=FRIEND, hp=80)
+    elif outcome == "expired":
+        hold = rig.mercy.holds[NPC]
+        hold.timer.cancel()
+        hold.timer = asyncio.get_running_loop().call_later(0.02, rig.mercy._end_hold, NPC, hold)
+        await asyncio.sleep(0.03)
+    await end_hero_hold(rig, conv)
+    assert not rig.mercy.holds and rig.fake.attack_state and rig.fake.native_fights[FRIEND]
+    attacks = [row["npc"] for row in rig.fake.story
+               if any(op.get("do") == "attack" for op in row.get("effects", []))]
+    assert attacks == ([NPC] if outcome == "ally_validation_hit" else [NPC, FRIEND])
+    # The same native fight has resumed: another plea must not call Gemma or pause it again.
+    conv.reply = asyncio.create_task(asyncio.Event().wait())
+    await rig.mercy.hold_surrender(conv, [conv.trigger])
+    assert probe.await_count == 1 and not rig.mercy.holds
+    await end_hero_hold(rig, conv)
+
+
+@pytest.mark.parametrize("first_hp", [80, 20])
+async def test_hits_after_broken_hold_offer_npc_surrender_without_restarting_attacks(
+    rig, monkeypatch, first_hp,
+):
+    rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    conv, _ = await begin_hero_hold(rig, monkeypatch)
+    offer = AsyncMock()
+    betray = Mock(wraps=rig.mercy._betray)
+    monkeypatch.setattr(rig.mercy, "_offer", offer)
+    monkeypatch.setattr(rig.mercy, "_betray", betray)
+    before_first = time.monotonic()
+    hit(rig, npc=NPC, hp=first_hp)
+    battle = rig.mercy.battles[NPC]
+    assert battle.hp == first_hp and battle.last >= before_first and len(battle.hits) == 1
+    betray.assert_called_once_with(NPC)
+    await rig.mercy._resuming[NPC]
+    await asyncio.gather(*rig.dialogue._background)
+    assert offer.await_count == (1 if first_hp == 20 else 0)
+    assert not conv.reply.done()
+
+    before_second = time.monotonic()
+    hit(rig, npc=NPC, hp=20)
+    assert battle.hp == 20 and battle.last >= before_second
+    assert betray.call_count == 2
+    assert not conv.reply.done()
+    await asyncio.gather(*rig.dialogue._background)
+    assert offer.await_count == (2 if first_hp == 20 else 1)
+    assert offer.await_args.args[0] == NPC and offer.await_args.args[1] is battle
+    assert offer.await_args.args[2].hp == 20 and offer.await_args.args[3] is True
+    attacks = [row["npc"] for row in rig.fake.story
+               if any(op.get("do") == "attack" for op in row.get("effects", []))]
+    assert attacks == [NPC, FRIEND]
+    await end_hero_hold(rig, conv)
+
+
+async def test_failed_hold_resume_allows_a_new_fight_to_pause(rig, monkeypatch):
+    conv, probe = await begin_hero_hold(rig, monkeypatch)
+    with monkeypatch.context() as failed:
+        attack = AsyncMock(return_value=("Injected attack failure", False))
+        failed.setattr(rig.dialogue, "_attack_hero", attack)
+        await end_hero_hold(rig, conv)
+        attack.assert_awaited_once()
+    assert NPC not in rig.mercy._hold_used and not rig.fake.attack_state
+
+    rig.fake.attack_state, rig.fake.target = True, "PC_HERO"
+    conv.reply = asyncio.create_task(asyncio.Event().wait())
+    conv.talked_at = time.monotonic()
+    await rig.mercy.hold_surrender(conv, [conv.trigger])
+    assert probe.await_count == 2 and rig.mercy.held(NPC)
+    assert not rig.fake.attack_state
+    await end_hero_hold(rig, conv)
+
+
+async def test_no_surrender_signal_keeps_native_combat_running(rig, monkeypatch):
+    conv, probe = await begin_hero_hold(rig, monkeypatch, surrendering=False)
+    assert probe.await_count == 1 and not rig.mercy.holds and rig.fake.attack_state
+    assert not any(op.get("do") == "calm" for row in rig.fake.story for op in row.get("effects", []))
+    await end_hero_hold(rig, conv)
+
+
+async def test_surrender_probe_cancels_the_active_combat_bark_first(rig, monkeypatch):
+    quick = rig.dialogue.quick = FakeBackend("Не дождёшься!", delay=0)
+    barks = rig.mercy.barks = CombatBarks(rig.dialogue)
+    rig.link._dispatch(NpcRoster(type="npc_roster", t=1000, npcs=[rig.talk.people[NPC]]))
+    started, cancelled = asyncio.Event(), asyncio.Event()
+    stream = quick.stream
+
+    async def held_bark(**options):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        async for event in stream(**options):
+            yield event
+
+    monkeypatch.setattr(quick, "stream", held_bark)
+    barks._attempt(NPC, "landed", None, "Ты попал по герою", time.monotonic())
+    await asyncio.wait_for(started.wait(), 1)
+    conv = rig.dialogue.conversations[NPC]
+    conv.trigger = Message("user", "Пощади!")
+    conv.talked_at = time.monotonic()
+    conv.reply = asyncio.create_task(asyncio.Event().wait())
+
+    async def probe(*args, **kwargs):
+        assert cancelled.is_set() and barks.task.cancelled()
+        assert not any(rig.dialogue._quick_busy)
+        return False
+
+    monkeypatch.setattr(rig.dialogue, "_surrendering", AsyncMock(side_effect=probe))
+    await rig.mercy.hold_surrender(conv, [conv.trigger])
+    rig.dialogue._surrendering.assert_awaited_once()
+    assert rig.dialogue._surrender_probes == 0 and rig.fake.attack_state
+    await end_hero_hold(rig, conv)
+
+
+async def test_player_turn_probes_then_accepts_surrender_from_hold(rig, monkeypatch):
+    words = rig.dialogue.quick = FakeBackend("Ладно!", delay=0)
+    recognition = FakeBackend("да", delay=0)
+    words_stream = words.stream
+
+    async def stream(**options):
+        backend = recognition.stream if options.get("temperature") == 0 else words_stream
+        async for event in backend(**options):
+            yield event
+
+    monkeypatch.setattr(words, "stream", stream)
+    await hero_yields(rig, [])
+    assert len(words.calls) == len(recognition.calls) == 1
+    assert rig.chronicle.facts("hero_yield") and not rig.mercy.holds and not rig.fake.attack_state
+    assert "опустил оружие и слушаешь" in str(rig.llm.calls[0][1])
+    assert rig.fake.said == ["Ладно!", "Ладно, живи. Я заберу своё."]
+
+
+async def test_second_hero_phrase_keeps_the_hold_until_the_replacement_turn_finishes(rig, monkeypatch):
+    rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    quick = rig.dialogue.quick = FakeBackend(script=[
+        FakeStep("да"), FakeStep("Слушаю."), FakeStep("Говори."),
+    ], delay=0)
+    rig.llm.script = [FakeStep()]
+    entered, release = asyncio.Event(), asyncio.Event()
+    stream = rig.llm.stream
+
+    async def delayed(**options):
+        entered.set()
+        await release.wait()
+        async for event in stream(**options):
+            yield event
+
+    monkeypatch.setattr(rig.llm, "stream", delayed)
+    conv = rig.dialogue.open(NPC, "Лобарт", warm=False)
+    first = rig.dialogue.say_as_player(NPC, "Сдаюсь, не бей", overlay=True)
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        hold = rig.mercy.holds[NPC]
+        timer, deadline = hold.timer, hold.timer.when()
+        assert rig.mercy.held(FRIEND) and not rig.fake.native_fights[FRIEND]
+
+        entered.clear()
+        second = rig.dialogue.say_as_player(NPC, "Пощади!", overlay=True)
+        await asyncio.gather(first, return_exceptions=True)
+        await asyncio.wait_for(entered.wait(), 2)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert first.cancelled() and not second.done()
+        assert rig.mercy.holds[NPC] is rig.mercy._hold_turns[NPC] is hold
+        assert hold.timer is timer and timer.when() == deadline and not timer.cancelled()
+        assert rig.mercy.held(FRIEND) and not rig.fake.attack_state and not rig.fake.native_fights[FRIEND]
+        assert quick.temperatures.count(0) == 1
+        assert "accept_surrender" in {tool.name for tool in rig.mercy.tools(NPC)}
+        assert not any(op.get("do") == "attack" for row in rig.fake.story
+                       for op in row.get("effects", []))
+
+        release.set()
+        await second
+        await finish(rig)
+        assert not rig.mercy.holds and NPC not in rig.mercy._hold_turns
+        attacks = [row["npc"] for row in rig.fake.story
+                   if any(op.get("do") == "attack" for op in row.get("effects", []))]
+        assert attacks == [NPC, FRIEND]
+    finally:
+        release.set()
+        await end_hero_hold(rig, conv)
+
+
+@pytest.mark.parametrize("race", ["calm_error", "validation_hit", "expired_accept", "expired_ally_hit"])
+async def test_accept_surrender_survives_deadline_and_resumes_on_calm_failure_or_hit(rig, monkeypatch, race):
+    rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    conv, _ = await begin_hero_hold(rig, monkeypatch)
+    hold = rig.mercy.holds[NPC]
+    native_outcome, calm = rig.mercy._native_outcome, rig.dialogue._calm
+    story_effect = rig.link.story_effect
+
+    async def outcome(*args, **kwargs):
+        await native_outcome(*args, **kwargs)
+        if race.startswith("expired"):
+            rig.mercy._end_hold(NPC, hold)
+        elif race == "validation_hit":
+            hit(rig, hp=80)
+
+    async def effect(npc, effects, **kwargs):
+        if race == "calm_error" and npc == NPC and any(op["do"] == "calm" for op in effects):
+            assert hold.timer.cancelled()
+            raise GameError("Injected final calm failure")
+        return await story_effect(npc, effects, **kwargs)
+
+    async def final_calm(listener, intent, **kwargs):
+        result = await calm(listener, intent, **kwargs)
+        if race == "expired_ally_hit" and listener.npc == FRIEND:
+            hit(rig, npc=FRIEND, hp=80)
+        return result
+
+    monkeypatch.setattr(rig.mercy, "_native_outcome", outcome)
+    monkeypatch.setattr(rig.link, "story_effect", effect)
+    monkeypatch.setattr(rig.dialogue, "_calm", final_calm)
+    result = await rig.mercy.handle(rig.dialogue, conv, ToolCall("accept_surrender", {
+        "take": [], "words": "Живи.", "humiliate": False,
+    }), rig.link.snapshots[NPC])
+    accepted = race == "expired_accept"
+    assert result.status == ("accepted" if accepted else "rejected")
+    assert bool(rig.chronicle.facts("hero_yield")) is accepted
+    assert not rig.mercy.holds and not conv.reply.done()
+    assert rig.fake.attack_state is not accepted
+    assert rig.fake.native_fights[FRIEND] is not accepted
+    await end_hero_hold(rig, conv)
+
+
 @pytest.mark.parametrize(("text", "quick"), [
     ("", False), ("Ладно, живи", False), ("This conversational text stays silent.", True),
 ])
@@ -381,9 +750,9 @@ async def test_accept_tool_only_after_hero_phrase_in_fight(rig, state):
         await rig.dialogue.event_turn(NPC, "[Шум рядом]", overlay=True)
     else:
         await rig.dialogue.say_as_player(NPC, "Пожалуйста, хватит!", overlay=True)
-    assert len(quick.calls) == 1
-    assert rig.fake.said == ["А ну стой!"]
     eligible = state in {"fighting", "native_only"}
+    assert len(quick.calls) == (2 if eligible else 1)
+    assert rig.fake.said == ["А ну стой!"]
     assert ("accept_surrender" in {t.name for t in rig.llm.calls[0][2]}) is eligible
     context = str(rig.llm.calls[0][1])
     assert ("Сейчас ты в бою с героем" in context) is eligible
@@ -471,7 +840,7 @@ async def test_hero_yield_band_truce_betrayal_and_memory_branch(rig, elapsed):
     assert rig.parley.truce(NPC)["until"] == 1980
     assert gang in rig.parley.truce(NPC)["members"]
     assert rig.dialogue.conversations[gang].intent.goal != "fight"
-    assert any(row.get("npc") == gang and {"do": "calm", "attitude": "ATT_NEUTRAL"}
+    assert any(row.get("npc") == gang and {"do": "calm", "attitude": "ATT_FRIENDLY"}
                in row.get("effects", []) for row in rig.fake.story)
     assert any("Герой сдался тебе в бою; ты взял:" in m.content
                for m in rig.dialogue.conversations[NPC].history)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Collection, Sequence
 from typing import Any
 
@@ -53,7 +54,7 @@ class OpenAICompatBackend:
     async def _create(self, **kwargs: Any) -> Any:
         slot = QUICK_SLOT.get()
         if slot is not None and self._id_slot_supported:
-            kwargs["extra_body"] = {"id_slot": slot}
+            kwargs.setdefault("extra_body", {})["id_slot"] = slot
             if kwargs.get("stream"):
                 kwargs["extra_body"]["timings_per_token"] = True
                 kwargs["stream_options"] = {"include_usage": True}
@@ -62,6 +63,8 @@ class OpenAICompatBackend:
         except openai.BadRequestError as err:
             if "extra_body" not in kwargs or "id_slot" not in str(err.body or err):
                 raise
+            if "grammar" in kwargs["extra_body"]:
+                raise  # an unpinned classifier could overwrite the speaking NPC's cache
             if self._id_slot_supported:
                 log.warning("%s: server rejected id_slot; continuing without slot pinning", self.name)
             self._id_slot_supported = False
@@ -89,6 +92,8 @@ class OpenAICompatBackend:
         allowed: Collection[str] | None = None,
         cache_key: str | None = None,
         temperature: float | None = None,
+        max_tokens: int | None = None,
+        grammar: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         chat = [{"role": "system", "content": instructions}, *chat_messages(messages)]
         kwargs: dict[str, Any] = {}
@@ -104,20 +109,29 @@ class OpenAICompatBackend:
             ]
             if tool_choice:
                 kwargs["tool_choice"] = tool_choice
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        limit = self.max_tokens if max_tokens is None else max_tokens
+        if limit is not None:
+            kwargs["max_tokens"] = limit
         if temperature is not None:
             kwargs["temperature"] = temperature
+        if grammar is not None:
+            kwargs["extra_body"] = {
+                "grammar": grammar, "chat_template_kwargs": {"enable_thinking": False},
+            }
         text = ""
         calls: dict[int, dict[str, str]] = {}
         stream = None
         slot = QUICK_SLOT.get()
         if slot is not None:
             self.timings.pop(slot, None)
+        client_timings: dict[str, float] = {}
+        started = time.monotonic() if grammar is not None else None
         try:
             stream = await self._create(
                 model=self.model, messages=chat, stream=True, **kwargs
             )
+            if started is not None:
+                client_timings["client_headers_ms"] = round((time.monotonic() - started) * 1000, 1)
             async for chunk in stream:
                 if slot is not None and (timings := getattr(chunk, "timings", None)):
                     self.timings[slot] = dict(timings)
@@ -125,6 +139,10 @@ class OpenAICompatBackend:
                     continue
                 delta = chunk.choices[0].delta
                 if delta.content:
+                    if started is not None and "client_first_token_ms" not in client_timings:
+                        client_timings["client_first_token_ms"] = round(
+                            (time.monotonic() - started) * 1000, 1,
+                        )
                     text += delta.content
                     yield TextDelta(delta.content)
                 for tc in delta.tool_calls or []:
@@ -138,8 +156,13 @@ class OpenAICompatBackend:
         except openai.APIConnectionError as err:
             raise LLMError(f"{self.name}: cannot reach {self._client.base_url}", retryable=True) from err
         finally:
-            if stream is not None:
-                await stream.aclose()  # release the model slot when a short line is cut or yields priority
+            try:
+                if stream is not None:
+                    await stream.aclose()  # release the slot when a short line is cut or yields priority
+            finally:
+                if started is not None and slot is not None:
+                    client_timings["client_total_ms"] = round((time.monotonic() - started) * 1000, 1)
+                    self.timings.setdefault(slot, {}).update(client_timings)
         items: list[Item] = [Message("assistant", text)] if text else []
         for acc in calls.values():
             try:

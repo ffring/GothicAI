@@ -192,6 +192,8 @@ class CombatBarks:
         ) < NPC_GAP_S
 
     def _world_busy(self) -> bool:
+        if self.dialogue._surrender_probes:
+            return True
         if self.task is not None and not self.task.done():
             return True
         if self.active is not None:

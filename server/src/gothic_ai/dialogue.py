@@ -121,6 +121,11 @@ LLM_FIRST_S, LLM_IDLE_S, STEP_RETRIES = 15.0, 15.0, 1
 # is the conversational model's after all
 QUICK_FIRST_S, QUICK_IDLE_S = 3.0, 2.0
 QUICK_HINT = "Сейчас горячо: ответь сразу, одной-двумя короткими фразами."
+SURRENDER_CLASSIFIER = (
+    "Ты классифицируешь реплики игрока в бою в ролевой игре. Ответь «да», если игрок сам сдаётся, "
+    "признаёт поражение или просит пощады/не бить его. Ответь «нет», если он угрожает, "
+    "требует сдаться противника, спрашивает или говорит что-то другое."
+)
 # the quick model's first words to the hero's phrase; "—": nothing (the answer is quick itself)
 REACT_HINT = (
     "Герой только что это сказал. Отреагируй вслух сразу, одной короткой фразой до восьми слов, "
@@ -742,6 +747,9 @@ class DialogueManager:
         # the npc fights the hero right now (the scripts' attack, talk.py; companions are not asked): talked
         # to, it may call it off (`_calm`)
         self.fights_hero: Callable[[str], bool] = lambda npc: False
+        self.surrender_hold: Callable[[Conversation, list[Item]], Awaitable[None]] | None = None
+        self.surrender_context: Callable[[str], str | None] = lambda npc: None
+        self.hero_fight_held: Callable[[str], bool] = lambda npc: False
         # an npc called off its fight with the hero (npc): a companion fighting it lets it be (orders.py)
         self.on_calm: list[Callable[[str], None]] = []
         # an npc turned on the hero by its own decision (npc): his companions stand up for him (orders.py)
@@ -773,6 +781,7 @@ class DialogueManager:
         self._quick_busy = [0] * PREWARM_SLOTS
         self._quick_locks = [asyncio.Lock() for _ in range(PREWARM_SLOTS)]
         self._quick_free = asyncio.Event()
+        self._surrender_probes = 0
         self._nearby: dict[str, tuple[str, float]] = {}  # human npc -> name, distance to the hero in cm
         self._svm_down: dict[str, bool] = {}  # latest known deaths, roster and snapshot health
         self._focus: str | None = None
@@ -875,7 +884,7 @@ class DialogueManager:
             attempt["outcome"] = "far"
         elif (
             npc == "PLAYER" or npc in self._svm_tasks or len(self._svm_tasks) >= PREWARM_SLOTS
-            or self._svm_busy(npc)
+            or self._surrender_probes or self._svm_busy(npc)
         ):
             pass
         else:
@@ -1191,6 +1200,8 @@ class DialogueManager:
             self._start_prewarm(conv, candidates)
 
     def _start_prewarm(self, conv: Conversation, candidates: list[str]) -> None:
+        if self._surrender_probes:
+            return
         self._open_ahead(conv.npc)
         warm = getattr(self.quick, "prewarm", None)
         if warm is None:
@@ -1274,14 +1285,26 @@ class DialogueManager:
 
     @asynccontextmanager
     async def _quick_request(self, npc: str) -> AsyncIterator[None]:
+        started, requested_at = time.monotonic(), time.time()
         while (slot := self._quick_slot(npc)) is None:
             self._quick_free.clear()
             await self._quick_free.wait()
+        slotted = time.monotonic()
         self._quick_busy[slot] += 1  # includes requests waiting for this NPC's previous real request
         if warm := self._prewarms.get(npc.upper()):
             warm.cancel()  # do not wait for a prewarm or share its slot with a real request
         try:
             async with self._quick_locks[slot]:
+                conv = self.conversations.get(npc.upper())
+                if self.trace is not None and conv is not None and conv.trigger is not None and (
+                    conv.trigger.role == "user" and conv.reply is not None and not conv.reply.done()
+                ):
+                    self.trace.write({
+                        "type": "quick_request", "t": round(time.time(), 3), "npc": npc,
+                        "requested_at": requested_at, "slot": slot,
+                        "slot_wait_ms": round((slotted - started) * 1000, 1),
+                        "lock_wait_ms": round((time.monotonic() - slotted) * 1000, 1),
+                    })
                 token = QUICK_SLOT.set(slot)
                 try:
                     yield
@@ -1296,6 +1319,90 @@ class DialogueManager:
         async with self._quick_request(npc), aclosing(self.quick.stream(**options)) as events:
             async for event in events:
                 yield event
+
+    async def _surrendering(
+        self, conv: Conversation, request: list[Item], *, opponent: str | None = None,
+    ) -> bool:
+        """Classify outside the persona on an idle slot other than the speaking NPC's.
+
+        Cancel warming and SVM generation before selecting an idle foreign LRU slot. Never
+        touch the speaker's prefix or another foreground request; no spare slot means no hold.
+        """
+        entered, wall = time.monotonic(), time.time()
+        attempt: dict[str, Any] = {
+            "type": "surrender_probe", "t": round(wall, 3), "npc": conv.npc,
+            "received_at": wall - (entered - conv.talked_at),
+            "entered_ms": round((entered - conv.talked_at) * 1000, 1),
+            "slot_wait_ms": 0.0, "outcome": "unavailable",
+        }
+        self._surrender_probes += 1
+        try:
+            if (self.quick is None or getattr(self.quick, "_id_slot_supported", True) is False
+                    or entered >= conv.talked_at + 2.0):
+                return False
+            async with asyncio.timeout_at(conv.talked_at + 2.0):
+                background = {task for task in (*self._prewarms.values(), *self._svm_tasks.values())
+                              if not task.done()}
+                for task in background:
+                    task.cancel()
+                if background:
+                    await asyncio.gather(*background, return_exceptions=True)
+                attempt["cancel_ms"] = round((time.monotonic() - entered) * 1000, 1)
+                own = self._quick_slots.get(conv.npc)
+                slots = [s for s in range(PREWARM_SLOTS)
+                         if s != own and not self._quick_busy[s] and not self._quick_locks[s].locked()]
+                if not slots:
+                    attempt["outcome"] = "no_slot"
+                    return False
+                owners = {s: n for n, s in self._quick_slots.items()}
+                slot = min(slots, key=lambda s: self._quick_used.get(owners.get(s), -1))
+                attempt["slot"] = slot
+                if old := owners.get(slot):
+                    del self._quick_slots[old]
+                    self._quick_used.pop(old, None)
+                    self._prewarm_history.pop(old, None)
+                    self._prewarms.pop(old, None)
+                phrase = next(m.content for m in reversed(request)
+                              if isinstance(m, Message) and m.role == "user")
+                context = self.surrender_context(conv.npc) if opponent is None else opponent
+                text_in = (f"Перед этим противник сказал: «{context}»\n" if context else "")
+                text_in += f"Реплика игрока: «{phrase}»"
+                text = ""
+                self._quick_busy[slot] += 1
+                token = QUICK_SLOT.set(slot)
+                locked = time.monotonic()
+                try:
+                    async with self._quick_locks[slot]:
+                        attempt["lock_wait_ms"] = round((time.monotonic() - locked) * 1000, 1)
+                        attempt["request_ms"] = round((time.monotonic() - conv.talked_at) * 1000, 1)
+                        async with aclosing(self.quick.stream(
+                            instructions=SURRENDER_CLASSIFIER, messages=[Message("user", text_in)],
+                            tools=[], temperature=0, max_tokens=4, grammar='root ::= "да" | "нет"',
+                        )) as events:
+                            async for event in events:
+                                if isinstance(event, TextDelta):
+                                    attempt.setdefault("first_token_ms", round(
+                                        (time.monotonic() - conv.talked_at) * 1000, 1,
+                                    ))
+                                    text += event.text
+                finally:
+                    attempt["timings"] = dict(getattr(self.quick, "timings", {}).get(slot, {}))
+                    QUICK_SLOT.reset(token)
+                    self._quick_busy[slot] -= 1
+                    self._quick_free.set()
+                answer = text.strip().lower()
+                attempt.update(answer=answer, outcome="yes" if answer == "да" else "no")
+                return answer == "да"
+        except (LLMError, TimeoutError) as error:
+            attempt.update(outcome="late" if isinstance(error, TimeoutError) else "error",
+                           error=type(error).__name__)
+            return False
+        finally:
+            self._surrender_probes -= 1
+            attempt["completed_ms"] = round((time.monotonic() - conv.talked_at) * 1000, 1)
+            log.info("%s: surrender probe %s", conv.npc, json.dumps(attempt, ensure_ascii=False))
+            if self.trace is not None:
+                self.trace.write(attempt)
 
     def _yield_to(self, npc: str) -> None:
         """Prioritize this NPC over other warming and SVM requests; its own warm is cancelled
@@ -2314,6 +2421,8 @@ class DialogueManager:
             else:
                 if quick and full is not None:  # the quick model said nothing: the whole situation, as usual
                     situation_text, _, state.sight = await full
+                    if self.hero_fight_held(conv.npc):
+                        situation_text, _, state.sight = await self._situation(conv, body)
                     if state.dynamic_tools:
                         state.tools = self._offered(conv.npc, state.sight)
                     if sound:
@@ -2448,12 +2557,23 @@ class DialogueManager:
         """The npc's line in a fight, from the quick model. False if it said nothing (it failed or went
         quiet first): the conversational model speaks then, as in any other turn."""
         assert self.quick is not None
-        st = trace.step(request, None, llm=getattr(self.quick, "model", None) or self.quick.name)
+        player = conv.trigger is not None and conv.trigger.role == "user"
+        slot = self._quick_slot(conv.npc) if player and self.surrender_hold is not None else None
+        if slot is not None:
+            self._quick_busy[slot] += 1  # keep the speaker's prefix while the other slot classifies
         try:
-            await self._step(conv, state, request, None, st, quick=True)
-        except LLMError as err:
-            log.warning("%s: the quick model failed: %s", conv.npc, err)
-            trace.event("quick_failed", error=str(err))
+            if slot is not None and self.surrender_hold is not None:
+                await self.surrender_hold(conv, request)
+            st = trace.step(request, None, llm=getattr(self.quick, "model", None) or self.quick.name)
+            try:
+                await self._step(conv, state, request, None, st, quick=True)
+            except LLMError as err:
+                log.warning("%s: the quick model failed: %s", conv.npc, err)
+                trace.event("quick_failed", error=str(err))
+        finally:
+            if slot is not None:
+                self._quick_busy[slot] -= 1
+                self._quick_free.set()
         return bool(state.text.strip())
 
     async def _act_on_line(
@@ -2471,6 +2591,8 @@ class DialogueManager:
         conv.acting = True  # the hero may speak again: a new turn, not an interruption
         await self._status(conv, "idle")
         situation_text, _, state.sight = await full
+        if self.hero_fight_held(conv.npc):
+            situation_text, _, state.sight = await self._situation(conv, None)
         if state.dynamic_tools:
             state.tools = self._offered(conv.npc, state.sight)
         said = " ".join(s for s in (sound, state.text.strip()) if s)
@@ -2911,13 +3033,17 @@ class DialogueManager:
         log.info("%s: the incident is over, intent back to %s", conv.npc, intent.goal)
         self._change_intent(conv, intent, self.link.snapshots.get(conv.npc), body=body)
 
-    async def _attack_hero(self, conv: Conversation, intent: Intent) -> tuple[str, bool]:
+    async def _attack_hero(
+        self, conv: Conversation, intent: Intent, *, resume: bool = False,
+    ) -> tuple[str, bool]:
         """The npc turns on the hero, after its words: the scripts' own attack (B_Attack), held or free, so
         the fight goes as the game's do. A bandit means to kill and its gang joins it; anyone else gives him
         a beating until he is down."""
         if conv.intent is not intent:
             return "", True  # it changed its mind before it was done talking
-        if self.fight_reason is not None:
+        if self.hero_fight_held(conv.npc):
+            return "Ты опустил оружие и слушаешь героя; решение о сдаче ещё не принято.", True
+        if not resume and self.fight_reason is not None:
             if why := self.fight_reason(conv.npc, self.link.snapshots.get(conv.npc)):
                 self._change_intent(
                     conv, conv.calm or Intent(), self.link.snapshots.get(conv.npc), body=False
