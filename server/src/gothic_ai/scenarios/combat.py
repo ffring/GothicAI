@@ -194,12 +194,13 @@ async def surrender_live(
                 ):
                     raise GameError("surrender_live preparation: NPC did not hit the hero")
                 if text is not None:
-                    snap = await link.snapshot(npc, fresh=True)
-                    if snap.player is None or snap.player.focus != npc:
+                    [view] = await link.npc_view([npc])
+                    if view.hero is None or view.hero.focus != npc:
                         await link.debug("teleport", near=npc, distance=200)
                     if not await _until_async(
-                        lambda npc=npc: link.snapshot(npc, fresh=True),
-                        lambda snap, npc=npc: snap.player is not None and snap.player.focus == npc, 4,
+                        lambda npc=npc: link.npc_view([npc]),
+                        lambda views, npc=npc: bool(views and views[0].hero and views[0].hero.focus == npc),
+                        4,
                     ):
                         raise GameError("surrender_live preparation: hero focus is not the intended opponent")
                 if text is None:
