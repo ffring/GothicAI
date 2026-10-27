@@ -58,15 +58,18 @@ function Invoke-Step([string[]]$Arguments) {
 }
 
 $parallel = if ($Jobs -gt 0) { @('--parallel', "$Jobs") } else { @() }
+# Ninja keeps compiling the other objects after an error (-k 0), so one failed build reports every
+# broken file; the build still exits nonzero and Invoke-Step throws.
+$keepGoing = @('--', '-k', '0')
 $engine = Join-Path $Root 'OpenGothic'
 $build = Join-Path $engine 'build'
 Invoke-Step @('-S', $engine, '-B', $build, '-G', 'Ninja', "-DCMAKE_BUILD_TYPE=$BuildType")
-Invoke-Step (@('--build', $build, '--target', 'Gothic2Notr') + $parallel)
+Invoke-Step (@('--build', $build, '--target', 'Gothic2Notr') + $parallel + $keepGoing)
 
 $graph = Join-Path $engine 'ai_bridge\storygraph'
 $graphBuild = Join-Path $graph 'build'
 Invoke-Step @('-S', $graph, '-B', $graphBuild, '-G', 'Ninja', "-DCMAKE_BUILD_TYPE=$BuildType")
-Invoke-Step (@('--build', $graphBuild, '--target', 'storygraph') + $parallel)
+Invoke-Step (@('--build', $graphBuild, '--target', 'storygraph') + $parallel + $keepGoing)
 
 # The runtime output folder already holds the game, Tempest.dll and the shader compiler DLLs Tempest copies.
 $out = Join-Path $build 'opengothic'

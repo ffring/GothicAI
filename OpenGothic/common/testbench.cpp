@@ -10157,6 +10157,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     NavDemos::command(a,w,pl,outDir);
     return;
   }
+  // MSVC allows at most 128 nested blocks, else-if clauses included (C1061), so the command
+  // ladder is split into runs: a run whose branch matched ends the command, otherwise the next
+  // run is tried. First-match order is that of a single ladder.
+  bool dispatched=true;
   if(c=="navmesh") {
     bench.navigationOnly = true;
     if(a.size()!=2 || a[1]!="wait") NavBench::command(a,w,pl,outDir);
@@ -10737,7 +10741,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("character_measure_end","\"frames\":"+std::to_string(bench.characterFrames.size()));
     }
 #endif
-  else if(Resources::isHeadless() && c=="cheat" && a.size()==2 && a[1]=="god") {
+  else dispatched=false;
+  if(dispatched) return;
+  dispatched=true;
+  if(Resources::isHeadless() && c=="cheat" && a.size()==2 && a[1]=="god") {
     // Marvin also draws a notification with a GPU font. The CPU runner needs the same game flag.
     Gothic::inst().setGodMode(!Gothic::inst().isGodMode());
     say("cheat god");
@@ -11013,7 +11020,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     arenaAbort("cloth timing requires a build with OPENGOTHIC_ENABLE_APP_CADENCE=ON");
     }
 #endif
-  else if(c=="water" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+  else dispatched=false;
+  if(dispatched) return;
+  dispatched=true;
+  if(c=="water" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","buoyancy",a[1]=="on");
     w.physic()->setBuoyancyEnabled(a[1]=="on");
     }
@@ -11367,7 +11377,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       } else arenaAbort("cannot write movable native step timing samples");
     }
 #endif
-  else if(c=="spell" && a.size()==3 && a[1]=="fixture") {
+  else dispatched=false;
+  if(dispatched) return;
+  dispatched=true;
+  if(c=="spell" && a.size()==3 && a[1]=="fixture") {
     prepareSpellFixture(w,pl,a[2]);
     if(!bench.spellActors.empty()) exec("watch watched",w,pl,ctrl);
     }
@@ -12008,7 +12021,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     arenaAbort("cadence requires a build with OPENGOTHIC_ENABLE_APP_CADENCE=ON");
     }
 #endif
-  else if(c=="ragdoll" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
+  else dispatched=false;
+  if(dispatched) return;
+  dispatched=true;
+  if(c=="ragdoll" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","ragdoll",a[1]=="on" ? 1 : 0);
     say("ragdoll "+a[1]);
     event("ragdoll_toggle","\"enabled\":"+std::string(a[1]=="on" ? "true" : "false"));
@@ -12782,7 +12798,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       say(buf);
       }
     }
-  else if(c=="views") {
+  else dispatched=false;
+  if(dispatched) return;
+  dispatched=true;
+  if(c=="views") {
     // views <npc> [count] [max dist] [from <min dist>] [shoot <prefix>]: where a camera sees the hero (the top of
     // the head, the chest: a wall's top may hide the legs) and the npc in one frame, from open air (nothing within
     // 40 cm, a clear line to the hero's head: the same room), as `cam lift off`, `cam follow <dist> <height>
@@ -14137,7 +14156,10 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="end") {
     }
-  else if(c=="slopes" || c=="stairs") {
+  else dispatched=false;
+  if(dispatched) return;
+  dispatched=true;
+  if(c=="slopes" || c=="stairs") {
     for(auto& s:findSpots(w,pl,c=="stairs" ? K_Stairs : K_Slope,num(a,1,10),num(a,2,35),"",30)) {
       char buf[256];
       std::snprintf(buf,sizeof(buf),"%s %s angle=%.1f rough=%.1f dist=%.0f",c.c_str(),s.name.c_str(),s.angle,s.rough,s.dist);
