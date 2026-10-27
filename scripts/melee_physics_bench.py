@@ -43,6 +43,11 @@ def summarize(output: Path, *, shadow: bool = False) -> dict:
               "solve_p95_ms": percentile([row["solve_ms"] for row in measured]),
               "cast_mean_ms": statistics.mean(row["cast_ms"] for row in measured),
               "cast_p95_ms": percentile([row["cast_ms"] for row in measured])}
+    events = [json.loads(line) for line in (output/"events.jsonl").read_text().splitlines()]
+    begin = next(row for row in events if row["kind"] == "melee_physics_measure_before")
+    end = next(row for row in events if row["kind"] == "melee_physics_measure_after")
+    result.update(game_seconds=(end["t"]-begin["t"])/1000,
+                  steady_mix=begin.get("steady_mix", False), attack_starts=end.get("attack_starts", 0))
     with (output/"melee-physics.csv.steps.csv").open() as stream:
         steps = list(csv.DictReader(stream))
     result["fixed_steps"] = len(steps)
@@ -98,7 +103,10 @@ def main() -> int:
         take = output/label
         take.mkdir()
         scenario = take/"melee-physics.bench"
-        scenario.write_text(template.replace("setup 10 full kinematic 2", f"setup {count} {mode} {pelvis} {steps}"))
+        scenario_text = template.replace("setup 10 full kinematic 2", f"setup {count} {mode} {pelvis} {steps}")
+        if args.hits_pair:
+            scenario_text = scenario_text.replace("cadence normal", "melee-physics steady\ncadence normal")
+        scenario.write_text(scenario_text)
         env = {**os.environ, "BENCH_HOST": "local", "NO_BUILD": "1", "WORLD": "NEWWORLD.ZEN",
                "OPENGOTHIC_MELEE_BENCH": "fixture", "GOTHIC_AI": "0", "TIMEOUT": "180"}
         if paired:

@@ -677,7 +677,8 @@ struct Bench {
   struct LivingPhysics { uint64_t time=0;uint64_t dt=0;float milliseconds=0;size_t bodies=0; };
   std::vector<LivingPhysics> livingPhysics;
   bool livingOverflow=false;
-  bool meleeFixture=false,meleeMeasuring=false;
+  bool meleeFixture=false,meleeMeasuring=false,meleeSteady=false;
+  uint32_t meleeAttackStarts=0;
   std::string meleeMode,meleePelvis;
   uint64_t meleeMotionFrom=0;
   std::vector<Npc*> meleeShadowActors;
@@ -11842,6 +11843,14 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     event("melee_physics_setup","\"actors\":"+std::to_string(count)+",\"mode\":"+jsonStr(mode)+
       ",\"pelvis\":"+jsonStr(pelvis)+",\"substeps\":"+std::to_string(substeps)+",\"animation_cycle_ms\":12000");
     }
+  else if(c=="melee-physics" && a.size()==2 && a[1]=="steady") {
+    if(!bench.meleeFixture || bench.meleeMode!="base") {
+      arenaAbort("steady melee measurement requires the base fixture");return;
+      }
+    // Keep four walkers, three idle actors and three attackers throughout the
+    // comparison; long frames must not change the mix by delaying a phase.
+    bench.meleeSteady=true;
+    }
   else if(c=="living" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","living_bodies",a[1]=="on");bench.livingPhase=a[1];
     }
@@ -11934,15 +11943,18 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
        !AppCadence::normalClock() || !AppCadence::arm(bench.meleeMode!="base")) {
       arenaAbort("melee measurement precondition failed");return;
       }
+    bench.meleeAttackStarts=0;
     AppCadence::counts(true,uint32_t(counts.models),0,uint32_t(counts.parts),0,0);
     w.physic()->measureMeleeBench(outDir+"/melee-physics.csv");bench.meleeMeasuring=true;
-    event("melee_physics_measure_before",livingCountFields(counts,w));
+    event("melee_physics_measure_before",livingCountFields(counts,w)+
+      ",\"steady_mix\":"+(bench.meleeSteady ? "true" : "false"));
     }
   else if(c=="melee-physics" && a.size()==2 && a[1]=="report") {
     if(!bench.meleeMeasuring || !AppCadence::done()) {arenaAbort("melee measurement window is incomplete");return;}
     bench.meleeMeasuring=false;w.physic()->reportMeleeBench();const auto counts=livingCounts();
     AppCadence::counts(false,uint32_t(counts.models),0,uint32_t(counts.parts),0,0);
-    event("melee_physics_measure_after",livingCountFields(counts,w));
+    event("melee_physics_measure_after",livingCountFields(counts,w)+
+      ",\"attack_starts\":"+std::to_string(bench.meleeAttackStarts));
     if(counts.alive!=bench.crew.size() || counts.duplicates!=0)
       arenaAbort("melee actors changed during measurement");
     }
@@ -15107,7 +15119,8 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
     size_t actor=0;
     for(auto& walker:bench.livingWalkers) {
       auto& npc=*walker.npc;
-      const int phase=int(((w.tickCount()-bench.meleeMotionFrom)/4000+actor++)%3);
+      const auto index=actor++;
+      const int phase=int(bench.meleeSteady ? index%3 : ((w.tickCount()-bench.meleeMotionFrom)/4000+index)%3);
       if(!npc.drawWeaponMelee()) continue;
       if(phase!=walker.meleePhase) {
         npc.clearAiQueue();npc.clearGoTo();npc.stopWalking();npc.setAnim(Npc::Anim::Idle);
@@ -15121,7 +15134,9 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
           }
         }
       else if(phase==2 && w.tickCount()>=walker.meleeAttackAt) {
-        npc.setAnim(Npc::Anim::Attack);walker.meleeAttackAt=w.tickCount()+1500;
+        const bool started=npc.setAnim(Npc::Anim::Attack);
+        if(bench.meleeMeasuring && started) ++bench.meleeAttackStarts;
+        walker.meleeAttackAt=w.tickCount()+1500;
         }
       }
     }
