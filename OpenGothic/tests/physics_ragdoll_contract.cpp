@@ -1999,6 +1999,7 @@ void testPoseActualDriverSave() {
   require(BaseImport::convertPrograms(root,base/"programs",false)==0,"pose driver program index must import");
   require(BaseImport::convertOutputUnits(root,base/"outputunits",false)==0,"pose driver output unit index must import");
   require(BaseImport::convertAudio(root,base/"audio",false)==0,"pose driver audio index must import");
+  require(BaseImport::convertMusic(root,base/"music",false)==0,"pose driver music index must import");
   {
     // Synthetic installation without remaining-family inputs: a labelled empty manifest.
     std::filesystem::create_directories(base/"sources");

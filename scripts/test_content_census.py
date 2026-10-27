@@ -114,11 +114,13 @@ def test_base_resources_are_separate_from_own_replacements():
              "replacement": "base/audio/ab/sound.wav", "opens": 1}
     speech = {"name": "DIA_X_7.WAV", "kind": "basespeech",
               "replacement": "base/audio/cd/speech.wav", "opens": 1}
+    music = {"name": "THEME.SGT", "kind": "basemusic",
+             "replacement": "base/music/gk/segment/record.json", "opens": 1}
     models = [{"name": name, "kind": "basemodel",
                "replacement": f"base/models/{name}.json", "opens": 1}
               for name in ("HERO.MDL", "HUMANS.MDH", "HUMANS-WALK.MAN", "BOW.MMB")]
     summary = census.summarize([
-        run([original("STONE-C.TEX")], [texture, mesh, world, zen, font, program, sound, speech, *models, replacement("OWN.TGA")]),
+        run([original("STONE-C.TEX")], [texture, mesh, world, zen, font, program, sound, speech, music, *models, replacement("OWN.TGA")]),
         run(replacements=[dict(texture, name="stone.tga"), mesh,
                           replacement("STONE.TGA"), replacement("BARREL.MRM", "mesh"),
                           world, zen, replacement("FIRE.ZEN", "world"), dict(font, name=font["name"].lower()),
@@ -126,6 +128,7 @@ def test_base_resources_are_separate_from_own_replacements():
                           dict(program, name="gothic.dat"), replacement("gothic.dat", "script"),
                           dict(sound, name="hit.wav"), replacement("hit.wav", "sound"),
                           dict(speech, name="dia_x_7.wav"), replacement("dia_x_7.wav", "speech"),
+                          dict(music, name="theme.sgt", replacement="base/music/dx8/segment/record.json"), replacement("theme.sgt", "music"),
                           *[replacement(row["name"].lower(), kind) for row, kind in
                             zip(models, ("model", "skeleton", "anim", "morph"))]]),
     ])
@@ -138,6 +141,7 @@ def test_base_resources_are_separate_from_own_replacements():
         {"kind": "basezen", "original": 0, "own": 0, "base": 1},
         {"kind": "basesound", "original": 0, "own": 0, "base": 1},
         {"kind": "basespeech", "original": 0, "own": 0, "base": 1},
+        {"kind": "basemusic", "original": 0, "own": 0, "base": 1},
         {"kind": "baseprogram", "original": 0, "own": 0, "base": 1},
         {"kind": "basefont", "original": 0, "own": 0, "base": 1},
     ]
@@ -149,9 +153,10 @@ def test_base_resources_are_separate_from_own_replacements():
     assert "| baseprogram | 0 | 0 | 1 | 0.0% |" in markdown
     assert "| basesound | 0 | 0 | 1 | 0.0% |" in markdown
     assert "| basespeech | 0 | 0 | 1 | 0.0% |" in markdown
+    assert "| basemusic | 0 | 0 | 1 | 0.0% |" in markdown
     assert "| baseworld | 0 | 0 | 1 | 0.0% |" in markdown
     assert "| basezen | 0 | 0 | 1 | 0.0% |" in markdown
-    assert "| **Всего** | **1** | **1** | **12** | **7.1%** |" in markdown
+    assert "| **Всего** | **1** | **1** | **13** | **6.7%** |" in markdown
 
 
 def test_top20_uses_summed_opens_and_stable_order_for_ties():

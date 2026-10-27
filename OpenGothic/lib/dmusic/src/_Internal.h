@@ -68,6 +68,11 @@ struct DmLoader {
 
 	DmStyleCache style_cache;
 	DmDlsCache dls_cache;
+
+	// Set by DmLoader_setFactory (copied by value); zero after DmLoader_create means no factory.
+	DmLoaderFactory factory;
+	void* factory_ctx;
+	bool has_factory;
 };
 
 typedef enum DmInstrumentFlags {

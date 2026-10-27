@@ -5,6 +5,8 @@
 #include "basemusic.h"
 #include "gothicglb.h"
 #include "audiodata.h"
+#include "musicdata.h"
+#include "musicnative.h"
 #include "outputunits.h"
 #include "programdata.h"
 #include "asset/fromzenkit.h"
@@ -29,6 +31,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -1832,6 +1835,511 @@ std::string AudioImport::json() const {
   s += "\n  }\n}\n";
   return s;
   }
+
+// "segment" | "style" | "dls" by extension, empty for other files.
+std::string musicKind(const std::string& name) {
+  const auto ext = extension(name);
+  return ext==".SGT" ? "segment" : ext==".STY" ? "style" : ext==".DLS" ? "dls" : "";
+  }
+
+const char* resultName(DmResult rv) {
+  switch(rv) {
+    case DmResult_SUCCESS:          return "SUCCESS";
+    case DmResult_INVALID_ARGUMENT: return "INVALID_ARGUMENT";
+    case DmResult_INVALID_STATE:    return "INVALID_STATE";
+    case DmResult_MEMORY_EXHAUSTED: return "MEMORY_EXHAUSTED";
+    case DmResult_NOT_FOUND:        return "NOT_FOUND";
+    case DmResult_FILE_CORRUPT:     return "FILE_CORRUPT";
+    case DmResult_MUTEX_ERROR:      return "MUTEX_ERROR";
+    }
+  return "UNKNOWN";
+  }
+
+// A GothicKit object built by the old parser (factory=false) or by the record factory, then encoded.
+// Returns the build result; `out` holds the encoding on success.
+DmResult gkBuildAndEncode(const std::string& kind, bool factory, const std::vector<uint8_t>& in,
+                          std::vector<uint8_t>& out) {
+  out.clear();
+  uint8_t* enc = nullptr;
+  size_t   len = 0;
+  DmResult rv, er = DmResult_SUCCESS;
+  if(kind=="segment") {
+    DmSegment* o = nullptr;
+    rv = factory ? MusicNative_segment(in.data(),in.size(),&o) : MusicNative_parseSegment(in.data(),in.size(),&o);
+    if(rv==DmResult_SUCCESS) {
+      er = MusicNative_encodeSegment(o,&enc,&len);
+      MusicNative_releaseSegment(o);
+      }
+    }
+  else if(kind=="style") {
+    DmStyle* o = nullptr;
+    rv = factory ? MusicNative_style(in.data(),in.size(),&o) : MusicNative_parseStyle(in.data(),in.size(),&o);
+    if(rv==DmResult_SUCCESS) {
+      er = MusicNative_encodeStyle(o,&enc,&len);
+      MusicNative_releaseStyle(o);
+      }
+    }
+  else {
+    DmDls* o = nullptr;
+    rv = factory ? MusicNative_dls(in.data(),in.size(),&o) : MusicNative_parseDls(in.data(),in.size(),&o);
+    if(rv==DmResult_SUCCESS) {
+      er = MusicNative_encodeDls(o,&enc,&len);
+      MusicNative_releaseDls(o);
+      }
+    }
+  if(rv!=DmResult_SUCCESS)
+    return rv;
+  require(er==DmResult_SUCCESS,std::string("GothicKit object cannot be encoded: ")+resultName(er));
+  out.assign(enc,enc+len);
+  std::free(enc);
+  return rv;
+  }
+
+// P16: every SGT/STY/DLS either music provider can select, parsed by that provider's old parser and stored
+// as its own records (common/musicdata.h). GothicKit selects each distinct basename of the runtime VFS by
+// Vfs::find; Dx8 opens host files directly in its six search directories.
+class MusicImport {
+  public:
+    explicit MusicImport(const fs::path& root)
+      : root16(installation(fs::absolute(root))), gothic(fs::path(root16).parent_path()) {
+      vfs.set_open_observer([this](std::string_view, std::string_view source) { opened = source; });
+      archives = mountRuntime(vfs,gothic,work);
+      collectPaths(vfs.root(),"",paths);
+      // Resources: the Dx8::DirectMusic search paths, in order.
+      dirs = {
+        nested({u"_work",u"Data",u"Music",u"newworld"},  Dir::FT_Dir),
+        nested({u"_work",u"Data",u"Music",u"AddonWorld"},Dir::FT_Dir),
+        nested({u"_work",u"Data",u"Music",u"dungeon"},   Dir::FT_Dir),
+        nested({u"_work",u"Data",u"Music",u"menu_men"},  Dir::FT_Dir),
+        nested({u"_work",u"Data",u"Music",u"orchestra"}, Dir::FT_Dir),
+        nested({u"_work",u"Data",u"Music"},              Dir::FT_Dir),
+        };
+      }
+
+    // Writes, or with verifyOnly compares, every record and the index; returns a summary line.
+    std::string run(const fs::path& out, bool verifyOnly);
+
+  private:
+    using Key = std::pair<std::string,std::string>; // origin, path
+
+    struct Entry {
+      std::string        archive, sha256, kind;
+      uint64_t           size = 0;
+      MusicData::Outcome gk, dx8;
+      };
+
+    // BaseMusic_trace callbacks: references are collected, never thrown through the C loader. The first
+    // exception is kept, later callbacks do nothing, and it is rethrown once BaseMusic_trace has returned
+    // (its loader lock released and its objects freed).
+    struct Trace {
+      MusicImport*                                 self = nullptr;
+      std::vector<std::pair<bool,std::string>>     references; // (style, file)
+      std::exception_ptr                           error;
+      };
+
+    std::u16string nested(const std::initializer_list<const char16_t*>& segments, Dir::FileType type) const {
+      return FileUtil::nestedPath(root16,segments,type);
+      }
+
+    std::string relative(const fs::path& p) const {
+      return p.lexically_relative(gothic).lexically_normal().generic_string();
+      }
+
+    Key  fromNode(const zenkit::VfsNode* node);
+    Key  fromHost(const fs::path& file);
+    void add(const Key& key, const std::string& archive, const std::vector<uint8_t>& bytes, const Digest& d);
+    void convertGk(const Key& key, Entry& e, const std::vector<uint8_t>& bytes);
+    void convertDx8(Entry& e, const std::vector<uint8_t>& bytes);
+    MusicData::Outcome   writeRecord(const std::string& projection, const std::string& kind, const std::vector<uint8_t>& bin);
+    std::vector<uint8_t> readBack(const MusicData::Outcome& o) const;
+    const Entry*         findDx8File(const std::u16string& file) const;
+    void                 checkGkReferences();
+    void                 checkDx8References();
+    std::string          json() const;
+
+    static void* resolveGk(void* ctx, char const* file, size_t* len);
+    static void  visitGk(void* ctx, BaseMusicReference const* reference);
+
+    std::u16string                               root16;
+    fs::path                                     gothic, work, out;
+    bool                                         verifyOnly = false;
+    zenkit::Vfs                                  vfs;
+    std::string                                  opened;
+    std::vector<RuntimeArchive>                  archives;
+    std::map<const zenkit::VfsNode*,std::string> paths;
+    std::vector<std::u16string>                  dirs;
+    std::map<const zenkit::VfsNode*,Key>         nodeKeys;
+    std::map<Key,Entry>                          sources;
+    std::map<std::string,std::string>            records;  // record key -> identity
+    std::map<std::string,Key>                    gkTable;  // ASCII-upper basename -> Vfs::find winner
+    std::map<std::string,Key>                    dx8Table; // installation-relative host path -> source
+  };
+
+MusicImport::Key MusicImport::fromNode(const zenkit::VfsNode* node) {
+  if(auto it=nodeKeys.find(node); it!=nodeKeys.end())
+    return it->second;
+  opened.clear();
+  auto in = node->open_read();
+  std::vector<uint8_t> bytes;
+  const auto d = digest(*in,&bytes);
+  if(fs::path(opened).is_absolute()) {
+    const auto key = fromHost(fs::path(opened));
+    require(sources.at(key).sha256==d.sha256,"host file changed while reading: "+opened);
+    return nodeKeys[node] = key;
+    }
+  const Key key{"archive",paths.at(node)};
+  add(key,upper(opened),bytes,d);
+  return nodeKeys[node] = key;
+  }
+
+MusicImport::Key MusicImport::fromHost(const fs::path& file) {
+  // Keyed by the spelling that reached it, so the Dx8 table names its own source exactly.
+  const Key key{"host",relative(file)};
+  if(sources.count(key))
+    return key;
+  auto in = zenkit::Read::from(file);
+  require(in!=nullptr,"cannot open "+file.string());
+  std::vector<uint8_t> bytes;
+  const auto d = digest(*in,&bytes);
+  add(key,std::string(),bytes,d);
+  return key;
+  }
+
+void MusicImport::add(const Key& key, const std::string& archive, const std::vector<uint8_t>& bytes, const Digest& d) {
+  if(sources.count(key))
+    return;
+  Entry e;
+  e.archive = archive;
+  e.size    = d.size;
+  e.sha256  = d.sha256;
+  e.kind    = musicKind(fs::path(key.second).filename().string());
+  require(!e.kind.empty(),"not a music file: "+key.second);
+  convertGk(key,e,bytes);
+  convertDx8(e,bytes);
+  sources.emplace(key,std::move(e));
+  }
+
+void MusicImport::convertGk(const Key& key, Entry& e, const std::vector<uint8_t>& bytes) {
+  // The old parser converts these strings in place with an unchecked wcrtomb: refuse what it cannot
+  // convert exactly, before it runs.
+  size_t bad = 0;
+  require(MusicNative_checkGkStrings(bytes.data(),bytes.size(),&bad)==DmResult_SUCCESS,
+          "music: "+key.second+": GothicKit string chunk at byte "+std::to_string(bad)+
+          " is not terminated ASCII UTF-16 inside its parent");
+
+  std::vector<uint8_t> bin;
+  const auto rv = gkBuildAndEncode(e.kind,false,bytes,bin);
+  require(rv!=DmResult_MEMORY_EXHAUSTED && rv!=DmResult_MUTEX_ERROR,
+          "music: "+key.second+": GothicKit parser failed transiently: "+resultName(rv));
+  if(rv!=DmResult_SUCCESS) {
+    e.gk.failure = resultName(rv);
+    return;
+    }
+  e.gk = writeRecord("gk",e.kind,bin);
+
+  // The runtime factory rebuilds the same object from the record as read back.
+  std::vector<uint8_t> again;
+  const auto back = readBack(e.gk);
+  const auto fr = gkBuildAndEncode(e.kind,true,back,again);
+  require(fr==DmResult_SUCCESS,"music: "+e.gk.record+": factory failed: "+resultName(fr));
+  require(again==bin,"music: "+e.gk.record+": factory object differs from the parsed one");
+  }
+
+void MusicImport::convertDx8(Entry& e, const std::vector<uint8_t>& bytes) {
+  // The Riff constructors exactly as DirectMusic runs them; a DLS also runs its SoundFont/Hydra
+  // finalization, whose exception is a failure of that file too. Waves are captured before it clears them.
+  std::optional<Dx8::Segment>               segment;
+  std::optional<Dx8::Style>                 style;
+  std::optional<Dx8::DlsCollection::Parsed> dls;
+  try {
+    Dx8::Riff riff(bytes.data(),bytes.size());
+    if(e.kind=="segment") {
+      segment.emplace(riff);
+      }
+    else if(e.kind=="style") {
+      style.emplace(riff);
+      }
+    else {
+      auto parsed = Dx8::DlsCollection::parse(riff);
+      Dx8::DlsCollection::Parsed copy = parsed;
+      Dx8::DlsCollection finalized(std::move(parsed));
+      dls.emplace(std::move(copy));
+      }
+    }
+  catch(const std::exception& ex) {
+    e.dx8.failure = ex.what();
+    return;
+    }
+
+  const auto bin = segment ? MusicData::encodeDx8(*segment) :
+                   style   ? MusicData::encodeDx8(*style)   : MusicData::encodeDx8(*dls);
+  e.dx8 = writeRecord("dx8",e.kind,bin);
+
+  const auto back  = readBack(e.dx8);
+  const auto again = segment ? MusicData::encodeDx8(MusicData::decodeDx8Segment(back)) :
+                     style   ? MusicData::encodeDx8(MusicData::decodeDx8Style(back))   :
+                               MusicData::encodeDx8(MusicData::decodeDx8Dls(back));
+  require(again==bin,"music: "+e.dx8.record+": decoded object differs from the parsed one");
+  }
+
+MusicData::Outcome MusicImport::writeRecord(const std::string& projection, const std::string& kind,
+                                            const std::vector<uint8_t>& bin) {
+  const std::string_view view(reinterpret_cast<const char*>(bin.data()),bin.size());
+  const auto sha  = sha256(view);
+  const auto json = "{\"format\":\"gothic-music-record\",\"version\":1,\"projection\":\""+projection+
+                    "\",\"kind\":\""+kind+"\",\"buffer\":\""+sha+".bin\",\"byte_length\":"+
+                    std::to_string(bin.size())+"}";
+  MusicData::Outcome o;
+  o.record   = projection+"/"+kind+"/"+sha;
+  o.identity = sha256(json+std::string(view));
+
+  const auto dir      = out/projection/kind;
+  const auto jsonFile = dir/(sha+".json");
+  const auto binFile  = dir/(sha+".bin");
+  if(verifyOnly) {
+    require(fs::is_regular_file(binFile) && fs::is_regular_file(jsonFile) &&
+            gothicglb::readFile(binFile)==bin && readText(jsonFile)==json,"music record differs: "+o.record);
+    }
+  else if(!records.count(o.record)) {
+    // Staged under the identity and renamed into place: a torn write never carries a record name.
+    fs::create_directories(dir);
+    const auto tmpBin  = dir/(o.identity+".bin.tmp");
+    const auto tmpJson = dir/(o.identity+".json.tmp");
+    gothicglb::writeFile(tmpBin,bin.data(),bin.size());
+    gothicglb::writeFile(tmpJson,json.data(),json.size());
+    fs::rename(tmpBin,binFile);
+    fs::rename(tmpJson,jsonFile);
+    }
+  records[o.record] = o.identity;
+  return o;
+  }
+
+std::vector<uint8_t> MusicImport::readBack(const MusicData::Outcome& o) const {
+  MusicData::Index index;
+  index.dir = out;
+  index.records[o.record] = o.identity;
+  return MusicData::readRecord(index,o.record);
+  }
+
+void* MusicImport::resolveGk(void* ctx, char const* file, size_t* len) {
+  auto& trace = *static_cast<Trace*>(ctx);
+  if(trace.error)
+    return nullptr;
+  try {
+    auto& self = *trace.self;
+    // Only music files are offered: every one of them passed the string check before any parser saw it.
+    std::string_view name(file);
+    while(!name.empty() && std::isspace(static_cast<unsigned char>(name.back())))
+      name.remove_suffix(1);
+    if(!self.gkTable.count(upperAscii(std::string(name))))
+      return nullptr;
+    const auto* node = self.vfs.find(file);
+    if(node==nullptr)
+      return nullptr;
+    auto in = node->open_read();
+    std::vector<uint8_t> bytes;
+    (void)digest(*in,&bytes);
+    void* buf = std::malloc(bytes.empty() ? 1 : bytes.size());
+    if(buf==nullptr)
+      return nullptr;
+    std::memcpy(buf,bytes.data(),bytes.size());
+    *len = bytes.size();
+    return buf;
+    }
+  catch(...) {
+    trace.error = std::current_exception();
+    return nullptr;
+    }
+  }
+
+void MusicImport::visitGk(void* ctx, BaseMusicReference const* reference) {
+  auto& trace = *static_cast<Trace*>(ctx);
+  if(trace.error || reference->file==nullptr)
+    return;
+  try {
+    trace.references.emplace_back(reference->style!=0,std::string(reference->file));
+    }
+  catch(...) {
+    trace.error = std::current_exception();
+    }
+  }
+
+// A reference that names a file of another kind fails the import (both providers would misparse it).
+void MusicImport::checkGkReferences() {
+  for(const auto& [name,key]:gkTable) {
+    if(sources.at(key).kind!="segment" || sources.at(key).gk.record.empty())
+      continue;
+    Trace trace;
+    trace.self = this;
+    int loaded = 0;
+    (void)BaseMusic_trace(name.c_str(),&MusicImport::resolveGk,&trace,&MusicImport::visitGk,&trace,&loaded);
+    if(trace.error)
+      std::rethrow_exception(trace.error);
+    for(const auto& [isStyle,file]:trace.references) {
+      std::string_view f(file);
+      while(!f.empty() && std::isspace(static_cast<unsigned char>(f.back())))
+        f.remove_suffix(1);
+      const auto it = gkTable.find(upperAscii(std::string(f)));
+      if(it==gkTable.end())
+        continue;
+      const auto& kind = sources.at(it->second).kind;
+      require(kind==(isStyle ? "style" : "dls"),
+              "music: "+name+": GothicKit "+(isStyle ? "style" : "instrument")+" reference "+file+" names a "+kind);
+      }
+    }
+  }
+
+const MusicImport::Entry* MusicImport::findDx8File(const std::u16string& file) const {
+  std::u16string openedPath;
+  try {
+    (void)Dx8::openSourceFile(dirs,file.c_str(),openedPath);
+    }
+  catch(const std::exception&) {
+    return nullptr;
+    }
+  const auto rel = relative(fs::path(openedPath));
+  if(auto it=dx8Table.find(rel); it!=dx8Table.end())
+    return &sources.at(it->second);
+  for(const auto& [path,key]:dx8Table)
+    if(upperAscii(path)==upperAscii(rel))
+      return &sources.at(key);
+  return nullptr;
+  }
+
+void MusicImport::checkDx8References() {
+  for(const auto& [path,key]:dx8Table) {
+    const auto& e = sources.at(key);
+    if(e.dx8.record.empty())
+      continue;
+    if(e.kind=="segment") {
+      const auto segment = MusicData::decodeDx8Segment(readBack(e.dx8));
+      for(const auto& track:segment.track) {
+        if(track.sttr==nullptr)
+          continue;
+        for(const auto& s:track.sttr->styles)
+          if(const auto* target = findDx8File(s.reference.file))
+            require(target->kind=="style","music: "+path+": Dx8 style reference "+str16(s.reference.file)+
+                                          " names a "+target->kind);
+        }
+      }
+    else if(e.kind=="style") {
+      const auto style = MusicData::decodeDx8Style(readBack(e.dx8));
+      for(const auto& band:style.band)
+        for(const auto& ins:band.intrument) {
+          if(ins.reference.file.empty())
+            continue;
+          if(const auto* target = findDx8File(ins.reference.file))
+            require(target->kind=="dls","music: "+path+": Dx8 instrument reference "+str16(ins.reference.file)+
+                                        " names a "+target->kind);
+          }
+      }
+    }
+  }
+
+std::string MusicImport::run(const fs::path& outDir, bool verify) {
+  out        = outDir;
+  verifyOnly = verify;
+  if(!verifyOnly)
+    fs::create_directories(out);
+
+  // GothicKit: every music basename of the runtime VFS and its Vfs::find winner.
+  std::set<std::string> names;
+  for(const auto& [node,path]:paths)
+    if(!musicKind(node->name()).empty())
+      names.insert(upperAscii(node->name()));
+  for(const auto& name:names) {
+    const auto* winner = vfs.find(name);
+    require(winner!=nullptr,"Vfs::find does not resolve "+name);
+    gkTable[name] = fromNode(winner);
+    }
+
+  // Dx8: every regular music file directly in each search directory, as nestedPath spells it.
+  for(const auto& dir:dirs) {
+    std::vector<std::u16string> files;
+    Dir::scan(dir,[&files](const std::u16string& name, Dir::FileType t) {
+      if(t==Dir::FT_File)
+        files.push_back(name);
+      });
+    std::sort(files.begin(),files.end());
+    for(const auto& name:files) {
+      const fs::path file = fs::path(dir)/fs::path(name);
+      if(musicKind(file.filename().string()).empty() || !fs::is_regular_file(file))
+        continue;
+      dx8Table[relative(file)] = fromHost(file);
+      }
+    }
+
+  checkGkReferences();
+  checkDx8References();
+
+  const auto text = json();
+  if(!verifyOnly) {
+    const auto tmp = out/"music.json.tmp";
+    gothicglb::writeFile(tmp,text.data(),text.size());
+    fs::rename(tmp,out/"music.json");
+    }
+  require(parse(readText(out/"music.json"),"music.json")==parse(text,"expected music index"),
+          "music.json differs from the installation");
+  const auto index = MusicData::readIndex(out);
+  require(index.sources.size()==sources.size() && index.records.size()==records.size() &&
+          index.gk.size()==gkTable.size() && index.dx8.size()==dx8Table.size(),"music.json reads back differently");
+
+  size_t gkRecords = 0, dx8Records = 0;
+  for(const auto& [key,e]:sources) {
+    gkRecords  += e.gk.record.empty()  ? 0 : 1;
+    dx8Records += e.dx8.record.empty() ? 0 : 1;
+    }
+  return std::to_string(sources.size())+" music sources ("+std::to_string(gkTable.size())+" GothicKit names, "+
+         std::to_string(dx8Table.size())+" Dx8 files), GothicKit "+std::to_string(gkRecords)+" parsed / "+
+         std::to_string(sources.size()-gkRecords)+" failed, Dx8 "+std::to_string(dx8Records)+" parsed / "+
+         std::to_string(sources.size()-dx8Records)+" failed, "+std::to_string(records.size())+" records";
+  }
+
+std::string MusicImport::json() const {
+  std::map<Key,size_t> index;
+  for(const auto& [k,e]:sources)
+    index.emplace(k,index.size());
+  const auto outcome = [](const MusicData::Outcome& o, bool gk) {
+    if(!o.failure)
+      return "{\"record\":\""+o.record+"\"}";
+    return std::string("{\"failure\":{")+(gk ? "\"result\":" : "\"error\":")+str(*o.failure)+"}}";
+    };
+
+  Files mounted;
+  for(const auto& a:archives)
+    mounted.emplace_back(a.name,a.size);
+  std::sort(mounted.begin(),mounted.end());
+
+  std::string s = "{\n  \"format\":\"gothic-music\",\n  \"version\":1,\n  \"archives\":[";
+  for(size_t i=0; i<mounted.size(); ++i)
+    s += std::string(i ? "," : "")+"\n    {\"name\":"+str(mounted[i].first)+",\"size\":"+std::to_string(mounted[i].second)+"}";
+  s += "\n  ],\n  \"loose_files\":[";
+  size_t n = 0;
+  for(const auto& [k,e]:sources)
+    if(k.first=="host")
+      s += std::string(n++ ? "," : "")+"\n    {\"path\":"+str(k.second)+",\"size\":"+std::to_string(e.size)+"}";
+  s += "\n  ],\n  \"records\":{";
+  n = 0;
+  for(const auto& [key,identity]:records)
+    s += std::string(n++ ? "," : "")+"\n    \""+key+"\":\""+identity+"\"";
+  s += "\n  },\n  \"sources\":[";
+  n = 0;
+  for(const auto& [k,e]:sources)
+    s += std::string(n++ ? "," : "")+"\n    {\"origin\":\""+k.first+"\",\"path\":"+str(k.second)+
+         ",\"archive\":"+(e.archive.empty() ? std::string("null") : str(e.archive))+",\"size\":"+std::to_string(e.size)+
+         ",\"sha256\":\""+e.sha256+"\",\"kind\":\""+e.kind+"\",\"gk\":"+outcome(e.gk,true)+
+         ",\"dx8\":"+outcome(e.dx8,false)+"}";
+  s += "\n  ],\n  \"gk\":{";
+  n = 0;
+  for(const auto& [name,k]:gkTable)
+    s += std::string(n++ ? "," : "")+"\n    "+str(name)+":"+std::to_string(index.at(k));
+  s += "\n  },\n  \"dx8\":{";
+  n = 0;
+  for(const auto& [path,k]:dx8Table)
+    s += std::string(n++ ? "," : "")+"\n    "+str(path)+":"+std::to_string(index.at(k));
+  s += "\n  }\n}\n";
+  return s;
+  }
 }
 
 std::vector<RuntimeArchive> runtimeArchives(const fs::path& gothic) {
@@ -1919,6 +2427,15 @@ int convertAudio(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
   const auto t0 = std::chrono::steady_clock::now();
   AudioImport audio(gothic);
   const auto summary = audio.run(out,verifyOnly);
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << (verifyOnly ? "verified " : "written and verified ") << summary << " (" << ms << " ms)\n";
+  return 0;
+  }
+
+int convertMusic(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
+  const auto t0 = std::chrono::steady_clock::now();
+  MusicImport music(gothic);
+  const auto summary = music.run(out,verifyOnly);
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
   std::cout << (verifyOnly ? "verified " : "written and verified ") << summary << " (" << ms << " ms)\n";
   return 0;

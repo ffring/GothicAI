@@ -14,9 +14,14 @@
 #include "resources.h"
 #include "sha256.h"
 #include "modeldata.h"
+#include "musicdata.h"
+#include "musicnative.h"
+#include "dmusic/directmusic.h"
+#include "dmusic/sourcefile.h"
 #include "programdata.h"
 #include "outputunits.h"
 #include "utils/gthfont.h"
+#include "utils/fileutil.h"
 
 #include <zenkit/DaedalusVm.hh>
 #include <zenkit/CutsceneLibrary.hh>
@@ -51,6 +56,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <exception>
 #include <functional>
 #include <map>
 #include <set>
@@ -1688,6 +1694,569 @@ struct BaseContentContract {
                 libraries,skipped,roots,nodes,messages,probes);
     }
 
+  template<class T>
+  static void musicField(const T& a,const T& b,const std::string& field) {
+    if constexpr(std::is_same_v<T,float>) equal(std::bit_cast<uint32_t>(a),std::bit_cast<uint32_t>(b),field+" bits");
+    else if constexpr(std::is_same_v<T,double>) equal(std::bit_cast<uint64_t>(a),std::bit_cast<uint64_t>(b),field+" bits");
+    else require(a==b,field+": values differ");
+    }
+  template<class T,size_t N>
+  static void musicField(const T (&a)[N],const T (&b)[N],const std::string& field) {
+    for(size_t i=0;i<N;++i) musicField(a[i],b[i],field+"["+std::to_string(i)+"]");
+    }
+  template<class T>
+  static void musicField(const std::vector<T>& a,const std::vector<T>& b,const std::string& field) {
+    equal(a.size(),b.size(),field+" count");
+    for(size_t i=0;i<a.size();++i) musicField(a[i],b[i],field+"["+std::to_string(i)+"]");
+    }
+  template<class T>
+  static void musicField(const std::shared_ptr<T>& a,const std::shared_ptr<T>& b,const std::string& field) {
+    equal(bool(a),bool(b),field+" presence"); if(a) musicField(*a,*b,field);
+    }
+#define MUSIC_FIELD(member) musicField(a.member,b.member,field+"." #member)
+  static void musicField(const Dx8::GUID& a,const Dx8::GUID& b,const std::string& field) { MUSIC_FIELD(Data1); MUSIC_FIELD(Data2); MUSIC_FIELD(Data3); MUSIC_FIELD(Data4); }
+  static void musicField(const Dx8::DMUS_IO_VERSION& a,const Dx8::DMUS_IO_VERSION& b,const std::string& field) { MUSIC_FIELD(dwVersionMS); MUSIC_FIELD(dwVersionLS); }
+  static void musicField(const Dx8::DMUS_IO_TIMESIG& a,const Dx8::DMUS_IO_TIMESIG& b,const std::string& field) { MUSIC_FIELD(bBeatsPerMeasure); MUSIC_FIELD(bBeat); MUSIC_FIELD(wGridsPerBeat); }
+  static void musicField(const Dx8::DMUS_IO_TRACK_HEADER& a,const Dx8::DMUS_IO_TRACK_HEADER& b,const std::string& field) { MUSIC_FIELD(guidClassID); MUSIC_FIELD(dwPosition); MUSIC_FIELD(dwGroup); MUSIC_FIELD(ckid); MUSIC_FIELD(fccType); }
+  static void musicField(const Dx8::DMUS_IO_CHORD& a,const Dx8::DMUS_IO_CHORD& b,const std::string& field) { MUSIC_FIELD(wszName); MUSIC_FIELD(mtTime); MUSIC_FIELD(wMeasure); MUSIC_FIELD(bBeat); MUSIC_FIELD(bFlags); }
+  static void musicField(const Dx8::DMUS_IO_SUBCHORD& a,const Dx8::DMUS_IO_SUBCHORD& b,const std::string& field) { MUSIC_FIELD(dwChordPattern); MUSIC_FIELD(dwScalePattern); MUSIC_FIELD(dwInversionPoints); MUSIC_FIELD(dwLevels); MUSIC_FIELD(bChordRoot); MUSIC_FIELD(bScaleRoot); }
+  static void musicField(const Dx8::DMUS_IO_COMMAND& a,const Dx8::DMUS_IO_COMMAND& b,const std::string& field) { MUSIC_FIELD(mtTime); MUSIC_FIELD(wMeasure); MUSIC_FIELD(bBeat); MUSIC_FIELD(bCommand); MUSIC_FIELD(bGrooveLevel); MUSIC_FIELD(bGrooveRange); MUSIC_FIELD(bRepeatMode); }
+  static void musicField(const Dx8::DMUS_IO_REFERENCE& a,const Dx8::DMUS_IO_REFERENCE& b,const std::string& field) { MUSIC_FIELD(guidClassID); }
+  static void musicField(const Dx8::DMUS_IO_STYLE& a,const Dx8::DMUS_IO_STYLE& b,const std::string& field) { MUSIC_FIELD(timeSig); MUSIC_FIELD(dblTempo); }
+  static void musicField(const Dx8::DMUS_IO_PATTERN& a,const Dx8::DMUS_IO_PATTERN& b,const std::string& field) { MUSIC_FIELD(timeSig); MUSIC_FIELD(bGrooveBottom); MUSIC_FIELD(bGrooveTop); MUSIC_FIELD(wEmbellishment); MUSIC_FIELD(wNbrMeasures); }
+  static void musicField(const Dx8::DMUS_IO_INSTRUMENT& a,const Dx8::DMUS_IO_INSTRUMENT& b,const std::string& field) { MUSIC_FIELD(dwPatch); MUSIC_FIELD(dwAssignPatch); MUSIC_FIELD(dwNoteRanges); MUSIC_FIELD(dwPChannel); MUSIC_FIELD(dwFlags); MUSIC_FIELD(bPan); MUSIC_FIELD(bVolume); }
+  static void musicField(const Dx8::DMUS_IO_STYLEPART& a,const Dx8::DMUS_IO_STYLEPART& b,const std::string& field) { MUSIC_FIELD(timeSig); MUSIC_FIELD(dwVariationChoices); MUSIC_FIELD(guidPartID); MUSIC_FIELD(wNbrMeasures); MUSIC_FIELD(bPlayModeFlags); }
+  static void musicField(const Dx8::DMUS_IO_PARTREF& a,const Dx8::DMUS_IO_PARTREF& b,const std::string& field) { MUSIC_FIELD(guidPartID); MUSIC_FIELD(wLogicalPartID); }
+  static void musicField(const Dx8::DMUS_IO_STYLENOTE& a,const Dx8::DMUS_IO_STYLENOTE& b,const std::string& field) { MUSIC_FIELD(mtGridStart); MUSIC_FIELD(dwVariation); MUSIC_FIELD(mtDuration); MUSIC_FIELD(nTimeOffset); MUSIC_FIELD(wMusicValue); MUSIC_FIELD(bVelocity); MUSIC_FIELD(bTimeRange); MUSIC_FIELD(bDurRange); MUSIC_FIELD(bVelRange); MUSIC_FIELD(bInversionID); MUSIC_FIELD(bPlayModeFlags); MUSIC_FIELD(bNoteFlags); }
+  static void musicField(const Dx8::DMUS_IO_STYLECURVE& a,const Dx8::DMUS_IO_STYLECURVE& b,const std::string& field) { MUSIC_FIELD(mtGridStart); MUSIC_FIELD(dwVariation); MUSIC_FIELD(mtDuration); MUSIC_FIELD(mtResetDuration); MUSIC_FIELD(nTimeOffset); MUSIC_FIELD(nStartValue); MUSIC_FIELD(nEndValue); MUSIC_FIELD(nResetValue); MUSIC_FIELD(bEventType); MUSIC_FIELD(bCurveShape); MUSIC_FIELD(bCCData); MUSIC_FIELD(bFlags); MUSIC_FIELD(wParamType); MUSIC_FIELD(wMergeIndex); }
+  static void musicField(const Dx8::Info& a,const Dx8::Info& b,const std::string& field) { MUSIC_FIELD(inam); }
+  static void musicField(const Dx8::Unfo& a,const Dx8::Unfo& b,const std::string& field) { MUSIC_FIELD(unam); }
+  static void musicField(const Dx8::Reference& a,const Dx8::Reference& b,const std::string& field) { MUSIC_FIELD(header); MUSIC_FIELD(guid); MUSIC_FIELD(name); MUSIC_FIELD(file); MUSIC_FIELD(category); MUSIC_FIELD(version); }
+  static void musicField(const Dx8::Band& a,const Dx8::Band& b,const std::string& field) { MUSIC_FIELD(guid); MUSIC_FIELD(vers); MUSIC_FIELD(info); MUSIC_FIELD(intrument); }
+  static void musicField(const Dx8::Band::Instrument& a,const Dx8::Band::Instrument& b,const std::string& field) { MUSIC_FIELD(header); MUSIC_FIELD(reference); }
+  static void musicField(const Dx8::Pattern& a,const Dx8::Pattern& b,const std::string& field) { MUSIC_FIELD(header); MUSIC_FIELD(info); MUSIC_FIELD(partref); }
+  static void musicField(const Dx8::Pattern::PartRef& a,const Dx8::Pattern::PartRef& b,const std::string& field) { MUSIC_FIELD(io); MUSIC_FIELD(unfo); }
+  static void musicField(const Dx8::Style& a,const Dx8::Style& b,const std::string& field) { MUSIC_FIELD(guid); MUSIC_FIELD(styh); MUSIC_FIELD(band); MUSIC_FIELD(parts); MUSIC_FIELD(patterns); }
+  static void musicField(const Dx8::Style::Part& a,const Dx8::Style::Part& b,const std::string& field) { MUSIC_FIELD(header); MUSIC_FIELD(notes); MUSIC_FIELD(curves); }
+  static void musicField(const Dx8::Track& a,const Dx8::Track& b,const std::string& field) { MUSIC_FIELD(head); MUSIC_FIELD(sttr); MUSIC_FIELD(cord); MUSIC_FIELD(cmnd); }
+  static void musicField(const Dx8::Track::StyleRef& a,const Dx8::Track::StyleRef& b,const std::string& field) { MUSIC_FIELD(stmp); MUSIC_FIELD(reference); }
+  static void musicField(const Dx8::Track::StyleTrack& a,const Dx8::Track::StyleTrack& b,const std::string& field) { MUSIC_FIELD(styles); }
+  static void musicField(const Dx8::Track::Chord& a,const Dx8::Track::Chord& b,const std::string& field) { MUSIC_FIELD(header); MUSIC_FIELD(ioChord); MUSIC_FIELD(subchord); }
+  static void musicField(const Dx8::Track::CommandTrack& a,const Dx8::Track::CommandTrack& b,const std::string& field) { MUSIC_FIELD(commands); }
+  static void musicField(const Dx8::Segment& a,const Dx8::Segment& b,const std::string& field) { MUSIC_FIELD(track); }
+  static void musicField(const Dx8::Wave& a,const Dx8::Wave& b,const std::string& field) { MUSIC_FIELD(wfmt); MUSIC_FIELD(extra); MUSIC_FIELD(wavedata); MUSIC_FIELD(waveSample); MUSIC_FIELD(loop); MUSIC_FIELD(info); }
+  static void musicField(const Dx8::Wave::WaveFormat& a,const Dx8::Wave::WaveFormat& b,const std::string& field) { MUSIC_FIELD(wFormatTag); MUSIC_FIELD(wChannels); MUSIC_FIELD(dwSamplesPerSec); MUSIC_FIELD(dwAvgBytesPerSec); MUSIC_FIELD(wBlockAlign); MUSIC_FIELD(wBitsPerSample); }
+  static void musicField(const Dx8::Wave::WaveSample& a,const Dx8::Wave::WaveSample& b,const std::string& field) { MUSIC_FIELD(cbSize); MUSIC_FIELD(usUnityNote); MUSIC_FIELD(sFineTune); MUSIC_FIELD(lAttenuation); MUSIC_FIELD(fulOptions); MUSIC_FIELD(cSampleLoops); }
+  static void musicField(const Dx8::Wave::WaveSampleLoop& a,const Dx8::Wave::WaveSampleLoop& b,const std::string& field) { MUSIC_FIELD(cbSize); MUSIC_FIELD(ulLoopType); MUSIC_FIELD(ulLoopStart); MUSIC_FIELD(ulLoopLength); }
+  static void musicField(const Dx8::DlsCollection::Parsed& a,const Dx8::DlsCollection::Parsed& b,const std::string& field) { MUSIC_FIELD(version); MUSIC_FIELD(dlid); MUSIC_FIELD(instrument); MUSIC_FIELD(wave); }
+  static void musicField(const Dx8::DlsCollection::RgnRange& a,const Dx8::DlsCollection::RgnRange& b,const std::string& field) { MUSIC_FIELD(usLow); MUSIC_FIELD(usHigh); }
+  static void musicField(const Dx8::DlsCollection::RegionHeader& a,const Dx8::DlsCollection::RegionHeader& b,const std::string& field) { MUSIC_FIELD(RangeKey); MUSIC_FIELD(RangeVelocity); MUSIC_FIELD(fusOptions); MUSIC_FIELD(usKeyGroup); }
+  static void musicField(const Dx8::DlsCollection::WaveLink& a,const Dx8::DlsCollection::WaveLink& b,const std::string& field) { MUSIC_FIELD(fusOptions); MUSIC_FIELD(usPhaseGroup); MUSIC_FIELD(ulChannel); MUSIC_FIELD(ulTableIndex); }
+  static void musicField(const Dx8::DlsCollection::WaveSample& a,const Dx8::DlsCollection::WaveSample& b,const std::string& field) { MUSIC_FIELD(cbSize); MUSIC_FIELD(usUnityNote); MUSIC_FIELD(sFineTune); MUSIC_FIELD(lAttenuation); MUSIC_FIELD(fulOptions); MUSIC_FIELD(cSampleLoops); }
+  static void musicField(const Dx8::DlsCollection::WaveSampleLoop& a,const Dx8::DlsCollection::WaveSampleLoop& b,const std::string& field) { MUSIC_FIELD(cbSize); MUSIC_FIELD(ulLoopType); MUSIC_FIELD(ulLoopStart); MUSIC_FIELD(ulLoopLength); }
+  static void musicField(const Dx8::DlsCollection::Region& a,const Dx8::DlsCollection::Region& b,const std::string& field) { MUSIC_FIELD(head); MUSIC_FIELD(wlink); MUSIC_FIELD(waveSample); MUSIC_FIELD(loop); }
+  static void musicField(const Dx8::DlsCollection::ConnectionBlock& a,const Dx8::DlsCollection::ConnectionBlock& b,const std::string& field) { MUSIC_FIELD(usSource); MUSIC_FIELD(usControl); MUSIC_FIELD(usDestination); MUSIC_FIELD(usTransform); MUSIC_FIELD(lScale); }
+  static void musicField(const Dx8::DlsCollection::Articulator& a,const Dx8::DlsCollection::Articulator& b,const std::string& field) { MUSIC_FIELD(connectionBlocks); }
+  static void musicField(const Dx8::DlsCollection::MidiLocale& a,const Dx8::DlsCollection::MidiLocale& b,const std::string& field) { MUSIC_FIELD(ulBank); MUSIC_FIELD(ulInstrument); }
+  static void musicField(const Dx8::DlsCollection::InstrumentHeader& a,const Dx8::DlsCollection::InstrumentHeader& b,const std::string& field) { MUSIC_FIELD(cRegions); MUSIC_FIELD(Locale); }
+  static void musicField(const Dx8::DlsCollection::Instrument& a,const Dx8::DlsCollection::Instrument& b,const std::string& field) { MUSIC_FIELD(info); MUSIC_FIELD(header); MUSIC_FIELD(regions); MUSIC_FIELD(articulators); }
+#undef MUSIC_FIELD
+
+  static const char* musicResult(DmResult result) {
+    switch(result) {
+      case DmResult_SUCCESS: return "SUCCESS";
+      case DmResult_INVALID_ARGUMENT: return "INVALID_ARGUMENT";
+      case DmResult_INVALID_STATE: return "INVALID_STATE";
+      case DmResult_MEMORY_EXHAUSTED: return "MEMORY_EXHAUSTED";
+      case DmResult_NOT_FOUND: return "NOT_FOUND";
+      case DmResult_FILE_CORRUPT: return "FILE_CORRUPT";
+      case DmResult_MUTEX_ERROR: return "MUTEX_ERROR";
+      }
+    throw std::runtime_error("unknown original music result");
+    }
+
+  static std::vector<uint8_t> musicRecord(const MusicData::Index& index,const MusicData::Outcome& outcome) {
+    require(!outcome.record.empty() && !outcome.failure,"successful music outcome must contain only its native record");
+    const auto file=index.dir/(outcome.record+".json");
+    auto bin=file; bin.replace_extension(".bin");
+    const auto descriptor=gothicglb::readFile(file),payload=gothicglb::readFile(bin);
+    Sha256 digest; digest.update(descriptor.data(),descriptor.size()); digest.update(payload.data(),payload.size());
+    require(digest.finish()==outcome.identity && index.records.at(outcome.record)==outcome.identity,
+            outcome.record+": actual JSON+BIN digest differs from native identity");
+    const auto loaded=MusicData::readRecord(index,outcome.record);
+    vector(payload,loaded,outcome.record+" verified BIN");
+    return loaded;
+    }
+
+  template<class T>
+  static void musicGkRecord(const MusicData::Index& index,const MusicData::Source& source,const std::vector<uint8_t>& raw,
+                            DmResult (*parse)(const uint8_t*,size_t,T**),DmResult (*create)(const uint8_t*,size_t,T**),
+                            DmResult (*encode)(const T*,uint8_t**,size_t*),void (*release)(T*)) {
+    T* oldRaw=nullptr;
+    const auto result=parse(raw.data(),raw.size(),&oldRaw);
+    std::unique_ptr<T,void(*)(T*)> original(result==DmResult_SUCCESS ? oldRaw : nullptr,release);
+    if(result!=DmResult_SUCCESS) {
+      require(!oldRaw && source.gk.failure && *source.gk.failure==musicResult(result) && source.gk.record.empty(),
+              source.path+": original GK parser failure differs from stored outcome");
+      return;
+      }
+    require(!source.gk.failure,source.path+": successful original GK input was stored as failure");
+    const auto bin=musicRecord(index,source.gk);
+    auto borrowed=bin;
+    T* nativeRaw=nullptr;
+    const auto created=create(borrowed.data(),borrowed.size(),&nativeRaw);
+    std::unique_ptr<T,void(*)(T*)> native(created==DmResult_SUCCESS ? nativeRaw : nullptr,release);
+    require(created==DmResult_SUCCESS && nativeRaw,source.path+": native GK factory failed");
+    std::fill(borrowed.begin(),borrowed.end(),0xdd); borrowed.clear(); borrowed.shrink_to_fit();
+    // Supplemental C verification compares every original/native private field at this point.
+    if constexpr(std::is_same_v<T,DmSegment>) {
+      const auto* a=DmSegment_getName(original.get()); const auto* b=DmSegment_getName(native.get());
+      equal(a!=nullptr,b!=nullptr,source.path+" GK segment name presence");
+      if(a) require(std::string(a)==b,source.path+": GK segment name differs");
+      bytes(DmSegment_getGuid(original.get())->data,DmSegment_getGuid(native.get())->data,16,source.path+" GK segment GUID");
+      musicField(DmSegment_getLength(original.get()),DmSegment_getLength(native.get()),source.path+" GK segment length");
+      equal(DmSegment_getRepeats(original.get()),DmSegment_getRepeats(native.get()),source.path+" GK segment repeats");
+      }
+    uint8_t* encoded=nullptr; size_t size=0;
+    const auto saved=encode(native.get(),&encoded,&size);
+    std::unique_ptr<uint8_t,decltype(&std::free)> owner(encoded,&std::free);
+    require(saved==DmResult_SUCCESS && size==bin.size(),source.path+": GK native ownership/encoding failed");
+    bytes(encoded,bin.data(),size,source.path+" native GK re-encoding after input destruction");
+    // Encoding equality tests the public factory/ownership boundary; the independent C field oracle is separate.
+    }
+
+  template<class T,class Parse>
+  static void musicDxRecord(const MusicData::Index& index,const MusicData::Source& source,const std::vector<uint8_t>& raw,
+                            Parse parse,T (*decode)(const std::vector<uint8_t>&)) {
+    std::optional<T> original; std::optional<std::string> failure;
+    try { Dx8::Riff riff(raw.data(),raw.size()); original.emplace(parse(riff)); }
+    catch(const std::exception& error) { failure=error.what(); }
+    require(failure==source.dx8.failure,source.path+": original Dx8 outcome differs from stored failure (including empty text)");
+    if(failure) return;
+    auto native=decode(musicRecord(index,source.dx8));
+    musicField(*original,native,source.path+" Dx8");
+    }
+
+  static void musicDlsRecord(const MusicData::Index& index,const MusicData::Source& source,const std::vector<uint8_t>& raw,
+                             size_t& waveCount,size_t& sampleCount) {
+    std::optional<Dx8::DlsCollection::Parsed> original; std::optional<std::string> failure;
+    try {
+      Dx8::Riff riff(raw.data(),raw.size()); original.emplace(Dx8::DlsCollection::parse(riff));
+      auto finalized=*original;
+      const Dx8::DlsCollection collection(std::move(finalized));
+      }
+    catch(const std::exception& error) { failure=error.what(); }
+    require(failure==source.dx8.failure,source.path+": complete original Dx8 DLS constructor outcome differs");
+    if(failure) return;
+    auto native=MusicData::decodeDx8Dls(musicRecord(index,source.dx8));
+    musicField(*original,native,source.path+" Dx8 DLS");
+    for(size_t i=0;i<original->wave.size();++i) {
+      const auto& a=original->wave[i]; const auto& b=native.wave[i];
+      require(a.wfmt.wFormatTag==Dx8::Wave::PCM && a.wfmt.wBitsPerSample==16 && a.wavedata.size()%2==0,
+              source.path+": unsupported original Dx8 decoded format");
+      const size_t count=a.wavedata.size()/sizeof(int16_t);
+      std::vector<float> oldSamples(count),nativeSamples(count);
+      if(count!=0) { a.toFloatSamples(oldSamples.data()); b.toFloatSamples(nativeSamples.data()); }
+      vector(oldSamples,nativeSamples,source.path+" wave["+std::to_string(i)+"] complete float bits");
+      ++waveCount; sampleCount+=count;
+      }
+    std::optional<std::string> nativeFailure;
+    try { const Dx8::DlsCollection finalized(std::move(native)); }
+    catch(const std::exception& error) { nativeFailure=error.what(); }
+    require(nativeFailure==failure,source.path+": native Dx8 DLS finalization differs from original");
+    }
+
+  using MusicFactoryContext=std::tuple<const MusicData::Index*,std::vector<std::string>*,std::exception_ptr*>;
+
+  template<class T>
+  static DmResult musicFactory(void* context,const char* name,T** out,const char* kind,
+                               DmResult (*create)(const uint8_t*,size_t,T**)) {
+    *out=nullptr;
+    auto& [index,requests,failure]=*static_cast<MusicFactoryContext*>(context);
+    try {
+      requests->emplace_back(name);
+      const auto* source=index->findGk(name);
+      if(!source) return DmResult_NOT_FOUND;
+      require(source->kind==kind,std::string(name)+": native factory selected the wrong kind");
+      if(source->gk.failure) {
+        for(int i=int(DmResult_INVALID_ARGUMENT);i<=int(DmResult_MUTEX_ERROR);++i)
+          if(*source->gk.failure==musicResult(DmResult(i))) return DmResult(i);
+        throw std::runtime_error("invalid stored GK failure");
+        }
+      const auto bin=musicRecord(*index,source->gk);
+      return create(bin.data(),bin.size(),out);
+      }
+    catch(...) { *failure=std::current_exception(); return DmResult_FILE_CORRUPT; }
+    }
+
+  static void musicHistory(const MusicData::Index& index,zenkit::Vfs& originalVfs) {
+    std::vector<std::string> originalRequests,nativeRequests;
+    std::exception_ptr failure;
+    using RawContext=std::tuple<zenkit::Vfs*,std::vector<std::string>*,std::exception_ptr*>;
+    RawContext originalContext{&originalVfs,&originalRequests,&failure};
+    const auto resolve=[](void* context,const char* name,size_t* size)->void* {
+      auto& [vfs,requests,error]=*static_cast<RawContext*>(context);
+      try {
+        requests->emplace_back(name);
+        const auto* node=vfs->find(name); if(!node) return nullptr;
+        auto reader=node->open_read(); reader->seek(0,zenkit::Whence::END);
+        std::vector<uint8_t> raw(reader->tell()); reader->seek(0,zenkit::Whence::BEG);
+        require(reader->read(raw.data(),raw.size())==raw.size(),"short original GK history read");
+        void* data=std::malloc(raw.empty() ? 1 : raw.size()); require(data!=nullptr,"GK history allocation failed");
+        if(!raw.empty()) std::memcpy(data,raw.data(),raw.size());
+        *size=raw.size(); return data;
+        }
+      catch(...) { *error=std::current_exception(); return nullptr; }
+      };
+    auto storedFailure=index;
+    MusicFactoryContext nativeContext{&index,&nativeRequests,&failure};
+    size_t fallbacks=0;
+    DmLoader* a=nullptr; auto result=DmLoader_create(&a,DmLoader_DOWNLOAD);
+    std::unique_ptr<DmLoader,decltype(&DmLoader_release)> original(result==DmResult_SUCCESS ? a : nullptr,&DmLoader_release);
+    require(result==DmResult_SUCCESS,"original history loader creation failed");
+    DmLoader* b=nullptr; result=DmLoader_create(&b,DmLoader_DOWNLOAD);
+    std::unique_ptr<DmLoader,decltype(&DmLoader_release)> native(result==DmResult_SUCCESS ? b : nullptr,&DmLoader_release);
+    require(result==DmResult_SUCCESS,"native history loader creation failed");
+    require(DmLoader_addResolver(original.get(),resolve,&originalContext)==DmResult_SUCCESS,"original history resolver registration failed");
+    DmLoaderFactory factory{
+      [](void* ctx,const char* name,DmSegment** out) { return musicFactory(ctx,name,out,"segment",MusicNative_segment); },
+      [](void* ctx,const char* name,DmStyle** out) { return musicFactory(ctx,name,out,"style",MusicNative_style); },
+      [](void* ctx,const char* name,DmDls** out) { return musicFactory(ctx,name,out,"dls",MusicNative_dls); }};
+    require(DmLoader_setFactory(native.get(),&factory,&nativeContext)==DmResult_SUCCESS,"native history factory registration failed");
+    factory={}; // The API copies the table; a caller-owned temporary is not its storage.
+    require(DmLoader_addResolver(native.get(),[](void* ctx,const char*,size_t*)->void* { ++*static_cast<size_t*>(ctx); return nullptr; },&fallbacks)==DmResult_SUCCESS,
+            "native fallback observer registration failed");
+    size_t roots=0;
+    for(const auto& [request,id]:index.gk) {
+      if(index.sources.at(id).kind!="segment") continue;
+      const auto* node=originalVfs.find(request); require(node!=nullptr,"original history root missing");
+      DmSegment* oldRaw=nullptr; const auto oldResult=DmLoader_getSegment(original.get(),node->name().c_str(),&oldRaw);
+      std::unique_ptr<DmSegment,decltype(&DmSegment_release)> oldSegment(oldResult==DmResult_SUCCESS ? oldRaw : nullptr,&DmSegment_release);
+      DmSegment* newRaw=nullptr; const auto newResult=DmLoader_getSegment(native.get(),node->name().c_str(),&newRaw);
+      std::unique_ptr<DmSegment,decltype(&DmSegment_release)> newSegment(newResult==DmResult_SUCCESS ? newRaw : nullptr,&DmSegment_release);
+      if(failure) std::rethrow_exception(failure);
+      equal(int(oldResult),int(newResult),request+" persistent loader result");
+      require(originalRequests==nativeRequests,request+": persistent GUID-cache request order/count differs");
+      if(oldResult==DmResult_SUCCESS) {
+        bytes(DmSegment_getGuid(oldSegment.get())->data,DmSegment_getGuid(newSegment.get())->data,16,request+" downloaded GUID");
+        musicField(DmSegment_getLength(oldSegment.get()),DmSegment_getLength(newSegment.get()),request+" downloaded length");
+        equal(DmSegment_getRepeats(oldSegment.get()),DmSegment_getRepeats(newSegment.get()),request+" downloaded repeats");
+        // Supplemental C verification inspects downloaded references and both persistent caches here.
+        }
+      ++roots;
+      }
+    // Supplemental C verification probes NULL/empty/GUID-alias rules on these same live loaders here.
+    for(auto* loader:{original.get(),native.get()}) {
+      DmSegment* missing=nullptr;
+      equal(int(DmLoader_getSegment(loader,"P16_HISTORY_MISSING.SGT",&missing)),int(DmResult_NOT_FOUND),"missing history segment");
+      require(missing==nullptr,"missing history segment must not return an owner");
+      }
+    if(failure) std::rethrow_exception(failure);
+    require(originalRequests==nativeRequests && fallbacks==0,"native factory must preserve request history without byte-resolver fallback");
+    const auto root=std::find_if(storedFailure.gk.begin(),storedFailure.gk.end(),[&](const auto& entry) { return storedFailure.sources.at(entry.second).kind=="segment"; });
+    require(root!=storedFailure.gk.end(),"stored failure check needs an actual segment");
+    storedFailure.sources.at(root->second).gk={"","",std::string("FILE_CORRUPT")};
+    std::get<0>(nativeContext)=&storedFailure;
+    DmSegment* failed=nullptr;
+    equal(int(DmLoader_getSegment(native.get(),root->first.c_str(),&failed)),int(DmResult_FILE_CORRUPT),"stored native parser failure");
+    require(!failed && fallbacks==0,"stored native failure must not call the original resolver");
+    require(DmLoader_setFactory(native.get(),nullptr,nullptr)==DmResult_SUCCESS,"clearing native factory failed");
+    equal(int(DmLoader_getSegment(native.get(),"P16_HISTORY_MISSING.SGT",&failed)),int(DmResult_NOT_FOUND),"cleared factory resolver result");
+    require(fallbacks==1,"cleared factory must restore the existing resolver path");
+    native.reset(); original.reset(); // All callback contexts above remain live through release.
+    std::printf("Music GK history: %zu roots, %zu ordered requests equal; native factory copied, misses/failures retained, no fallback\n",roots,originalRequests.size());
+    }
+
+  static void musicDxHistory(const MusicData::Index& index,const std::vector<std::u16string>& dirs,const fs::path& gothic) {
+    std::vector<std::u16string> nativeRequests;
+    const auto read=[&](const char16_t* name,const char* kind) {
+      nativeRequests.emplace_back(name);
+      for(const auto& dir:dirs) {
+        const auto path=FileUtil::nestedPath(dir,{name},Tempest::Dir::FT_File);
+        if(!FileUtil::exists(path)) continue;
+        const auto relative=fs::path(path).lexically_relative(gothic).lexically_normal().generic_string();
+        const auto* source=index.findDx8(relative);
+        require(source!=nullptr && source->kind==kind,"native Dx8 history selected an unindexed/wrong-kind host file");
+        if(source->dx8.failure) throw std::runtime_error(*source->dx8.failure);
+        return musicRecord(index,source->dx8);
+        }
+      throw std::runtime_error("file not found");
+      };
+    Dx8::DirectMusic raw;
+    Dx8::DirectMusic::Native callbacks{
+      [&](const char16_t* name) { return MusicData::decodeDx8Segment(read(name,"segment")); },
+      [&](const char16_t* name) { return MusicData::decodeDx8Style(read(name,"style")); },
+      [&](const char16_t* name) { return MusicData::decodeDx8Dls(read(name,"dls")); }};
+    Dx8::DirectMusic native(std::move(callbacks));
+    for(const auto& dir:dirs) { raw.addPath(dir); native.addPath(dir); }
+    std::set<std::u16string> roots;
+    for(const auto& [path,id]:index.dx8) if(index.sources.at(id).kind=="segment") roots.insert(fs::path(path).filename().u16string());
+    for(const auto& root:roots) {
+      std::optional<Dx8::PatternList> a,b; std::optional<std::string> oldFailure,newFailure;
+      try { a.emplace(raw.load(root.c_str())); } catch(const std::exception& error) { oldFailure=error.what(); }
+      try { b.emplace(native.load(root.c_str())); } catch(const std::exception& error) { newFailure=error.what(); }
+      const auto field=fs::path(root).string()+" persistent Dx8";
+      require(oldFailure==newFailure,field+": original/native constructor outcome differs");
+      if(!oldFailure) {
+        equal(a->size(),b->size(),field+" pattern count");
+        for(size_t i=0;i<a->size();++i) require((*a)[i].name==(*b)[i].name,field+": pattern order/name differs");
+        }
+      equal(raw.stlList().size(),native.stlList().size(),field+" style cache count");
+      for(size_t i=0;i<raw.stlList().size();++i) {
+        require(raw.stlList()[i].first==native.stlList()[i].first,field+": exact style cache key/order differs");
+        musicField(raw.stlList()[i].second,native.stlList()[i].second,field+" cached style");
+        }
+      equal(raw.dlsCollection().size(),native.dlsCollection().size(),field+" DLS cache count");
+      for(size_t i=0;i<raw.dlsCollection().size();++i) {
+        const auto& x=*raw.dlsCollection()[i]; const auto& y=*native.dlsCollection()[i];
+        require(x.first==y.first,field+": exact DLS cache key/order differs");
+        musicField(x.second.version,y.second.version,field+" DLS version");
+        musicField(x.second.dlid,y.second.dlid,field+" DLS GUID");
+        musicField(x.second.instrument,y.second.instrument,field+" DLS instruments");
+        }
+      }
+    require(!native.dlsCollection().empty(),"Dx8 history needs an actual cached bank");
+    const auto file=native.dlsCollection().front()->first;
+    const auto before=nativeRequests.size();
+    require(&native.dlsCollection(file)==&native.dlsCollection(file),"native Dx8 DLS cache must preserve stable object identity");
+    equal(nativeRequests.size(),before,"exact repeated Dx8 bank request must not reload a record");
+    std::printf("Music Dx8 history: %zu roots; exact ordered style/DLS caches and pattern names equal; %zu native callbacks\n",roots.size(),nativeRequests.size());
+    }
+
+  static void musicIntegrity(const fs::path& base,const fs::path& temporary) {
+    auto index=MusicData::readIndex(base/"music");
+    require(!index.records.empty(),"music integrity check needs a native record");
+    const auto [key,identity]=*index.records.begin(); (void)identity;
+    const auto original=index.dir;
+    index.dir=temporary/"music-integrity";
+    const auto descriptor=index.dir/(key+".json"); auto payload=descriptor; payload.replace_extension(".bin");
+    fs::create_directories(descriptor.parent_path());
+    const auto source=original/(key+".json"); auto sourceBin=source; sourceBin.replace_extension(".bin");
+    fs::create_symlink(source,descriptor); fs::create_symlink(sourceBin,payload);
+    const auto descriptorBytes=gothicglb::readFile(source),payloadBytes=gothicglb::readFile(sourceBin);
+    require(!payloadBytes.empty(),"music integrity fixture needs a nonempty native record");
+    const auto rejects=[&](const char* label) {
+      bool rejected=false;
+      try { (void)MusicData::readRecord(index,key); }
+      catch(const std::runtime_error& error) { rejected=std::string(error.what()).find("music data: "+key+":")!=std::string::npos; }
+      require(rejected,std::string(label)+": native music record must fail explicitly");
+      };
+    fs::remove(descriptor); rejects("missing JSON"); fs::create_symlink(source,descriptor);
+    fs::remove(payload); rejects("missing BIN");
+    auto changed=payloadBytes; changed.push_back(0);
+    gothicglb::writeFile(payload,changed.data(),changed.size()); rejects("resized BIN");
+    changed=payloadBytes; changed.at(0)^=1;
+    gothicglb::writeFile(payload,changed.data(),changed.size()); rejects("same-size corrupt BIN");
+    fs::remove(payload); fs::create_symlink(sourceBin,payload);
+    fs::remove(descriptor); auto changedJson=descriptorBytes; changedJson.push_back(' ');
+    gothicglb::writeFile(descriptor,changedJson.data(),changedJson.size()); rejects("changed actual JSON identity");
+    fs::remove(descriptor); fs::create_symlink(source,descriptor);
+    index.records.erase(key); rejects("missing record index entry");
+    }
+
+  static void musicRuntime(const fs::path& base,const fs::path& temporary,const fs::path& censusPath) {
+    const auto fixture=temporary/"music-runtime-base";
+    fs::create_directories(fixture/"music");
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","outputunits","audio","sources"})
+      fs::create_symlink(base/part,fixture/part);
+    fs::copy_file(base/"music/music.json",fixture/"music/music.json");
+    setenv("OPENGOTHIC_BASE",fixture.c_str(),1);
+    MusicData::Source selected;
+    {
+    Resources resources; Resources::loadVdfs({},true);
+    require(Resources::isHeadless(),"private music reader checks must remain CPU-only");
+    const auto found=std::find_if(resources.baseMusic.sources.begin(),resources.baseMusic.sources.end(),[&](const auto& source) {
+      return source.origin=="host" && source.kind=="segment" && !source.gk.failure && !source.dx8.failure &&
+             resources.baseMusic.findGk(fs::path(source.path).filename().string())==&source;
+      });
+    require(found!=resources.baseMusic.sources.end(),"music runtime needs an actual host segment selected by both providers");
+    selected=*found;
+    const auto request=fs::path(selected.path).filename().string(); const auto name=fs::path(request).u16string();
+    const auto gothic=fs::path(CommandLine::inst().rootPath());
+    const std::vector<std::u16string> dirs{(gothic/fs::path(selected.path).parent_path()).u16string()+u"/"};
+    require(Resources::loadMusicSegment(request.c_str())==nullptr,"headless public GK music must remain empty");
+    (void)Resources::loadDxMusic(request); // Its legacy empty PatternList has no safe size() query.
+    for(const auto* outcome:{&selected.gk,&selected.dx8}) {
+      const auto file=fixture/"music"/(outcome->record+".json"); auto bin=file; bin.replace_extension(".bin");
+      const auto source=base/"music"/(outcome->record+".json"); auto sourceBin=source; sourceBin.replace_extension(".bin");
+      fs::create_directories(file.parent_path()); fs::copy_file(source,file); fs::copy_file(sourceBin,bin);
+      }
+    std::vector<uint8_t> bin;
+    require(resources.readGkMusic(request,"segment",bin)==DmResult_SUCCESS,"private GK reader must verify native record");
+    vector(bin,musicRecord(resources.baseMusic,selected.gk),"private GK record bytes");
+    vector(resources.readDxMusic(dirs,name.c_str(),"segment"),musicRecord(resources.baseMusic,selected.dx8),"private Dx8 record bytes");
+    const auto nativeIndex=resources.baseMusic;
+    resources.baseMusic.gk.erase(resources.baseMusic.gk.find(upperMusic(request)));
+    bin={1}; require(resources.readGkMusic(request,"segment",bin)==DmResult_NOT_FOUND && bin.empty(),"missing GK index entry must stay missing");
+    resources.baseMusic=nativeIndex; resources.baseMusic.dx8.erase(selected.path);
+    bool unindexed=false;
+    try { (void)resources.readDxMusic(dirs,name.c_str(),"segment"); }
+    catch(const std::runtime_error& error) { unindexed=std::string(error.what()).find("selected host file is not indexed")!=std::string::npos; }
+    require(unindexed,"selected original Dx8 file without a native entry must not fall back");
+    resources.baseMusic=nativeIndex;
+    const auto id=resources.baseMusic.gk.at(upperMusic(request));
+    resources.baseMusic.sources[id].gk={"","",std::string("FILE_CORRUPT")};
+    bin={1}; require(resources.readGkMusic(request,"segment",bin)==DmResult_FILE_CORRUPT && bin.empty(),"stored GK failure must remain exact and clear output");
+    resources.baseMusic.sources[id].dx8={"","",std::string{}};
+    bool emptyFailure=false;
+    try { (void)resources.readDxMusic(dirs,name.c_str(),"segment"); }
+    catch(const std::runtime_error& error) { emptyFailure=std::string(error.what()).empty(); }
+    require(emptyFailure,"stored empty Dx8 error must remain a failure without raw fallback");
+    resources.baseMusic=nativeIndex;
+    for(size_t provider=0;provider<2;++provider) {
+      const auto& outcome=provider==0 ? selected.gk : selected.dx8;
+      const auto file=fixture/"music"/(outcome.record+".bin"); const auto original=base/"music"/(outcome.record+".bin");
+      const auto rejects=[&] {
+        if(provider==0) { bin={1}; require(resources.readGkMusic(request,"segment",bin)==DmResult_FILE_CORRUPT && bin.empty(),"broken native GK record must fail and clear output"); }
+        else {
+          bool failed=false; try { (void)resources.readDxMusic(dirs,name.c_str(),"segment"); } catch(const std::runtime_error&) { failed=true; }
+          require(failed,"broken native Dx8 record must fail without raw fallback");
+          }
+        };
+      fs::remove(file); rejects();
+      auto corrupt=gothicglb::readFile(original); require(!corrupt.empty(),"music runtime corruption fixture must be nonempty"); corrupt.at(0)^=1;
+      gothicglb::writeFile(file,corrupt.data(),corrupt.size()); rejects();
+      }
+    }
+    const auto census=json(censusPath);
+    require(census["files"].Empty(),"native private music readers must make zero original Resource opens");
+    const auto& music=census["runtime_music"];
+    require(std::string(music["coverage"].GetString())=="verified_base_record_reads" && !music["complete_corpus"].GetBool(),"music census scope must describe verified native reads");
+    equal(music["selections"].Size(),2u,"successful private music reads");
+    equal(census["base_misses"].Size(),5u,"native music integrity/index misses");
+    for(const auto& row:music["selections"].GetArray()) {
+      const auto& outcome=std::string_view(row["provider"].GetString())=="gk" ? selected.gk : selected.dx8;
+      require(std::string(row["kind"].GetString())=="segment" && gothicglb::jsonToString(row["request"],"request")==fs::path(selected.path).filename().string(),"native music census request/kind");
+      require(std::string(row["record"]["json"].GetString())=="base/music/"+outcome.record+".json" &&
+              std::string(row["record"]["bin"].GetString())=="base/music/"+outcome.record+".bin" && row["record"]["sha256"].GetString()==outcome.identity,
+              "music census must report actual verified JSON+BIN identity");
+      const auto& source=row["imported_source"];
+      require(std::string(source["origin"].GetString())==selected.origin && gothicglb::jsonToString(source["path"],"path")==selected.path &&
+              source["archive"].IsNull() && source["size"].GetUint64()==selected.size && source["sha256"].GetString()==selected.sha256,
+              "music census must keep imported original provenance distinct");
+      }
+    equal(census["replacements"].Size(),2u,"private verified music replacement count");
+    for(const auto& row:census["replacements"].GetArray()) require(std::string(row["kind"].GetString())=="basemusic","native music replacement kind");
+    setenv("OPENGOTHIC_BASE",base.c_str(),1);
+    }
+
+  static std::string upperMusic(std::string text) {
+    for(auto& c:text) if(c>='a' && c<='z') c=char(c-'a'+'A');
+    return text;
+    }
+
+  static void musicCorpus(const fs::path& base) {
+    const auto index=MusicData::readIndex(base/"music");
+    const auto metadata=json(base/"sources/sources.json");
+    const auto upper=[](std::string text) { for(auto& c:text) if(c>='a' && c<='z') c=char(c-'a'+'A'); return text; };
+    const auto legacy=[](const rapidjson::Value& value,const char* name) { return gothicglb::jsonToString(value,name); };
+    zenkit::Vfs oracle; std::string opened;
+    oracle.set_open_observer([&](std::string_view,std::string_view source) { opened=source; });
+    const auto gothic=fs::path(CommandLine::inst().rootPath()); fs::path work;
+    const auto archives=BaseImport::mountRuntime(oracle,gothic,work);
+    BaseImport::Files mounted; for(const auto& archive:archives) mounted.emplace_back(archive.name,archive.size);
+    std::sort(mounted.begin(),mounted.end()); require(mounted==index.archives,"music archive order/identity differs from original mount");
+    std::map<const zenkit::VfsNode*,std::string> paths;
+    std::set<std::string> requests;
+    std::function<void(const zenkit::VfsNode&,const std::string&)> collect=[&](const auto& node,const auto& path) {
+      if(node.type()==zenkit::VfsNodeType::DIRECTORY) {
+        for(const auto& child:node.children()) collect(child,path.empty() ? child.name() : path+"/"+child.name());
+        return;
+        }
+      paths.emplace(&node,path);
+      const auto ext=upper(fs::path(node.name()).extension().string());
+      if(ext==".SGT" || ext==".STY" || ext==".DLS") requests.insert(upper(node.name()));
+      };
+    collect(oracle.root(),"");
+    using Key=std::tuple<std::string,std::string,std::string>;
+    std::map<Key,size_t> sources;
+    for(size_t i=0;i<index.sources.size();++i) {
+      const auto& source=index.sources[i];
+      require(sources.emplace(Key{source.origin,source.path,source.archive},i).second,"music index duplicates a selected source");
+      }
+    std::set<size_t> seen;
+    size_t gkSuccess=0,gkFailures=0,dxSuccess=0,dxFailures=0,waves=0,samples=0;
+    const auto selected=[&](const std::string& path,const std::string& origin,const std::string& archive,const std::vector<uint8_t>& raw) {
+      const auto found=sources.find(Key{origin,path,archive});
+      require(found!=sources.end(),path+": independently selected original missing from native music index");
+      const size_t id=found->second; const auto& source=index.sources.at(id);
+      const auto digest=BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(raw.data()),raw.size()));
+      require(source.size==raw.size() && source.sha256==digest,path+": native source provenance differs from actual original bytes");
+      const auto ext=upper(fs::path(path).extension().string());
+      const auto kind=ext==".SGT" ? "segment" : ext==".STY" ? "style" : "dls";
+      require(source.kind==kind,path+": original extension and native source kind differ");
+      bool oldFound=false;
+      for(const auto& row:metadata["music"]["corpus"].GetArray())
+        if(legacy(row["source"],"source")== (origin=="host" ? path : archive) &&
+           (origin=="host" || legacy(row["path"],"path")==path)) {
+          require(row["size"].GetUint64()==raw.size() && row["sha256"].GetString()==digest,path+": original differs from P10 metadata"); oldFound=true;
+          }
+      require(oldFound,path+": selected music source missing from preserved P10 corpus");
+      if(!seen.insert(id).second) return id;
+      size_t badOffset=0;
+      require(MusicNative_checkGkStrings(raw.data(),raw.size(),&badOffset)==DmResult_SUCCESS,path+": unsupported original GK string at "+std::to_string(badOffset));
+      if(source.kind=="segment") {
+        musicGkRecord(index,source,raw,MusicNative_parseSegment,MusicNative_segment,MusicNative_encodeSegment,MusicNative_releaseSegment);
+        musicDxRecord<Dx8::Segment>(index,source,raw,[](Dx8::Riff& riff) { return Dx8::Segment(riff); },MusicData::decodeDx8Segment);
+        }
+      else if(source.kind=="style") {
+        musicGkRecord(index,source,raw,MusicNative_parseStyle,MusicNative_style,MusicNative_encodeStyle,MusicNative_releaseStyle);
+        musicDxRecord<Dx8::Style>(index,source,raw,[](Dx8::Riff& riff) { return Dx8::Style(riff); },MusicData::decodeDx8Style);
+        }
+      else {
+        musicGkRecord(index,source,raw,MusicNative_parseDls,MusicNative_dls,MusicNative_encodeDls,MusicNative_releaseDls);
+        musicDlsRecord(index,source,raw,waves,samples);
+        }
+      gkSuccess+=!source.gk.failure; gkFailures+=source.gk.failure.has_value();
+      dxSuccess+=!source.dx8.failure; dxFailures+=source.dx8.failure.has_value();
+      return id;
+      };
+    equal(requests.size(),index.gk.size(),"every original GK music request must be indexed");
+    for(const auto& request:requests) {
+      const auto* node=oracle.find(request); require(node!=nullptr,request+": independent GK lookup failed");
+      opened.clear(); auto reader=node->open_read(); reader->seek(0,zenkit::Whence::END);
+      std::vector<uint8_t> raw(reader->tell()); reader->seek(0,zenkit::Whence::BEG);
+      require(reader->read(raw.data(),raw.size())==raw.size(),request+": short original music read");
+      const bool host=fs::path(opened).is_absolute();
+      const auto path=host ? fs::path(opened).lexically_relative(gothic).lexically_normal().generic_string() : paths.at(node);
+      const size_t id=selected(path,host ? "host" : "archive",host ? "" : upper(opened),raw);
+      require(index.gk.at(request)==id && index.findGk(node->name()+" \t")==&index.sources[id],request+": native GK selection/source index differs");
+      }
+    std::vector<std::u16string> dirs;
+    for(const auto* dir:{u"newworld",u"AddonWorld",u"dungeon",u"menu_men",u"orchestra"})
+      dirs.push_back(CommandLine::inst().nestedPath({u"_work",u"Data",u"Music",dir},Tempest::Dir::FT_Dir));
+    dirs.push_back(CommandLine::inst().nestedPath({u"_work",u"Data",u"Music"},Tempest::Dir::FT_Dir));
+    std::set<std::string> hostPaths;
+    for(const auto& dir:dirs) Tempest::Dir::scan(dir,[&](const std::u16string& name,Tempest::Dir::FileType type) {
+      if(type!=Tempest::Dir::FT_File) return;
+      const auto ext=upper(fs::path(name).extension().string()); if(ext!=".SGT" && ext!=".STY" && ext!=".DLS") return;
+      const auto file=fs::path(dir)/name;
+      const auto path=file.lexically_relative(gothic).lexically_normal().generic_string();
+      hostPaths.insert(path);
+      const size_t id=selected(path,"host","",gothicglb::readFile(file));
+      require(index.dx8.at(path)==id && index.findDx8(upper(path))==&index.sources[id],path+": native Dx8 selected source index differs");
+      });
+    equal(index.dx8.size(),hostPaths.size(),"all independent Dx8 host selections must be indexed");
+    equal(seen.size(),index.sources.size(),"all native music sources must match an original provider selection");
+    BaseImport::Files loose;
+    for(const auto& source:index.sources) if(source.origin=="host") loose.emplace_back(source.path,source.size);
+    std::sort(loose.begin(),loose.end()); require(loose==index.looseFiles,"music loose source identity differs");
+    require(!index.findGk("P16_MISSING.SGT") && !index.findGk("prefix/NW_DayStd.sgt") && !index.findDx8("_work/P16_MISSING.SGT"),
+            "missing/exact-name music lookups must stay missing");
+    std::set<fs::path> expected{fs::path("music.json")};
+    std::set<std::string> referenced;
+    for(const auto& source:index.sources) for(const auto* outcome:{&source.gk,&source.dx8}) if(!outcome->record.empty()) referenced.insert(outcome->record);
+    equal(referenced.size(),index.records.size(),"music index must contain exactly the selected records");
+    for(const auto& [key,identity]:index.records) { (void)identity; expected.insert(key+".json"); expected.insert(key+".bin"); }
+    std::set<fs::path> actual;
+    for(const auto& file:fs::recursive_directory_iterator(index.dir)) if(file.is_regular_file()) actual.insert(file.path().lexically_relative(index.dir));
+    require(actual==expected,"native music record file set differs from index");
+    musicHistory(index,oracle);
+    musicDxHistory(index,dirs,gothic);
+    std::printf("Music corpus: %zu original sources; GK %zu parsed/%zu stored failures (public factory/ownership); Dx8 %zu parsed/%zu stored failures; %zu complete waves/%zu float samples equal\n",
+                seen.size(),gkSuccess,gkFailures,dxSuccess,dxFailures,waves,samples);
+    }
+
   static void audioCorpus(const fs::path& base) {
     const auto index=AudioData::readIndex(base/"audio");
     const auto nativeJson=json(base/"audio/audio.json");
@@ -1832,7 +2401,7 @@ struct BaseContentContract {
     // A valid base index with no audio payloads must mount before lazy integrity checks run.
     const auto fixtureBase=temporary/"audio-runtime-base";
     fs::create_directories(fixtureBase/"audio");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","outputunits","sources"})
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","outputunits","music","sources"})
       fs::create_symlink(base/part,fixtureBase/part);
     fs::create_symlink(base/"audio/audio.json",fixtureBase/"audio/audio.json");
     setenv("OPENGOTHIC_BASE",fixtureBase.c_str(),1);
@@ -2325,6 +2894,9 @@ struct BaseContentContract {
     legacyModelBounds();
     modelTagBoundary();
     }
+    musicCorpus(base);
+    musicIntegrity(base,temporary);
+    musicRuntime(base,temporary,censusPath);
     audioCorpus(base);
     audioRuntime(base,temporary,censusPath);
     std::printf("Meshes: %zu equal; %zu vertices, %zu indices, %zu meshlets; physics packing equal\n",
@@ -2350,11 +2922,11 @@ struct BaseContentContract {
     catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
     require(rejected,"invalid explicit base must fail with recovery instructions");
 
-    for(const std::string kind:{"models","fonts","programs","outputunits","audio"}) {
+    for(const std::string kind:{"models","fonts","programs","outputunits","audio","music"}) {
       const auto incomplete=temporary/("missing-"+kind+"-index");
       fs::create_directories(incomplete/kind);
       fs::copy_file(base/"base.json",incomplete/"base.json");
-      for(const auto* part:{"textures","meshes","zen","models","fonts","programs","outputunits","audio","sources"})
+      for(const auto* part:{"textures","meshes","zen","models","fonts","programs","outputunits","audio","music","sources"})
         if(part!=kind) fs::create_directory_symlink(base/part,incomplete/part);
       setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
       std::string missingIndexError;
@@ -2363,7 +2935,7 @@ struct BaseContentContract {
         Resources::loadVdfs({},true);
         }
       catch(const BaseStore::Error& error) { missingIndexError=error.what(); }
-      const auto prefix=kind=="programs" ? "program data: " : kind=="outputunits" ? "output units: " : kind=="audio" ? "audio data: " : "base index missing: ";
+      const auto prefix=kind=="programs" ? "program data: " : kind=="outputunits" ? "output units: " : kind=="audio" ? "audio data: " : kind=="music" ? "music data: " : "base index missing: ";
       require(missingIndexError.find(prefix+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
               missingIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
               "base without "+kind+"/"+kind+".json must fail with recovery instructions");
@@ -2371,7 +2943,7 @@ struct BaseContentContract {
     {
     const auto broken=temporary/"broken-program-record";
     fs::create_directories(broken/"programs");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","outputunits","audio","sources"})
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","outputunits","audio","music","sources"})
       fs::create_symlink(base/part,broken/part);
     for(const auto& file:fs::directory_iterator(base/"programs"))
       fs::create_symlink(file.path(),broken/"programs"/file.path().filename());
@@ -2420,7 +2992,7 @@ struct BaseContentContract {
     {
     const auto broken=temporary/"broken-outputunits-record";
     fs::create_directories(broken/"outputunits");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","audio","sources"})
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","audio","music","sources"})
       fs::create_symlink(base/part,broken/part);
     for(const auto& file:fs::directory_iterator(base/"outputunits"))
       fs::create_symlink(file.path(),broken/"outputunits"/file.path().filename());

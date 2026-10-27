@@ -86,33 +86,42 @@ void DlsCollection::Instrument::implRead(Riff &input) {
     }
   }
 
-DlsCollection::DlsCollection(Riff& input) {
+DlsCollection::DlsCollection(Riff& input)
+  :DlsCollection(parse(input)) {
+  }
+
+DlsCollection::Parsed DlsCollection::parse(Riff& input) {
+  Parsed ret;
   if(!input.is("RIFF"))
     throw std::runtime_error("not a riff");
   input.readListId("DLS ");
-  input.read([this](Riff& c){
-    implRead(c);
+  input.read([&ret](Riff& c){
+    implRead(ret,c);
     });
+  return ret;
+  }
 
+DlsCollection::DlsCollection(Parsed&& parsed)
+  :version(parsed.version), dlid(parsed.dlid), instrument(std::move(parsed.instrument)), wave(std::move(parsed.wave)) {
   shData = SoundFont::shared(*this,wave);
   wave.clear();
   }
 
-void DlsCollection::implRead(Riff &input) {
+void DlsCollection::implRead(Parsed& out, Riff &input) {
   if(input.is("vers"))
-    input.read(&version,sizeof(version));
+    input.read(&out.version,sizeof(out.version));
   else if(input.is("dlid"))
-    input.read(&dlid,sizeof(dlid));
+    input.read(&out.dlid,sizeof(out.dlid));
   else if(input.is("LIST")){
     if(input.isListId("wvpl")){
-      input.read([this](Riff& chunk){
+      input.read([&out](Riff& chunk){
         Wave wx(chunk);
-        wave.emplace_back(std::move(wx));
+        out.wave.emplace_back(std::move(wx));
         });
       }
     else if(input.isListId("lins")){
-      input.read([this](Riff& chunk){
-        instrument.emplace_back(chunk);
+      input.read([&out](Riff& chunk){
+        out.instrument.emplace_back(chunk);
         });
       }
     }

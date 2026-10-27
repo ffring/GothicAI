@@ -11,11 +11,17 @@ using namespace Dx8;
 DirectMusic::DirectMusic() {
   }
 
+DirectMusic::DirectMusic(Native source) : native(std::move(source)) {
+  }
+
 PatternList DirectMusic::load(const Segment &s) {
   return PatternList(s,*this);
   }
 
 PatternList DirectMusic::load(const char16_t *fsgt) {
+  if(native.segment)
+    return load(native.segment(fsgt));
+
   Tempest::RFile fin = implOpen(fsgt);
   std::vector<uint8_t> v(size_t(fin.size()));
   fin.read(v.data(), v.size());
@@ -33,6 +39,11 @@ const Style &DirectMusic::style(const Reference &id) {
   for(auto& i:styles){
     if(i.first==id.file)
       return i.second;
+    }
+
+  if(native.style) {
+    styles.emplace_back(id.file,native.style(id.file.c_str()));
+    return styles.back().second;
     }
 
   Tempest::RFile fin = implOpen(id.file.c_str());
@@ -57,6 +68,12 @@ const DlsCollection &DirectMusic::dlsCollection(const std::u16string &file) {
     if(i->first==file)
       return i->second;
     }
+  if(native.dls) {
+    DlsCollection value(native.dls(file.c_str()));
+    dls.emplace_back(new std::pair<std::u16string,DlsCollection>(file,std::move(value)));
+    return dls.back()->second;
+    }
+
   Tempest::RFile fin    = implOpen(file.c_str());
   const size_t   length = fin.size();
 
