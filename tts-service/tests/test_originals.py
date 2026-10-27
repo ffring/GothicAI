@@ -103,9 +103,13 @@ def test_prepare_reuses_matching_source_and_rebuilds_changes(tmp_path, monkeypat
     monkeypatch.setattr(originals, "speech_index", lambda game: {})
     built = []
     cid = "NONE_100_XARDAS"
+    unavailable = "VLK_439_VATRAS"
+    ids = [cid, unavailable]
 
     def build(selected, index, texts, out):
         built.append(selected)
+        if selected == unavailable:
+            return {"id": selected, "name": "Vatras", "error": "no lines"}
         path = out / f"{selected}.wav"
         path.write_bytes(b"synthetic sample")
         return {"id": selected, "file": str(path)}
@@ -113,12 +117,12 @@ def test_prepare_reuses_matching_source_and_rebuilds_changes(tmp_path, monkeypat
     monkeypatch.setattr(originals, "build", build)
     out = tmp_path / "voices"
     progress = []
-    path = originals.prepare(game, out, ids=[cid], progress=lambda n, total: progress.append((n, total)))
+    path = originals.prepare(game, out, ids=ids, progress=lambda n, total: progress.append((n, total)))
     first = path.read_bytes()
-    originals.prepare(game, out, ids=[cid])
-    assert built == [cid]
+    originals.prepare(game, out, ids=ids)
+    assert built == ids
     assert path.read_bytes() == first
-    assert progress == [(1, 1)]
+    assert progress == [(1, 2), (2, 2)]
     assert all(argv[-1] == "--ou-messages" for argv in exports)
     manifest = json.loads(first)
     assert manifest["source"]["game_dir"] == str(game)
@@ -128,11 +132,11 @@ def test_prepare_reuses_matching_source_and_rebuilds_changes(tmp_path, monkeypat
         "mtime_ns": speech.stat().st_mtime_ns,
     }
     speech.write_bytes(b"changed synthetic archive")
-    originals.prepare(game, out, ids=[cid])
-    assert built == [cid] * 2
+    originals.prepare(game, out, ids=ids)
+    assert built == ids * 2
     messages[0][1] = "Changed synthetic text."
-    originals.prepare(game, out, ids=[cid])
-    assert built == [cid] * 3
+    originals.prepare(game, out, ids=ids)
+    assert built == ids * 3
     monkeypatch.setattr(originals, "ALGORITHM_VERSION", originals.ALGORITHM_VERSION + 1)
-    originals.prepare(game, out, ids=[cid])
-    assert built == [cid] * 4
+    originals.prepare(game, out, ids=ids)
+    assert built == ids * 4

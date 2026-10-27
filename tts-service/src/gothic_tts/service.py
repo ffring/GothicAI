@@ -35,7 +35,7 @@ from websockets.http11 import Request, Response
 
 from . import originals
 from .providers import TtsError, TtsProvider, Voice
-from .providers.inworld import InworldTTS
+from .providers.inworld import InworldTTS, _UnknownVoice
 from .synthesizer import Synthesizer
 
 log = logging.getLogger(__name__)
@@ -115,15 +115,16 @@ class TtsService:
             return
         started = time.monotonic()
         try:
-            if self.game_dir is None:
-                raise ValueError("no game directory (--game-dir)")
+            if self.game_dir is None and not (self.original_voices_dir / "manifest.json").is_file():
+                raise ValueError("no game directory (--game-dir) or prepared original voices")
 
             def progress(done: int, total: int) -> None:
                 log.info("original voices: snapshots %d/%d", done, total)
 
-            await asyncio.to_thread(
-                originals.prepare, self.game_dir, self.original_voices_dir, progress=progress
-            )
+            if self.game_dir is not None:
+                await asyncio.to_thread(
+                    originals.prepare, self.game_dir, self.original_voices_dir, progress=progress
+                )
             snapshots = load_original_voices(self.original_voices_dir)
         except Exception as err:
             log.warning(
@@ -200,7 +201,7 @@ class TtsService:
         )
         original = self.original_voices.get(voice.id.casefold()) if not voice.preset else None
         if original is not None:
-            original = replace(original, description=voice.description, style=voice.style)
+            original = replace(original, description="", style=voice.style)
         if not text:
             await _send(conn, {"type": "error", "id": req, "detail": "empty text"})
             return
@@ -213,7 +214,16 @@ class TtsService:
             await conn.send(pcm)
 
         try:
-            s = await self.synthesizer.speak(text, voice, chunk, original_voice=original)
+            try:
+                s = await self.synthesizer.speak(text, voice, chunk, original_voice=original)
+            except _UnknownVoice:
+                if original is None or current:
+                    raise
+                self.original_voices = {
+                    alias: ready for alias, ready in self.original_voices.items() if ready.id != original.id
+                }
+                log.warning("original voice %s is gone; using designed voice until restart", original.id)
+                s = await self.synthesizer.speak(text, voice, chunk)
         except TtsError as err:
             await _send(conn, {"type": "error", "id": req, "detail": str(err)})
             return

@@ -499,8 +499,7 @@ def prepare(
     if all(
         cid in prepared
         and cid in manifest
-        and not manifest[cid].get("error")
-        and Path(manifest[cid].get("file", "")).is_file()
+        and (manifest[cid].get("error") or Path(manifest[cid].get("file", "")).is_file())
         for cid in only
     ):
         return path
@@ -516,10 +515,9 @@ def prepare(
                 destination = out / f"{cid}.wav"
                 Path(result["file"]).replace(destination)
                 result["file"] = str(destination)
-                prepared.add(cid)
             else:
                 log.warning("original voice %s snapshot failed: %s", cid, result["error"])
-                prepared.discard(cid)
+            prepared.add(cid)
             manifest[cid] = result
             if progress is not None:
                 progress(done, len(only))

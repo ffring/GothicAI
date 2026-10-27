@@ -200,9 +200,15 @@ async def test_original_voice_cache_preserves_the_designed_voice(api, tmp_path, 
     p = _provider(api, tmp_path, keep_warm=0)
     synth = Synthesizer(p)
     designed = TtsService(synth, original_voices_dir=None)
-    original = TtsService(synth, original_voices_dir=tmp_path, game_dir=tmp_path / "game")
-    monkeypatch.setattr(service.originals, "prepare", lambda *args, **kwargs: tmp_path / "manifest.json")
+    await p.clone(Voice(f"{XARDAS.id}@original", sample=str(sample)))
+    original = TtsService(synth, original_voices_dir=tmp_path)
+
+    def prepare(*args, **kwargs):
+        raise AssertionError("prepared snapshots must work without a game directory")
+
+    monkeypatch.setattr(service.originals, "prepare", prepare)
     await original._prepare_originals()
+    assert original.original_voices and api.cloned == 1
     messages = []
 
     async def send(message):
@@ -284,11 +290,30 @@ async def test_original_preparation_never_delays_a_game_line(api, tmp_path, monk
         request["voice"]["id"] = "other_xardas"
         await svc._speak(conn, request)
         assert api.streams()[-1]["voiceId"] == "ws__clone-voice-1"
+        assert "instruction" not in api.streams()[-1]
+        request["style"] = "say calmly"
+        await svc._speak(conn, request)
+        assert api.streams()[-1]["instruction"] == "say calmly"
         assert api.cloned == 1
-        # If the library clone is deleted, a game request must still never create another clone.
+        # A deleted clone falls back to its designed voice without disabling Inworld or recloning.
         api.voices.discard("ws__clone-voice-1")
         await svc._speak(conn, request)
-        assert api.cloned == 1
+        assert json.loads(messages[-1])["type"] == "done"
+        assert api.streams()[-1]["voiceId"] == "ws__design-voice-2"
+        assert synth.available() == [p] and api.cloned == 1
+        assert not svc.original_voices  # remove all aliases of the deleted clone
+        assert f"{XARDAS.id}@original" not in json.loads(p.cache.read_text())
+        deleted_requests = sum(line["voiceId"] == "ws__clone-voice-1" for line in api.streams())
+        request["voice"]["id"] = XARDAS.id
+        await svc._speak(conn, request)
+        assert json.loads(messages[-1])["type"] == "done"
+        assert api.streams()[-1]["voiceId"] == "ws__design-voice-1"
+        assert sum(line["voiceId"] == "ws__clone-voice-1" for line in api.streams()) == deleted_requests
+        request["voice"]["id"] = "diego"
+        await svc._speak(conn, request)
+        assert json.loads(messages[-1])["type"] == "done"
+        assert api.streams()[-1]["voiceId"] == "ws__design-voice-3"
+        assert synth.available() == [p] and api.cloned == 1
     finally:
         finish_snapshots.set()
         finish_clone.set()

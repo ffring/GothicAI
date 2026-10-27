@@ -144,7 +144,7 @@ async def test_original_voices_preserve_other_requests(service, tmp_path, caplog
     svc.original_voices = load_original_voices(tmp_path)
     assert len(svc.original_voices) == 2
     assert "MISSING skipped: no sample" in caplog.text
-    original = Voice("NONE_100_XARDAS@original", "Old man", style="say calmly", sample=str(sample))
+    original = Voice("NONE_100_XARDAS@original", style="say calmly", sample=str(sample))
     async with connect(f"ws://127.0.0.1:{svc.port}") as ws:
         for cid, preset, clones, enabled, expected in [
             ("none_100_xardas", None, True, True, original),
