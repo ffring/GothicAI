@@ -66,7 +66,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 52;
+constexpr int         ProtocolVersion = 53;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -1062,6 +1062,13 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   else if(type=="chat_status") {
     onChatStatus(*world,doc);
+    }
+  else if(type=="feat_toast") {
+    // a feat of the hero (v53): a quiet toast, nothing answers it
+    ensureChat();
+    chat->showFeat(TextCodec::fromUtf8(JsonRead::str(doc,"title")),
+                   TextCodec::fromUtf8(JsonRead::str(doc,"text")),
+                   std::string(JsonRead::str(doc,"icon")));
     }
   else if(type=="transcript") {
     onTranscript(doc);
