@@ -23,6 +23,10 @@ if(PROJECT_IS_TOP_LEVEL)
   set(DM_ENABLE_ASAN OFF CACHE INTERNAL "")
   add_subdirectory(../../lib/dmusic dmusic EXCLUDE_FROM_ALL)
   include(../../cmake/BaseImport.cmake)
+  if(MSVC)
+    # the importer's C sources read dmusic's _Atomic structs (see the game's CMakeLists.txt)
+    target_compile_options(gothic-base-import PRIVATE $<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
+  endif()
 endif()
 
 set(STORYGRAPH_SOURCES
