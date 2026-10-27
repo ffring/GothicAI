@@ -300,15 +300,26 @@ int main() {
     const auto identity=VideoData::identify(game);
     require(VideoData::sources(game).size()==21,"expected 21 selected BIK sources");
     std::string events;
-    const auto log=[&](std::string_view line) { events+=std::string(line)+'\n'; std::cout << line << '\n'; };
+    Clock::time_point importStarted, importFinished;
+    bool sawImport=false, sawImportFinished=false;
+    const auto log=[&](std::string_view line) {
+      if(line=="video base: importing installation") { importStarted=Clock::now(); sawImport=true; }
+      if(sawImport && !sawImportFinished && line.starts_with("videos: ")) {
+        importFinished=Clock::now(); sawImportFinished=true;
+        }
+      events+=std::string(line)+'\n'; std::cout << line << '\n';
+      };
     const auto started=Clock::now();
     auto imported=BaseStore::resolveVideos(game,log);
-    const auto importSeconds=std::chrono::duration<double>(Clock::now()-started).count();
+    const auto selectionSeconds=std::chrono::duration<double>(Clock::now()-started).count();
     const auto part=imported.path;
     if(imported.publication.valid()) imported.publication.get();
     require(events.find("video base: import ")!=std::string::npos,"empty cache/store did not import");
+    require(sawImport && sawImportFinished,"corpus import timing events missing");
+    const auto importSeconds=std::chrono::duration<double>(importFinished-importStarted).count();
     const auto bytes=directorySize(part);
-    std::cout << "video part: files=" << hashes(part).size() << " bytes=" << bytes << " import_seconds=" << importSeconds << '\n';
+    std::cout << "video part: files=" << hashes(part).size() << " bytes=" << bytes << " import_seconds=" << importSeconds
+              << " selection_seconds=" << selectionSeconds << '\n';
     require(bytes<=2500000000ull,"needs_decision: video part exceeds 2.5 GB: "+std::to_string(bytes));
     require(importSeconds<=90,"needs_decision: corpus import exceeds 90 s: "+std::to_string(importSeconds));
     require(VideoData::matches(store/"base/videos"/identity.fingerprint,identity),"background publication missing");
@@ -332,6 +343,25 @@ int main() {
     require(hashes(part)==expected,"store copy differs");
     const auto entries=VideoData::readIndex(part);
     require(!entries.empty(),"empty video index");
+    const auto indexFile=part/"videos.json";
+    std::ifstream indexInput(indexFile,std::ios::binary);
+    const std::string indexBytes{std::istreambuf_iterator<char>(indexInput),std::istreambuf_iterator<char>()};
+    indexInput.close();
+    auto alteredIndex=indexBytes;
+    const auto sourcePath=alteredIndex.find("\"path\":\"");
+    require(sourcePath!=std::string::npos && sourcePath+8<alteredIndex.size(),"index source path missing");
+    alteredIndex[sourcePath+8]=alteredIndex[sourcePath+8]=='X' ? 'Y' : 'X';
+    const auto writeIndex=[&](const std::string& bytes) {
+      std::ofstream output(indexFile,std::ios::binary|std::ios::trunc);
+      output.write(bytes.data(),std::streamsize(bytes.size()));
+      require(bool(output),"cannot write index mutation");
+      };
+    writeIndex(alteredIndex);
+    require(!VideoData::matches(part,identity),"parseable corrupted index was accepted by part validation");
+    bool indexRejected=false;
+    try { (void)VideoData::readIndex(part); } catch(const std::exception&) { indexRejected=true; }
+    require(indexRejected,"parseable corrupted index was accepted by readIndex");
+    writeIndex(indexBytes);
     const auto damaged=part/entries.front().file;
     flipLastByte(damaged);
     require(!VideoData::matches(part,identity),"corrupted video payload was accepted by part validation");

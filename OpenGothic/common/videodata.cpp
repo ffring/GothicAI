@@ -128,7 +128,12 @@ Entry encode(const Source& source,Bink::Video& video,const fs::path& out) {
   writeInfo(output,entry.info,positions,0,std::string(64,'0'));
   Sha256 payloadHash;
   for(uint32_t f=0;f<entry.info.frames;++f) {
-    const auto& frame=video.nextFrame(); const uint64_t start=uint64_t(output.tellp());
+    const Bink::Frame* decoded=nullptr;
+    try { decoded=&video.nextFrame(); }
+    catch(const std::exception& e) {
+      throw std::runtime_error("video data: "+source.name+" frame "+std::to_string(f)+" (zero-based): "+e.what());
+      }
+    const auto& frame=*decoded; const uint64_t start=uint64_t(output.tellp());
     std::ostringstream encodedFrame(std::ios::binary|std::ios::out);
     for(uint8_t p=0;p<4;++p) {
       const auto& pi=entry.info.planes[p]; encodePlane(encodedFrame,frame.plane(p).data(),size_t(pi.stride)*pi.rows,pi.stride);
@@ -158,10 +163,25 @@ void writeIndex(const fs::path& out,const Identity& id,const std::vector<Entry>&
   for(size_t i=0;i<entries.size();++i) {
     const auto& e=entries[i]; json+=std::string(i ? "," : "")+"{\"name\":"+quoted(e.source.name)+",\"path\":"+quoted(e.source.path.generic_string())+",\"source_size\":"+std::to_string(e.source.size)+",\"source_sha256\":"+quoted(e.source.sha256)+",\"file\":"+quoted(e.file)+",\"size\":"+std::to_string(e.size)+",\"sha256\":"+quoted(e.sha256)+",\"info\":"+infoJson(e.info)+"}";
     }
-  json+="]}\n"; std::ofstream file(out/"videos.json",std::ios::binary); writeBytes(file,json.data(),json.size());
+  json+="]";
+  const auto checksum=Sha256::hash(json); json+=",\"index_sha256\":\""+checksum+"\"}\n";
+  std::ofstream file(out/"videos.json",std::ios::binary); writeBytes(file,json.data(),json.size());
   }
 rapidjson::Document document(const fs::path& file) {
-  const auto text=readText(file); rapidjson::Document doc; doc.Parse(text.data(),text.size()); require(!doc.HasParseError() && doc.IsObject(),"invalid videos.json"); return doc;
+  const auto text=readText(file);
+  constexpr std::string_view marker=",\"index_sha256\":\"", ending="\"}\n";
+  const size_t trailer=marker.size()+64+ending.size();
+  require(text.size()>=trailer,"missing index SHA-256");
+  const size_t prefixSize=text.size()-trailer;
+  require(text.compare(prefixSize,marker.size(),marker)==0 &&
+          text.compare(text.size()-ending.size(),ending.size(),ending)==0,"invalid index SHA-256 trailer");
+  require(Sha256::hash(std::string_view(text.data(),prefixSize))==text.substr(prefixSize+marker.size(),64),"index SHA-256 differs");
+  rapidjson::Document doc; doc.Parse(text.data(),text.size()); require(!doc.HasParseError() && doc.IsObject(),"invalid videos.json");
+  size_t checksums=0;
+  for(auto member=doc.MemberBegin();member!=doc.MemberEnd();++member)
+    if(std::string_view(member->name.GetString(),member->name.GetStringLength())=="index_sha256") ++checksums;
+  require(checksums==1,"repeated index SHA-256");
+  return doc;
   }
 const rapidjson::Value& member(const rapidjson::Value& object,const char* key) { require(object.IsObject() && object.HasMember(key),std::string("missing ")+key); return object[key]; }
 std::string str(const rapidjson::Value& object,const char* key) { const auto& v=member(object,key); require(v.IsString(),std::string("invalid ")+key); return {v.GetString(),v.GetStringLength()}; }
@@ -194,9 +214,6 @@ void compare(const fs::path& file,Bink::Video& video) {
 
 std::string formatSha256() { return VideoFormatSha256; }
 std::vector<Source> sources(const fs::path& gothic) { return Selected(gothic).list; }
-std::vector<uint8_t> readSource(const fs::path& gothic,const std::string& name) {
-  zenkit::Vfs vfs; fs::path work; BaseImport::mountRuntime(vfs,gothic,work); const auto* node=vfs.find(name); if(!node) node=vfs.find(name+".bik"); require(node!=nullptr,"missing BIK "+name); return bytes(*node);
-  }
 Identity identify(const fs::path& gothic) { return identityOf(sources(gothic)); }
 std::vector<Entry> readIndex(const fs::path& dir) {
   const auto doc=document(dir/"videos.json"); require(number(doc,"version")==1,"unsupported index version"); const auto& list=member(doc,"videos"); require(list.IsArray(),"invalid video list");
