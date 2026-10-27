@@ -270,8 +270,8 @@ void build(const fs::path& gothic,const fs::path& out,const BaseImport::Progress
   struct Job { std::vector<uint8_t> bytes; std::unique_ptr<Input> input; std::unique_ptr<Bink::Video> video; };
   std::vector<Job> jobs(selected.list.size());
   // Bink constructors write global VLC and cosine tables. Complete all constructors before decoding
-  // on worker threads; the decoder sources and the player's use remain unchanged.
-  for(size_t i=0;i<jobs.size();++i) { auto& job=jobs[i]; job.bytes=bytes(*selected.nodes[i]); require(Sha256::hash({reinterpret_cast<const char*>(job.bytes.data()),job.bytes.size()})==selected.list[i].sha256,"BIK changed while importing"); job.input=std::make_unique<Input>(job.bytes); job.video=std::make_unique<Bink::Video>(job.input.get()); }
+  // on worker threads.
+  for(size_t i=0;i<jobs.size();++i) { auto& job=jobs[i]; job.bytes=bytes(*selected.nodes[i]); require(Sha256::hash({reinterpret_cast<const char*>(job.bytes.data()),job.bytes.size()})==selected.list[i].sha256,"BIK changed while importing"); job.input=std::make_unique<Input>(job.bytes); job.video=std::make_unique<Bink::Video>(job.input.get(),selected.list[i].name); }
   const size_t threads=std::min<size_t>(12,std::max<size_t>(1,jobs.size())); std::vector<Entry> entries(jobs.size()); std::atomic<size_t> cursor=0; std::exception_ptr error; std::mutex sync;
   const auto run=[&] {
     try { for(;;) { const size_t i=cursor.fetch_add(1); if(i>=jobs.size()) break; entries[i]=encode(selected.list[i],*jobs[i].video,out); } }
@@ -287,7 +287,7 @@ void build(const fs::path& gothic,const fs::path& out,const BaseImport::Progress
 int convert(const fs::path& gothic,const fs::path& out,bool verifyOnly) {
   if(!verifyOnly) { build(gothic,out); return 0; }
   Selected selected(gothic); require(matches(out,identityOf(selected.list)),"video part does not match installation"); const auto entries=readIndex(out); require(entries.size()==selected.list.size(),"video corpus size differs");
-  for(size_t i=0;i<entries.size();++i) { auto data=bytes(*selected.nodes[i]); Input input(data); Bink::Video video(&input); compare(out/entries[i].file,video); }
+  for(size_t i=0;i<entries.size();++i) { auto data=bytes(*selected.nodes[i]); Input input(data); Bink::Video video(&input,selected.list[i].name); compare(out/entries[i].file,video); }
   std::cout<<"videos: verified "<<entries.size()<<" files, every plane and PCM sample\n"; return 0;
   }
 }

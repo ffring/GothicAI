@@ -90,7 +90,8 @@ std::vector<std::byte> readSource(const zenkit::VfsNode& node) {
 // Both pipes carry only the compressed source or one decoded reference frame at a time.
 class Ffmpeg {
   public:
-    explicit Ffmpeg(const std::vector<std::byte>& bytes) {
+    explicit Ffmpeg(const std::vector<std::byte>& bytes,int track=-1,uint32_t sampleRate=0,uint32_t channels=0) {
+      const auto selection="0:a:"+std::to_string(track), rate=std::to_string(sampleRate), channelCount=std::to_string(channels);
       int source[2], decoded[2];
       require(pipe(source)==0,"cannot create ffmpeg source pipe");
       if(pipe(decoded)!=0) { close(source[0]); close(source[1]); throw std::runtime_error("cannot create ffmpeg output pipe"); }
@@ -102,6 +103,12 @@ class Ffmpeg {
       if(decoder==0) {
         if(dup2(source[0],STDIN_FILENO)<0 || dup2(decoded[1],STDOUT_FILENO)<0) _exit(125);
         close(source[0]); close(source[1]); close(decoded[0]); close(decoded[1]);
+        if(track>=0) {
+          execl("/usr/bin/ffmpeg","ffmpeg","-hide_banner","-v","error","-nostdin","-threads","1","-filter_threads","1","-i","pipe:0",
+                "-map",selection.c_str(),"-vn","-f","s16le","-acodec","pcm_s16le","-ar",rate.c_str(),
+                "-ac",channelCount.c_str(),"-threads","1","pipe:1",static_cast<char*>(nullptr));
+          _exit(127);
+          }
         execl("/usr/bin/ffmpeg","ffmpeg","-hide_banner","-v","error","-nostdin",
               "-threads","1","-filter_threads","1","-i","pipe:0","-map","0:v:0","-an",
               "-fps_mode","passthrough","-f","rawvideo","-pix_fmt","yuv420p","-threads","1","pipe:1",
@@ -165,13 +172,13 @@ struct PlaneDifference {
   };
 
 void preflightReference(const fs::path& gothic) {
+  require(access("/usr/bin/ffmpeg",X_OK)==0,"independent video reference requires executable /usr/bin/ffmpeg");
   zenkit::Vfs vfs; fs::path work;
   BaseImport::mountRuntime(vfs,gothic,work);
   const auto sources=VideoData::sources(gothic);
   require(sources.size()==21,"ffmpeg reference requires all 21 selected BIK files");
-  bool fixedCredits=false, fixedShip=false;
-  uint64_t fixedMismatches=0, fixedUncompared=0, totalMatched=0, totalMismatched=0, totalUncompared=0;
-  unsigned decoderFailures=0, referenceFailures=0;
+  uint64_t totalMatched=0, totalMismatched=0, totalUncompared=0, totalReference=0, totalHeld=0;
+  unsigned decoderFailures=0, referenceFailures=0, audioFailures=0;
   std::string failureContext;
   std::cout << "video ffmpeg command: /usr/bin/ffmpeg -hide_banner -v error -nostdin -threads 1 -filter_threads 1"
                " -i pipe:0 -map 0:v:0 -an -fps_mode passthrough -f rawvideo -pix_fmt yuv420p -threads 1 pipe:1\n";
@@ -179,26 +186,42 @@ void preflightReference(const fs::path& gothic) {
     const auto* selected=vfs.find(source.name);
     require(selected!=nullptr,source.name+": missing ffmpeg reference source");
     const auto bytes=readSource(*selected);
-    Input input(bytes); Bink::Video oracle(&input); Ffmpeg reference(bytes);
+    Input input(bytes); Bink::Video oracle(&input,source.name); Ffmpeg reference(bytes);
     const auto width=oracle.frame(0).width(), height=oracle.frame(0).height();
     require(width%2==0 && height%2==0,source.name+": reference expects even YUV420 dimensions");
     const std::array<size_t,3> planeSizes={size_t(width)*height,size_t(width/2)*(height/2),size_t(width/2)*(height/2)};
     const auto frameSize=planeSizes[0]+planeSizes[1]+planeSizes[2];
     std::vector<uint8_t> expected(frameSize), actual(frameSize);
+    std::array<std::vector<uint8_t>,4> previousPlanes;
     std::array<PlaneDifference,3> differences;
-    uint64_t matched=0, mismatched=0, decodedFrames=0, referenceFrames=0, referencePartialBytes=0;
-    uint64_t suffixDecoded=0, suffixMatched=0, suffixMismatched=0;
-    int64_t decoderErrorFrame=-1;
-    std::string decoderError;
+    std::vector<uint64_t> audioSamples(oracle.audioCount());
     const bool credits=source.name=="CREDITS_EXTRO.BIK", ship=source.name=="SHIP.BIK";
-    const uint32_t suffixStart=credits ? 147u : 1048u;
-    int64_t firstMismatch=-1;
-    std::string firstActualHash, firstExpectedHash;
+    const int64_t heldFrame=credits ? 147 : ship ? 1048 : -1;
+    uint64_t matched=0, mismatched=0, decodedFrames=0, referenceFrames=0, referencePartialBytes=0, held=0;
+    int64_t firstMismatch=-1, decoderErrorFrame=-1;
+    bool heldPlanesEqual=true;
+    std::string firstActualHash, firstExpectedHash, decoderError;
     for(uint32_t frame=0;frame<oracle.frameCount();++frame) {
+      const auto recoveries=oracle.recoveryCount();
       const Bink::Frame* decoded=nullptr;
       try { decoded=&oracle.nextFrame(); }
       catch(const std::exception& error) { decoderError=error.what(); decoderErrorFrame=frame; break; }
+      if(oracle.recoveryCount()!=recoveries+(int64_t(frame)==heldFrame ? 1u : 0u)) {
+        decoderError="unexpected recovery location/count"; decoderErrorFrame=frame; break;
+        }
       ++decodedFrames;
+      for(size_t track=0;track<audioSamples.size();++track) audioSamples[track]+=decoded->audio(uint8_t(track)).samples.size();
+      bool heldEqual=true;
+      if(int64_t(frame)+1==heldFrame || int64_t(frame)==heldFrame) {
+        for(uint8_t plane=0;plane<4;++plane) {
+          const auto rows=(((plane==1 || plane==2 ? height/2 : height)+15)/16)*16;
+          const auto size=size_t(decoded->plane(plane).stride())*rows;
+          const auto* data=decoded->plane(plane).data();
+          if(int64_t(frame)==heldFrame)
+            heldEqual&=previousPlanes[plane].size()==size && std::memcmp(data,previousPlanes[plane].data(),size)==0;
+          else previousPlanes[plane].assign(data,data+size);
+          }
+        }
       size_t offset=0;
       for(uint8_t plane=0;plane<3;++plane) {
         const auto rows=plane==0 ? height : height/2, columns=plane==0 ? width : width/2;
@@ -206,34 +229,31 @@ void preflightReference(const fs::path& gothic) {
           std::memcpy(actual.data()+offset+size_t(row)*columns,decoded->plane(plane).data()+size_t(row)*decoded->plane(plane).stride(),columns);
         offset+=planeSizes[plane];
         }
-      const auto count=reference.read(expected.data(),expected.size());
+      const bool isHeld=int64_t(frame)==heldFrame;
+      if(isHeld) heldPlanesEqual=heldEqual;
+      const auto count=isHeld ? frameSize : reference.read(expected.data(),expected.size());
       const bool available=count==frameSize;
       if(!available) referencePartialBytes+=count;
-      if(available) ++referenceFrames;
+      if(available && !isHeld) ++referenceFrames;
+      if(isHeld) ++held;
       const auto actualHash=Sha256::hash({reinterpret_cast<const char*>(actual.data()),actual.size()});
       const auto expectedHash=available ? Sha256::hash({reinterpret_cast<const char*>(expected.data()),expected.size()}) : "missing";
-      const bool equal=actualHash==expectedHash;
+      const bool equal=heldEqual && actualHash==expectedHash;
       if(available && equal) ++matched;
       else if(available) {
         ++mismatched;
         if(firstMismatch<0) { firstMismatch=frame; firstActualHash=actualHash; firstExpectedHash=expectedHash; }
-        if(available) {
-          offset=0;
-          for(size_t plane=0;plane<3;++plane) {
-            auto& difference=differences[plane]; uint64_t differing=0;
-            for(size_t sample=0;sample<planeSizes[plane];++sample) {
-              const auto a=actual[offset+sample], b=expected[offset+sample];
-              const auto delta=unsigned(a>b ? a-b : b-a);
-              if(delta) { ++differing; difference.absoluteDelta+=delta; difference.maxDelta=std::max(difference.maxDelta,delta); }
-              }
-            if(differing) ++difference.frames;
-            difference.bytes+=differing; offset+=planeSizes[plane];
+        offset=0;
+        for(size_t plane=0;plane<3;++plane) {
+          auto& difference=differences[plane]; uint64_t differing=0;
+          for(size_t sample=0;sample<planeSizes[plane];++sample) {
+            const auto a=actual[offset+sample], b=expected[offset+sample];
+            const auto delta=unsigned(a>b ? a-b : b-a);
+            if(delta) { ++differing; difference.absoluteDelta+=delta; difference.maxDelta=std::max(difference.maxDelta,delta); }
             }
+          if(differing) ++difference.frames;
+          difference.bytes+=differing; offset+=planeSizes[plane];
           }
-        }
-      if((credits || ship) && frame>=suffixStart) {
-        ++suffixDecoded;
-        if(available) { if(equal) ++suffixMatched; else ++suffixMismatched; }
         }
       }
     uint64_t extraBytes=0;
@@ -241,26 +261,21 @@ void preflightReference(const fs::path& gothic) {
     const bool referenceSucceeded=reference.finish();
     referenceFrames+=extraBytes/frameSize; referencePartialBytes+=extraBytes%frameSize;
     const auto uncompared=oracle.frameCount()-matched-mismatched;
-    const auto suffixFrames=(credits || ship) && oracle.frameCount()>suffixStart ? oracle.frameCount()-suffixStart : 0;
-    const auto suffixUncompared=suffixFrames-suffixMatched-suffixMismatched;
     if(!decoderError.empty()) {
       ++decoderFailures;
       failureContext+=" "+source.name+" frame "+std::to_string(decoderErrorFrame)+": "+decoderError+";";
       }
-    const bool referenceComplete=referenceSucceeded && referenceFrames==oracle.frameCount() && referencePartialBytes==0;
+    const bool referenceComplete=referenceSucceeded && referenceFrames+held==oracle.frameCount() && referencePartialBytes==0;
     if(!referenceComplete) { ++referenceFailures; failureContext+=" "+source.name+" ffmpeg frames="+std::to_string(referenceFrames)+";"; }
-    if(credits || ship) {
-      fixedMismatches+=suffixMismatched+(referenceFrames>oracle.frameCount() ? referenceFrames-oracle.frameCount() : 0);
-      fixedUncompared+=suffixUncompared;
-      fixedCredits|=credits; fixedShip|=ship;
-      }
     const bool complete=decoderError.empty() && referenceComplete;
     const bool luma=differences[0].bytes>0, chroma=differences[1].bytes>0 || differences[2].bytes>0;
-    const auto kind=mismatched==0 && complete ? "exact" : luma && chroma ? "luma+chroma" : luma ? "luma" : chroma ? "chroma" : "incomplete";
+    const auto kind=mismatched==0 && complete ? "exact" : luma && chroma ? "luma+chroma" : luma ? "luma" : chroma ? "chroma" : "incomplete-or-hold";
     std::cout << "video ffmpeg: " << source.name << " frames=" << oracle.frameCount() << " decoded_frames=" << decodedFrames
-              << " reference_frames=" << referenceFrames << " reference_exit_ok=" << referenceSucceeded
-              << " reference_partial_bytes=" << referencePartialBytes << " matched=" << matched << " mismatched=" << mismatched
-              << " uncompared=" << uncompared << " comparison=frame_sha256 kind=" << kind << " complete=" << complete
+              << " reference_frames=" << referenceFrames << " held_frames=" << held << " held_frame_zero_based=" << heldFrame
+              << " held_previous_planes_equal=" << heldPlanesEqual << " recovery_count=" << oracle.recoveryCount()
+              << " reference_exit_ok=" << referenceSucceeded << " reference_partial_bytes=" << referencePartialBytes
+              << " matched=" << matched << " mismatched=" << mismatched << " uncompared=" << uncompared
+              << " comparison=frame_sha256 kind=" << kind << " complete=" << complete
               << " first_mismatch_zero_based=" << firstMismatch << " decoder_error_frame_zero_based=" << decoderErrorFrame;
     if(!decoderError.empty()) std::cout << " decoder_error=\"" << decoderError << '\"';
     for(size_t plane=0;plane<3;++plane) {
@@ -270,21 +285,35 @@ void preflightReference(const fs::path& gothic) {
                 << (difference.bytes ? double(difference.absoluteDelta)/double(difference.bytes) : 0.0);
       }
     if(firstMismatch>=0) std::cout << " first_our_sha256=" << firstActualHash << " first_ffmpeg_sha256=" << firstExpectedHash;
-    if(credits || ship) std::cout << " suffix_start_zero_based=" << suffixStart << " suffix_frames=" << suffixFrames
-                                << " suffix_decoded=" << suffixDecoded << " suffix_matched=" << suffixMatched
-                                << " suffix_mismatched=" << suffixMismatched << " suffix_uncompared=" << suffixUncompared;
     std::cout << std::endl;
+    if(credits || ship) {
+      for(size_t track=0;track<audioSamples.size();++track) {
+        const auto& audio=oracle.audio(uint8_t(track));
+        const uint32_t channels=audio.isMono ? 1u : 2u;
+        Ffmpeg referenceAudio(bytes,int(track),audio.sampleRate,channels);
+        std::array<uint8_t,65536> buffer; uint64_t audioBytes=0;
+        for(;;) { const auto count=referenceAudio.read(buffer.data(),buffer.size()); if(!count) break; audioBytes+=count; }
+        const bool audioSucceeded=referenceAudio.finish();
+        const auto referenceSamples=audioBytes/2;
+        const bool equal=audioSucceeded && audioBytes%2==0 && referenceSamples==audioSamples[track];
+        std::cout << "video ffmpeg audio: " << source.name << " track=" << track << " sample_rate=" << audio.sampleRate
+                  << " channels=" << channels << " our_samples=" << audioSamples[track] << " reference_samples=" << referenceSamples
+                  << " reference_exit_ok=" << audioSucceeded << " sample_count_equal=" << equal << std::endl;
+        if(!equal) { ++audioFailures; failureContext+=" "+source.name+" audio track "+std::to_string(track)+" sample count differs;"; }
+        }
+      }
     totalMatched+=matched; totalMismatched+=mismatched; totalUncompared+=uncompared;
+    totalReference+=referenceFrames; totalHeld+=held;
     }
-  require(fixedCredits && fixedShip,"ffmpeg reference did not cover both corrected videos");
-  std::cout << "video ffmpeg: 21/21 matched_frames=" << totalMatched << " mismatched_frames=" << totalMismatched
-            << " uncompared_frames=" << totalUncompared << " decoder_failures=" << decoderFailures
-            << " reference_failures=" << referenceFailures << " corrected_suffix_mismatches=" << fixedMismatches
-            << " corrected_suffix_uncompared=" << fixedUncompared << std::endl;
-  require(decoderFailures==0 && referenceFailures==0 && fixedUncompared==0,
+  std::cout << "video ffmpeg: 21/21 checked_frames=" << totalMatched+totalMismatched << " matched_frames=" << totalMatched
+            << " mismatched_frames=" << totalMismatched << " uncompared_frames=" << totalUncompared << " reference_frames=" << totalReference
+            << " held_frames=" << totalHeld << " decoder_failures=" << decoderFailures << " reference_failures=" << referenceFailures
+            << " audio_count_failures=" << audioFailures << std::endl;
+  require(decoderFailures==0 && referenceFailures==0 && audioFailures==0,
           "needs_decision: decoder failures="+std::to_string(decoderFailures)+", ffmpeg incomplete="+
-          std::to_string(referenceFailures)+", uncompared corrected suffix frames="+std::to_string(fixedUncompared)+";"+failureContext);
-  require(fixedMismatches==0,"needs_decision: corrected Credits_Extro/Ship suffixes differ from ffmpeg: "+std::to_string(fixedMismatches)+" frames");
+          std::to_string(referenceFailures)+", audio count failures="+std::to_string(audioFailures)+";"+failureContext);
+  require(totalMatched==29654 && totalMismatched==0 && totalUncompared==0 && totalReference==29652 && totalHeld==2,
+          "needs_decision: expected 29654 exact checked frames including 2 held frames and 29652 ffmpeg raw frames");
   }
 
 std::map<std::string,std::string> hashes(const fs::path& root) {
@@ -325,7 +354,7 @@ void compareCorpus(const fs::path& gothic, const fs::path& part) {
     require(BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(bytes.data()),bytes.size()))==entry.source.sha256,
             entry.source.name+": selected source SHA-256");
     Input input(bytes), repeatedInput(bytes);
-    Bink::Video oracle(&input), repeated(&repeatedInput);
+    Bink::Video oracle(&input,entry.source.name), repeated(&repeatedInput,entry.source.name);
     VideoData::Reader native(part/entry.file);
     native.verifyPayload();
     const auto& info=native.info();

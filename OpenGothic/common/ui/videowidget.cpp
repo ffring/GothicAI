@@ -99,7 +99,7 @@ void VideoWidget::Sound::renderSound(int16_t *out, size_t n) {
   }
 
 struct VideoWidget::Context {
-  Context(std::unique_ptr<zenkit::Read>&& f) : fin(std::move(f)), input(*fin), vid(&input) {
+  Context(std::unique_ptr<zenkit::Read>&& f, std::string_view filename) : fin(std::move(f)), input(*fin), vid(&input,filename) {
     sndCtx.resize(vid.audioCount());
     for(size_t i=0; i<sndCtx.size(); ++i) {
       auto& aud = vid.audio(uint8_t(i));
@@ -305,7 +305,7 @@ void VideoWidget::tick() {
     }
 
   try {
-    ctx.reset(new Context(std::move(read)));
+    ctx.reset(new Context(std::move(read),filename));
     if(!active) {
       active       = true;
       restoreMusic = GameMusic::inst().isEnabled();
