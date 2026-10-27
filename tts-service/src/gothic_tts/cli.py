@@ -12,7 +12,8 @@ from pathlib import Path
 from .audio import to_wav
 from .loudness import TARGET_LUFS, Leveler
 from .providers import PROVIDERS, TtsError, TtsProvider, Voice, make_provider
-from .service import TtsService
+from .providers.inworld import InworldTTS
+from .service import DEFAULT_ORIGINAL_VOICES, TtsService, load_original_voices
 from .synthesizer import Synthesizer
 
 log = logging.getLogger("gothic_tts")
@@ -44,7 +45,12 @@ async def serve(args: argparse.Namespace) -> int:
     if not args.no_warmup:
         await synth.warmup()
     try:
-        await TtsService(synth, args.host, args.port).serve_forever()
+        await TtsService(
+            synth,
+            args.host,
+            args.port,
+            original_voices_dir=None if args.no_original_voices else args.original_voices_dir,
+        ).serve_forever()
     finally:
         await synth.aclose()
     return 0
@@ -83,6 +89,40 @@ async def say(args: argparse.Namespace) -> int:
     finally:
         await synth.aclose()
     return 0
+
+
+async def clone_originals(args: argparse.Namespace) -> int:
+    voices = load_original_voices(args.dir)
+    if not voices:
+        print(
+            f"error: no original voices in {args.dir} (run scripts/voice_snapshots.py)",
+            file=sys.stderr,
+        )
+        return 1
+    selected: dict[str, Voice] = {}
+    failed = False
+    if args.ids:
+        for cid in args.ids:
+            if voice := voices.get(cid.casefold()):
+                selected[voice.id] = voice
+            else:
+                print(f"error: no original voice for {cid}", file=sys.stderr)
+                failed = True
+    else:
+        selected = {voice.id: voice for voice in voices.values()}
+    provider = InworldTTS()
+    try:
+        for voice in selected.values():
+            cid = voice.id.removesuffix("@original")
+            try:
+                voice_id = await provider.clone(voice)
+                print(f"{cid} → {voice_id}")
+            except (TtsError, OSError) as err:
+                print(f"error: {cid}: {err}", file=sys.stderr)
+                failed = True
+    finally:
+        await provider.aclose()
+    return int(failed)
 
 
 def _write(path: str, data: bytes) -> None:
@@ -125,7 +165,13 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=47820)
     p.add_argument("--no-warmup", action="store_true")
+    p.add_argument("--original-voices-dir", type=Path, default=DEFAULT_ORIGINAL_VOICES)
+    p.add_argument("--no-original-voices", action="store_true")
     _add_provider_args(p)
+
+    p = sub.add_parser("clone-originals", help="clone the original game voices into the Inworld cache")
+    p.add_argument("--dir", type=Path, default=DEFAULT_ORIGINAL_VOICES)
+    p.add_argument("ids", metavar="ID", nargs="*")
 
     p = sub.add_parser("say", help="speak lines and measure latency")
     p.add_argument("text", nargs="+")
@@ -153,6 +199,8 @@ def main() -> None:
                 code = asyncio.run(serve(args))
             case "say":
                 code = asyncio.run(say(args))
+            case "clone-originals":
+                code = asyncio.run(clone_originals(args))
             case _:
                 code = 2
     except ValueError as err:

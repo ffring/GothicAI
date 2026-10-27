@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from http import HTTPStatus
+from pathlib import Path
 
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
@@ -35,13 +37,46 @@ log = logging.getLogger(__name__)
 
 MAX_TEXT = 1000
 MAX_STYLE = 300
+DEFAULT_ORIGINAL_VOICES = Path.home() / ".local/share/gothic-ai/voices/original"
+
+
+def load_original_voices(directory: str | Path = DEFAULT_ORIGINAL_VOICES) -> dict[str, Voice]:
+    """Index snapshots by instance ID; aliases share the canonical clone's cache key."""
+    directory = Path(directory).expanduser()
+    manifest = directory / "manifest.json"
+    if not manifest.is_file():
+        log.info("original voices disabled: no %s", manifest)
+        return {}
+    voices: dict[str, Voice] = {}
+    for entry in json.loads(manifest.read_text()):
+        cid = entry["id"]
+        sample = Path(entry.get("file") or f"{cid}.wav").expanduser()
+        if not sample.is_absolute():
+            sample = directory / sample
+        if not sample.is_file():
+            log.warning("original voice %s skipped: no sample %s", cid, sample)
+            continue
+        voice = Voice(f"{cid}@original", sample=str(sample))
+        for alias in (cid, *entry.get("aliases", [])):
+            voices[alias.casefold()] = voice
+    return voices
 
 
 class TtsService:
-    def __init__(self, synthesizer: Synthesizer, host: str = "127.0.0.1", port: int = 47820) -> None:
+    def __init__(
+        self,
+        synthesizer: Synthesizer,
+        host: str = "127.0.0.1",
+        port: int = 47820,
+        *,
+        original_voices_dir: str | Path | None = DEFAULT_ORIGINAL_VOICES,
+    ) -> None:
         self.synthesizer = synthesizer
         self.host = host
         self.port = port
+        self.original_voices = (
+            load_original_voices(original_voices_dir) if original_voices_dir is not None else {}
+        )
 
     async def serve_forever(self, started=None) -> None:
         async with serve(
@@ -92,6 +127,9 @@ class TtsService:
             v.get("preset"),
             str(msg.get("style") or "")[:MAX_STYLE],
         )
+        original = self.original_voices.get(voice.id.casefold()) if not voice.preset else None
+        if original is not None:
+            original = replace(original, description=voice.description, style=voice.style)
         if not text:
             await _send(conn, {"type": "error", "id": req, "detail": "empty text"})
             return
@@ -104,7 +142,7 @@ class TtsService:
             await conn.send(pcm)
 
         try:
-            s = await self.synthesizer.speak(text, voice, chunk)
+            s = await self.synthesizer.speak(text, voice, chunk, original_voice=original)
         except TtsError as err:
             await _send(conn, {"type": "error", "id": req, "detail": str(err)})
             return

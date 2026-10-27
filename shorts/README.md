@@ -116,7 +116,8 @@ Say so in the description.
 - `film` voices the hero's lines once (`tts-service`, `gothic-tts say`, the voice `SHORTS_HERO` designed from
   `hero_voice`; kept in `.shorts/voice/` by text), writes the bench scenario, starts ASR, TTS and the AI
   server like the launcher (with `--voice-files`: a `ptt_start` may name a wav instead of the microphone),
-  and the game with the bench in film mode:
+  and the game with the bench in film mode. TTS always starts with `--no-original-voices`: shorts keep
+  designed NPC voices regardless of the launcher's `tts.original_voices` setting:
   - `TEMPEST_WINDOW_SIZE`: the frame (486x864 points, 972x1728 pixels);
   - `TEMPEST_AUDIO_LOOPBACK=48000`: nothing plays; OpenAL mixes the game's effects when the bench asks, a
     frame's worth per frame, into `main.wav` next to `main.mp4`;

@@ -47,6 +47,7 @@ class _UnknownVoice(TtsError):
 
 class InworldTTS:
     name = "inworld"
+    supports_cloning = True
 
     def __init__(
         self,
@@ -81,6 +82,7 @@ class InworldTTS:
             limits=httpx.Limits(keepalive_expiry=max(120.0, 2 * self.keep_warm)),
         )
         self._designing = asyncio.Lock()
+        self._cloning = asyncio.Lock()
         self._used = 0.0  # time.monotonic() of the last request's start or end
         self._keeper: asyncio.Task[None] | None = None
 
@@ -199,6 +201,9 @@ class InworldTTS:
 
     async def _designed(self, voice: Voice) -> str:
         """The library voice made for `voice` (designed and published on its first line)."""
+        entry = self._load().get(voice.id, {})
+        if entry.get("description") == voice.description and entry.get("language") == self.language:
+            return str(entry["voice_id"])
         async with self._designing:
             entry = self._load().get(voice.id, {})
             if entry.get("description") == voice.description and entry.get("language") == self.language:
@@ -239,18 +244,25 @@ class InworldTTS:
             self._save(entries)
             return voice_id
 
+    async def clone(self, voice: Voice) -> str:
+        """Prepare a cloned library voice without synthesizing a line."""
+        return await self._cloned(voice)
+
     async def _cloned(self, voice: Voice) -> str:
         """The library voice cloned from `voice.sample` (made on its first line, again when the recording
         changes). Inworld detects the recording's language; the lines are said in the provider's
         `language`, so a Russian recording speaks English. Its best length is 10-30 s."""
-        async with self._designing:
-            try:
-                audio = await asyncio.to_thread(Path(voice.sample).read_bytes)
-            except OSError as err:
-                raise TtsError(f"inworld: no sample to clone {voice.id!r} from: {err}") from err
-            digest = hashlib.sha1(audio).hexdigest()[:16]
+        try:
+            audio = await asyncio.to_thread(Path(voice.sample).read_bytes)
+        except OSError as err:
+            raise TtsError(f"inworld: no sample to clone {voice.id!r} from: {err}") from err
+        digest = hashlib.sha1(audio).hexdigest()[:16]
+        entry = self._load().get(voice.id, {})
+        if entry.get("sample") == digest and entry.get("voice_id"):
+            return str(entry["voice_id"])
+        async with self._cloning:
             entry = self._load().get(voice.id, {})
-            if entry.get("sample") == digest:
+            if entry.get("sample") == digest and entry.get("voice_id"):
                 return str(entry["voice_id"])
             body: dict[str, Any] = {
                 "displayName": f"gothic-ai {voice.id}",
@@ -268,8 +280,10 @@ class InworldTTS:
                 for warning in checked.get("warnings", []):
                     log.warning("inworld: sample of %s: %s", voice.id, warning.get("text", warning))
             try:
-                voice_id = str(cloned["voice"]["voiceId"])
-            except (KeyError, TypeError) as err:
+                voice_id = cloned["voice"]["voiceId"]
+                if not isinstance(voice_id, str) or not voice_id.strip():
+                    raise ValueError("empty voice id")
+            except (KeyError, TypeError, ValueError) as err:
                 raise TtsError(f"inworld: voice cloning returned no voice: {str(cloned)[:300]}") from err
             log.info("inworld: cloned voice %s for %s", voice_id, voice.id)
             entries = self._load()
