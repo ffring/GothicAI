@@ -13,9 +13,11 @@
 #include "resources.h"
 #include "modeldata.h"
 #include "programdata.h"
+#include "outputunits.h"
 #include "utils/gthfont.h"
 
 #include <zenkit/DaedalusVm.hh>
+#include <zenkit/CutsceneLibrary.hh>
 #include <zenkit/Font.hh>
 #include <zenkit/Stream.hh>
 #include <zenkit/Model.hh>
@@ -1478,6 +1480,211 @@ struct BaseContentContract {
       }
     }
 
+  static void outputUnitFields(const std::shared_ptr<zenkit::Object>& a, const std::shared_ptr<asset::Object>& b,
+                               std::map<const zenkit::Object*,const asset::Object*>& forward,
+                               std::map<const asset::Object*,const zenkit::Object*>& reverse,
+                               const std::string& field) {
+    require(bool(a)==bool(b),field+": null object differs");
+    if(!a) return;
+    const auto [old,inserted]=forward.emplace(a.get(),b.get());
+    const auto [own,unique]=reverse.emplace(b.get(),a.get());
+    require(old->second==b.get() && own->second==a.get() && inserted==unique,field+": shared object identity differs");
+    if(!inserted) return;
+    switch(a->get_object_type()) {
+      case zenkit::ObjectType::zCCSBlock: {
+        require(b->get_object_type()==asset::ObjectType::zCCSBlock,field+": block class differs");
+        const auto& x=static_cast<const zenkit::CutsceneBlock&>(*a);
+        const auto& y=static_cast<const asset::CutsceneBlock&>(*b);
+        modelField(x.name,y.name,field+".name");
+        equal(x.block.index(),y.block.index(),field+".variant");
+        if(x.block.index()==0)
+          outputUnitFields(std::get<0>(x.block),std::get<0>(y.block),forward,reverse,field+".atomic");
+        else
+          outputUnitFields(std::get<1>(x.block),std::get<1>(y.block),forward,reverse,field+".nested");
+        break;
+        }
+      case zenkit::ObjectType::zCCSAtomicBlock: {
+        require(b->get_object_type()==asset::ObjectType::zCCSAtomicBlock,field+": atomic class differs");
+        const auto& x=static_cast<const zenkit::CutsceneAtomicBlock&>(*a);
+        const auto& y=static_cast<const asset::CutsceneAtomicBlock&>(*b);
+        modelField(x.synchronized,y.synchronized,field+".synchronized");
+        outputUnitFields(x.message,y.message,forward,reverse,field+".message");
+        break;
+        }
+      case zenkit::ObjectType::oCMsgConversation: {
+        require(b->get_object_type()==asset::ObjectType::oCMsgConversation,field+": message class differs");
+        const auto& x=static_cast<const zenkit::ConversationMessageEvent&>(*a);
+        const auto& y=static_cast<const asset::ConversationMessageEvent&>(*b);
+        modelField(x.type,y.type,field+".type");
+        modelField(x.text,y.text,field+".text bytes");
+        modelField(x.name,y.name,field+".audio name bytes");
+        modelField(x.high_priority,y.high_priority,field+".high_priority");
+        modelField(x.used,y.used,field+".used");
+        modelField(x.deleted,y.deleted,field+".deleted");
+        break;
+        }
+      default: require(false,field+": unexpected original library class");
+      }
+    }
+
+  static void outputUnits(const fs::path& base, const fs::path& censusPath) {
+    const auto index=OutputUnits::readIndex(base/"outputunits");
+    size_t libraries=0,roots=0,nodes=0,messages=0,probes=0,skipped=0;
+    std::set<std::string> records;
+    for(const auto& source:index.sources) {
+      const auto field="OU "+source.origin+":"+source.path;
+      std::unique_ptr<zenkit::Read> input;
+      if(source.origin=="host") {
+        require(source.archive.empty(),field+": host archive provenance");
+        const auto path=fs::path(CommandLine::inst().rootPath())/source.path;
+        input=zenkit::Read::from(path);
+        Resources::censusFile(path.u16string());
+        }
+      else {
+        require(source.origin=="archive" && !source.archive.empty(),field+": archive provenance");
+        Resources::CensusSource opened;
+        input=Resources::getFileBuffer(fs::path(source.path).filename().string(),&opened);
+        auto archive=opened.source;
+        for(auto& c:archive) if(c>='a' && c<='z') c=char(c-'a'+'A');
+        require(opened.node!=nullptr && opened.node==Resources::vdfsIndex().resolve(source.path) && archive==source.archive,
+                field+": selected mounted node/archive differs");
+        }
+      require(input!=nullptr,field+": original source cannot be opened");
+      input->seek(0,zenkit::Whence::END);
+      std::vector<std::byte> raw(input->tell());
+      input->seek(0,zenkit::Whence::BEG);
+      require(input->read(raw.data(),raw.size())==raw.size(),field+": incomplete original source");
+      require(raw.size()==source.size &&
+              BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(raw.data()),raw.size()))==source.sha256,
+              field+": original identity differs from imported provenance");
+      if(!source.skipped.empty()) {
+        require(source.record.empty() && source.recordSha256.empty(),field+": skipped source names a record");
+        bool parsed=false;
+        if(std::string_view(reinterpret_cast<const char*>(raw.data()),raw.size()).starts_with("ZenGin Archive"))
+          try {
+            auto oldReader=zenkit::Read::from(&raw);
+            auto oldArchive=zenkit::ReadArchive::from(oldReader.get());
+            parsed=bool(oldArchive->read_object<zenkit::CutsceneLibrary>(zenkit::GameVersion::GOTHIC_2));
+            }
+          catch(const std::exception&) {}
+        require(!parsed,field+": importer skipped a source accepted by the independent original library reader");
+        ++skipped;
+        continue;
+        }
+      auto reader=zenkit::Read::from(&raw);
+      auto archive=zenkit::ReadArchive::from(reader.get());
+      zenkit::ArchiveObject object;
+      require(archive->read_object_begin(object) && object.class_name=="zCCSLib",field+": original library root");
+      const auto count=archive->read_int();
+      require(count>=0,field+": negative root count");
+      std::vector<std::shared_ptr<zenkit::CutsceneBlock>> ordered;
+      for(int32_t i=0;i<count;++i) ordered.push_back(archive->read_object<zenkit::CutsceneBlock>(zenkit::GameVersion::GOTHIC_2));
+      if(!archive->read_object_end()) archive->skip_object(true);
+      // Independent old reader, including its exact platform std::sort and duplicate-name order.
+      auto oldReader=zenkit::Read::from(&raw);
+      auto oldArchive=zenkit::ReadArchive::from(oldReader.get());
+      const auto original=oldArchive->read_object<zenkit::CutsceneLibrary>(zenkit::GameVersion::GOTHIC_2);
+      require(original!=nullptr,field+": original library cannot be loaded");
+      require(Resources::writeCensus(),"cannot write original OU census");
+      const auto before=json(censusPath);
+      std::string digest;
+      const auto native=OutputUnits::readLibrary(index.path(source),&digest);
+      require(Resources::writeCensus(),"cannot write native OU census");
+      const auto after=json(censusPath);
+      require(before["files"]==after["files"],field+": native decoding opened original data");
+      require(digest==source.recordSha256 && index.records.at(source.record)==digest &&
+              BaseImport::sha256File(index.path(source))==digest,field+": actual native JSON identity");
+      auto name=fs::path(source.path).filename().string();
+      for(auto& c:name) if(c>='a' && c<='z') c=char(c-'a'+'A');
+      require(native.kind=="cutscene_library" && native.source.world==name && native.source.size==raw.size() &&
+              native.source.crc32==worldChunkCrc32(raw.data(),raw.size()),field+": library source metadata");
+      equal(ordered.size(),native.blocks.size(),field+" archive-order roots");
+      std::map<const zenkit::Object*,const asset::Object*> forward;
+      std::map<const asset::Object*,const zenkit::Object*> reverse;
+      for(size_t i=0;i<ordered.size();++i)
+        outputUnitFields(ordered[i],native.blocks[i],forward,reverse,field+" archive root "+std::to_string(i));
+      nodes+=forward.size(); roots+=ordered.size();
+      // Derive the server's raw message view independently from the original, with aliases visited once.
+      std::vector<std::shared_ptr<zenkit::ConversationMessageEvent>> originalMessages;
+      std::set<const zenkit::Object*> visited;
+      std::function<void(const std::shared_ptr<zenkit::CutsceneBlock>&)> visit=[&](const auto& block) {
+        if(!block || !visited.insert(block.get()).second) return;
+        if(block->block.index()==1) { visit(std::get<1>(block->block)); return; }
+        const auto& atomic=std::get<0>(block->block);
+        if(!atomic || !visited.insert(atomic.get()).second || !atomic->message || !visited.insert(atomic->message.get()).second) return;
+        originalMessages.push_back(atomic->message);
+        };
+      for(const auto& block:ordered) visit(block);
+      const auto ownMessages=OutputUnits::messagesInArchiveOrder(native);
+      equal(originalMessages.size(),ownMessages.size(),field+" archive-order messages");
+      for(size_t i=0;i<originalMessages.size();++i) {
+        require(forward.at(originalMessages[i].get())==ownMessages[i].get(),field+": server message order/alias differs");
+        modelField(originalMessages[i]->name,ownMessages[i]->name,field+" server audio bytes");
+        modelField(originalMessages[i]->text,ownMessages[i]->text,field+" server text bytes");
+        }
+      messages+=ownMessages.size();
+      const auto sorted=OutputUnits::sortedBlocks(native);
+      equal(original->blocks.size(),sorted.size(),field+" sorted roots");
+      forward.clear(); reverse.clear();
+      for(size_t i=0;i<sorted.size();++i)
+        outputUnitFields(original->blocks[i],sorted[i],forward,reverse,field+" sorted root "+std::to_string(i));
+      std::set<std::string> requests{""};
+      for(size_t i=0;i<original->blocks.size();++i) {
+        const auto& key=original->blocks[i]->name;
+        requests.insert(key);
+        // This is an absent byte-string strictly between adjacent names whenever such a gap exists.
+        auto between=key+std::string(1,'\0');
+        if(i+1<original->blocks.size() && between<original->blocks[i+1]->name) requests.insert(std::move(between));
+        }
+      if(!original->blocks.empty()) requests.insert(original->blocks.back()->name+std::string(1,char(0xff)));
+      for(const auto& request:requests) {
+        const auto a=original->block_by_name(request);
+        const auto b=OutputUnits::blockByName(sorted,request);
+        require(bool(a)==bool(b) && (!a || forward.at(a.get())==b.get()),field+": lower_bound successor lookup differs");
+        if(a) {
+          const auto x=a->get_message();
+          const auto y=OutputUnits::message(*b);
+          require(bool(x)==bool(y) && (!x || forward.at(x.get())==y.get()),field+": get_message differs");
+          }
+        ++probes;
+        }
+      records.insert(source.record);
+      ++libraries;
+      }
+    require(Resources::writeCensus(),"cannot write OU selection baseline census");
+    const auto beforeSelections=json(censusPath);
+    for(const auto& row:index.selections) {
+      if(!row.source) continue;
+      const auto& source=index.sources.at(*row.source);
+      if(!source.skipped.empty()) continue;
+      const auto host=row.step.starts_with("host_") ?
+        (fs::path(CommandLine::inst().rootPath())/source.path).u16string() : std::u16string{};
+      std::vector<std::shared_ptr<asset::CutsceneBlock>> loaded;
+      require(Resources::loadBaseOutputUnits(row.candidate,row.language,row.step,loaded,host),
+              "OU indexed selection must load its native library");
+      equal(loaded.size(),OutputUnits::readLibrary(index.path(source)).blocks.size(),"OU selected native root count");
+      }
+    require(Resources::writeCensus(),"cannot write OU selected-native census");
+    const auto afterSelections=json(censusPath);
+    require(beforeSelections["files"]==afterSelections["files"],"Resources native OU selections must open zero original sources");
+    require(libraries>0,"OU corpus must contain parsed libraries");
+    equal(records.size(),index.records.size(),"every indexed OU record must have an independently checked source");
+    WorldData::ZenFile empty;
+    empty.kind="cutscene_library";
+    require(OutputUnits::sortedBlocks(empty).empty() && OutputUnits::messagesInArchiveOrder(empty).empty() &&
+            !OutputUnits::blockByName({},"missing"),"empty OU library must stay empty");
+    zenkit::CutsceneBlock oldNull;
+    asset::CutsceneBlock ownNull;
+    std::get<0>(oldNull.block)->message.reset();
+    std::get<0>(ownNull.block)->message.reset();
+    require(!oldNull.get_message() && !OutputUnits::message(ownNull),"null atomic message must stay null");
+    oldNull.block=std::shared_ptr<zenkit::CutsceneBlock>{};
+    ownNull.block=std::shared_ptr<asset::CutsceneBlock>{};
+    require(!oldNull.get_message() && !OutputUnits::message(ownNull),"null nested block must stay null");
+    std::printf("Output units: %zu original libraries, %zu skipped sources with verified SHA-256, %zu roots, %zu unique nodes, %zu raw messages, %zu successor lookups equal\n",
+                libraries,skipped,roots,nodes,messages,probes);
+    }
+
   static void census(const fs::path& file, size_t meshes, size_t models, size_t fonts, size_t programs) {
     const auto data=json(file);
     equal(data["replacements"].Size(),meshes+models+programs,"census base mesh/model/program count");
@@ -1838,6 +2045,7 @@ struct BaseContentContract {
     Resources resources;
     Resources::loadVdfs({},true);
     definitionRecords(base,censusPath);
+    outputUnits(base,censusPath);
     legacyModelBounds();
     modelTagBoundary();
     }
@@ -1864,11 +2072,11 @@ struct BaseContentContract {
     catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
     require(rejected,"invalid explicit base must fail with recovery instructions");
 
-    for(const std::string kind:{"models","fonts","programs"}) {
+    for(const std::string kind:{"models","fonts","programs","outputunits"}) {
       const auto incomplete=temporary/("missing-"+kind+"-index");
       fs::create_directories(incomplete/kind);
       fs::copy_file(base/"base.json",incomplete/"base.json");
-      for(const auto* part:{"textures","meshes","zen","models","fonts","programs","sources"})
+      for(const auto* part:{"textures","meshes","zen","models","fonts","programs","outputunits","sources"})
         if(part!=kind) fs::create_directory_symlink(base/part,incomplete/part);
       setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
       std::string missingIndexError;
@@ -1877,7 +2085,7 @@ struct BaseContentContract {
         Resources::loadVdfs({},true);
         }
       catch(const BaseStore::Error& error) { missingIndexError=error.what(); }
-      const auto prefix=kind=="programs" ? "program data: " : "base index missing: ";
+      const auto prefix=kind=="programs" ? "program data: " : kind=="outputunits" ? "output units: " : "base index missing: ";
       require(missingIndexError.find(prefix+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
               missingIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
               "base without "+kind+"/"+kind+".json must fail with recovery instructions");
@@ -1885,7 +2093,7 @@ struct BaseContentContract {
     {
     const auto broken=temporary/"broken-program-record";
     fs::create_directories(broken/"programs");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","sources"})
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","outputunits","sources"})
       fs::create_symlink(base/part,broken/part);
     for(const auto& file:fs::directory_iterator(base/"programs"))
       fs::create_symlink(file.path(),broken/"programs"/file.path().filename());
@@ -1930,6 +2138,55 @@ struct BaseContentContract {
     require(failed["files"].Empty() && failed["replacements"].Empty() &&
             failed["runtime_programs"]["selections"].Empty() && failed["base_misses"].Size()==3,
             "failed native records must record misses without original opens or successful selections");
+    }
+    {
+    const auto broken=temporary/"broken-outputunits-record";
+    fs::create_directories(broken/"outputunits");
+    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","sources"})
+      fs::create_symlink(base/part,broken/part);
+    for(const auto& file:fs::directory_iterator(base/"outputunits"))
+      fs::create_symlink(file.path(),broken/"outputunits"/file.path().filename());
+    const auto index=OutputUnits::readIndex(broken/"outputunits");
+    const auto selected=std::find_if(index.selections.begin(),index.selections.end(),[&](const auto& row) {
+      return row.language==-1 && row.source && index.sources.at(*row.source).skipped.empty();
+      });
+    require(selected!=index.selections.end(),"native OU integrity check needs a default selection");
+    const auto& source=index.sources.at(*selected->source);
+    const auto file=index.path(source);
+    fs::remove(file);
+    setenv("OPENGOTHIC_BASE",broken.c_str(),1);
+    {
+    Resources resources;
+    Resources::loadVdfs({},true);
+    Resources::mountWork(CommandLine::inst().nestedPath({u"_work"},Tempest::Dir::FT_Dir));
+    const auto host=selected->step.starts_with("host_") ?
+      (fs::path(CommandLine::inst().rootPath())/source.path).u16string() : std::u16string{};
+    const auto sentinel=std::make_shared<asset::CutsceneBlock>();
+    std::vector<std::shared_ptr<asset::CutsceneBlock>> blocks{sentinel};
+    const auto fails=[&](const std::string& description, const std::string& reason=std::string{}) {
+      bool failed=false;
+      try { (void)Resources::loadBaseOutputUnits(selected->candidate,selected->language,selected->step,blocks,host); }
+      catch(const BaseStore::Error& error) {
+        const std::string message=error.what();
+        failed=message.find("output units "+selected->candidate+":")!=std::string::npos &&
+               (reason.empty() || message.find(reason)!=std::string::npos);
+        }
+      require(failed && blocks.size()==1 && blocks[0]==sentinel,
+              description+": native OU failure must preserve the prior library and cannot fall back to raw sources");
+      };
+    fails("missing OU JSON");
+    const std::string invalid="{broken";
+    gothicglb::writeFile(file,invalid.data(),invalid.size());
+    fails("corrupt OU JSON");
+    auto changed=gothicglb::readFile(base/"outputunits"/file.filename());
+    changed.push_back(' ');
+    gothicglb::writeFile(file,changed.data(),changed.size());
+    fails("changed OU identity","output units record identity differs from base index");
+    }
+    const auto failed=json(censusPath);
+    require(failed["files"].Empty() && failed["replacements"].Empty() &&
+            failed["runtime_outputunits"]["selections"].Empty() && failed["runtime_sources"]["selections"].Empty() &&
+            failed["base_misses"].Size()==3,"failed native OU records must record misses with zero original opens or selections");
     }
     setenv("OPENGOTHIC_BASE",base.c_str(),1);
     {

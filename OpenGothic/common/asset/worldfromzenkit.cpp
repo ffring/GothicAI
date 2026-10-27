@@ -11,6 +11,7 @@
 #include <zenkit/vobs/Sound.hh>
 #include <zenkit/vobs/Trigger.hh>
 #include <zenkit/vobs/Zone.hh>
+#include <algorithm>
 #include <bit>
 #include <functional>
 #include <type_traits>
@@ -961,6 +962,49 @@ bool loadZen(const std::vector<std::byte>& bytes, const WorldChunkSource& source
   importChecked(out.vobs,world.world_vobs,compareVobs);
   importChecked(out.waynet,world.way_net,compareWaynet);
   return true;
+  }
+
+void loadCutsceneLibrary(const std::vector<std::byte>& bytes, const WorldChunkSource& source, ZenFile& out) {
+  out=ZenFile{};
+  out.source=source;
+  out.kind="cutscene_library";
+  // The roots as written to a library, as one ZenKit ASCII archive (graph references included).
+  const auto libraryText=[](const std::vector<std::shared_ptr<CutsceneBlock>>& blocks) {
+    auto library=std::make_shared<CutsceneLibrary>();
+    library->blocks=blocks;
+    return ascii([&](WriteArchive& w) { w.write_object(library,GameVersion::GOTHIC_2); });
+    };
+  // CutsceneLibrary::load inside ReadArchive::read_object, without the sort.
+  std::vector<std::shared_ptr<CutsceneBlock>> roots;
+  {
+  auto stream=Read::from(&bytes);
+  auto archive=ReadArchive::from(stream.get());
+  require(archive!=nullptr,source.world+": not a ZenGin archive");
+  ArchiveObject obj;
+  require(archive->read_object_begin(obj),source.world+": expected a library object");
+  require(obj.class_name=="zCCSLib",source.world+": root is "+obj.class_name+", not zCCSLib");
+  const auto count=archive->read_int(); // NumOfItems
+  for(int32_t i=0;i<count;++i) {
+    auto block=archive->read_object<CutsceneBlock>(GameVersion::GOTHIC_2);
+    require(block!=nullptr,source.world+": null library root "+std::to_string(i));
+    roots.push_back(std::move(block));
+    }
+  if(!archive->read_object_end())
+    archive->skip_object(true);
+  }
+  importChecked(out.blocks,roots,[&](const auto& a,const auto& b) {
+    return textDifference(libraryText(a),libraryText(b),source.world+" library");
+    });
+  // ZenKit's own reader: its sorted blocks must be the same std::sort of these roots.
+  auto stream=Read::from(&bytes);
+  auto archive=ReadArchive::from(stream.get());
+  require(archive!=nullptr,source.world+": not a ZenGin archive");
+  const auto library=archive->read_object<CutsceneLibrary>(GameVersion::GOTHIC_2);
+  require(library!=nullptr,source.world+": ZenKit reads no cutscene library");
+  auto sorted=roots;
+  std::sort(sorted.begin(),sorted.end(),[](auto const& a, auto const& b) { return a->name < b->name; });
+  const auto difference=textDifference(libraryText(library->blocks),libraryText(sorted),source.world+" sorted library");
+  require(difference.empty(),difference);
   }
 
 void selfTest(const fs::path& dir) {

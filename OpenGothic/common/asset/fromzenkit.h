@@ -52,6 +52,12 @@ namespace WorldData {
 Data fromWorld(const zenkit::World& world, const WorldChunkSource& source);
 // Returns false for worlds with a mesh. Unknown archive classes are errors.
 bool loadZen(const std::vector<std::byte>& bytes, const WorldChunkSource& source, ZenFile& out);
+// P14: a ZenGin cutscene library (OU.BIN/OU.DAT) as kind "cutscene_library": the zCCSLib root is read
+// like zenkit::CutsceneLibrary::load but without its sort, so the roots keep archive order. Converted with
+// the shared graph copy and checked back; then the bytes are parsed again with ZenKit's own reader and
+// std::sort of the roots by name must give exactly CutsceneLibrary::blocks. Throws on a root that is not
+// zCCSLib, a null root and any parse or comparison error.
+void loadCutsceneLibrary(const std::vector<std::byte>& bytes, const WorldChunkSource& source, ZenFile& out);
 // Converter contract, including all supported archive classes and graph references.
 void selfTest(const std::filesystem::path& dir);
 }

@@ -46,6 +46,13 @@ int convertFonts(const std::filesystem::path& gothic, const std::filesystem::pat
 // .DAT of the runtime VFS, below the nine _compiled directories and the server's GOTHIC.DAT.
 // An installation without programs gives an empty index.
 int convertPrograms(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
+// P14: outputunits/outputunits.json and one record per distinct cutscene library (common/outputunits.h)
+// for every .BIN/.DAT of the runtime VFS, the engine's host and language candidates and the server's
+// and storygraph's choices. Fails when the server's native message view differs from its original
+// scanner. An installation without libraries gives an empty index.
+int convertOutputUnits(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
+// One external OU.BIN/OU.DAT to a native record at `record` (import only; prints both SHA-256).
+int convertOutputUnitsFile(const std::filesystem::path& source, const std::filesystem::path& record);
 // P10: sources/sources.json, the selected inputs of the not yet migrated families
 // (FNT, audio, BIK, SGT/STY/DLS, the eight DATs, OU, server readers) with origin and SHA-256.
 int convertSources(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -6,8 +7,9 @@ from pathlib import Path
 import pytest
 
 from gothic_ai.authoring import ITEMS
-from gothic_ai.gamedata import storygraph
+from gothic_ai.gamedata import ou, storygraph
 from gothic_ai.gamedata.storygraph import is_known, load, render, variables
+from tests.test_dialogue_text import parse_ou_bin
 
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "OpenGothic" / "ai_bridge" / "storygraph" / "build" / "storygraph"
@@ -159,7 +161,8 @@ def test_ensure_rebuilds_native_sources_and_publishes_atomically(tmp_path, monke
         sources = {
             "program_native_sha256": "a" * 64,
             "program_source_sha256": "b" * 64,
-            "ou_sha256": ("c" if not calls else "d") * 64,
+            "ou_native_sha256": ("c" if not calls else "d") * 64,
+            "ou_source_sha256": "f" * 64,
             "converter_sha256": "e" * 64,
         }
         Path(cmd[-1]).write_text(json.dumps({**GRAPH, "sources": sources}), encoding="utf-8")
@@ -175,7 +178,7 @@ def test_ensure_rebuilds_native_sources_and_publishes_atomically(tmp_path, monke
         before = cache.read_bytes()
         assert load(cache).node("DIA_LOBART_WORKNOW").description == "Я ищу работу."
     assert len(calls) == 2
-    assert json.loads(cache.read_text())["sources"]["ou_sha256"] == "d" * 64
+    assert json.loads(cache.read_text())["sources"]["ou_native_sha256"] == "d" * 64
 
 
 def test_ensure_failed_rebuild_preserves_existing_cache(tmp_path, monkeypatch, caplog):
@@ -287,6 +290,93 @@ def test_the_real_game(tmp_path):
     assert "ZS_DEAD" in graph.vars["MIS_HLPLOGAN"].others
     # the gate guard stores AIV_PASSGATE and then checks it: the check sees the store (found by the VM check)
     assert "PAL_205_SCHONMALREINGELASSEN" in variables(graph.node("DIA_PAL_205_TORWACHE_FIRSTWARN").condition)
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_native_ou_matches_the_complete_legacy_server_view(monkeypatch):
+    source = ou.find_ou_file(GAME_DIR)
+    if source is None:
+        pytest.skip("needs the Python-selected physical OU.BIN")
+    monkeypatch.setenv("STORYGRAPH_TOOL", str(TOOL))
+    messages = ou.native_messages(GAME_DIR)
+    assert messages is not None
+    assert ou.lines_from_messages(messages) == parse_ou_bin(source.read_bytes())
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_native_ou_metadata_and_overrides_preserve_the_graph(tmp_path):
+    base = os.environ.get("OPENGOTHIC_BASE")
+    if not base:
+        pytest.skip("needs an explicit matching OPENGOTHIC_BASE for independent record hashes")
+    base = Path(base)
+    index = json.loads((base / "outputunits" / "outputunits.json").read_text())
+    result = subprocess.run(
+        [str(TOOL), str(GAME_DIR), "--ou-messages"], check=True, capture_output=True, timeout=1800
+    )
+    exported = json.loads(result.stdout)
+    source = index["sources"][index["server"]["ou_py"]]
+    record = base / "outputunits" / f"{source['record']}.json"
+    assert exported["format"] == "gothic-ou-messages" and exported["version"] == 1
+    assert exported["source"] == {"path": source["path"], "sha256": source["sha256"]}
+    assert exported["source"]["sha256"] == hashlib.sha256(
+        (GAME_DIR / source["path"]).read_bytes()
+    ).hexdigest()
+    assert exported["native_sha256"] == hashlib.sha256(record.read_bytes()).hexdigest()
+
+    def graph_with(*args):
+        out = tmp_path / "story.json"
+        subprocess.run(
+            [str(TOOL), str(DAT), "--json", str(out), *args], check=True, capture_output=True, timeout=1800
+        )
+        return json.loads(out.read_text())
+
+    graph = graph_with()
+    # Reproduce the existing physical, program-relative default selection (independent of engine VFS).
+    selected = DAT.parent.parent
+    for name in ("CONTENT", "CUTSCENE", "OU.BIN"):
+        selected = next(entry for entry in selected.iterdir() if entry.name.upper() == name)
+    source = index["sources"][index["host"][selected.relative_to(GAME_DIR).as_posix()]]
+    record = base / "outputunits" / f"{source['record']}.json"
+    programs = json.loads((base / "programs" / "programs.json").read_text())
+    program = programs["sources"][programs["host"][DAT.relative_to(GAME_DIR).as_posix()]]
+    program_file = base / "programs" / program["program"]
+    sources = graph.pop("sources")
+    assert sources == {
+        "program_native_sha256": hashlib.sha256(
+            program_file.with_suffix(".json").read_bytes() + program_file.with_suffix(".bin").read_bytes()
+        ).hexdigest(),
+        "program_source_sha256": hashlib.sha256(DAT.read_bytes()).hexdigest(),
+        "ou_native_sha256": hashlib.sha256(record.read_bytes()).hexdigest(),
+        "ou_source_sha256": hashlib.sha256(selected.read_bytes()).hexdigest(),
+        "converter_sha256": hashlib.sha256(TOOL.read_bytes()).hexdigest(),
+    }
+    indexed = graph_with("--ou", str(selected))
+    assert indexed.pop("sources") == sources
+    assert indexed == graph
+    arbitrary = tmp_path / "own-ou.json"
+    arbitrary.write_bytes(record.read_bytes())
+    own = graph_with("--ou", str(arbitrary))
+    assert own.pop("sources") == {**sources, "ou_source_sha256": None}
+    assert own == graph
+    raw = tmp_path / "external-ou.bin"
+    raw.write_bytes(selected.read_bytes())
+    failed = subprocess.run(
+        [str(TOOL), str(DAT), "--ou", str(raw)], capture_output=True, timeout=1800
+    )
+    assert failed.returncode != 0 and b"invoke content-convert outputunits-file" in failed.stderr
+
+
+@pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
+def test_native_storygraph_matches_the_complete_p13_graph(tmp_path):
+    baseline = os.environ.get("STORYGRAPH_P13_JSON")
+    if not baseline:
+        pytest.skip("needs the independently generated P13 graph in STORYGRAPH_P13_JSON")
+    out = tmp_path / "story.json"
+    subprocess.run([str(TOOL), str(DAT), "--json", str(out)], check=True, capture_output=True, timeout=1800)
+    old, new = json.loads(Path(baseline).read_text()), json.loads(out.read_text())
+    old.pop("sources")
+    new.pop("sources")
+    assert new == old
 
 
 def _run(*args):

@@ -4,7 +4,9 @@
 #include "baseimport.h"
 #include "basemusic.h"
 #include "gothicglb.h"
+#include "outputunits.h"
 #include "programdata.h"
+#include "asset/fromzenkit.h"
 #include "sha256.h"
 #include "dmusic/segment.h"
 #include "dmusic/sourcefile.h"
@@ -1267,6 +1269,426 @@ std::string ProgramImport::json() const {
   s += "\n  ],\n  \"server\":{\"storygraph_dat\":"+ref(server)+"}\n}\n";
   return s;
   }
+
+// P14, import only: server/src/gothic_ai/gamedata/ou.py parse_ou_bin over the original bytes, before
+// decoding: upper stem -> raw text bytes, last wins. Kept to prove the native message view equal.
+std::map<std::string,std::string> originalServerLines(const std::vector<uint8_t>& data) {
+  const auto stem = [](uint8_t c) {
+    return (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='_';
+    };
+  const auto u16 = [&data](size_t at) { return size_t(data[at]) | size_t(data[at+1])<<8; };
+  std::map<std::string,std::string> lines;
+  const size_t n = data.size();
+  for(size_t i=0; i<n;) {
+    // _WAV_ENTRY = \x01(..)([A-Za-z0-9_]+)\.WAV, DOTALL; finditer resumes after each match.
+    if(data[i]!=0x01 || i+3>=n) { ++i; continue; }
+    size_t end = i+3;
+    while(end<n && stem(data[end]))
+      ++end;
+    if(end==i+3 || end+4>n || std::memcmp(data.data()+end,".WAV",4)!=0) { ++i; continue; }
+    const size_t matchEnd = end+4;
+    const std::string name(reinterpret_cast<const char*>(data.data()+i+3),end-i-3);
+    const size_t start = i;
+    i = matchEnd;
+    if(u16(start+1)!=name.size()+4 || start<5 || data[start-5]!=0x12)
+      continue;
+    // _string_ending_at(data, hash_pos): the nearest string ending there, within 4096 starts.
+    const size_t hashPos = start-5;
+    if(hashPos<3)
+      continue;
+    const ptrdiff_t stop = std::max<ptrdiff_t>(ptrdiff_t(hashPos)-3-4096,-1);
+    for(ptrdiff_t s=ptrdiff_t(hashPos)-3; s>stop; --s) {
+      const auto at = size_t(s);
+      if(data[at]==0x01 && u16(at+1)==hashPos-at-3) {
+        lines[upperAscii(name)] = std::string(reinterpret_cast<const char*>(data.data()+at+3),hashPos-at-3);
+        break;
+        }
+      }
+    }
+  return lines;
+  }
+
+// The same map from the native record: messages in archive order, the server's ASCII WAV-name rule
+// (whole name [A-Za-z0-9_]+\.WAV), raw text, last wins. The server applies exactly this to the
+// native messages, then its own cp1251 decode and strip.
+std::map<std::string,std::string> nativeServerLines(const WorldData::ZenFile& library) {
+  std::map<std::string,std::string> lines;
+  for(const auto& msg:OutputUnits::messagesInArchiveOrder(library)) {
+    const auto& name = msg->name;
+    if(name.size()<=4 || name.compare(name.size()-4,4,".WAV")!=0)
+      continue;
+    const auto stem = std::string_view(name).substr(0,name.size()-4);
+    if(!std::all_of(stem.begin(),stem.end(),[](char c) {
+         return (c>='A' && c<='Z') || (c>='a' && c<='z') || (c>='0' && c<='9') || c=='_'; }))
+      continue;
+    lines[upperAscii(std::string(stem))] = msg->text;
+    }
+  return lines;
+  }
+
+std::string printable(const std::string& s) {
+  std::string out;
+  for(const char c:s.substr(0,120)) {
+    const auto b = uint8_t(c);
+    if(b>=0x20 && b<0x7F && c!='\\') { out.push_back(c); continue; }
+    static const char digits[] = "0123456789abcdef";
+    out += "\\x"; out.push_back(digits[b>>4]); out.push_back(digits[b&15]);
+    }
+  return out+(s.size()>120 ? "..." : "");
+  }
+
+// Fails unless the old server scanner and the native message view give the same complete map.
+void requireServerView(const std::vector<uint8_t>& original, const WorldData::ZenFile& library, const std::string& what) {
+  const auto expected = originalServerLines(original);
+  const auto actual   = nativeServerLines(library);
+  if(expected==actual)
+    return;
+  size_t onlyOld = 0, onlyNative = 0, different = 0;
+  std::string first;
+  for(const auto& [key,text]:expected) {
+    const auto it = actual.find(key);
+    if(it==actual.end()) {
+      ++onlyOld;
+      if(first.empty()) first = key+": only the original scanner has '"+printable(text)+"'";
+      }
+    else if(it->second!=text) {
+      ++different;
+      if(first.empty()) first = key+": scanner '"+printable(text)+"', native '"+printable(it->second)+"'";
+      }
+    }
+  for(const auto& [key,text]:actual)
+    if(!expected.count(key)) {
+      ++onlyNative;
+      if(first.empty()) first = key+": only the native view has '"+printable(text)+"'";
+      }
+  throw std::runtime_error(what+": server OU view differs from the original scanner (unsupported source structure): "+
+                           std::to_string(expected.size())+" scanner lines, "+std::to_string(actual.size())+
+                           " native, "+std::to_string(onlyOld)+" only scanner, "+std::to_string(onlyNative)+
+                           " only native, "+std::to_string(different)+" different; first "+first);
+  }
+
+// P14: every origin GameScript::loadDialogOU, the server or storygraph can take the dialog line library
+// from, converted to our own records (common/outputunits.h) and indexed by the original choices.
+class OutputUnitsImport {
+  public:
+    explicit OutputUnitsImport(const fs::path& root)
+      : root16(installation(fs::absolute(root))), gothic(fs::path(root16).parent_path()) {
+      vfs.set_open_observer([this](std::string_view, std::string_view source) { opened = source; });
+      archives = mountRuntime(vfs,gothic,work);
+      collectPaths(vfs.root(),"",paths);
+      }
+
+    // Converts, or with verifyOnly compares, every library; returns a summary line.
+    std::string run(const fs::path& out, bool verifyOnly);
+
+  private:
+    using Key = std::pair<std::string,std::string>; // origin, path
+
+    struct Entry {
+      std::string archive, sha256, record, skipped;
+      uint64_t    size = 0;
+      std::optional<WorldData::ZenFile> library;
+      std::vector<uint8_t> bytes;                    // kept only for the server-view proof
+      };
+
+    struct Row {
+      int                language = -1;
+      std::string        candidate, step, path;
+      std::optional<Key> source;
+      };
+
+    std::u16string nested(const std::initializer_list<const char16_t*>& segments, Dir::FileType type) const {
+      return FileUtil::nestedPath(root16,segments,type);
+      }
+
+    std::string relative(const fs::path& p) const {
+      return p.lexically_relative(gothic).lexically_normal().generic_string();
+      }
+
+    Key  fromNode(const zenkit::VfsNode* node);
+    Key  fromHost(const fs::path& file);
+    void add(const Key& key, const std::string& archive, std::vector<uint8_t>&& bytes, const Digest& d);
+    void writeRecord(Entry& e);
+    std::string json() const;
+
+    std::u16string                               root16;
+    fs::path                                     gothic, work, out;
+    bool                                         verifyOnly = false;
+    zenkit::Vfs                                  vfs;
+    std::string                                  opened;
+    std::vector<RuntimeArchive>                  archives;
+    std::map<const zenkit::VfsNode*,std::string> paths;
+    std::map<const zenkit::VfsNode*,Key>         nodeKeys;
+    std::map<Key,Entry>                          sources;
+    std::set<std::string>                        records;  // written or verified record names
+    std::map<std::string,Key>                    vfsTable;
+    std::vector<Row>                             rows;
+    std::optional<Key>                           serverOuPy;
+  };
+
+OutputUnitsImport::Key OutputUnitsImport::fromNode(const zenkit::VfsNode* node) {
+  if(auto it=nodeKeys.find(node); it!=nodeKeys.end())
+    return it->second;
+  opened.clear();
+  auto in = node->open_read();
+  std::vector<uint8_t> bytes;
+  const auto d = digest(*in,&bytes);
+  if(fs::path(opened).is_absolute()) {
+    const auto key = fromHost(fs::path(opened));
+    require(sources.at(key).sha256==d.sha256,"host file changed while reading: "+opened);
+    return nodeKeys[node] = key;
+    }
+  const Key key{"archive",paths.at(node)};
+  add(key,upper(opened),std::move(bytes),d);
+  return nodeKeys[node] = key;
+  }
+
+OutputUnitsImport::Key OutputUnitsImport::fromHost(const fs::path& file) {
+  Key key{"host",relative(file)};
+  // One physical file, however a lookup spelled it (case-insensitive file systems).
+  for(const auto& [k,e]:sources) {
+    std::error_code ec;
+    if(k.first=="host" && upperAscii(k.second)==upperAscii(key.second) && fs::equivalent(gothic/k.second,file,ec))
+      return k;
+    }
+  auto in = zenkit::Read::from(file);
+  require(in!=nullptr,"cannot open "+file.string());
+  std::vector<uint8_t> bytes;
+  const auto d = digest(*in,&bytes);
+  add(key,std::string(),std::move(bytes),d);
+  return key;
+  }
+
+void OutputUnitsImport::add(const Key& key, const std::string& archive, std::vector<uint8_t>&& bytes, const Digest& d) {
+  if(sources.count(key))
+    return;
+  Entry e;
+  e.archive = archive;
+  e.size    = d.size;
+  e.sha256  = d.sha256;
+  static const char zengin[] = "ZenGin Archive";
+  if(bytes.size()<sizeof(zengin)-1 || std::memcmp(bytes.data(),zengin,sizeof(zengin)-1)!=0) {
+    e.skipped = "not a zengin archive";
+    sources.emplace(key,std::move(e));
+    return;
+    }
+  // The game's host branch skips any failing candidate; a failing VFS one ends its load, and the
+  // engine reports that from the skipped entry. Neither makes the import fail here.
+  try {
+    const std::vector<std::byte> raw(reinterpret_cast<const std::byte*>(bytes.data()),
+                                     reinterpret_cast<const std::byte*>(bytes.data())+bytes.size());
+    const auto name = upper(fs::path(key.second).filename().string());
+    const WorldChunkSource source{name,bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())};
+    WorldData::ZenFile library;
+    WorldData::loadCutsceneLibrary(raw,source,library);
+    e.library = std::move(library);
+    e.bytes = std::move(bytes);
+    }
+  catch(const std::exception& ex) {
+    e.skipped = std::string("parse failed: ")+ex.what();
+    }
+  sources.emplace(key,std::move(e));
+  }
+
+void OutputUnitsImport::writeRecord(Entry& e) {
+  // The record name is the SHA-256 of its bytes; write beside the index first.
+  const auto staging = (verifyOnly ? fs::temp_directory_path() : out)/
+                       ("outputunits-"+e.sha256+"-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+".json.tmp");
+  const auto identity = OutputUnits::writeLibrary(*e.library,staging);
+  const auto file = out/(identity+".json");
+  if(verifyOnly) {
+    const bool same = fs::is_regular_file(file) && gothicglb::readFile(file)==gothicglb::readFile(staging);
+    std::error_code ec; fs::remove(staging,ec);
+    require(same,"output units record differs: "+file.string());
+    }
+  else if(records.count(identity)) {
+    fs::remove(staging);
+    }
+  else {
+    fs::rename(staging,file);
+    }
+  std::string actual;
+  const auto back = OutputUnits::readLibrary(file,&actual);
+  require(actual==identity,"output units record identity differs after reading: "+file.string());
+  const auto diff = WorldData::compareZen(*e.library,back);
+  require(diff.empty(),"output units record differs after reading: "+diff);
+  records.insert(identity);
+  e.record = identity;
+  }
+
+std::string OutputUnitsImport::run(const fs::path& outDir, bool verify) {
+  out        = outDir;
+  verifyOnly = verify;
+  if(!verifyOnly)
+    fs::create_directories(out);
+
+  // The runtime VFS: every .BIN/.DAT basename, chosen by the engine's own Vfs::find, whatever it is.
+  std::set<std::string> names;
+  for(const auto& [node,path]:paths) {
+    const auto ext = extension(node->name());
+    if(ext==".BIN" || ext==".DAT")
+      names.insert(upperAscii(node->name()));
+    }
+  for(const auto& name:names) {
+    const auto* node = vfs.find(name);
+    require(node!=nullptr,"VFS lost "+name);
+    vfsTable[name] = fromNode(node);
+    }
+
+  const auto scan = [this](const fs::path& root) {
+    if(!fs::is_directory(root))
+      return;
+    std::vector<fs::path> files;
+    for(const auto& e:fs::recursive_directory_iterator(root))
+      if(e.is_regular_file()) {
+        const auto ext = extension(e.path().filename().string());
+        if(ext==".BIN" || ext==".DAT")
+          files.push_back(e.path());
+        }
+    std::sort(files.begin(),files.end());
+    for(const auto& f:files)
+      fromHost(f);
+    };
+  // CommandLine::cutscenePath() and cutscenePath(lang).
+  const auto cutscene = nested({u"_work",u"Data",u"Scripts",u"content",u"CUTSCENE"},Dir::FT_Dir);
+  scan(fs::path(cutscene));
+  for(const auto* dir:scriptLanguages)
+    scan(fs::path(nested({u"_work",u"Data",dir},Dir::FT_Dir)));
+
+  // server/src/gothic_ai/gamedata/ou.py find_ou_file: exact-case directories, first OU.BIN entry.
+  if(const auto dir = gothic/"_work"/"Data"/"Scripts"/"CONTENT"/"CUTSCENE"; fs::is_directory(dir))
+    if(const auto file = firstChild(dir,"OU.BIN"); !file.empty() && fs::is_regular_file(file))
+      serverOuPy = fromHost(file);
+  // ai_bridge/storygraph findOu(dat) for every host DAT a storygraph run can name.
+  std::vector<const char16_t*> compiled = {u"Scripts"};
+  compiled.insert(compiled.end(),scriptLanguages.begin(),scriptLanguages.end());
+  for(const auto* dir:compiled) {
+    const fs::path root(nested({u"_work",u"Data",dir,u"_compiled"},Dir::FT_Dir));
+    if(!fs::is_directory(root))
+      continue;
+    std::vector<fs::path> dats;
+    for(const auto& e:fs::recursive_directory_iterator(root))
+      if(e.is_regular_file() && extension(e.path().filename().string())==".DAT")
+        dats.push_back(e.path());
+    std::sort(dats.begin(),dats.end());
+    for(const auto& dat:dats) {
+      const auto content = firstChild(dat.parent_path().parent_path(),"CONTENT");
+      const auto cut     = content.empty() ? fs::path() : firstChild(content,"CUTSCENE");
+      const auto ou      = cut.empty() ? fs::path() : firstChild(cut,"OU.BIN");
+      if(!ou.empty() && fs::is_regular_file(ou))
+        fromHost(ou);
+      }
+    }
+
+  // GameScript::loadDialogOU for the default prefix and every language setting; evidence only.
+  const auto widened = [](const std::string& s) { return widen(s.substr(0,std::min<size_t>(s.size(),255))); };
+  for(int lang=-1; lang<int(scriptLanguages.size()); ++lang)
+    for(const std::string candidate:{"OU.BIN","OU.DAT"}) {
+      Row r;
+      r.language  = lang;
+      r.candidate = candidate;
+      if(const auto* node = vfs.find(candidate)) {
+        r.step   = "vfs_find_request";
+        r.path   = paths.at(node);
+        r.source = fromNode(node);
+        rows.push_back(std::move(r));
+        break; // loaded, or the VFS failure ends the game's load
+        }
+      auto file = FileUtil::caseInsensitiveSegment(cutscene,widened(candidate).c_str(),Dir::FT_File);
+      r.step = "host_ordinary";
+      if(!FileUtil::exists(file) && lang>=0) {
+        const auto localized = nested({u"_work",u"Data",scriptLanguages[size_t(lang)]},Dir::FT_Dir);
+        file   = FileUtil::caseInsensitiveSegment(localized,widened(candidate).c_str(),Dir::FT_File);
+        r.step = "host_localized";
+        }
+      bool loaded = false;
+      if(FileUtil::exists(file)) {
+        r.source = fromHost(fs::path(file));
+        r.path   = r.source->second;
+        loaded   = sources.at(*r.source).library.has_value();
+        }
+      rows.push_back(std::move(r));
+      if(loaded)
+        break;
+      }
+
+  // The server reads its view from the native messages: prove it equals the original scanner first.
+  if(serverOuPy) {
+    auto& e = sources.at(*serverOuPy);
+    if(e.library)
+      requireServerView(e.bytes,*e.library,serverOuPy->second);
+    }
+
+  size_t libraries = 0;
+  for(auto& [key,e]:sources)
+    if(e.library) {
+      writeRecord(e);
+      e.bytes.clear();
+      ++libraries;
+      }
+
+  const auto text = json();
+  if(!verifyOnly) {
+    const auto tmp = out/"outputunits.json.tmp";
+    gothicglb::writeFile(tmp,text.data(),text.size());
+    fs::rename(tmp,out/"outputunits.json");
+    }
+  require(parse(readText(out/"outputunits.json"),"outputunits.json")==parse(text,"expected output units"),
+          "outputunits.json differs from the installation");
+  const auto index = OutputUnits::readIndex(out);
+  require(index.sources.size()==sources.size() && index.records.size()==records.size(),
+          "outputunits.json reads back differently");
+  return std::to_string(records.size())+" library records from "+std::to_string(sources.size())+" sources, "+
+         std::to_string(sources.size()-libraries)+" skipped";
+  }
+
+std::string OutputUnitsImport::json() const {
+  std::map<Key,size_t> index;
+  for(const auto& [k,e]:sources)
+    index.emplace(k,index.size());
+  const auto ref = [&](const std::optional<Key>& k) { return k ? std::to_string(index.at(*k)) : std::string("null"); };
+  const auto opt = [](const std::string& s) { return s.empty() ? std::string("null") : str(s); };
+
+  Files mounted;
+  for(const auto& a:archives)
+    mounted.emplace_back(a.name,a.size);
+  std::sort(mounted.begin(),mounted.end());
+
+  std::string s = "{\n  \"format\":\"gothic-outputunits\",\n  \"version\":1,\n  \"archives\":[";
+  for(size_t i=0; i<mounted.size(); ++i)
+    s += std::string(i ? "," : "")+"\n    {\"name\":"+str(mounted[i].first)+",\"size\":"+std::to_string(mounted[i].second)+"}";
+  s += "\n  ],\n  \"loose_files\":[";
+  size_t n = 0;
+  for(const auto& [k,e]:sources)
+    if(k.first=="host")
+      s += std::string(n++ ? "," : "")+"\n    {\"path\":"+str(k.second)+",\"size\":"+std::to_string(e.size)+"}";
+  s += "\n  ],\n  \"records\":{";
+  n = 0;
+  for(const auto& name:records)
+    s += std::string(n++ ? "," : "")+"\n    \""+name+"\":\""+name+"\"";
+  s += "\n  },\n  \"sources\":[";
+  n = 0;
+  for(const auto& [k,e]:sources)
+    s += std::string(n++ ? "," : "")+"\n    {\"origin\":\""+k.first+"\",\"path\":"+str(k.second)+
+         ",\"archive\":"+opt(e.archive)+",\"size\":"+std::to_string(e.size)+",\"sha256\":\""+e.sha256+
+         "\",\"record\":"+opt(e.record)+",\"skipped\":"+opt(e.skipped)+"}";
+  s += "\n  ],\n  \"vfs\":{";
+  n = 0;
+  for(const auto& [name,k]:vfsTable)
+    s += std::string(n++ ? "," : "")+"\n    "+str(name)+":"+ref(k);
+  s += "\n  },\n  \"host\":{";
+  n = 0;
+  for(const auto& [k,e]:sources)
+    if(k.first=="host")
+      s += std::string(n++ ? "," : "")+"\n    "+str(k.second)+":"+ref(k);
+  s += "\n  },\n  \"selections\":[";
+  for(size_t i=0; i<rows.size(); ++i)
+    s += std::string(i ? "," : "")+"\n    {\"language\":"+std::to_string(rows[i].language)+",\"candidate\":"+
+         str(rows[i].candidate)+",\"step\":\""+rows[i].step+"\",\"path\":"+opt(rows[i].path)+
+         ",\"source\":"+ref(rows[i].source)+"}";
+  s += "\n  ],\n  \"server\":{\"ou_py\":"+ref(serverOuPy)+"}\n}\n";
+  return s;
+  }
 }
 
 std::vector<RuntimeArchive> runtimeArchives(const fs::path& gothic) {
@@ -1347,6 +1769,37 @@ int convertSources(const fs::path& gothic, const fs::path& out, bool verifyOnly)
           "sources.json differs from the installation");
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
   std::cout << (verifyOnly ? "verified" : "written and verified") << " source manifest (" << ms << " ms)\n";
+  return 0;
+  }
+
+int convertOutputUnits(const fs::path& gothic, const fs::path& out, bool verifyOnly) {
+  const auto t0 = std::chrono::steady_clock::now();
+  OutputUnitsImport outputUnits(gothic);
+  const auto summary = outputUnits.run(out,verifyOnly);
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-t0).count();
+  std::cout << (verifyOnly ? "verified " : "written and verified ") << summary << " (" << ms << " ms)\n";
+  return 0;
+  }
+
+int convertOutputUnitsFile(const fs::path& source, const fs::path& record) {
+  auto in = zenkit::Read::from(source);
+  require(in!=nullptr,"cannot open "+source.string());
+  std::vector<uint8_t> bytes;
+  const auto d = digest(*in,&bytes);
+  const std::vector<std::byte> raw(reinterpret_cast<const std::byte*>(bytes.data()),
+                                   reinterpret_cast<const std::byte*>(bytes.data())+bytes.size());
+  const WorldChunkSource origin{upper(source.filename().string()),bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())};
+  WorldData::ZenFile library;
+  WorldData::loadCutsceneLibrary(raw,origin,library);
+  const auto identity = OutputUnits::writeLibrary(library,record);
+  std::string actual;
+  const auto back = OutputUnits::readLibrary(record,&actual);
+  require(actual==identity,"output units record identity differs after reading: "+record.string());
+  const auto diff = WorldData::compareZen(library,back);
+  require(diff.empty(),"output units record differs after reading: "+diff);
+  std::cout << "record sha256 " << identity << ", source sha256 " << d.sha256 << ", "
+            << library.blocks.size() << " roots, " << OutputUnits::messagesInArchiveOrder(library).size()
+            << " messages\n";
   return 0;
   }
 

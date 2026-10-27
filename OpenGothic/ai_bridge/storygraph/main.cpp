@@ -17,25 +17,25 @@
 //                                  --via-json too, each program written as JSON and read back first
 //   storygraph <GOTHIC.DAT> --program DIA_LOBART_WORKNOW   the programs of a dialog (condition, information)
 //                                  or of a script function
+//   storygraph <game directory> --ou-messages    owned raw message pairs for the Python server
 //
-// Subtitles come from OU.BIN next to the scripts (_work/Data/Scripts/Content/Cutscene/OU.BIN), or --ou <path>.
+// Subtitles use the imported source next to the scripts, or --ou <imported source|native record>.
 
 #include "bytecode.h"
 #include "baseimport.h"
 #include "basestore.h"
 #include "check.h"
 #include "execcheck.h"
+#include "gothicglb.h"
 #include "lifter.h"
 #include "model.h"
+#include "outputunits.h"
 #include "program.h"
 #include "programdata.h"
 #include "vocab.h"
 
-#include <zenkit/Archive.hh>
-#include <zenkit/CutsceneLibrary.hh>
 #include <zenkit/DaedalusVm.hh>
 #include <zenkit/Logger.hh>
-#include <zenkit/Stream.hh>
 #include <zenkit/Vfs.hh>
 #include <zenkit/addon/daedalus.hh>
 
@@ -47,6 +47,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -94,17 +95,23 @@ static fs::path installationRoot(const fs::path& input, bool directory) {
   }
 
 static std::string sourceMetadata(const std::string& programSha, const ProgramData::Source& source,
-                                  const std::string& ouSha, const char* executable) {
+                                  const std::string& ouNativeSha, const std::string& ouSourceSha,
+                                  const char* executable) {
   rapidjson::StringBuffer buffer;
   rapidjson::Writer<rapidjson::StringBuffer> json(buffer);
   json.StartObject();
   json.Key("program_native_sha256"); json.String(programSha.c_str());
   json.Key("program_source_sha256"); json.String(source.sha256.c_str());
-  json.Key("ou_sha256");
-  if(ouSha.empty())
+  json.Key("ou_native_sha256");
+  if(ouNativeSha.empty())
     json.Null();
   else
-    json.String(ouSha.c_str());
+    json.String(ouNativeSha.c_str());
+  json.Key("ou_source_sha256");
+  if(ouSourceSha.empty())
+    json.Null();
+  else
+    json.String(ouSourceSha.c_str());
   json.Key("converter_sha256");
   std::error_code error;
   if(fs::is_regular_file(fs::path(executable),error))
@@ -115,32 +122,46 @@ static std::string sourceMetadata(const std::string& programSha, const ProgramDa
   return std::string(buffer.GetString(),buffer.GetSize());
   }
 
-static LineTexts loadLines(const fs::path& ou, std::string& actualSha) {
+static WorldData::ZenFile loadLibrary(const OutputUnits::Index& index, const OutputUnits::Source& source,
+                                     std::string& actualSha) {
+  auto library = OutputUnits::readLibrary(index.path(source),&actualSha);
+  if(actualSha!=source.recordSha256)
+    throw std::runtime_error("selected OU record identity differs from its index");
+  return library;
+  }
+
+static LineTexts loadLines(const WorldData::ZenFile& library) {
   LineTexts lines;
-  auto r = zenkit::Read::from(ou);
-  if(r==nullptr)
-    return lines;
-  r->seek(0,zenkit::Whence::END);
-  std::vector<std::byte> bytes(r->tell());
-  r->seek(0,zenkit::Whence::BEG);
-  for(size_t at=0; at<bytes.size();) {
-    const auto n = r->read(bytes.data()+at,bytes.size()-at);
-    if(n==0)
-      throw std::runtime_error("short OU read");
-    at += n;
-    }
-  actualSha = BaseImport::sha256(std::string_view(reinterpret_cast<const char*>(bytes.data()),bytes.size()));
-  auto input = zenkit::Read::from(std::move(bytes));
-  auto ar = zenkit::ReadArchive::from(input.get());
-  if(ar==nullptr)
-    return lines;
-  auto lib = ar->read_object<zenkit::CutsceneLibrary>(zenkit::GameVersion::GOTHIC_2);
-  if(lib==nullptr)
-    return lines;
-  for(auto& b : lib->blocks)
-    if(auto msg = b->get_message())
+  for(const auto& b:OutputUnits::sortedBlocks(library))
+    if(auto msg = OutputUnits::message(*b))
       lines[upper(b->name)] = msg->text;
   return lines;
+  }
+
+static int printOuMessages(const OutputUnits::Index& index) {
+  std::string text = "{\"format\":\"gothic-ou-messages\",\"version\":1,\"source\":";
+  const auto* source = index.serverOuPy();
+  if(source==nullptr) {
+    text += "null,\"native_sha256\":null,\"messages\":null}";
+    } else {
+    std::string actualSha;
+    const auto library = loadLibrary(index,*source,actualSha);
+    text += "{\"path\":"+gothicglb::jsonString(source->path)+",\"sha256\":"+
+            gothicglb::jsonString(source->sha256)+"},\"native_sha256\":"+
+            gothicglb::jsonString(actualSha)+",\"messages\":[";
+    bool first = true;
+    for(const auto& message:OutputUnits::messagesInArchiveOrder(library)) {
+      if(!first)
+        text += ',';
+      first = false;
+      text += '['+gothicglb::jsonString(message->name)+','+gothicglb::jsonString(message->text)+']';
+      }
+    text += "]}";
+    }
+  text += '\n';
+  if(std::fwrite(text.data(),1,text.size(),stdout)!=text.size() || std::fflush(stdout)!=0)
+    throw std::runtime_error("cannot write OU messages to stdout");
+  return 0;
   }
 
 static double pct(size_t a, size_t b) { return b==0 ? 0.0 : 100.0*double(a)/double(b); }
@@ -209,6 +230,7 @@ static int run(int argc, char** argv) {
   bool        verbose = false;
   bool        effects = false;
   bool        exec    = false;
+  bool        ouMessages = false;
   size_t      top     = 0;
   uint32_t    fuzz    = 0;
   std::vector<std::string> saves;
@@ -246,11 +268,14 @@ static int run(int argc, char** argv) {
       exec = true;
     else if(std::strcmp(argv[i],"--via-json")==0)
       storygraph::ExecCheck::viaJson = true;
+    else if(std::strcmp(argv[i],"--ou-messages")==0)
+      ouMessages = true;
     else
       datPath = argv[i];
     }
   if(datPath==nullptr) {
-    std::fprintf(stderr, "usage: storygraph <game directory|DAT source path> [--ou OU.BIN] [--json out.json [--pretty]] [--node ID] "
+    std::fprintf(stderr, "usage: storygraph <game directory|DAT source path> [--ou OU.BIN|native.json] [--ou-messages] "
+                         "[--json out.json [--pretty]] [--node ID] "
                          "[--quest MIS_*] [--scan [--tsv out.tsv] [--top N]] [--disasm FN] "
                          "[--check <save dir>... [--verbose]] [--fuzz N] [--effects|--exec [--via-json]] [--program FN]\n");
     return 2;
@@ -259,6 +284,11 @@ static int run(int argc, char** argv) {
   const fs::path input(datPath);
   const bool directory = fs::is_directory(input);
   const auto gothic = installationRoot(input,directory);
+  // A cold base import writes converter summaries to cout; the export's stdout is only JSON.
+  auto* importOutput = ouMessages ? std::cout.rdbuf(std::cerr.rdbuf()) : nullptr;
+  zenkit::Logger::set(zenkit::LogLevel::ERROR,[](auto level, const char* component, const char* message) {
+    BaseImport::onZenkitLog(level,component,message);
+    });
   BaseImport::Files mounted;
   {
   zenkit::Vfs vfs;
@@ -267,13 +297,17 @@ static int run(int argc, char** argv) {
     mounted.emplace_back(archive.name,archive.size);
   }
   std::sort(mounted.begin(),mounted.end());
-  zenkit::Logger::set(zenkit::LogLevel::ERROR,[](auto level, const char* component, const char* message) {
-    BaseImport::onZenkitLog(level,component,message);
-    });
   auto base = BaseStore::resolve(gothic,mounted,[](std::string_view message) {
     std::fprintf(stderr,"%.*s\n",int(message.size()),message.data());
     });
+  if(importOutput!=nullptr)
+    std::cout.rdbuf(importOutput);
   zenkit::Logger::set(zenkit::LogLevel::INFO,{});
+  const auto ouIndex = OutputUnits::readIndex(base.path/"outputunits");
+  if(ouIndex.archives!=mounted)
+    throw std::runtime_error("output units index archives differ from the installation");
+  if(ouMessages)
+    return printOuMessages(ouIndex);
   const auto index = ProgramData::readIndex(base.path/"programs");
   if(index.archives!=mounted)
     throw std::runtime_error("program index archives differ from the installation");
@@ -321,9 +355,27 @@ static int run(int argc, char** argv) {
 
   fs::path ou = ouPath ? fs::path(ouPath) : findOu(gothic/fs::path(source->path));
   LineTexts lines;
-  std::string ouSha;
-  if(!ou.empty())
-    lines = loadLines(ou,ouSha);
+  std::string ouNativeSha, ouSourceSha;
+  if(!ou.empty()) {
+    const auto relative = fs::absolute(ou).lexically_normal().lexically_relative(gothic.lexically_normal());
+    const auto* ouSource = !relative.empty() && *relative.begin()!=".." ?
+                          ouIndex.findHost(relative.generic_string()) : nullptr;
+    if(ouSource!=nullptr) {
+      lines = loadLines(loadLibrary(ouIndex,*ouSource,ouNativeSha));
+      ouSourceSha = ouSource->sha256;
+      } else if(ouPath!=nullptr) {
+      try {
+        lines = loadLines(OutputUnits::readLibrary(ou,&ouNativeSha));
+        }
+      catch(const std::exception& error) {
+        throw std::runtime_error(ou.string()+" is neither an imported OU source of this installation nor a native "
+                                 "cutscene-library record; invoke content-convert outputunits-file <file> <record.json>: "+
+                                 error.what());
+        }
+      } else {
+      throw std::runtime_error("selected host OU is missing from the base: "+relative.generic_string());
+      }
+    }
   if(lines.empty())
     std::fprintf(stderr, "no subtitles (OU.BIN not found, use --ou): lines will have no text\n");
 
@@ -353,7 +405,7 @@ static int run(int argc, char** argv) {
     }
   if(json!=nullptr) {
     auto text = toJson(m, pretty);
-    text.insert(1,"\"sources\":"+sourceMetadata(programSha,*source,ouSha,argv[0])+",");
+    text.insert(1,"\"sources\":"+sourceMetadata(programSha,*source,ouNativeSha,ouSourceSha,argv[0])+",");
     FILE* f = std::fopen(json, "wb");
     if(f==nullptr) {
       std::fprintf(stderr, "can't write %s\n", json);

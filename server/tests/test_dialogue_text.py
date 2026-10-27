@@ -1,3 +1,7 @@
+import json
+import re
+import subprocess
+
 import pytest
 
 from gothic_ai.dialogue import (
@@ -13,7 +17,8 @@ from gothic_ai.dialogue import (
     to_game_text,
     tool_leak,
 )
-from gothic_ai.gamedata.ou import npc_dialog_key, npc_lines, parse_ou_bin
+from gothic_ai.gamedata import ou
+from gothic_ai.gamedata.ou import lines_from_messages, npc_dialog_key, npc_lines
 from gothic_ai.persona import pick_samples, render_instructions
 
 
@@ -140,8 +145,35 @@ def test_game_text_drops_markdown_and_non_cp1251():
     assert to_game_text("**Ксардас** смотрит 🔥 на тебя…  «Иди»") == "Ксардас смотрит на тебя… «Иди»"
 
 
-def _binsafe_line(name: str, text: str) -> bytes:
-    raw = text.encode("cp1251")
+_WAV_ENTRY = re.compile(rb"\x01(..)([A-Za-z0-9_]+)\.WAV", re.DOTALL)
+_MAX_TEXT = 4096
+
+
+def parse_ou_bin(data: bytes, encoding: str = "cp1251") -> dict[str, str]:
+    """The former production scanner, retained unchanged as an independent legacy oracle."""
+    lines: dict[str, str] = {}
+    for m in _WAV_ENTRY.finditer(data):
+        name = m.group(2).decode("ascii")
+        if int.from_bytes(m.group(1), "little") != len(name) + 4:
+            continue
+        hash_pos = m.start() - 5
+        if hash_pos < 0 or data[hash_pos] != 0x12:
+            continue
+        text = _string_ending_at(data, hash_pos)
+        if text is not None:
+            lines[name.upper()] = text.decode(encoding, "replace").strip()
+    return lines
+
+
+def _string_ending_at(data: bytes, end: int) -> bytes | None:
+    for start in range(end - 3, max(end - 3 - _MAX_TEXT, -1), -1):
+        if data[start] == 0x01 and int.from_bytes(data[start + 1 : start + 3], "little") == end - start - 3:
+            return data[start + 3 : end]
+    return None
+
+
+def _binsafe_line(name: str, text: str | bytes) -> bytes:
+    raw = text.encode("cp1251") if isinstance(text, str) else text
     wav = f"{name}.WAV".encode()
     return (
         b"\x01\x05\x00ATOMB"
@@ -155,12 +187,109 @@ def _binsafe_line(name: str, text: str) -> bytes:
 
 
 def test_parse_ou_bin_reads_subtitles_by_line_name():
-    data = b"ZenGin Archive\nEND\n" + _binsafe_line("DIA_Xardas_Hello_14_01", "Наконец-то.")
-    data += _binsafe_line("DIA_Xardas_Hello_15_02", "Что случилось?")
+    # Block names are independent; this view uses only the audio filename, in raw message order.
+    messages = [
+        (b"DIA_Xardas_Hello_14_01.WAV", "Первая версия.".encode("cp1251")),
+        (b"DIA_Xardas_Hello_15_02.WAV", "Что случилось?".encode("cp1251")),
+        (
+            b"DIA_Xardas_Hello_14_01.WAV",
+            b" \t\xa0" + "Наконец-то.".encode("cp1251") + b"\x98\xa0\r\n",
+        ),
+        (b"DIA_Xardas_Empty_14_03.WAV", b"\xa0 \t\r\n"),
+        (b"DIA_Xardas_Lower_14_04.wav", b"ignored"),
+    ]
+    data = b"ZenGin Archive\nEND\n" + b"".join(
+        _binsafe_line(name[:-4].decode("ascii"), text) if name.endswith(b".WAV") else b""
+        for name, text in messages
+    )
     lines = parse_ou_bin(data)
-    assert lines == {"DIA_XARDAS_HELLO_14_01": "Наконец-то.", "DIA_XARDAS_HELLO_15_02": "Что случилось?"}
+    assert lines_from_messages(messages) == lines == {
+        "DIA_XARDAS_HELLO_14_01": "Наконец-то.\ufffd",
+        "DIA_XARDAS_HELLO_15_02": "Что случилось?",
+        "DIA_XARDAS_EMPTY_14_03": "",
+    }
     # hero (voice 15) lines are not the npc's
-    assert npc_lines(lines, "NONE_100_XARDAS") == [("DIA_XARDAS_HELLO_14_01", "Наконец-то.")]
+    assert npc_lines(lines, "NONE_100_XARDAS") == [("DIA_XARDAS_HELLO_14_01", "Наконец-то.\ufffd")]
+
+
+def test_native_text_is_not_reparsed_as_binsafe():
+    # Import-time compatibility checks reject these structures; the runtime returns the actual text.
+    name = b"DIA_Xardas_Hello_14_01.WAV"
+    for raw, scanned in [(b"prefix\x01\x01\x00x", {"DIA_XARDAS_HELLO_14_01": "x"}), (b"x" * 4100, {})]:
+        assert parse_ou_bin(_binsafe_line(name[:-4].decode("ascii"), raw)) == scanned
+        assert lines_from_messages([(name, raw)]) == {"DIA_XARDAS_HELLO_14_01": raw.decode("cp1251")}
+
+
+def _ou_export(messages):
+    return {
+        "format": "gothic-ou-messages",
+        "version": 1,
+        "source": {"path": "_work/Data/Scripts/CONTENT/CUTSCENE/OU.BIN", "sha256": "a" * 64},
+        "native_sha256": "b" * 64,
+        "messages": messages,
+    }
+
+
+@pytest.fixture
+def native_ou(tmp_path, monkeypatch):
+    tool = tmp_path / "storygraph"
+    tool.touch()
+    monkeypatch.setenv("STORYGRAPH_TOOL", str(tool))
+    source = tmp_path / "game" / "_work" / "Data" / "Scripts" / "CONTENT" / "CUTSCENE" / "oU.bIn"
+    source.parent.mkdir(parents=True)
+    source.touch()
+    return tmp_path / "game", tool
+
+
+def test_native_ou_boundary_preserves_raw_bytes_and_empty_source(native_ou, monkeypatch):
+    game, tool = native_ou
+    raw = b"\x00\x98\xa0\xff"
+    exports = [_ou_export([["DIA_X_14_01.WAV", raw.decode("latin1")]]), _ou_export([])]
+
+    def read(cmd, **kwargs):
+        assert cmd == [str(tool), str(game), "--ou-messages"]
+        assert kwargs == {"check": True, "capture_output": True, "timeout": 1800}
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(exports.pop(0)).encode(), b"progress on stderr")
+
+    monkeypatch.setattr(ou.subprocess, "run", read)
+    assert ou.native_messages(game) == [(b"DIA_X_14_01.WAV", raw)]
+    assert ou.load_npc_lines(game, "NONE_100_XARDAS") == []
+
+
+def test_native_ou_absent_source_skips_tool_but_present_source_requires_it(tmp_path, monkeypatch):
+    tool = tmp_path / "missing-storygraph"
+    monkeypatch.setenv("STORYGRAPH_TOOL", str(tool))
+    assert ou.load_npc_lines(tmp_path, "NONE_100_XARDAS") == []
+    source = tmp_path / "_work" / "Data" / "Scripts" / "CONTENT" / "CUTSCENE" / "OU.BIN"
+    source.parent.mkdir(parents=True)
+    source.touch()
+    with pytest.raises(RuntimeError, match="cmake --build.*STORYGRAPH_TOOL"):
+        ou.load_npc_lines(tmp_path, "NONE_100_XARDAS")
+
+
+@pytest.mark.parametrize("failure", ["child", "timeout", "json", "version", "unicode", "null"])
+def test_native_ou_failures_are_explicit(native_ou, monkeypatch, failure):
+    game, _ = native_ou
+
+    def fail(cmd, **kwargs):
+        if failure == "child":
+            raise subprocess.CalledProcessError(1, cmd, stderr=b"broken native record")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(cmd, 1800, stderr=b"import timeout")
+        data = _ou_export([])
+        if failure == "version":
+            data["version"] = 2
+        elif failure == "unicode":
+            data["messages"] = [["DIA_X_14_01.WAV", "\u0100"]]
+        elif failure == "null":
+            data.update(source=None, native_sha256=None, messages=None)
+        output = b"not JSON" if failure == "json" else json.dumps(data).encode()
+        return subprocess.CompletedProcess(cmd, 0, output, b"native details")
+
+    monkeypatch.setattr(ou.subprocess, "run", fail)
+    match = {"child": "broken native record", "timeout": "import timeout", "null": "no server OU"}
+    with pytest.raises(RuntimeError, match=match.get(failure, "invalid JSON.*")):
+        ou.load_npc_lines(game, "NONE_100_XARDAS")
 
 
 def test_npc_dialog_key():
