@@ -902,7 +902,7 @@ void build(const fs::path& gothic, const fs::path& out, const Progress& progress
     if(progress) progress(std::string("base import: ")+world);
     require(convertWorld(gothic,std::string(world)+".ZEN",out/"worlds"/world)==0,"world import failed");
     }
-  for(const char* kind:{"zen","textures","meshes","models","fonts","programs","outputunits","sources"}) fs::remove_all(out/kind);
+  for(const char* kind:{"zen","textures","meshes","models","fonts","programs","outputunits","audio","sources"}) fs::remove_all(out/kind);
   if(progress) progress("base import: ZEN files");
   require(convertZen(gothic,out/"zen",false)==0,"ZEN import failed");
   if(progress) progress("base import: textures");
@@ -917,6 +917,8 @@ void build(const fs::path& gothic, const fs::path& out, const Progress& progress
   require(convertPrograms(gothic,out/"programs",false)==0,"program import failed");
   if(progress) progress("base import: dialog line library");
   require(convertOutputUnits(gothic,out/"outputunits",false)==0,"dialog line library import failed");
+  if(progress) progress("base import: sounds and speech");
+  require(convertAudio(gothic,out/"audio",false)==0,"sound import failed");
   if(progress) progress("base import: source manifest");
   require(convertSources(gothic,out/"sources",false)==0,"source manifest failed");
   require(identify(gothic).json==identity.json,"installation changed during base import");

@@ -2,6 +2,7 @@
 #include "sha256.h"
 #include "programdata.h"
 #include "outputunits.h"
+#include "audiodata.h"
 
 #include <Tempest/Log>
 #include <Tempest/TextCodec>
@@ -200,6 +201,24 @@ void ContentCensus::outputUnits(std::string_view consumer, std::string_view requ
   catch(...) { Tempest::Log::e("census: unable to record base output units"); }
   }
 
+void ContentCensus::audioLoaded(std::string_view request, const AudioData::Sound& source) noexcept {
+  try {
+    AudioSelection entry;
+    entry.request = request;
+    entry.cls = source.cls;
+    entry.payloadFile = "base/audio/"+source.file;
+    entry.payloadSha256 = source.payload;
+    entry.sourceOrigin = source.origin;
+    entry.sourcePath = source.path;
+    entry.sourceArchive = source.archive;
+    entry.sourceSha256 = source.sourceSha256;
+    entry.size = source.size;
+    std::lock_guard<std::mutex> guard(sync);
+    audioSelections.push_back(std::move(entry));
+    }
+  catch(...) { Tempest::Log::e("census: unable to record base audio"); }
+  }
+
 bool ContentCensus::write() noexcept {
   try {
     std::lock_guard<std::mutex> guard(sync);
@@ -237,6 +256,14 @@ bool ContentCensus::write() noexcept {
                                key.second.compare(0,7,"worlds/")==0 ? "worldmesh" : kind(key.first,{}));
       json.Key("replacement"); string(key.second);
       json.Key("opens"); json.Uint64(count);
+      json.EndObject();
+      }
+    for(const auto& entry:audioSelections) {
+      json.StartObject();
+      json.Key("name"); string(basename(entry.sourcePath));
+      json.Key("kind"); string(entry.cls=="speech" ? "basespeech" : "basesound");
+      json.Key("replacement"); string(entry.payloadFile);
+      json.Key("opens"); json.Uint64(1);
       json.EndObject();
       }
     json.EndArray();
@@ -340,6 +367,35 @@ bool ContentCensus::write() noexcept {
       json.Key("archive");
       if(entry.sourceArchive.empty()) json.Null(); else string(entry.sourceArchive);
       json.Key("size"); json.Uint64(entry.sourceSize);
+      json.Key("sha256"); string(entry.sourceSha256);
+      json.EndObject();
+      json.EndObject();
+      }
+    json.EndArray();
+    json.EndObject();
+    json.Key("runtime_audio");
+    json.StartObject();
+    json.Key("coverage"); string("verified_base_payload_reads");
+    json.Key("complete_corpus"); json.Bool(false);
+    json.Key("selections");
+    json.StartArray();
+    for(const auto& entry:audioSelections) {
+      json.StartObject();
+      json.Key("request"); string(entry.request);
+      json.Key("class"); string(entry.cls);
+      json.Key("payload");
+      json.StartObject();
+      json.Key("file"); string(entry.payloadFile);
+      json.Key("size"); json.Uint64(entry.size);
+      json.Key("sha256"); string(entry.payloadSha256);
+      json.EndObject();
+      json.Key("imported_source");
+      json.StartObject();
+      json.Key("origin"); string(entry.sourceOrigin);
+      json.Key("path"); string(entry.sourcePath);
+      json.Key("archive");
+      if(entry.sourceArchive.empty()) json.Null(); else string(entry.sourceArchive);
+      json.Key("size"); json.Uint64(entry.size);
       json.Key("sha256"); string(entry.sourceSha256);
       json.EndObject();
       json.EndObject();
