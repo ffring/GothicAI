@@ -10,6 +10,7 @@ import math
 import os
 import shlex
 import sys
+import threading
 import time
 import tomllib
 from array import array
@@ -810,6 +811,7 @@ async def serve(args: argparse.Namespace) -> int:
     llm = _backend(args)
     game_dir = Path(args.game_dir) if args.game_dir else None
     personas = PersonaProvider(game_dir if game_dir and game_dir.is_dir() else None)
+    threading.Thread(target=personas.warm, name="original-lines", daemon=True).start()
     memory = MemoryStore(args.memory_db)
     asr = None if args.no_voice else AsrClient(args.asr_url)
     decider = None if args.no_brain or not args.decider_url else DeciderClient(args.decider_url)

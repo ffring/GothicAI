@@ -99,20 +99,22 @@ def test_the_voice_order(game_dir):
 
 
 def test_the_game_lines_are_read_once(game_dir, monkeypatch):
-    calls: list[str] = []
-    load = persona_module.load_npc_lines
+    calls: list[Path] = []
+    load = persona_module.game_lines
 
-    def counted(path: Path, npc: str) -> list[tuple[str, str]]:
-        calls.append(npc)
-        return load(path, npc)
+    def counted(path: Path) -> dict[str, str] | None:
+        calls.append(path)
+        return load(path)
 
-    monkeypatch.setattr(persona_module, "load_npc_lines", counted)
+    monkeypatch.setattr(persona_module, "game_lines", counted)
     personas = PersonaProvider(game_dir, {})
+    personas.warm()  # the server reads them ahead, in a thread (cli.py)
     personas.get(BABERA, "Бабера")
     personas.get("bau_934_babera", "Бабера")
     personas.brief(BABERA, "Бабера")
     personas.get(BABERA, "Бабера-другая")  # another name: another persona, the same lines
-    assert calls == [BABERA]
+    personas.get(EDDA, "Эдда")  # another npc: the same reading of the game
+    assert calls == [game_dir]
 
 
 def test_brief_labels_the_card_as_its_own(game_dir):

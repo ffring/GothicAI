@@ -124,11 +124,18 @@ def voice_index(lines: Iterable[tuple[str, str]]) -> str | None:
     return voices.most_common(1)[0][0] if voices else None
 
 
-def load_npc_lines(game_dir: Path, symbol: str) -> list[tuple[str, str]]:
+def game_lines(game_dir: Path) -> dict[str, str] | None:
+    """All the dialog lines of the game: None without OU.BIN. The native reader takes seconds, so callers
+    that need many npc's lines read them once (persona.py)."""
     path = find_ou_file(game_dir)
     if path is None:
-        return []
+        return None
     messages = native_messages(game_dir)
     if messages is None:
         raise RuntimeError(f"The base has no server OU for an existing OU.BIN: {path}")
-    return npc_lines(lines_from_messages(messages), symbol)
+    return lines_from_messages(messages)
+
+
+def load_npc_lines(game_dir: Path, symbol: str) -> list[tuple[str, str]]:
+    lines = game_lines(game_dir)
+    return [] if lines is None else npc_lines(lines, symbol)
