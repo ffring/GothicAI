@@ -1660,7 +1660,7 @@ void Npc::syncMeleeShadowSwing() {
     }
   const auto* skeleton = visual.visualSkeleton();
   if(skeleton==nullptr)
-    return;
+    throw std::runtime_error("Melee shadow requires a humanoid attack skeleton");
   const auto* item = mode==WeaponState::Fist ? nullptr : invent.activeWeapon();
   float length = 12.f;
   bool normalY = true;
@@ -1688,7 +1688,7 @@ void Npc::syncMeleeShadowSwing() {
     if(cached(w) && (window==nullptr || (w.index<=combo && w.index>window->index)))
       window = &w;
   if(window==nullptr)
-    return;
+    throw std::runtime_error("Melee shadow requires an optimal-frame attack window");
   if(shadow.window && shadow.window->sequence==seq && shadow.window->index==window->index &&
      shadow.start==attack->start && shadow.window->length==length && shadow.window->normalY==normalY)
     return;
