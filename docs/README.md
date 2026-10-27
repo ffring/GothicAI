@@ -216,7 +216,7 @@
 
 Настройки сервисов — `.env` по образцу [`.env.example`](../.env.example). Развёртывание GPU-сервисов — `scripts/deploy-gpu.sh`.
 
-Оригинальные голоса TTS: [`tts-service/scripts/voice_snapshots.py`](../tts-service/scripts/voice_snapshots.py) режет снапшоты в `~/.local/share/gothic-ai/voices/original/`, `gothic-tts clone-originals [--dir DIR] [ID ...]` заранее клонирует их в Inworld. Сервис принимает `--original-voices-dir DIR` и `--no-original-voices`; лаунчер — `tts.original_voices` (по умолчанию `true`), шортсы выключают подмену. [Текущее поведение и команды](MVP.md#как-работает-сейчас).
+Оригинальные голоса TTS: `gothic-tts serve --game-dir DIR` через модуль [`gothic_tts.originals`](../tts-service/src/gothic_tts/originals.py) сам в фоне режет 36 снапшотов игры без ffmpeg и заранее готовит клоны Inworld; до готовности звучат придуманные голоса. Снапшоты остаются у игрока в `~/.local/share/gothic-ai/voices/original/`, повторная нарезка нужна только при смене отпечатка источника или алгоритма. Ручные [`voice_snapshots.py`](../tts-service/scripts/voice_snapshots.py) и `gothic-tts clone-originals [--dir DIR] [ID ...]` сохранены. Сервис принимает `--original-voices-dir DIR` и `--no-original-voices`; лаунчер — `tts.original_voices` (по умолчанию `true`), шортсы выключают всю подготовку. [Текущее поведение и команды](MVP.md#как-работает-сейчас).
 
 ## Флаги `gothic-ai serve`
 

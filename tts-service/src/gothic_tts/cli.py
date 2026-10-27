@@ -20,8 +20,10 @@ log = logging.getLogger("gothic_tts")
 
 
 def load_env_file(start: Path | None = None) -> Path | None:
-    """Reads the nearest `.env` at or above `start` (API keys and local settings live in the repository root's `.env`).
-    Variables already set in the environment win."""
+    """Reads the nearest `.env` at or above `start`.
+
+    API keys and local settings live in the repository root's `.env`;
+    variables already set in the environment win."""
     here = start or Path.cwd()
     for d in (here, *here.parents):
         path = d / ".env"
@@ -50,6 +52,7 @@ async def serve(args: argparse.Namespace) -> int:
             args.host,
             args.port,
             original_voices_dir=None if args.no_original_voices else args.original_voices_dir,
+            game_dir=args.game_dir,
         ).serve_forever()
     finally:
         await synth.aclose()
@@ -165,6 +168,7 @@ def main() -> None:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=47820)
     p.add_argument("--no-warmup", action="store_true")
+    p.add_argument("--game-dir", type=Path, help="Gothic II folder for automatic original voice preparation")
     p.add_argument("--original-voices-dir", type=Path, default=DEFAULT_ORIGINAL_VOICES)
     p.add_argument("--no-original-voices", action="store_true")
     _add_provider_args(p)
