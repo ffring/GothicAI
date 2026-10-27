@@ -96,6 +96,7 @@ def test_prepare_reuses_matching_source_and_rebuilds_changes(tmp_path, monkeypat
     exports = []
 
     def export(argv, **kwargs):
+        assert not list(out.glob(".snapshots-*"))
         exports.append(argv)
         return SimpleNamespace(stdout=json.dumps({"messages": messages}).encode())
 
@@ -116,9 +117,14 @@ def test_prepare_reuses_matching_source_and_rebuilds_changes(tmp_path, monkeypat
 
     monkeypatch.setattr(originals, "build", build)
     out = tmp_path / "voices"
+    stale = out / ".snapshots-interrupted"
+    stale.mkdir(parents=True)
+    (stale / "partial.wav").write_bytes(b"incomplete sample")
     progress = []
     path = originals.prepare(game, out, ids=ids, progress=lambda n, total: progress.append((n, total)))
     first = path.read_bytes()
+    stale.mkdir()
+    (stale / "partial.wav").write_bytes(b"incomplete sample")
     originals.prepare(game, out, ids=ids)
     assert built == ids
     assert path.read_bytes() == first

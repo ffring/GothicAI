@@ -248,6 +248,15 @@ class InworldTTS:
         """Prepare a cloned library voice without synthesizing a line."""
         return await self._cloned(voice)
 
+    def cached_clone(self, voice: Voice) -> str | None:
+        """Look up a matching sample without contacting Inworld; call from a worker thread."""
+        entry = self._load().get(voice.id, {})
+        if entry.get("voice_id") and entry.get("sample"):
+            digest = hashlib.sha1(Path(voice.sample).read_bytes()).hexdigest()[:16]
+            if entry["sample"] == digest:
+                return str(entry["voice_id"])
+        return None
+
     async def _cloned(self, voice: Voice) -> str:
         """The library voice cloned from `voice.sample` (made on its first line, again when the recording
         changes). Inworld detects the recording's language; the lines are said in the provider's

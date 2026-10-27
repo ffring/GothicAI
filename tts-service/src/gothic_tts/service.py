@@ -114,8 +114,23 @@ class TtsService:
         if self.original_voices_dir is None:
             return
         started = time.monotonic()
+        provider = self.synthesizer.primary
+        manifest = self.original_voices_dir / "manifest.json"
+        previous_manifest = None
+        if isinstance(provider, InworldTTS) and os.environ.get(provider.api_key_env) and manifest.is_file():
+            try:
+                previous_manifest = manifest.read_bytes()
+                snapshots = load_original_voices(self.original_voices_dir)
+                for voice in {voice.id: voice for voice in snapshots.values()}.values():
+                    if voice_id := await asyncio.to_thread(provider.cached_clone, voice):
+                        prepared = replace(voice, preset=voice_id, sample="")
+                        self.original_voices.update(
+                            (alias, prepared) for alias, sample in snapshots.items() if sample.id == voice.id
+                        )
+            except (OSError, ValueError, KeyError) as err:
+                log.warning("original voice cache unavailable: %s", " ".join(str(err).split()))
         try:
-            if self.game_dir is None and not (self.original_voices_dir / "manifest.json").is_file():
+            if self.game_dir is None and not manifest.is_file():
                 raise ValueError("no game directory (--game-dir) or prepared original voices")
 
             def progress(done: int, total: int) -> None:
@@ -126,12 +141,13 @@ class TtsService:
                     originals.prepare, self.game_dir, self.original_voices_dir, progress=progress
                 )
             snapshots = load_original_voices(self.original_voices_dir)
+            if previous_manifest is not None and manifest.read_bytes() != previous_manifest:
+                self.original_voices.clear()
         except Exception as err:
             log.warning(
-                "original voices unavailable: %s; using designed voices", " ".join(str(err).split())
+                "original voice preparation unavailable: %s", " ".join(str(err).split())
             )
             return
-        provider = self.synthesizer.primary
         if not isinstance(provider, InworldTTS) or not os.environ.get(provider.api_key_env):
             log.info(
                 "original voices: snapshots ready in %.1fs; Inworld cloning unavailable",

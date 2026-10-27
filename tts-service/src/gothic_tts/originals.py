@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import struct
 import subprocess
 import tempfile
@@ -467,6 +468,9 @@ def prepare(
     """Reuse matching snapshots or rebuild them synchronously; callers run this in a worker thread."""
     game = Path(game_dir).expanduser().resolve()
     out = Path(out).expanduser().resolve()
+    for stale in out.glob(".snapshots-*"):
+        if stale.is_dir():
+            shutil.rmtree(stale)
     archives = speech_archives(game)
     texts = _texts(game, ou)
     source = {

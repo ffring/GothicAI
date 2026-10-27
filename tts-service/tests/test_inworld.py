@@ -322,6 +322,76 @@ async def test_original_preparation_never_delays_a_game_line(api, tmp_path, monk
         await synth.aclose()
 
 
+@pytest.mark.parametrize("changed", [False, True])
+async def test_cached_originals_are_ready_before_source_export_finishes(api, tmp_path, monkeypatch, changed):
+    import threading
+
+    source = service.originals
+    game, out = tmp_path / "game", tmp_path / "original"
+    (game / "Data").mkdir(parents=True)
+    (game / "Data/Speech.vdf").write_bytes(b"synthetic archive")
+    monkeypatch.setenv("STORYGRAPH_TOOL", __file__)
+    monkeypatch.setattr(source, "CHARACTERS", {XARDAS.id: source.CHARACTERS[XARDAS.id]})
+    monkeypatch.setattr(source, "speech_index", lambda game: {})
+    messages = [["DIA_XARDAS_TEST_14_00.WAV", "Synthetic line."]]
+    export_started, release_export = asyncio.Event(), threading.Event()
+    loop = asyncio.get_running_loop()
+    blocked = False
+
+    def export(*args, **kwargs):
+        if blocked:
+            loop.call_soon_threadsafe(export_started.set)
+            assert release_export.wait(5)
+        return SimpleNamespace(stdout=json.dumps({"messages": messages}).encode())
+
+    built = []
+
+    def build(cid, index, texts, directory):
+        built.append(cid)
+        sample = directory / f"{cid}.wav"
+        sample.write_bytes(f"RIFF synthetic {len(built)}".encode())
+        return {"id": cid, "aliases": ["OTHER_XARDAS"], "file": str(sample)}
+
+    monkeypatch.setattr(source.subprocess, "run", export)
+    monkeypatch.setattr(source, "build", build)
+    source.prepare(game, out)
+    p = _provider(api, tmp_path, keep_warm=0)
+    await p.clone(Voice(f"{XARDAS.id}@original", sample=str(out / f"{XARDAS.id}.wav")))
+    requests = len(api.requests)
+    if changed:
+        messages[0][1] = "Changed synthetic text."
+    blocked = True
+    synth = Synthesizer(p)
+    svc = TtsService(synth, original_voices_dir=out, game_dir=game)
+    preparation = asyncio.create_task(svc._prepare_originals())
+    spoken = []
+
+    async def send(message):
+        spoken.append(message)
+
+    try:
+        await asyncio.wait_for(export_started.wait(), 2)
+        assert not release_export.is_set() and not preparation.done()
+        assert svc.original_voices[XARDAS.id.casefold()].preset == "ws__clone-voice-1"
+        assert svc.original_voices["other_xardas"].preset == "ws__clone-voice-1"
+        assert len(api.requests) == requests  # the fast path only reads the cache
+        await svc._speak(SimpleNamespace(send=send), {
+            "id": "1", "text": "Да.", "voice": {"id": XARDAS.id, "description": XARDAS.description},
+        })
+        assert json.loads(spoken[-1])["type"] == "done"
+        assert api.streams()[-1]["voiceId"] == "ws__clone-voice-1"
+        release_export.set()
+        await asyncio.wait_for(preparation, 2)
+        assert built == [XARDAS.id] * (2 if changed else 1)
+        assert api.cloned == (2 if changed else 1)
+        expected = "ws__clone-voice-2" if changed else "ws__clone-voice-1"
+        assert svc.original_voices["other_xardas"].preset == expected
+    finally:
+        release_export.set()
+        await asyncio.gather(preparation, return_exceptions=True)
+        await synth.aclose()
+
+
 @pytest.mark.parametrize("failure", ["network", "empty_voice"])
 async def test_background_clones_continue_and_retry_only_next_start(
     api, tmp_path, monkeypatch, caplog, failure
