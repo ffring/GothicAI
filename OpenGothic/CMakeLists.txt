@@ -84,7 +84,8 @@ endif()
 file(GLOB_RECURSE OPENGOTHIC_SOURCES "common/*.h" "common/*.cpp")
 foreach(source sha256 baseimport basesources worldchunks worlddata modeldata fontdata programdata outputunits audiodata basemesh gothicglb gltfmesh asset/fromzenkit asset/worldfromzenkit asset/modelfromzenkit
                utils/fileutil dmusic/sourcefile dmusic/riff dmusic/segment dmusic/track dmusic/style dmusic/band
-               dmusic/reference dmusic/info dmusic/pattern)
+               dmusic/reference dmusic/info dmusic/pattern musicdata dmusic/dlscollection dmusic/wave dmusic/soundfont
+               dmusic/hydra)
   list(REMOVE_ITEM OPENGOTHIC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/common/${source}.cpp")
 endforeach()
 if(NOT OPENGOTHIC_ENABLE_FRAME_PROFILE)

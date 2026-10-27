@@ -35,6 +35,10 @@
 //   content-convert audio|verify-audio <gothic dir> <dir>
 //       Every .WAV/.OGG request of the runtime VFS copied byte for byte (common/audiodata.h);
 //       audio.json maps the request names to payloads, provenance and header facts.
+//   content-convert music|verify-music <gothic dir> <dir>
+//       Every SGT/STY/DLS GothicKit (runtime VFS basenames) or Dx8 (its six search directories) can
+//       select, as each provider's parsed records (common/musicdata.h); music.json maps the selections
+//       to records or to the old parser's failure.
 //   content-convert sources|verify-sources <gothic dir> <dir>
 //       sources.json: selected FNT/audio/BIK/music/DAT/OU inputs of the engine
 //       and server readers, their origin and SHA-256; no payload conversion.
@@ -51,6 +55,8 @@
 #include "programdata.h"
 #include "outputunits.h"
 #include "audiodata.h"
+#include "musicdata.h"
+#include "musicnative.h"
 #include "worldchunks.h"
 #include "worlddata.h"
 #include "gothicglb.h"
@@ -78,8 +84,10 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -485,6 +493,293 @@ int selfTest() {
           AudioData::readIndex(dir/"audio-empty-out").sounds.empty(),"an installation without sounds gives an empty index");
   }
 
+  {
+  // P16 music: synthetic RIFF files both providers parse, an installation around them, both record codecs
+  // and the GothicKit string check.
+  using Bytes = std::vector<uint8_t>;
+  const auto put16 = [](Bytes& b, uint16_t v) { b.push_back(uint8_t(v)); b.push_back(uint8_t(v>>8)); };
+  const auto put32 = [](Bytes& b, uint32_t v) { for(int i=0; i<4; ++i) b.push_back(uint8_t(v>>(8*i))); };
+  const auto chunk = [&](const char* id, const Bytes& body) {
+    Bytes b(id,id+4);
+    put32(b,uint32_t(body.size()));
+    b.insert(b.end(),body.begin(),body.end());
+    if(body.size()%2)
+      b.push_back(0);
+    return b;
+    };
+  const auto list = [&](const char* id, const char* type, std::initializer_list<Bytes> children) {
+    Bytes body(type,type+4);
+    for(const auto& c:children)
+      body.insert(body.end(),c.begin(),c.end());
+    return chunk(id,body);
+    };
+  const auto utf16 = [&](std::u16string_view s, bool terminated) {
+    Bytes b;
+    for(const auto c:s)
+      put16(b,uint16_t(c));
+    if(terminated)
+      put16(b,0);
+    return b;
+    };
+  const auto unfo = [&](const Bytes& unam) { return list("LIST","UNFO",{chunk("UNAM",unam)}); };
+  Bytes guid;
+  for(uint8_t i=1; i<=16; ++i)
+    guid.push_back(i);
+
+  Bytes segh;
+  for(const uint32_t v:std::initializer_list<uint32_t>{1,768,0,0,768,0})
+    put32(segh,v);
+  const auto segment = [&](const Bytes& unam) { return list("RIFF","DMSG",{chunk("segh",segh),chunk("guid",guid),unfo(unam)}); };
+  const auto seg = segment(utf16(u"Seg",true));
+  Bytes styh = {4,4,4,0};
+  {
+  const double tempo = 120.0;
+  uint64_t bits = 0;
+  std::memcpy(&bits,&tempo,sizeof bits);
+  for(int i=0; i<8; ++i)
+    styh.push_back(uint8_t(bits>>(8*i)));
+  }
+  const auto sty = list("RIFF","DMST",{chunk("guid",guid),chunk("styh",styh),unfo(utf16(u"Sty",true))});
+  // One instrument whose region key range ends above 255: GothicKit parses it, Dx8's Hydra finalization throws.
+  Bytes colh, insh, rgnh;
+  put32(colh,1);
+  for(const uint32_t v:std::initializer_list<uint32_t>{1,0,5})
+    put32(insh,v);
+  for(const uint16_t v:std::initializer_list<uint16_t>{0,300,0,127,0,0})
+    put16(rgnh,v);
+  const auto dls = list("RIFF","DLS ",{chunk("dlid",guid),chunk("colh",colh),
+                        list("LIST","lins",{list("LIST","ins ",{chunk("insh",insh),
+                             list("LIST","lrgn",{list("LIST","rgn ",{chunk("rgnh",rgnh)})})})})});
+
+  // The string check runs before the old parser converts in place; the offset names the UNAM chunk
+  // (RIFF header 12, segh 32, guid 24, UNFO list header 12).
+  const size_t unamAt = 12+32+24+12;
+  size_t bad = 99;
+  require(MusicNative_checkGkStrings(seg.data(),seg.size(),&bad)==DmResult_SUCCESS && bad==0,"ASCII GothicKit strings pass");
+  const auto nonAscii = segment(utf16(u"Seä",true));
+  require(MusicNative_checkGkStrings(nonAscii.data(),nonAscii.size(),&bad)==DmResult_FILE_CORRUPT && bad==unamAt,
+          "a non-ASCII GothicKit string is rejected before parsing");
+  const auto unterminated = segment(utf16(u"Seg!",false));
+  require(MusicNative_checkGkStrings(unterminated.data(),unterminated.size(),&bad)==DmResult_FILE_CORRUPT && bad==unamAt,
+          "an unterminated GothicKit string is rejected before parsing");
+
+  // GothicKit: old parser -> record -> factory -> the same record; every malformed record is refused whole.
+  DmSegment* parsed = nullptr;
+  require(MusicNative_parseSegment(seg.data(),seg.size(),&parsed)==DmResult_SUCCESS && parsed!=nullptr,
+          "GothicKit parses the synthetic segment");
+  uint8_t* enc = nullptr;
+  size_t   encLen = 0;
+  require(MusicNative_encodeSegment(parsed,&enc,&encLen)==DmResult_SUCCESS,"GothicKit segment encodes");
+  MusicNative_releaseSegment(parsed);
+  const Bytes gkSeg(enc,enc+encLen);
+  std::free(enc);
+  DmSegment* made = nullptr;
+  require(MusicNative_segment(gkSeg.data(),gkSeg.size(),&made)==DmResult_SUCCESS && made!=nullptr,"GothicKit factory");
+  require(MusicNative_encodeSegment(made,&enc,&encLen)==DmResult_SUCCESS && Bytes(enc,enc+encLen)==gkSeg,
+          "the factory object encodes as the parsed one");
+  std::free(enc);
+  MusicNative_releaseSegment(made);
+  for(size_t n=0; n<gkSeg.size(); ++n) {
+    DmSegment* cut = nullptr;
+    require(MusicNative_segment(gkSeg.data(),n,&cut)==DmResult_FILE_CORRUPT && cut==nullptr,
+            "a truncated GothicKit record is refused at "+std::to_string(n));
+    }
+  {
+  auto longer = gkSeg;
+  longer.push_back(0);
+  DmSegment* extra = nullptr;
+  require(MusicNative_segment(longer.data(),longer.size(),&extra)==DmResult_FILE_CORRUPT && extra==nullptr,
+          "trailing bytes in a GothicKit record are refused");
+  }
+
+  // Dx8 codec: every field memberwise, owning lengths kept (embedded NUL), optional tracks.
+  const auto rejected = [](const std::function<void()>& fn) {
+    try { fn(); }
+    catch(const std::exception&) { return true; }
+    return false;
+    };
+  Dx8::Segment dseg;
+  dseg.track.emplace_back();
+  auto& track = dseg.track.back();
+  track.head.dwGroup = 7;
+  std::memcpy(track.head.ckid,"sttr",4);
+  track.sttr = std::make_shared<Dx8::Track::StyleTrack>();
+  track.sttr->styles.emplace_back();
+  track.sttr->styles.back().stmp = 3;
+  track.sttr->styles.back().reference.file = std::u16string(u"A\0B.STY",7);
+  track.cord = std::make_shared<Dx8::Track::Chord>();
+  track.cord->ioChord.wszName[0] = u'C';
+  track.cord->subchord.resize(2);
+  track.cord->subchord[1].bScaleRoot = 9;
+  track.cmnd = std::make_shared<Dx8::Track::CommandTrack>();
+  track.cmnd->commands.resize(1);
+  track.cmnd->commands[0].bCommand = Dx8::DMUS_COMMANDT_FILL;
+  dseg.track.emplace_back();
+  const auto segBin  = MusicData::encodeDx8(dseg);
+  const auto segBack = MusicData::decodeDx8Segment(segBin);
+  require(MusicData::encodeDx8(segBack)==segBin && segBack.track.size()==2 && segBack.track[1].sttr==nullptr &&
+          segBack.track[0].sttr->styles[0].reference.file==std::u16string(u"A\0B.STY",7) &&
+          segBack.track[0].cord->subchord[1].bScaleRoot==9 && segBack.track[0].cmnd->commands[0].bCommand==Dx8::DMUS_COMMANDT_FILL,
+          "Dx8 segment codec");
+  {
+  auto cut = segBin;
+  cut.pop_back();
+  auto longer = segBin;
+  longer.push_back(0);
+  require(rejected([&] { (void)MusicData::decodeDx8Segment(cut); }) &&
+          rejected([&] { (void)MusicData::decodeDx8Segment(longer); }),"a malformed Dx8 record is refused");
+  }
+
+  Dx8::Style dsty;
+  dsty.styh.dblTempo = 97.5;
+  dsty.band.emplace_back();
+  dsty.band.back().intrument.emplace_back();
+  dsty.band.back().intrument.back().header.dwPatch = 0x10203;
+  dsty.band.back().intrument.back().reference.file = u"BANK.DLS";
+  dsty.parts.emplace_back();
+  dsty.parts.back().notes.resize(2);
+  dsty.parts.back().notes[1].nTimeOffset = -5;
+  dsty.parts.back().curves.resize(1);
+  dsty.parts.back().curves[0].wMergeIndex = 11;
+  dsty.patterns.emplace_back();
+  dsty.patterns.back().partref.resize(1);
+  dsty.patterns.back().info.unam = u"P";
+  const auto styBin  = MusicData::encodeDx8(dsty);
+  const auto styBack = MusicData::decodeDx8Style(styBin);
+  require(MusicData::encodeDx8(styBack)==styBin && styBack.styh.dblTempo==97.5 && styBack.parts[0].notes[1].nTimeOffset==-5 &&
+          styBack.band[0].intrument[0].reference.file==u"BANK.DLS" && styBack.patterns[0].info.unam==u"P","Dx8 style codec");
+
+  Dx8::DlsCollection::Parsed ddls;
+  ddls.version = 0x0001000200030004ull;
+  ddls.instrument.emplace_back();
+  auto& ins = ddls.instrument.back();
+  ins.info.inam = "I";
+  ins.regions.emplace_back();
+  ins.regions.back().head.RangeKey.usHigh = 127;
+  ins.regions.back().loop.resize(1);
+  ins.articulators.emplace_back();
+  ins.articulators.back().connectionBlocks.resize(1);
+  ins.articulators.back().connectionBlocks[0].lScale = -65536;
+  ddls.wave.emplace_back();
+  auto& wave = ddls.wave.back();
+  wave.wfmt.wFormatTag     = Dx8::Wave::PCM;
+  wave.wfmt.wBitsPerSample = 16;
+  wave.extra    = {1,2};
+  wave.wavedata = {3,4,5,6};
+  wave.loop.resize(1);
+  const auto dlsBin  = MusicData::encodeDx8(ddls);
+  const auto dlsBack = MusicData::decodeDx8Dls(dlsBin);
+  require(MusicData::encodeDx8(dlsBack)==dlsBin && dlsBack.version==ddls.version &&
+          dlsBack.instrument[0].articulators[0].connectionBlocks[0].lScale==-65536 &&
+          dlsBack.wave[0].wavedata==wave.wavedata && dlsBack.wave[0].extra==wave.extra,"Dx8 DLS codec");
+
+  // An installation: three archive files and one host file in the first Dx8 search directory.
+  const auto game = dir/"music-game";
+  fs::create_directories(game/"Data");
+  fs::create_directories(game/"_work/Data/Music/newworld");
+  {
+  zenkit::Vfs vdf;
+  vdf.mkdir("/_WORK/DATA/MUSIC/NEWWORLD");
+  const auto add = [&vdf](const char* name, const Bytes& b) {
+    vdf.mount(zenkit::VfsNode::file(name,zenkit::VfsFileDescriptor{reinterpret_cast<const std::byte*>(b.data()),b.size(),false}),
+              "/_WORK/DATA/MUSIC/NEWWORLD");
+    };
+  add("SEG.SGT",seg);
+  add("STY.STY",sty);
+  add("BANK.DLS",dls);
+  auto archive = zenkit::Write::to(game/"Data/MUSIC.VDF");
+  vdf.save(archive.get(),zenkit::GameVersion::GOTHIC_2);
+  }
+  gothicglb::writeFile(game/"_work/Data/Music/newworld/HOST.SGT",seg.data(),seg.size());
+
+  const auto out = dir/"music-out";
+  require(BaseImport::convertMusic(game,out,false)==0 && BaseImport::convertMusic(game,out,true)==0,"music import and verify");
+  const auto index = MusicData::readIndex(out);
+  std::string names;
+  for(const auto& [name,i]:index.gk)
+    names += name+";";
+  require(names=="BANK.DLS;HOST.SGT;SEG.SGT;STY.STY;","GothicKit selection by basename");
+  require(index.dx8.size()==1 && index.dx8.count("_work/Data/Music/newworld/HOST.SGT")==1,"Dx8 table: files of the search directories");
+  const auto* s     = index.findGk("seg.sgt \t");
+  const auto* host  = index.findDx8("_WORK/data/Music/NewWorld/host.sgt");
+  const auto* bank  = index.findGk("BANK.DLS");
+  const auto* style = index.findGk("STY.STY");
+  require(s!=nullptr && s==index.findGk("SEG.SGT") && index.findGk(" SEG.SGT")==nullptr && index.findGk("NEWWORLD/SEG.SGT")==nullptr &&
+          host!=nullptr && host==index.findGk("HOST.SGT") && bank!=nullptr && style!=nullptr && index.findDx8("SEG.SGT")==nullptr,
+          "music lookups");
+  require(s->origin=="archive" && s->archive=="MUSIC.VDF" && host->origin=="host" && s->kind=="segment" &&
+          bank->kind=="dls" && style->kind=="style","music provenance and kinds");
+  require(s->gk.record.rfind("gk/segment/",0)==0 && s->dx8.record.rfind("dx8/segment/",0)==0 && !s->gk.failure && !s->dx8.failure,
+          "a segment parsed by both providers");
+  require(host->gk.record==s->gk.record && host->dx8.record==s->dx8.record,"equal bytes share their records");
+  require(s->gk.identity!=s->sha256 && s->gk.record.substr(s->gk.record.rfind('/')+1)!=s->sha256,
+          "record names and identities are not the source SHA-256");
+  require(style->gk.record.rfind("gk/style/",0)==0 && style->dx8.record.rfind("dx8/style/",0)==0,"a style parsed by both providers");
+  require(bank->gk.record.rfind("gk/dls/",0)==0 && bank->dx8.record.empty() && bank->dx8.failure &&
+          *bank->dx8.failure=="hydra.igen range error","a Hydra-rejected DLS is a Dx8 failure; GothicKit still parses it");
+
+  const auto key = s->gk.record;
+  const auto gkBin = MusicData::readRecord(index,key);
+  require(gkBin==gkSeg,"the GothicKit segment record is the parsed object");
+  require(MusicData::decodeDx8Segment(MusicData::readRecord(index,s->dx8.record)).track.empty(),"Dx8 segment without a track list");
+  const auto sha      = key.substr(key.rfind('/')+1);
+  const auto binFile  = out/"gk"/"segment"/(sha+".bin");
+  const auto jsonFile = out/"gk"/"segment"/(sha+".json");
+  const auto rejectedRecord = [&](const std::string& k, const char* what) {
+    bool failed = false;
+    try { (void)MusicData::readRecord(index,k); }
+    catch(const std::exception& e) { failed = std::string(e.what()).find(k)!=std::string::npos; }
+    require(failed,std::string("music record must be rejected: ")+what);
+    };
+  rejectedRecord("gk/style/"+sha,"key of another kind");
+  auto altered = gkBin;
+  altered.back() ^= 1;
+  gothicglb::writeFile(binFile,altered.data(),altered.size());
+  rejectedRecord(key,"same size, different bytes");
+  gothicglb::writeFile(binFile,gkBin.data(),gkBin.size()-1);
+  rejectedRecord(key,"resized");
+  fs::remove(binFile);
+  rejectedRecord(key,"missing");
+  gothicglb::writeFile(binFile,gkBin.data(),gkBin.size());
+  auto json = gothicglb::readFile(jsonFile);
+  const auto jsonBack = json;
+  json.push_back(' ');
+  gothicglb::writeFile(jsonFile,json.data(),json.size());
+  rejectedRecord(key,"altered envelope");
+  gothicglb::writeFile(jsonFile,jsonBack.data(),jsonBack.size());
+  require(MusicData::readRecord(index,key)==gkBin,"a restored record reads again");
+
+  // A string the old parser cannot convert exactly stops the import with the file named.
+  const auto badGame = dir/"music-bad";
+  fs::create_directories(badGame/"Data");
+  fs::create_directories(badGame/"_work");
+  {
+  zenkit::Vfs vdf;
+  vdf.mount(zenkit::VfsNode::file("BAD.SGT",zenkit::VfsFileDescriptor{reinterpret_cast<const std::byte*>(nonAscii.data()),nonAscii.size(),false}),"/");
+  auto archive = zenkit::Write::to(badGame/"Data/BAD.VDF");
+  vdf.save(archive.get(),zenkit::GameVersion::GOTHIC_2);
+  }
+  bool stopped = false;
+  try { (void)BaseImport::convertMusic(badGame,dir/"music-bad-out",false); }
+  catch(const std::exception& e) { stopped = std::string(e.what()).find("BAD.SGT")!=std::string::npos; }
+  require(stopped,"a GothicKit string its parser cannot convert stops the music import");
+
+  const auto empty = dir/"music-empty";
+  fs::create_directories(empty/"Data");
+  fs::create_directories(empty/"_work");
+  {
+  zenkit::Vfs vdf;
+  const std::vector<uint8_t> marker = {1};
+  vdf.mount(zenkit::VfsNode::file("FIXTURE.BIN",zenkit::VfsFileDescriptor{reinterpret_cast<const std::byte*>(marker.data()),marker.size(),false}),"/");
+  auto archive = zenkit::Write::to(empty/"Data/EMPTY.VDF");
+  vdf.save(archive.get(),zenkit::GameVersion::GOTHIC_2);
+  }
+  require(BaseImport::convertMusic(empty,dir/"music-empty-out",false)==0,"music import of an installation without music");
+  const auto emptyIndex = MusicData::readIndex(dir/"music-empty-out");
+  require(emptyIndex.sources.empty() && emptyIndex.records.empty() && emptyIndex.gk.empty() && emptyIndex.dx8.empty(),
+          "an installation without music gives an empty index");
+  }
+
   WorldData::selfTest(dir/"world-data");
   fs::remove_all(dir);
   std::cout << "self-test passed\n";
@@ -524,6 +819,8 @@ int main(int argc, char** argv) {
       return BaseImport::convertOutputUnitsFile(args[1],args[2]);
     if(args.size()==3 && (args[0]=="audio" || args[0]=="verify-audio"))
       return BaseImport::convertAudio(args[1],args[2],args[0]=="verify-audio");
+    if(args.size()==3 && (args[0]=="music" || args[0]=="verify-music"))
+      return BaseImport::convertMusic(args[1],args[2],args[0]=="verify-music");
     if(args.size()==3 && (args[0]=="sources" || args[0]=="verify-sources"))
       return BaseImport::convertSources(args[1],args[2],args[0]=="verify-sources");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
@@ -539,6 +836,7 @@ int main(int argc, char** argv) {
                  "       content-convert outputunits|verify-outputunits <gothic dir> <dir>\n"
                  "       content-convert outputunits-file <OU.BIN|OU.DAT> <record.json>\n"
                  "       content-convert audio|verify-audio <gothic dir> <dir>\n"
+                 "       content-convert music|verify-music <gothic dir> <dir>\n"
                  "       content-convert sources|verify-sources <gothic dir> <dir>\n"
                  "       content-convert base <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";

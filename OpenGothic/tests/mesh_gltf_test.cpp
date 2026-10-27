@@ -14,6 +14,11 @@
 #include "asset/fromzenkit.h"
 #include "baseimport.h"
 #include "basemesh.h"
+#include "gothicglb.h"
+#include "musicdata.h"
+#include "sha256.h"
+#include "dmusic/patternlist.h"
+#include "dmusic.h"
 #include "utils/gthfont.h"
 
 #include <Tempest/Device>
@@ -374,6 +379,7 @@ struct Fixture {
     require(BaseImport::convertPrograms(root,base/"programs",false)==0,"synthetic program index must import into its own base");
     require(BaseImport::convertOutputUnits(root,base/"outputunits",false)==0,"synthetic output unit index must import into its own base");
     require(BaseImport::convertAudio(root,base/"audio",false)==0,"synthetic audio index must import into its own base");
+    require(BaseImport::convertMusic(root,base/"music",false)==0,"synthetic music index must import into its own base");
     // Synthetic installation without remaining-family inputs: a labelled empty manifest.
     std::filesystem::create_directories(base/"sources");
     textFile(base/"sources/sources.json","{\"format\":\"gothic-sources\",\"version\":1,\"synthetic\":\"mesh-gltf fixture without remaining-family inputs\"}\n");
@@ -1598,6 +1604,80 @@ void effectCases(const std::string& game, const std::string& base) {
   CommandLine commandLine(4,args);
   Tempest::VulkanApi api;
   Tempest::Device device(api);
+  {
+    std::string censusPath=(std::filesystem::temp_directory_path()/"gothic-music-wiring-XXXXXX").string();
+    const int file=mkstemp(censusPath.data());
+    require(file>=0,"music wiring census needs its own temporary file");
+    ::close(file);
+    setenv("OPENGOTHIC_CENSUS",censusPath.c_str(),1);
+    try {
+      {
+      Resources resources(device);
+      Gothic gothic;
+      auto* segment=Resources::loadMusicSegment("NW_DayStd.sgt");
+      require(segment!=nullptr,"native GK music segment must load through Resources");
+      DmSegment_release(segment);
+      const auto patterns=Resources::loadDxMusic("NW_DayStd.sgt");
+      require(patterns.size()>0,"native Dx8 music must produce patterns through Resources");
+      require(Resources::writeCensus(),"music wiring census must be writable");
+      const auto bytes=gothicglb::readFile(censusPath);
+      rapidjson::Document census;
+      census.Parse(reinterpret_cast<const char*>(bytes.data()),bytes.size());
+      require(!census.HasParseError() && census.IsObject(),"music wiring census must contain valid JSON");
+      const auto& music=census["runtime_music"];
+      require(std::string_view(music["coverage"].GetString())=="verified_base_record_reads" && !music["complete_corpus"].GetBool(),
+              "music wiring census must describe actual native reads");
+      for(const auto& row:census["files"].GetArray()) {
+        auto extension=std::filesystem::path(gothicglb::jsonToString(row["name"],"name")).extension().string();
+        for(auto& c:extension) if(c>='a' && c<='z') c=char(c-'a'+'A');
+        require(std::string_view(row["kind"].GetString())!="music" && extension!=".SGT" && extension!=".STY" && extension!=".DLS",
+                "native music wiring must not open original VFS or host music files");
+        }
+      const auto index=MusicData::readIndex(std::filesystem::path(base)/"music");
+      size_t gk=0,dx8=0,replacements=0;
+      for(const auto& row:music["selections"].GetArray()) {
+        if(std::string_view(row["kind"].GetString())!="segment") continue;
+        require(std::string_view(row["request"].GetString())=="NW_DayStd.sgt","music wiring segment request must retain its spelling");
+        const bool isGk=std::string_view(row["provider"].GetString())=="gk";
+        require(isGk || std::string_view(row["provider"].GetString())=="dx8","music wiring provider must be retained");
+        isGk ? ++gk : ++dx8;
+        const auto& imported=row["imported_source"];
+        const auto path=gothicglb::jsonToString(imported["path"],"path");
+        const auto* source=isGk ? index.findGk("NW_DayStd.sgt") : index.findDx8(path);
+        require(source && source->kind=="segment","music wiring must identify its indexed source");
+        const auto& outcome=isGk ? source->gk : source->dx8;
+        const auto descriptor=gothicglb::readFile(index.dir/(outcome.record+".json"));
+        const auto payload=gothicglb::readFile(index.dir/(outcome.record+".bin"));
+        Sha256 digest; digest.update(descriptor.data(),descriptor.size()); digest.update(payload.data(),payload.size());
+        const auto actual=digest.finish();
+        const auto& record=row["record"];
+        require(gothicglb::jsonToString(record["json"],"json")=="base/music/"+outcome.record+".json" &&
+                gothicglb::jsonToString(record["bin"],"bin")=="base/music/"+outcome.record+".bin" &&
+                actual==record["sha256"].GetString() && actual==outcome.identity && index.records.at(outcome.record)==actual,
+                "music wiring must report the actual native JSON and BIN identity");
+        require(path==source->path && std::string_view(imported["origin"].GetString())==source->origin &&
+                imported["size"].GetUint64()==source->size && std::string_view(imported["sha256"].GetString())==source->sha256 &&
+                (source->archive.empty() ? imported["archive"].IsNull() :
+                 imported["archive"].IsString() && std::string_view(imported["archive"].GetString())==source->archive),
+                "music wiring must retain imported source provenance separately from native identity");
+        }
+      for(const auto& row:census["replacements"].GetArray())
+        replacements+=std::string_view(row["kind"].GetString())=="basemusic";
+      require(gk==1 && dx8==1 && replacements==music["selections"].Size(),
+              "both Resources music providers must record one segment and every verified native read");
+      std::cout << "p16-music wiring: both native providers selected NW_DayStd.sgt with zero original music opens\n";
+      }
+      }
+    catch(...) {
+      unsetenv("OPENGOTHIC_CENSUS");
+      std::error_code error;
+      std::filesystem::remove(censusPath,error); std::filesystem::remove(censusPath+".tmp",error);
+      throw;
+      }
+    unsetenv("OPENGOTHIC_CENSUS");
+    std::error_code error;
+    std::filesystem::remove(censusPath,error); std::filesystem::remove(censusPath+".tmp",error);
+    }
   {
     Resources resources(device);
     Shaders shaders;

@@ -3,6 +3,7 @@
 #include "programdata.h"
 #include "outputunits.h"
 #include "audiodata.h"
+#include "musicdata.h"
 
 #include <Tempest/Log>
 #include <Tempest/TextCodec>
@@ -219,6 +220,26 @@ void ContentCensus::audioLoaded(std::string_view request, const AudioData::Sound
   catch(...) { Tempest::Log::e("census: unable to record base audio"); }
   }
 
+void ContentCensus::musicLoaded(std::string_view provider, std::string_view request,
+                               const MusicData::Source& source, const MusicData::Outcome& outcome) noexcept {
+  try {
+    MusicSelection entry;
+    entry.provider = provider;
+    entry.request = request;
+    entry.kind = source.kind;
+    entry.record = "base/music/"+outcome.record;
+    entry.sha256 = outcome.identity;
+    entry.sourceOrigin = source.origin;
+    entry.sourcePath = source.path;
+    entry.sourceArchive = source.archive;
+    entry.sourceSha256 = source.sha256;
+    entry.sourceSize = source.size;
+    std::lock_guard<std::mutex> guard(sync);
+    musicSelections.push_back(std::move(entry));
+    }
+  catch(...) { Tempest::Log::e("census: unable to record base music"); }
+  }
+
 bool ContentCensus::write() noexcept {
   try {
     std::lock_guard<std::mutex> guard(sync);
@@ -263,6 +284,14 @@ bool ContentCensus::write() noexcept {
       json.Key("name"); string(basename(entry.sourcePath));
       json.Key("kind"); string(entry.cls=="speech" ? "basespeech" : "basesound");
       json.Key("replacement"); string(entry.payloadFile);
+      json.Key("opens"); json.Uint64(1);
+      json.EndObject();
+      }
+    for(const auto& entry:musicSelections) {
+      json.StartObject();
+      json.Key("name"); string(basename(entry.sourcePath));
+      json.Key("kind"); string("basemusic");
+      json.Key("replacement"); string(entry.record+".json");
       json.Key("opens"); json.Uint64(1);
       json.EndObject();
       }
@@ -396,6 +425,36 @@ bool ContentCensus::write() noexcept {
       json.Key("archive");
       if(entry.sourceArchive.empty()) json.Null(); else string(entry.sourceArchive);
       json.Key("size"); json.Uint64(entry.size);
+      json.Key("sha256"); string(entry.sourceSha256);
+      json.EndObject();
+      json.EndObject();
+      }
+    json.EndArray();
+    json.EndObject();
+    json.Key("runtime_music");
+    json.StartObject();
+    json.Key("coverage"); string("verified_base_record_reads");
+    json.Key("complete_corpus"); json.Bool(false);
+    json.Key("selections");
+    json.StartArray();
+    for(const auto& entry:musicSelections) {
+      json.StartObject();
+      json.Key("provider"); string(entry.provider);
+      json.Key("request"); string(entry.request);
+      json.Key("kind"); string(entry.kind);
+      json.Key("record");
+      json.StartObject();
+      json.Key("json"); string(entry.record+".json");
+      json.Key("bin"); string(entry.record+".bin");
+      json.Key("sha256"); string(entry.sha256);
+      json.EndObject();
+      json.Key("imported_source");
+      json.StartObject();
+      json.Key("origin"); string(entry.sourceOrigin);
+      json.Key("path"); string(entry.sourcePath);
+      json.Key("archive");
+      if(entry.sourceArchive.empty()) json.Null(); else string(entry.sourceArchive);
+      json.Key("size"); json.Uint64(entry.sourceSize);
       json.Key("sha256"); string(entry.sourceSha256);
       json.EndObject();
       json.EndObject();

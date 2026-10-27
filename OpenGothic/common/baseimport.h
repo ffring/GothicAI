@@ -56,6 +56,11 @@ int convertOutputUnitsFile(const std::filesystem::path& source, const std::files
 // P15: audio/audio.json and one exact copy per distinct payload (common/audiodata.h) of every .WAV/.OGG
 // request of the runtime VFS and its Vfs::find winner. An installation without sounds gives an empty index.
 int convertAudio(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
+// P16: music/music.json and the GothicKit and Dx8 records (common/musicdata.h) of every SGT/STY/DLS either
+// provider selects: each music basename of the runtime VFS and its Vfs::find winner, and every music file
+// directly in the six Dx8 search directories. Stops on a GothicKit string its parser cannot convert exactly
+// and on a reference naming a file of another kind. An installation without music gives an empty index.
+int convertMusic(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);
 // P10: sources/sources.json, the selected inputs of the not yet migrated families
 // (FNT, audio, BIK, SGT/STY/DLS, the eight DATs, OU, server readers) with origin and SHA-256.
 int convertSources(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly);

@@ -13,6 +13,7 @@ namespace zenkit { class Read; }
 namespace ProgramData { struct Source; }
 namespace OutputUnits { struct Source; }
 namespace AudioData { struct Sound; }
+namespace MusicData { struct Source; struct Outcome; }
 
 // Session-only accounting. Resources creates this object only with OPENGOTHIC_CENSUS.
 class ContentCensus final {
@@ -33,6 +34,8 @@ class ContentCensus final {
                      std::string_view branch, std::string_view record, std::string_view sha256,
                      const OutputUnits::Source& source) noexcept;
     void audioLoaded(std::string_view request, const AudioData::Sound& source) noexcept;
+    void musicLoaded(std::string_view provider, std::string_view request,
+                     const MusicData::Source& source, const MusicData::Outcome& outcome) noexcept;
     bool write() noexcept;
 
   private:
@@ -65,4 +68,10 @@ class ContentCensus final {
       uint64_t size = 0;
       };
     std::vector<AudioSelection> audioSelections;
+    struct MusicSelection {
+      std::string provider, request, kind, record, sha256;
+      std::string sourceOrigin, sourcePath, sourceArchive, sourceSha256;
+      uint64_t sourceSize = 0;
+      };
+    std::vector<MusicSelection> musicSelections;
   };

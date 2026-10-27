@@ -6,12 +6,32 @@ set(BASE_SOURCES
   common/programdata.cpp common/outputunits.cpp common/audiodata.cpp common/basemesh.cpp common/gothicglb.cpp common/gltfmesh.cpp common/asset/fromzenkit.cpp common/asset/worldfromzenkit.cpp common/asset/modelfromzenkit.cpp
   # The game's own path helpers, Dx8 file search and Dx8 parsers, owned here once.
   common/utils/fileutil.cpp common/dmusic/sourcefile.cpp common/dmusic/riff.cpp common/dmusic/segment.cpp common/dmusic/track.cpp
-  common/dmusic/style.cpp common/dmusic/band.cpp common/dmusic/reference.cpp common/dmusic/info.cpp common/dmusic/pattern.cpp)
-# Tempest's native file, directory and text-codec code that FileUtil and the Dx8 search use.
+  common/dmusic/style.cpp common/dmusic/band.cpp common/dmusic/reference.cpp common/dmusic/info.cpp common/dmusic/pattern.cpp
+  # P16: the Dx8 DLS parser with its SoundFont/Hydra finalization, and both music record codecs.
+  common/dmusic/dlscollection.cpp common/dmusic/wave.cpp common/dmusic/soundfont.cpp common/dmusic/hydra.cpp
+  common/musicdata.cpp common/musicnative.c)
+# The four Dx8 files keep the game's old compile context: TSF_NO_STDIO (the root add_definitions) and
+# no floating-point contraction (inherited there from Jolt's PUBLIC options), without linking Jolt.
+# hydra.cpp includes the engine's TinySoundFont by explicit path; GothicKit's <tsf.h> stays its own.
+set_source_files_properties(
+  "${BASE_ROOT}/common/dmusic/dlscollection.cpp" "${BASE_ROOT}/common/dmusic/wave.cpp"
+  "${BASE_ROOT}/common/dmusic/soundfont.cpp" "${BASE_ROOT}/common/dmusic/hydra.cpp"
+  PROPERTIES COMPILE_DEFINITIONS TSF_NO_STDIO
+             COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/fp:precise,-ffp-contract=off>")
+# musicnative.c sees dmusic's private structs (_Internal.h, thread/Thread.h): it must use the C11-thread
+# backend the linked dmusic target was built with. Only that one private choice is mirrored.
+get_target_property(BASE_DMUSIC_DEFINITIONS dmusic COMPILE_DEFINITIONS)
+if("_DM_USE_NATIVE_THREAD=1" IN_LIST BASE_DMUSIC_DEFINITIONS)
+  set_property(SOURCE "${BASE_ROOT}/common/musicnative.c" APPEND PROPERTY COMPILE_DEFINITIONS _DM_USE_NATIVE_THREAD=1)
+endif()
+# Tempest's native file, directory and text-codec code that FileUtil and the Dx8 search use, plus the
+# memory streams and log the Dx8 wave and DLS parsers use.
 # The game links the whole Tempest target; the converter builds only these sources.
 set(BASE_NATIVE_IO
   lib/Tempest/Engine/io/rfile.cpp lib/Tempest/Engine/io/idevice.cpp lib/Tempest/Engine/utility/dir.cpp
-  lib/Tempest/Engine/utility/textcodec.cpp lib/Tempest/Engine/exceptions/exception.cpp)
+  lib/Tempest/Engine/utility/textcodec.cpp lib/Tempest/Engine/exceptions/exception.cpp
+  lib/Tempest/Engine/io/memreader.cpp lib/Tempest/Engine/io/memwriter.cpp lib/Tempest/Engine/io/odevice.cpp
+  lib/Tempest/Engine/io/wfile.cpp lib/Tempest/Engine/utility/log.cpp)
 file(GLOB_RECURSE BASE_FORMAT_INPUTS CONFIGURE_DEPENDS RELATIVE "${BASE_ROOT}"
   "${BASE_ROOT}/common/asset/*.h" "${BASE_ROOT}/common/asset/fromzenkit.cpp"
   "${BASE_ROOT}/lib/ZenKit/src/*" "${BASE_ROOT}/lib/ZenKit/include/*"
@@ -24,7 +44,11 @@ list(APPEND BASE_FORMAT_INPUTS ${BASE_SOURCES} ${BASE_NATIVE_IO}
   common/sha256.h common/baseimport.h common/basemusic.h common/worldchunks.h common/worlddata.h common/modeldata.h common/fontdata.h common/programdata.h common/outputunits.h common/audiodata.h common/basemesh.h
   common/gothicglb.h common/gltfmesh.h common/utils/fileutil.h common/dmusic/sourcefile.h common/dmusic/riff.h common/dmusic/segment.h
   common/dmusic/track.h common/dmusic/style.h common/dmusic/band.h common/dmusic/reference.h common/dmusic/info.h common/dmusic/pattern.h
-  common/dmusic/structs.h lib/Tempest/Engine/system/platform.h lib/Tempest/Engine/include/Tempest/File lib/Tempest/Engine/include/Tempest/Dir
+  common/dmusic/structs.h common/dmusic/dlscollection.h common/dmusic/wave.h common/dmusic/soundfont.h common/dmusic/hydra.h
+  common/musicdata.h common/musicnative.h lib/TinySoundFont/tsf.h lib/Tempest/Engine/sound/sound.h
+  lib/Tempest/Engine/include/Tempest/Sound lib/Tempest/Engine/include/Tempest/MemReader lib/Tempest/Engine/include/Tempest/MemWriter
+  lib/Tempest/Engine/include/Tempest/ODevice lib/Tempest/Engine/include/Tempest/Log
+  lib/Tempest/Engine/system/platform.h lib/Tempest/Engine/include/Tempest/File lib/Tempest/Engine/include/Tempest/Dir
   lib/Tempest/Engine/include/Tempest/TextCodec lib/Tempest/Engine/include/Tempest/Except lib/Tempest/Engine/include/Tempest/IDevice
   lib/Tempest/Engine/include/Tempest/Platform lib/cgltf/cgltf.h lib/miniz/miniz.h lib/miniz/miniz.c
   cmake/BaseImport.cmake)

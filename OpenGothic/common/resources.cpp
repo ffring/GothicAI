@@ -1,6 +1,7 @@
 #include "resources.h"
 #include "basestore.h"
 #include "commandline.h"
+#include "musicnative.h"
 
 #include <Tempest/MemReader>
 #include <Tempest/Pixmap>
@@ -19,6 +20,7 @@
 #include <miniz.h>
 
 #include <cctype>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -139,16 +141,27 @@ Resources::Resources(Tempest::Device &device, BaseImport::Progress progress)
     };
   cube = device.ibo(index, sizeof(index)/sizeof(index[0]));
 
-  dxMusic.reset(new Dx8::DirectMusic());
-  // G2
-  dxMusic->addPath(Gothic::nestedPath({u"_work",u"Data",u"Music",u"newworld"},  Dir::FT_Dir));
-  dxMusic->addPath(Gothic::nestedPath({u"_work",u"Data",u"Music",u"AddonWorld"},Dir::FT_Dir));
-  // G1
-  dxMusic->addPath(Gothic::nestedPath({u"_work",u"Data",u"Music",u"dungeon"},  Dir::FT_Dir));
-  dxMusic->addPath(Gothic::nestedPath({u"_work",u"Data",u"Music",u"menu_men"}, Dir::FT_Dir));
-  dxMusic->addPath(Gothic::nestedPath({u"_work",u"Data",u"Music",u"orchestra"},Dir::FT_Dir));
-  // switch-build
-  dxMusic->addPath(Gothic::nestedPath({u"_work",u"Data",u"Music"},Dir::FT_Dir));
+  const std::vector<std::u16string> musicPaths = {
+    Gothic::nestedPath({u"_work",u"Data",u"Music",u"newworld"},  Dir::FT_Dir),
+    Gothic::nestedPath({u"_work",u"Data",u"Music",u"AddonWorld"},Dir::FT_Dir),
+    Gothic::nestedPath({u"_work",u"Data",u"Music",u"dungeon"},  Dir::FT_Dir),
+    Gothic::nestedPath({u"_work",u"Data",u"Music",u"menu_men"}, Dir::FT_Dir),
+    Gothic::nestedPath({u"_work",u"Data",u"Music",u"orchestra"},Dir::FT_Dir),
+    Gothic::nestedPath({u"_work",u"Data",u"Music"},Dir::FT_Dir)
+    };
+  Dx8::DirectMusic::Native dxSource;
+  dxSource.segment = [this,musicPaths](const char16_t* name) {
+    return MusicData::decodeDx8Segment(readDxMusic(musicPaths,name,"segment"));
+    };
+  dxSource.style = [this,musicPaths](const char16_t* name) {
+    return MusicData::decodeDx8Style(readDxMusic(musicPaths,name,"style"));
+    };
+  dxSource.dls = [this,musicPaths](const char16_t* name) {
+    return MusicData::decodeDx8Dls(readDxMusic(musicPaths,name,"dls"));
+    };
+  dxMusic.reset(new Dx8::DirectMusic(std::move(dxSource)));
+  for(const auto& path:musicPaths)
+    dxMusic->addPath(path);
 
   fBuff .reserve(8*1024*1024);
   indexHdTextures();
@@ -176,25 +189,27 @@ Resources::Resources(Tempest::Device &device, BaseImport::Progress progress)
     Log::e("Failed to created DmLoader object. Out of memory?");
     }
 
-  DmLoader_addResolver(dmLoader, [](void* ctx, char const* name, size_t* len) -> void* {
-      auto* slf = reinterpret_cast<Resources*>(ctx);
-      auto* node = slf->gothicAssets.find(name);
-
-      if (node == nullptr) {
-        return nullptr;
-      }
-
-      auto reader = node->open_read();
-
-      reader->seek(0, zenkit::Whence::END);
-      *len = reader->tell();
-
-      reader->seek(0, zenkit::Whence::BEG);
-      auto* bytes = static_cast<uint8_t *>(malloc(*len));
-      reader->read(bytes, *len);
-
-      return bytes;
-  }, this);
+  DmLoaderFactory gkSource;
+  gkSource.segment = [](void* ctx, const char* name, DmSegment** out) {
+    *out = nullptr;
+    std::vector<uint8_t> bytes;
+    const auto result = static_cast<Resources*>(ctx)->readGkMusic(name,"segment",bytes);
+    return result==DmResult_SUCCESS ? MusicNative_segment(bytes.data(),bytes.size(),out) : result;
+    };
+  gkSource.style = [](void* ctx, const char* name, DmStyle** out) {
+    *out = nullptr;
+    std::vector<uint8_t> bytes;
+    const auto result = static_cast<Resources*>(ctx)->readGkMusic(name,"style",bytes);
+    return result==DmResult_SUCCESS ? MusicNative_style(bytes.data(),bytes.size(),out) : result;
+    };
+  gkSource.dls = [](void* ctx, const char* name, DmDls** out) {
+    *out = nullptr;
+    std::vector<uint8_t> bytes;
+    const auto result = static_cast<Resources*>(ctx)->readGkMusic(name,"dls",bytes);
+    return result==DmResult_SUCCESS ? MusicNative_dls(bytes.data(),bytes.size(),out) : result;
+    };
+  if(dmLoader!=nullptr && DmLoader_setFactory(dmLoader,&gkSource,this)!=DmResult_SUCCESS)
+    throw std::runtime_error("unable to configure native music loader");
   }
 
 void Resources::zenkitLog(zenkit::LogLevel lvl, const char* cat, const char* message) {
@@ -302,6 +317,15 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
         throw std::runtime_error("loose file differs from audio base index: "+path);
       }
     Log::i("base: ",inst->baseAudio.sounds.size()," sounds from \"",inst->baseAudio.dir.string(),"\"");
+    if(inst->baseMusic.archives!=mounted)
+      throw std::runtime_error("mounted archives differ from music base index: "+inst->baseMusic.dir.string());
+    for(const auto& [path,size]:inst->baseMusic.looseFiles) {
+      std::error_code error;
+      const auto actual = std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/path,error);
+      if(error || actual!=size)
+        throw std::runtime_error("loose file differs from music base index: "+path);
+      }
+    Log::i("base: ",inst->baseMusic.records.size()," music records from \"",inst->baseMusic.dir.string(),"\"");
     inst->baseProgress={};
     }
   catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
@@ -770,6 +794,7 @@ void Resources::indexBaseContent() {
   basePrograms = ProgramData::readIndex(root/"programs");
   baseOutputUnits = OutputUnits::readIndex(root/"outputunits");
   baseAudio = AudioData::readIndex(root/"audio");
+  baseMusic = MusicData::readIndex(root/"music");
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {
@@ -1532,6 +1557,67 @@ std::unique_ptr<Animation> Resources::implLoadAnimation(std::string name) {
     }
 
   return nullptr;
+  }
+
+std::vector<uint8_t> Resources::readMusicRecord(std::string_view provider, std::string_view request,
+                                                const char* kind, const MusicData::Source& source) {
+  try {
+    if(source.kind!=kind)
+      throw std::runtime_error("music data: requested kind differs from indexed source: "+std::string(request));
+    const auto& outcome = provider=="gk" ? source.gk : source.dx8;
+    auto bytes = MusicData::readRecord(baseMusic,outcome.record);
+    if(census) census->musicLoaded(provider,request,source,outcome);
+    return bytes;
+    }
+  catch(const std::exception& error) {
+    if(census) census->missing(request,error.what());
+    try { Log::e("base: ",error.what()); } catch(...) {}
+    throw;
+    }
+  }
+
+DmResult Resources::readGkMusic(std::string_view name, const char* kind, std::vector<uint8_t>& bytes) noexcept {
+  bytes.clear();
+  try {
+    const auto* source = baseMusic.findGk(name);
+    if(source==nullptr)
+      return DmResult_NOT_FOUND;
+    if(source->gk.failure) {
+      static constexpr std::array<std::string_view,7> results = {
+        "SUCCESS","INVALID_ARGUMENT","INVALID_STATE","MEMORY_EXHAUSTED","NOT_FOUND","FILE_CORRUPT","MUTEX_ERROR"
+        };
+      for(size_t i=1;i<results.size();++i)
+        if(*source->gk.failure==results[i])
+          return static_cast<DmResult>(i);
+      return DmResult_FILE_CORRUPT;
+      }
+    bytes = readMusicRecord("gk",name,kind,*source);
+    return DmResult_SUCCESS;
+    }
+  catch(const std::bad_alloc&) { return DmResult_MEMORY_EXHAUSTED; }
+  catch(...) { return DmResult_FILE_CORRUPT; }
+  }
+
+std::vector<uint8_t> Resources::readDxMusic(const std::vector<std::u16string>& paths, const char16_t* name,
+                                          const char* kind) {
+  for(const auto& path:paths) {
+    const auto file = FileUtil::nestedPath(path,{name},Dir::FT_File);
+    if(!FileUtil::exists(file))
+      continue;
+    const auto relative = std::filesystem::path(file).lexically_relative(std::filesystem::path(CommandLine::inst().rootPath()))
+                                                     .lexically_normal().generic_string();
+    const auto* source = baseMusic.findDx8(relative);
+    if(source==nullptr) {
+      const auto reason = "music data: selected host file is not indexed: "+relative;
+      if(census) census->missing(Tempest::TextCodec::toUtf8(name),reason);
+      Log::e("base: ",reason);
+      throw std::runtime_error(reason);
+      }
+    if(source->dx8.failure)
+      throw std::runtime_error(*source->dx8.failure);
+    return readMusicRecord("dx8",Tempest::TextCodec::toUtf8(name),kind,*source);
+    }
+  throw std::runtime_error("file not found");
   }
 
 Dx8::PatternList Resources::implLoadDxMusic(std::string_view name) {

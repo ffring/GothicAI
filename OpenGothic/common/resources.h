@@ -13,7 +13,9 @@
 #include "programdata.h"
 #include "outputunits.h"
 #include "audiodata.h"
+#include "musicdata.h"
 #include "asset/worldtypes.h"
+#include <dmusic.h>
 
 #include <tuple>
 #include <string_view>
@@ -21,9 +23,6 @@
 
 #include "graphics/material.h"
 #include "sound/soundfx.h"
-
-struct DmSegment;
-struct DmLoader;
 
 class StaticMesh;
 class ProtoMesh;
@@ -246,6 +245,7 @@ class Resources final {
     ProgramData::Index basePrograms;
     OutputUnits::Index baseOutputUnits;
     AudioData::Index baseAudio;
+    MusicData::Index baseMusic;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     BaseStore::Selection automaticBase;
     BaseImport::Progress baseProgress;
@@ -295,6 +295,10 @@ class Resources final {
     Tempest::Sound        implLoadSoundBuffer(std::string_view name);
     Dx8::PatternList      implLoadDxMusic(std::string_view name);
     DmSegment*            implLoadMusicSegment(char const* name);
+    DmResult              readGkMusic(std::string_view name, const char* kind, std::vector<uint8_t>& bytes) noexcept;
+    std::vector<uint8_t>  readDxMusic(const std::vector<std::u16string>& paths, const char16_t* name, const char* kind);
+    std::vector<uint8_t>  readMusicRecord(std::string_view provider, std::string_view request,
+                                        const char* kind, const MusicData::Source& source);
     GthFont&              implLoadFont(std::string_view fname, FontType type, const float scale);
     PfxEmitterMesh*       implLoadEmiterMesh(std::string_view name);
     const VobTree*        implLoadVobBundle(std::string_view name);
