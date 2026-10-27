@@ -2620,7 +2620,22 @@ class DialogueManager:
             if slot is not None:
                 self._quick_busy[slot] -= 1
                 self._quick_free.set()
-        return bool(state.text.strip())
+        said = bool(state.text.strip())
+        if said and ready is not None:  # parallel turns also wait for Gemma when Sol fails
+            # Sending the text can finish before the game receives it (or TTS even starts).
+            # Keep this turn until its last Gemma line starts, so it cannot be dropped as unsaid.
+            line = conv.last_lines[-1] if conv.last_lines else None
+            if line is not None and self.started_at(line) is None and line not in conv.hushed:
+                started = self._starts[line] = asyncio.Event()
+                try:
+                    await asyncio.wait_for(started.wait(), max(
+                        0.0, self._sent[line] + LINE_LOST_S - time.monotonic(),
+                    ))
+                except TimeoutError:
+                    log.info("%s: quick line %s did not start", conv.npc, line)
+                finally:
+                    self._starts.pop(line, None)
+        return said
 
     async def _act_on_line(
         self,
