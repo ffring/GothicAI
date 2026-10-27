@@ -101,6 +101,9 @@ class Npc final {
     void       drawMeleeShadow(DbgPainter& p, uint64_t now) const;
     void       updateMeleeShadow();
     void       resolveMeleeContacts();
+    static bool skipMeleeAlly(bool player, bool selectedTarget, bool sameGuild, bool sameParty, bool enemy) {
+      return !player && !selectedTarget && (sameGuild || sameParty || !enemy);
+      }
 
     bool       setPosition (float x,float y,float z);
     bool       setPosition (const Tempest::Vec3& pos);

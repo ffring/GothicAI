@@ -10,6 +10,7 @@
 #include "graphics/bounds.h"
 #include "game/serialize.h"
 #include "game/damagecalculator.h"
+#include "world/objects/npc.h"
 #include "gothic.h"
 
 #include <Tempest/MemReader>
@@ -4016,6 +4017,23 @@ namespace {
       require(triangleHit.sector!=nullptr && sectors[i]==triangleHit.sector,
               "mesh hit must retain its sector beyond 32 segments");
       }
+
+    require(Npc::skipMeleeAlly(false,false,true,false,true),
+            "an incidental same-guild contact must skip NPC damage even with hostile attitude");
+    require(Npc::skipMeleeAlly(false,false,false,true,true),
+            "an incidental party contact must skip NPC damage even with hostile attitude");
+    require(Npc::skipMeleeAlly(false,false,false,false,false),
+            "an incidental nonhostile contact must skip NPC damage");
+    require(!Npc::skipMeleeAlly(false,false,false,false,true),
+            "an incidental enemy contact must receive NPC damage");
+    require(!Npc::skipMeleeAlly(true,false,true,true,false),
+            "the hero must damage incidental allies");
+    require(!Npc::skipMeleeAlly(false,true,false,false,false),
+            "the selected neutral or angry target must receive NPC damage");
+    require(!Npc::skipMeleeAlly(false,true,true,false,false),
+            "the selected same-guild target must receive NPC damage");
+    require(!Npc::skipMeleeAlly(false,true,false,true,false),
+            "the selected party target must receive NPC damage");
 
     // The actual melee damage multiplier is bounded before cleave attenuation.
     requireNear(DamageCalculator::meleeMultiplier(0,1000,0,0,0),.5f,.0001f,"slow grip contacts must respect the lower damage bound");

@@ -1972,8 +1972,9 @@ void Npc::consumeMeleeContacts() {
       continue;
       }
     const int partyMember = Gothic::inst().version().game==2 ? 15 : 36;
-    const bool sameParty = handle().aivar[partyMember]!=0 && (target->isPlayer() || target->handle().aivar[partyMember]!=0);
-    if(!isPlayer() && (guild()==target->guild() || sameParty || !isEnemy(*target))) {
+    const bool sameParty = owner.script().isFriendlyFire(*this,*target) ||
+                           (handle().aivar[partyMember]!=0 && target->handle().aivar[partyMember]!=0);
+    if(skipMeleeAlly(isPlayer(),target==currentTarget,guild()==target->guild(),sameParty,isEnemy(*target))) {
       entry.result = "ally_skipped";
       if(swing.outcome=="miss")
         swing.outcome = "ally_skipped";
