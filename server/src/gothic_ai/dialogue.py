@@ -138,6 +138,10 @@ ACK_HINT = (
     "(«Есть!», «Иду!», «Стою.»)."
 )
 SOUND_SAID = "\nТы уже сказал вслух: «{}» — ответ продолжает это, не повторяй его."
+PARALLEL_ACT_HINT = (
+    "Твою реплику уже произносят вслух. Не пиши текст: если нужно действие, сразу вызови инструмент; "
+    "если делать ничего не нужно, ответь пустым сообщением."
+)
 PREWARM_DELAY_S = 0.1  # notes come in bursts: the quick model's cache is filled once they are in
 TALK_WARM_S = 300.0  # an npc the hero spoke to this recently is kept warm in the quick model's cache
 PREWARM_CM = 800.0  # a new npc the hero looks at this close is warmed before he speaks
@@ -2550,7 +2554,7 @@ class DialogueManager:
                         while self.audible(conv.npc):  # noqa: ASYNC110 - playback ends by clock, not event
                             await asyncio.sleep(0.05)
                 else:
-                    # Gemma said nothing: voice this already completed response, without asking Sol again.
+                    # Gemma said nothing: voice Sol's buffer, or ask once for speech without tools.
                     speak = True
                     st.silent = False
                     trace.event("quick_fallback", step=trace.steps.index(st))
@@ -2562,6 +2566,15 @@ class DialogueManager:
                         )
                         await self._feed_lines(conv, state, pieces)
                         await self._say_rest(conv, state)
+                    else:
+                        request = [
+                            replace(item, content=item.content.removesuffix("\n" + PARALLEL_ACT_HINT))
+                            if isinstance(item, Message) and item.role == "developer" else item
+                            for item in request
+                        ]
+                        spoken = trace.step(request, "none")
+                        spoken.started_s = round(time.time() - trace.started, 3)
+                        await self._step(conv, state, request, "none", spoken)
                 quick_line = None
             if state.relevant is not None and not state.relevant() and not (speak and state.text.strip()):
                 raise StaleTurn  # the incident is over: nothing said yet, or only late acts are left
@@ -2650,6 +2663,8 @@ class DialogueManager:
                 f"\nТы уже сказал вслух: «{said}». Новых слов не нужно: реши, что ты делаешь, и сделай это "
                 "инструментами, если нужно."
             )
+        else:
+            situation_text += "\n" + PARALLEL_ACT_HINT
         request: list[Item] = [*conv.history, Message("developer", situation_text), trigger]
         try:
             return await self._steps(conv, state, request, trace, speak=False, quick_line=quick_line)
