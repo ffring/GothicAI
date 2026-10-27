@@ -1647,7 +1647,7 @@ void Npc::syncMeleeShadowSwing() {
   const bool enabled = Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits;
   if(meleeShadowSuspended || !isHuman() || isDown() ||
      (mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)) {
-    finishMeleeShadowSwing();
+    finishMeleeShadowSwing(true,meleeShadowSuspended);
     return;
     }
   if(!enabled && !(meleeShadow && meleeShadow->window))
@@ -1697,6 +1697,8 @@ void Npc::syncMeleeShadowSwing() {
     return;
   const auto selected = *window;
   finishMeleeShadowSwing(false);
+  if(meleeShadowSuspended)
+    return;
   if(!enabled) {
     owner.physic()->removeShadowBlade(this);
     return;
@@ -1946,8 +1948,10 @@ void Npc::consumeMeleeContacts() {
     return;
   auto& swing = *meleeShadow;
   while(swing.consumed<swing.contacts.size()) {
-    auto& entry = swing.contacts[swing.consumed++];
-    const auto& hit = entry.hit;
+    const auto index = swing.consumed++;
+    const auto id = swing.id;
+    auto& entry = swing.contacts[index];
+    const auto hit = entry.hit;
     // Walkable ground is a logged brush, not the target contact ending assistance.
     if(swing.magnet.eligible && !swing.magnet.contactStopped && (!hit.world || hit.stopsSwing)) {
       swing.magnet.contactStopped = true;
@@ -2005,7 +2009,10 @@ void Npc::consumeMeleeContacts() {
                             "\"result\":"+TestBench::bodyJson(entry.result),visual.pose().animNames());
       const auto before = target->attribute(ATR_HITPOINTS);
       target->takeDamage(*this,nullptr,false,entry.multiplier,&hit);
-      entry.damage = std::max(0,before-target->attribute(ATR_HITPOINTS));
+      // Damage scripts may remove the attacker, retiring and clearing this window.
+      if(!swing.window || swing.id!=id)
+        return;
+      swing.contacts[index].damage = std::max(0,before-target->attribute(ATR_HITPOINTS));
       }
     if(block) {
       swing.stopped = true;
@@ -2053,14 +2060,14 @@ void Npc::drawMeleeShadow(DbgPainter& p, uint64_t now) const {
   }
 
 void Npc::clearMeleeShadow() {
-  finishMeleeShadowSwing();
+  finishMeleeShadowSwing(true,true);
   if(meleeShadowBody && owner.physic()!=nullptr) {
     owner.physic()->removeShadowBody(this);
     meleeShadowBody = false;
     }
   }
 
-void Npc::finishMeleeShadowSwing(bool remove) {
+void Npc::finishMeleeShadowSwing(bool remove, bool discard) {
   if(!meleeShadow || !meleeShadow->window || owner.physic()==nullptr)
     return;
   auto& shadow = *meleeShadow;
@@ -2070,7 +2077,17 @@ void Npc::finishMeleeShadowSwing(bool remove) {
   meleeShadowDrawActive = false;
   for(const auto& hit:contacts)
     shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
-  consumeMeleeContacts();
+  const auto id = shadow.id;
+  if(discard) {
+    if(shadow.consumed<shadow.contacts.size() && shadow.outcome=="miss")
+      shadow.outcome = "discarded";
+    while(shadow.consumed<shadow.contacts.size())
+      shadow.contacts[shadow.consumed++].result = "discarded";
+    }
+  else consumeMeleeContacts();
+  // A nested removal already wrote and cleared the window; do not flush it twice.
+  if(!shadow.window || shadow.id!=id)
+    return;
   if(remove)
     owner.physic()->removeShadowBlade(this);
   const auto& window = *shadow.window;
@@ -2080,7 +2097,7 @@ void Npc::finishMeleeShadowSwing(bool remove) {
     const auto& contact = entry.hit;
     const auto point = meleeShadowPoint(contact.point);
     if(contact.world) {
-      worldHit |= contact.stopsSwing && entry.result!="after_stop";
+      worldHit |= entry.result=="wall";
       world = "{\"point_cm\":" + point + ",\"normal\":" + meleeShadowPoint(contact.normal) +
               ",\"material\":" + std::to_string(int(contact.material)) +
               ",\"result\":" + TestBench::bodyJson(entry.result) + ",\"step\":" + std::to_string(contact.step) + "}";

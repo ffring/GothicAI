@@ -540,7 +540,7 @@ class Npc final {
     void      prepareLivingBody();
     void      syncRagdoll();
     void      suspendRagdoll();
-    void      finishMeleeShadowSwing(bool remove=true);
+    void      finishMeleeShadowSwing(bool remove=true, bool discard=false);
     bool      setRagdollDown(bool death);
     void      addRagdollImpulse(const Tempest::Vec3& impulse);
     float     physicsMass() const;
