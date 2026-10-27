@@ -59,6 +59,7 @@ from .dialogue import REACT_HINT, SVM_HINT, DialogueManager
 from .director import Director
 from .errands import Errands
 from .executor import Intent
+from .feats import Feats
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
@@ -182,6 +183,7 @@ HELP = """commands (npc defaults to the last attached one):
   crimes            the current branch's crimes, witnesses, encounter reactions and communities
   lines             the director's plot lines, their state and remaining budget
   pitch             an occasion here and now, subject to the director's budget
+  feats             the chronicler's feats on the current save branch
   claims            quests of the scripts the hero said were done: believed, lies, found out
   know [npc] [query]  what the npc knows of the world now (M6), and what recall finds for the query
   see [npc]         what the npc perceives now: in Russian for its words, in English for its body
@@ -253,6 +255,7 @@ class ServerState:
         self.occasions: Occasions | None = None
         self.questlog: QuestLog | None = None
         self.showrunner: Showrunner | None = None
+        self.feats: Feats | None = None
         self.vanilla: VanillaQuests | None = None
         self.gates: Gates | None = None
         self.trust: Trust | None = None
@@ -452,6 +455,13 @@ class Console:
                 else:
                     fact = await showrunner.pitch()
                     print(json.dumps(fact, ensure_ascii=False) if fact else "(no occasion now)")
+            case "feats":
+                if self.state.chronicle is not None:
+                    for feat in self.state.chronicle.facts("feat"):
+                        print(
+                            f"{feat['id']}: {feat['title']}; {feat['text']}; "
+                            f"evidence={feat['evidence']}"
+                        )
             case "graph" if self.state.story is not None:
                 await self.graph(rest)
             case "quest" if len(rest) >= 5 and self.state.quests is not None:
@@ -952,6 +962,10 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
+        state.feats = (
+            Feats(link, state.chronicle, llm, journal=journal)
+            if not args.no_feats and args.scenario is None else None
+        )
         if not args.no_crimes:
             state.crimes = Crimes(
                 link,
@@ -1444,6 +1458,8 @@ async def serve(args: argparse.Namespace) -> int:
                 errand_clock.cancel()
             for task in directing:
                 task.cancel()
+            if state.feats is not None:
+                await state.feats.close()
             if state.questlog is not None:
                 await state.questlog.close()
             if state.book is not None:
@@ -3219,6 +3235,11 @@ def main() -> None:
         "--no-showrunner",
         action="store_true",
         help="disable the director's new plot lines (enabled by default outside scenarios)",
+    )
+    p.add_argument(
+        "--no-feats",
+        action="store_true",
+        help="disable the chronicler's feats (enabled by default outside scenarios)",
     )
     p.add_argument(
         "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"
