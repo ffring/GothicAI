@@ -160,12 +160,14 @@ def test_turns_require_the_related_earlier_deed():
     ({"evidence": [2]}, []),
     ({"evidence": [1, 2]}, [feat(trigger=2)]),
     ({"title": "Кошель Хильда"}, []),
-    ({"text": "Обокрал Хильда."}, []),
+    ({"title": "Кошель Хильды"}, []),
+    ({"text": "Обокрал Хильду."}, []),
     ({"emblem": ""}, []),
     ({"emblem": "purse " * 16}, []),
     ({"emblem": "Чужой кошель"}, []),
     *[({"emblem": f"An old {word}"}, []) for word in
-      ("blood", "gore", "face", "text", "letter", "rune")],
+      ("blood", "gore", "face", "text", "letter", "rune", "FACES", "letters", "runes")],
+    ({"text": "Метка ©️."}, []),
 ])
 def test_canon_rejects_each_invalid_field(changes, previous):
     window = [(1, crime()), (2, {"fact": "deal", "npc": "HILDA", "name": "Хильда"})]
@@ -174,13 +176,34 @@ def test_canon_rejects_each_invalid_field(changes, previous):
                           for error in errors)
 
 
-def test_canon_accepts_names_from_evidence_and_unchanged_proposal():
+@pytest.mark.parametrize(("name", "text"), [
+    ("Хильда", "Обокрал Хильду."),
+    ("Хильда", "Взял кошель у Хильды."),
+    ("Лобарт", "Взял кошель у Лобарта."),
+    ("Онар", "Договорился с Онаром."),
+])
+def test_canon_accepts_names_from_evidence_and_unchanged_proposal(name, text):
     raw = proposal()
     assert canon(Proposal.of(raw), 1, [(1, crime())], []) == []
-    raw["text"] = "Взял кошель у Хильда."
+    raw["text"] = text
+    window = [(1, {"fact": "deal"}), (2, {"fact": "deal", "name": name})]
+    assert canon(Proposal.of(raw), 1, window, []) == [
+        f"Имя «{name.casefold()}» отсутствует в доказательствах",
+    ]
     raw["evidence"] = [1, 2]
-    window = [(1, crime()), (2, {"fact": "deal", "npc": "HILDA", "name": "Хильда"})]
     assert canon(Proposal.of(raw), 1, window, []) == []
+
+
+@pytest.mark.parametrize("changes", [
+    {"emblem": "A purse on a wooden surface"},
+    {"emblem": "A purse made of textile"},
+    {"emblem": "A prune beside a purse"},
+    {"text": "Поручение №2."},
+    {"text": "Повернул на 90°."},
+    {"text": "Метка ©."},
+])
+def test_canon_accepts_ordinary_words_and_symbols(changes):
+    assert canon(Proposal.of(proposal(**changes)), 1, [(1, crime())], []) == []
 
 
 async def test_complete_path_retries_records_toast_and_journal_then_rolls_back():

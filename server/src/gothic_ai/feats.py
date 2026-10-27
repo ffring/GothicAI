@@ -238,7 +238,8 @@ def canon(p: Proposal, trigger: int, window: list[tuple[int, Fact]], previous: l
         errors.append("В названии и тексте нельзя использовать латиницу")
     if "!" in words:
         errors.append("В названии и тексте нельзя использовать восклицательный знак")
-    if any(unicodedata.category(c) == "So" or c in "\u200d\ufe0f\u20e3\u203c\u2049" for c in words):
+    if any((unicodedata.category(c) == "So" and c not in "№°©")
+           or c in "\u200d\ufe0f\u20e3\u203c\u2049" for c in words):
         errors.append("В названии и тексте нельзя использовать эмодзи")
     if re.search(r"поздравля|достижени|ачивк", words, flags=re.IGNORECASE):
         errors.append("В названии и тексте нельзя писать поздравления и слова о достижениях")
@@ -255,13 +256,16 @@ def canon(p: Proposal, trigger: int, window: list[tuple[int, Fact]], previous: l
         errors.append("Повод прежнего достижения нельзя использовать снова")
     evidence_names = _names([(seq, f) for seq, f in window if seq in p.evidence])
     for name in sorted(_names(window) - evidence_names):
-        if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", words.casefold()):
+        # Match ordinary Russian case endings without treating a name as an arbitrary word prefix.
+        stem = name[:-1] if name.endswith(("а", "я", "ь", "й")) else name
+        if re.search(r"(?<!\w)" + re.escape(stem)
+                     + r"(?:а|я|у|ю|ом|ем|е|и|ы|ой|ей|ью|ь|й)?(?!\w)", words.casefold()):
             errors.append(f"Имя «{name}» отсутствует в доказательствах")
     if not p.emblem.strip() or len(p.emblem.split()) > 15:
         errors.append("Эмблема должна содержать от 1 до 15 слов")
     if not p.emblem.isascii():
         errors.append("Описание эмблемы должно быть на английском в ASCII")
-    if any(word in p.emblem.lower() for word in ("blood", "gore", "face", "text", "letter", "rune")):
+    if re.search(r"\b(blood|gore|face|text|letter|rune)s?\b", p.emblem, flags=re.IGNORECASE):
         errors.append("В эмблеме запрещены кровь, жестокость, лица, текст, буквы и руны")
     return errors
 
