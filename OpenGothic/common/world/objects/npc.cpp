@@ -134,6 +134,14 @@ struct Npc::MeleeShadow final {
   Vec3 stepRemaining;
   float stepRequestedCm = 0, stepMovedCm = 0;
   std::string outcome = "miss";
+  struct Diagnostic final {
+    uint32_t target = uint32_t(-1);
+    std::string who = "null";
+    uint64_t sample = 0;
+    Vec3 targetStart, forward, nearestOffset;
+    float initialGapCm = 0, minClearanceCm = std::numeric_limits<float>::max(), retreatCm = 0;
+    bool sampled = false, jumpback = false;
+    } diagnostic;
   };
 
 // Npc::tick may intentionally return without calling MoveAlgo (for example a native attack gate).
@@ -1533,6 +1541,11 @@ void Npc::syncMeleeShadowSwing() {
   shadow.outcome = "miss";
   shadow.stepRemaining = {};
   shadow.stepRequestedCm = shadow.stepMovedCm = 0;
+  shadow.diagnostic = {};
+  if(TestBench::bodyTracing() && currentTarget!=nullptr) {
+    shadow.diagnostic.target = owner.npcId(currentTarget);
+    shadow.diagnostic.who = meleeShadowWho(currentTarget);
+    }
   if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget)) {
     // Distance to the near surface of the target's actual body capsules.
     std::vector<HitZones::Posed> targetZones;
@@ -1602,6 +1615,61 @@ void Npc::updateMeleeShadow() {
   // including frames whose endpoint is already past the end of that window.
   const double activeBegin = double(shadow.start)+double(window.beginMs)/shadow.speed;
   const double activeEnd   = double(shadow.start)+double(window.endMs)/shadow.speed;
+  if(TestBench::bodyTracing() && double(owner.tickCount())>=activeBegin && double(owner.tickCount())<activeEnd) {
+    auto& diagnostic = shadow.diagnostic;
+    if(const auto* target = owner.npcById(diagnostic.target)) {
+      std::vector<HitZones::Posed> targetZones;
+      target->visual.hitZonesPosed(targetZones);
+      const auto root = position();
+      if(!diagnostic.sampled && !targetZones.empty()) {
+        diagnostic.sampled = true;
+        diagnostic.sample = owner.tickCount();
+        diagnostic.targetStart = target->position();
+        auto direction = target->position()-root;
+        direction.y = 0;
+        diagnostic.forward = direction.length()>0 ? Vec3::normalize(direction) : Vec3();
+        float distance = std::numeric_limits<float>::max();
+        for(const auto& zone:targetZones) {
+          const Vec2 a(zone.a.x-root.x,zone.a.z-root.z), b(zone.b.x-root.x,zone.b.z-root.z);
+          const auto axis = b-a;
+          const float at = axis.quadLength()>0 ? std::clamp(-(a.x*axis.x+a.y*axis.y)/axis.quadLength(),0.f,1.f) : 0.f;
+          distance = std::min(distance,(a+axis*at).length()-zone.r);
+          }
+        diagnostic.initialGapCm = distance-window.reachCm;
+        }
+      diagnostic.jumpback |= target->visual.pose().isJumpBack(owner.tickCount());
+      diagnostic.retreatCm = std::max(diagnostic.retreatCm,Vec3::dotProduct(target->position()-diagnostic.targetStart,diagnostic.forward));
+      // Closest points on the two capsule axes. This tracing-only summary uses
+      // actual published poses; it never changes the collision query or damage.
+      for(const auto& segment:blade)
+        for(const auto& zone:targetZones) {
+          const auto u = segment.to-segment.from, v = zone.b-zone.a, r = segment.from-zone.a;
+          const float a = Vec3::dotProduct(u,u), e = Vec3::dotProduct(v,v), f = Vec3::dotProduct(v,r);
+          float s = 0, t = 0;
+          if(a<=1.e-6f) {
+            t = e>1.e-6f ? std::clamp(f/e,0.f,1.f) : 0.f;
+            }
+          else {
+            const float c = Vec3::dotProduct(u,r);
+            if(e<=1.e-6f) s = std::clamp(-c/a,0.f,1.f);
+            else {
+              const float b = Vec3::dotProduct(u,v), denominator = a*e-b*b;
+              s = denominator>1.e-6f ? std::clamp((b*f-c*e)/denominator,0.f,1.f) : 0.f;
+              t = (b*s+f)/e;
+              if(t<0) { t = 0; s = std::clamp(-c/a,0.f,1.f); }
+              else if(t>1) { t = 1; s = std::clamp((b-c)/a,0.f,1.f); }
+              }
+            }
+          const auto offset = segment.from+u*s-(zone.a+v*t);
+          const float clearance = offset.length()-segment.radiusCm-zone.r;
+          if(clearance<diagnostic.minClearanceCm) {
+            diagnostic.minClearanceCm = clearance;
+            const auto side = Vec3(-diagnostic.forward.z,0,diagnostic.forward.x);
+            diagnostic.nearestOffset = {Vec3::dotProduct(offset,diagnostic.forward),offset.y,Vec3::dotProduct(offset,side)};
+            }
+          }
+      }
+    }
   if(shadow.stopped)
     return;
   const float walkableCos = std::cos(float(owner.script().guildVal().slide_angle[guild()])*float(M_PI)/180.f);
@@ -1826,6 +1894,24 @@ void Npc::finishMeleeShadowSwing(bool remove) {
   else if(shadow.legacyHit)
     comparison = "\"legacy_only\"";
   const auto number = [](auto value) { return std::to_string(value); };
+  std::string diagnostic = "null";
+  if(TestBench::bodyTracing()) {
+    const auto& value = shadow.diagnostic;
+    const double activeBegin = double(shadow.start)+double(window.beginMs)/shadow.speed;
+    const double activeEnd = double(shadow.start)+double(window.endMs)/shadow.speed;
+    diagnostic = "{\"target\":" + value.who +
+                 ",\"active_begin_ms\":" + number(activeBegin) +
+                 ",\"active_end_ms\":" + number(activeEnd) +
+                 ",\"sample_time_ms\":" + number(value.sample) +
+                 ",\"sampled\":" + (value.sampled ? "true" : "false") +
+                 ",\"reach_cm\":" + number(window.reachCm) +
+                 ",\"initial_gap_cm\":" + (value.sampled ? number(value.initialGapCm) : "null") +
+                 ",\"min_clearance_cm\":" + (value.minClearanceCm<std::numeric_limits<float>::max() ? number(value.minClearanceCm) : "null") +
+                 ",\"nearest_offset_forward_up_side_cm\":" + meleeShadowPoint(value.nearestOffset) +
+                 ",\"target_retreat_cm\":" + number(value.retreatCm) +
+                 ",\"jumpback\":" + (value.jumpback ? "true" : "false") +
+                 ",\"window_completed\":" + (double(owner.tickCount())>=activeEnd ? "true" : "false") + "}";
+    }
   writeMeleeShadow("{\"swing\":" + number(shadow.id) + ",\"world\":" + TestBench::bodyJson(owner.name()) +
                   ",\"game_time_ms\":" + number(shadow.tick) + ",\"end_time_ms\":" + number(owner.tickCount()) +
                   ",\"attacker\":" + shadow.attacker + ",\"weapon\":" + shadow.weapon +
@@ -1847,7 +1933,7 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                   ",\"outcome\":" + TestBench::bodyJson(shadow.outcome) +
                   ",\"step_requested_cm\":" + number(shadow.stepRequestedCm) +
                   ",\"step_moved_cm\":" + number(shadow.stepMovedCm) +
-                  "},\"comparison\":" + comparison + "}");
+                  "},\"diagnostic\":" + diagnostic + ",\"comparison\":" + comparison + "}");
   shadow.contacts.clear();
   shadow.window.reset();
   }
