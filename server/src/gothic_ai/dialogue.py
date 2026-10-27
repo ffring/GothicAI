@@ -121,6 +121,11 @@ LLM_FIRST_S, LLM_IDLE_S, STEP_RETRIES = 15.0, 15.0, 1
 # is the conversational model's after all
 QUICK_FIRST_S, QUICK_IDLE_S = 3.0, 2.0
 QUICK_HINT = "Сейчас горячо: ответь сразу, одной-двумя короткими фразами."
+SURRENDER_CLASSIFIER = (
+    "Ты классифицируешь реплики игрока в бою в ролевой игре. Ответь «да», если игрок сам сдаётся, "
+    "признаёт поражение или просит пощады/не бить его. Ответь «нет», если он угрожает, "
+    "требует сдаться противника, спрашивает или говорит что-то другое."
+)
 # the quick model's first words to the hero's phrase; "—": nothing (the answer is quick itself)
 REACT_HINT = (
     "Герой только что это сказал. Отреагируй вслух сразу, одной короткой фразой до восьми слов, "
@@ -743,6 +748,7 @@ class DialogueManager:
         # to, it may call it off (`_calm`)
         self.fights_hero: Callable[[str], bool] = lambda npc: False
         self.surrender_hold: Callable[[Conversation, list[Item]], Awaitable[None]] | None = None
+        self.surrender_context: Callable[[str], str | None] = lambda npc: None
         self.hero_fight_held: Callable[[str], bool] = lambda npc: False
         # an npc called off its fight with the hero (npc): a companion fighting it lets it be (orders.py)
         self.on_calm: list[Callable[[str], None]] = []
@@ -1253,7 +1259,7 @@ class DialogueManager:
             QUICK_SLOT.reset(token)
         log.debug("%s: the quick model warmed in %.2fs", conv.npc, time.monotonic() - started)
 
-    def _quick_slot(self, npc: str, *, evict: bool = True) -> int | None:
+    def _quick_slot(self, npc: str) -> int | None:
         npc = npc.upper()
         if npc not in self._quick_slots:
             free = (set(range(PREWARM_SLOTS)) - set(self._quick_slots.values())
@@ -1261,8 +1267,6 @@ class DialogueManager:
             if free:
                 slot = min(free)
             else:
-                if not evict:
-                    return None
                 idle = [n for n, s in self._quick_slots.items() if not self._quick_busy[s]]
                 if not idle:
                     return None
@@ -1301,32 +1305,44 @@ class DialogueManager:
             async for event in events:
                 yield event
 
-    async def _surrendering(self, conv: Conversation, request: list[Item]) -> bool:
-        """Ask only about the hero's intent, preserving this NPC's first-words prefix and slot.
+    async def _surrendering(
+        self, conv: Conversation, request: list[Item], *, opponent: str | None = None,
+    ) -> bool:
+        """Classify outside the persona on an idle slot other than the speaking NPC's.
 
-        The question and four answer tokens fit within llama.cpp's SWA rollback window. Never
-        evict another NPC for this optional probe; failure leaves the ordinary fight unchanged.
+        Reuse an unbound slot or evict the least recently used idle NPC and forget its warmed
+        prefix. Never touch the speaker's slot or an active request; no spare slot means no hold.
         """
-        if self.quick is None or time.monotonic() >= conv.talked_at + 1.5:
+        if (self.quick is None or getattr(self.quick, "_id_slot_supported", True) is False
+                or time.monotonic() >= conv.talked_at + 1.5):
             return False
-        if self._quick_slot(conv.npc, evict=False) is None:
+        own = self._quick_slots.get(conv.npc)
+        slots = [s for s in range(PREWARM_SLOTS)
+                 if s != own and not self._quick_busy[s] and not self._quick_locks[s].locked()
+                 and not any(self._quick_slots.get(n) == s and not task.done()
+                             for n, task in self._prewarms.items())]
+        if not slots:
             return False
-        question = Message(
-            "developer", "Герой сдаётся/просит пощады себе? Да/нет. "
-            "Требования к NPC и угрозы — нет.",
-        )
+        owners = {s: n for n, s in self._quick_slots.items()}
+        slot = min(slots, key=lambda s: self._quick_used.get(owners.get(s), -1))
+        if old := owners.get(slot):
+            del self._quick_slots[old]
+            self._quick_used.pop(old, None)
+            self._prewarm_history.pop(old, None)
+            self._prewarms.pop(old, None)
+        phrase = next(m.content for m in reversed(request) if isinstance(m, Message) and m.role == "user")
+        context = self.surrender_context(conv.npc) if opponent is None else opponent
+        text_in = (f"Перед этим противник сказал: «{context}»\n" if context else "")
+        text_in += f"Реплика игрока: «{phrase}»"
         text = ""
         started = time.monotonic()
+        self._quick_busy[slot] += 1
+        token = QUICK_SLOT.set(slot)
         try:
             async with asyncio.timeout_at(conv.talked_at + 1.5):
-                async with aclosing(self._quick_stream(
-                    conv.npc, instructions=conv.persona.instructions,
-                    messages=[*request, question], tools=[], temperature=0, max_tokens=4,
-                    response_format={"type": "json_schema", "json_schema": {
-                        "name": "surrender", "strict": True,
-                        "schema": {"type": "string", "enum": ["да", "нет"]},
-                    }},
-                    cache_key=conv.npc,
+                async with self._quick_locks[slot], aclosing(self.quick.stream(
+                    instructions=SURRENDER_CLASSIFIER, messages=[Message("user", text_in)],
+                    tools=[], temperature=0, max_tokens=4, grammar='root ::= "да" | "нет"',
                 )) as events:
                     async for event in events:
                         if isinstance(event, TextDelta):
@@ -1334,7 +1350,11 @@ class DialogueManager:
         except (LLMError, TimeoutError) as error:
             log.info("%s: surrender probe unavailable: %s", conv.npc, error)
             return False
-        answer = text.strip().strip('"').lower()
+        finally:
+            QUICK_SLOT.reset(token)
+            self._quick_busy[slot] -= 1
+            self._quick_free.set()
+        answer = text.strip().lower()
         log.info("%s: surrender probe %r in %.3fs", conv.npc, answer, time.monotonic() - started)
         return answer == "да"
 
@@ -2491,20 +2511,26 @@ class DialogueManager:
         """The npc's line in a fight, from the quick model. False if it said nothing (it failed or went
         quiet first): the conversational model speaks then, as in any other turn."""
         assert self.quick is not None
-        probe = conv.trigger is not None and conv.trigger.role == "user" and self.surrender_hold is not None
-        slot = self._quick_slot(conv.npc, evict=False) if probe else None
+        probe: asyncio.Task[None] | None = None
+        player = conv.trigger is not None and conv.trigger.role == "user"
+        slot = self._quick_slot(conv.npc) if player and self.surrender_hold is not None else None
         if slot is not None:
-            self._quick_busy[slot] += 1  # preserve the prefix while native calm effects are in flight
+            self._quick_busy[slot] += 1  # keep the speaker's prefix while the other slot classifies
         try:
             if slot is not None and self.surrender_hold is not None:
-                await self.surrender_hold(conv, request)
+                probe = asyncio.create_task(self.surrender_hold(conv, request))
             st = trace.step(request, None, llm=getattr(self.quick, "model", None) or self.quick.name)
             try:
                 await self._step(conv, state, request, None, st, quick=True)
             except LLMError as err:
                 log.warning("%s: the quick model failed: %s", conv.npc, err)
                 trace.event("quick_failed", error=str(err))
+            if probe is not None:
+                await probe
         finally:
+            if probe is not None:
+                probe.cancel()
+                await asyncio.gather(probe, return_exceptions=True)
             if slot is not None:
                 self._quick_busy[slot] -= 1
                 self._quick_free.set()

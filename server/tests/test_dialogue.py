@@ -2393,39 +2393,73 @@ async def test_a_rejection_after_the_quick_fight_line_keeps_the_next_step_silent
     assert history[-1].content == "Держись!"
 
 
-async def test_surrender_probe_preserves_the_first_words_prefix_and_npc_slot():
+async def test_surrender_probe_uses_a_separate_slot_and_leaves_the_npc_cache_intact():
     quick = FakeBackend(script=[FakeStep("да"), FakeStep("Ладно!")], delay=0)
     dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
                                PersonaProvider(None), quick=quick)
     conv = dialogue.open(LOBART, "Лобарт", warm=False)
     conv.talked_at = time.monotonic()
     slot = dialogue._quick_slot(LOBART)
+    history = [Message("assistant", "Я тебя проучу!")]
+    dialogue._prewarm_history[LOBART] = history
     request = [Message("assistant", "Я тебя проучу!"),
                Message("developer", dialogue._brief(conv) + "\n" + dialogue_module.QUICK_HINT),
                Message("user", "Сдаюсь, забирай золото, только не бей")]
     assert await dialogue._surrendering(conv, request)
+    assert dialogue._quick_slots[LOBART] == slot
+    assert dialogue._prewarm_history[LOBART] is history
     words, _ = await dialogue._quick_words(conv, request)
     assert words == "Ладно!"
-    assert quick.slot_ids == [slot, slot]
-    assert quick.calls[0][0] == quick.calls[1][0] == conv.persona.instructions
-    assert quick.calls[0][1][:-1] == quick.calls[1][1] == request
-    assert len(quick.calls[0][1][-1].content) < 400
+    assert quick.slot_ids[0] != slot and quick.slot_ids[1] == slot
+    assert quick.calls[0][0] != conv.persona.instructions
+    assert quick.calls[1][0] == conv.persona.instructions
+    assert request[-1].content in " ".join(m.content for m in quick.calls[0][1])
+    assert quick.calls[1][1] == request
     assert quick.temperatures == [0, None]
     assert quick.max_token_limits == [4, None]
+    assert quick.grammars == ['root ::= "да" | "нет"', None]
     assert not conv.history
 
 
-async def test_surrender_probe_does_not_evict_another_npcs_slot():
+async def test_surrender_probe_evicts_only_the_least_recent_idle_foreign_slot():
     quick = FakeBackend("да", delay=0)
     dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
                                PersonaProvider(None), quick=quick)
-    for npc in (XARDAS, LOBART, HILDA):
+    for npc in (LOBART, HILDA, XARDAS):
+        dialogue._quick_slot(npc)
+        dialogue._prewarm_history[npc] = [Message("assistant", npc)]
+    owner_slot, evicted_slot = dialogue._quick_slots[LOBART], dialogue._quick_slots[HILDA]
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    conv.talked_at = time.monotonic()
+    assert await dialogue._surrendering(conv, [Message("user", "Пощади!")])
+    assert quick.slot_ids == [evicted_slot]
+    assert dialogue._quick_slots == {LOBART: owner_slot, XARDAS: 2}
+    assert set(dialogue._prewarm_history) == {LOBART, XARDAS}
+    assert set(dialogue._quick_used) == {LOBART, XARDAS}
+
+
+@pytest.mark.parametrize("unavailable", ["busy", "locked"])
+async def test_surrender_probe_skips_when_only_its_own_or_busy_slots_remain(unavailable):
+    quick = FakeBackend("да", delay=0)
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    for npc in (LOBART, HILDA, XARDAS):
         dialogue._quick_slot(npc)
     slots = dict(dialogue._quick_slots)
-    conv = dialogue.open("BDT_1014_BANDIT_L", "Браго", warm=False)
+    for slot in (1, 2):
+        if unavailable == "busy":
+            dialogue._quick_busy[slot] = 1
+        else:
+            await dialogue._quick_locks[slot].acquire()
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
     conv.talked_at = time.monotonic()
-    assert not await dialogue._surrendering(conv, [Message("user", "Пощади!")])
-    assert dialogue._quick_slots == slots and not quick.calls
+    try:
+        assert not await dialogue._surrendering(conv, [Message("user", "Пощади!")])
+        assert dialogue._quick_slots == slots and not quick.calls
+    finally:
+        for slot in (1, 2):
+            if unavailable == "locked":
+                dialogue._quick_locks[slot].release()
 
 
 @pytest.mark.parametrize("reply", ["нет", "Я тебя не пощажу", ""])
@@ -2436,6 +2470,19 @@ async def test_surrender_probe_requires_an_affirmative_model_answer(reply):
     conv = dialogue.open(LOBART, "Лобарт", warm=False)
     conv.talked_at = time.monotonic()
     assert not await dialogue._surrendering(conv, [Message("user", "Сдаюсь! Не бей! Пощади!")])
+
+
+async def test_surrender_probe_includes_the_opponents_current_combat_words():
+    quick = FakeBackend("да", delay=0)
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    dialogue.surrender_context = lambda npc: "Сдаёшься?"
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    conv.talked_at = time.monotonic()
+    assert await dialogue._surrendering(conv, [Message("user", "Да")])
+    assert quick.calls[0][1] == [Message(
+        "user", "Перед этим противник сказал: «Сдаёшься?»\nРеплика игрока: «Да»",
+    )]
 
 
 @pytest.mark.parametrize("failure", ["unavailable", "error", "deadline", "expired"])
@@ -2537,23 +2584,31 @@ async def test_surrender_recognition_live_gemma():
         raise AssertionError("the live quick model produced no first words")
 
     try:
-        for phrase, expected in SURRENDER_PHRASES:
-            await warm()
+        await warm()
+        owner_slot = dialogue._quick_slots[conv.npc]
+        cases = [(phrase, expected, None) for phrase, expected in SURRENDER_PHRASES]
+        cases.append(("Да", True, "Сдаёшься?"))
+        for phrase, expected, context in cases:
+            dialogue.surrender_context = lambda npc, words=context: words
             request = [*history, situation, Message("user", phrase)]
             conv.talked_at = started = time.monotonic()
             actual = await dialogue._surrendering(conv, request)
             durations.append(time.monotonic() - started)
-            cache_timings.append(dict(quick.timings.get(dialogue._quick_slots[conv.npc], {})))
+            cache_timings.append({slot: dict(timing) for slot, timing in quick.timings.items()
+                                  if slot != owner_slot})
             observed.append((phrase, expected, actual))
+            assert dialogue._quick_slots[conv.npc] == owner_slot
+        dialogue.surrender_context = lambda npc: None
         for phrase, _ in SURRENDER_PHRASES[:3]:
             request = [*history, situation, Message("user", phrase)]
             await warm()
             baseline = await first_delta(request)
             await warm()
-            conv.talked_at = started = time.monotonic()
-            await dialogue._surrendering(conv, request)
-            await first_delta(request)
-            overheads.append(time.monotonic() - started - baseline)
+            conv.talked_at = time.monotonic()
+            _, parallel_first = await asyncio.gather(
+                dialogue._surrendering(conv, request), first_delta(request),
+            )
+            overheads.append(parallel_first - baseline)
     finally:
         await quick.aclose()
     positives = sum(expected for _, expected, _ in observed)

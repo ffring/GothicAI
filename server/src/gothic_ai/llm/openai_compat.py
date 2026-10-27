@@ -53,7 +53,7 @@ class OpenAICompatBackend:
     async def _create(self, **kwargs: Any) -> Any:
         slot = QUICK_SLOT.get()
         if slot is not None and self._id_slot_supported:
-            kwargs["extra_body"] = {"id_slot": slot}
+            kwargs.setdefault("extra_body", {})["id_slot"] = slot
             if kwargs.get("stream"):
                 kwargs["extra_body"]["timings_per_token"] = True
                 kwargs["stream_options"] = {"include_usage": True}
@@ -62,6 +62,8 @@ class OpenAICompatBackend:
         except openai.BadRequestError as err:
             if "extra_body" not in kwargs or "id_slot" not in str(err.body or err):
                 raise
+            if "grammar" in kwargs["extra_body"]:
+                raise  # an unpinned classifier could overwrite the speaking NPC's cache
             if self._id_slot_supported:
                 log.warning("%s: server rejected id_slot; continuing without slot pinning", self.name)
             self._id_slot_supported = False
@@ -90,7 +92,7 @@ class OpenAICompatBackend:
         cache_key: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        response_format: dict[str, Any] | None = None,
+        grammar: str | None = None,
     ) -> AsyncIterator[LLMEvent]:
         chat = [{"role": "system", "content": instructions}, *chat_messages(messages)]
         kwargs: dict[str, Any] = {}
@@ -111,8 +113,10 @@ class OpenAICompatBackend:
             kwargs["max_tokens"] = limit
         if temperature is not None:
             kwargs["temperature"] = temperature
-        if response_format is not None:
-            kwargs["response_format"] = response_format
+        if grammar is not None:
+            kwargs["extra_body"] = {
+                "grammar": grammar, "chat_template_kwargs": {"enable_thinking": False},
+            }
         text = ""
         calls: dict[int, dict[str, str]] = {}
         stream = None

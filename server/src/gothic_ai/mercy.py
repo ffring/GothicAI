@@ -20,6 +20,7 @@ from .perception import BEASTS
 from .protocol import (
     CombatHit,
     GameMessage,
+    LineStarted,
     Loading,
     NpcRoster,
     NpcViews,
@@ -123,7 +124,9 @@ class Mercy:
         self.battles: dict[str, Battle] = {}
         self.offering: set[str] = set()
         self.holds: dict[str, HeroHold] = {}
+        self._hold_turns: dict[str, HeroHold] = {}
         self._resuming: dict[str, asyncio.Task[None]] = {}
+        self._fight_words: dict[str, str] = {}
         # False until the resumed native attack appears in a roster; its later end starts a new fight.
         self._hold_used: dict[str, bool] = {}
         self._ticks = 0
@@ -135,6 +138,7 @@ class Mercy:
         dialogue.on_player_said.append(self.hero_said)
         dialogue.surrender_hold = self.hold_surrender
         dialogue.hero_fight_held = self.held
+        dialogue.surrender_context = self._fight_words.get
 
     def held(self, npc: str) -> bool:
         return any(npc in hold.members for hold in self.holds.values())
@@ -147,8 +151,8 @@ class Mercy:
             hold.timer.cancel()
         return True
 
-    def _end_hold(self, npc: str, hold: HeroHold) -> None:
-        if self._release_hold(npc, hold):
+    def _end_hold(self, npc: str, hold: HeroHold, *, force: bool = False) -> None:
+        if self._release_hold(npc, hold) or force:
             hold.resumed = True
             task = self._resuming[npc] = asyncio.create_task(self._resume_hold(hold))
             self.dialogue._background.add(task)
@@ -173,6 +177,7 @@ class Mercy:
 
     async def hold_surrender(self, conv: Conversation, request: list[Item]) -> None:
         npc = conv.npc
+        opponent = self._fight_words.get(npc, "")  # freeze before the parallel first words can start
         if (self.dialogue.quick is None or npc in self._hold_used or self.held(npc)
                 or not self._hero_turn(npc)):
             return
@@ -182,14 +187,21 @@ class Mercy:
         except (GameError, TimeoutError) as error:
             log.info("%s: surrender hold unavailable: %s", npc, error)
             return
-        if not await self.dialogue._surrendering(conv, request):
+        if not await self.dialogue._surrendering(conv, request, opponent=opponent):
             return
         if self._loading or not self._hero_turn(npc) or not self._alive(npc):
             return
         hold = self.holds[npc] = HeroHold()
+        self._hold_turns[npc] = hold
         hold.timer = asyncio.get_running_loop().call_later(HERO_HOLD_S, self._end_hold, npc, hold)
         assert conv.reply is not None
-        conv.reply.add_done_callback(lambda _: self._end_hold(npc, hold))
+
+        def finished_turn(_: asyncio.Task) -> None:
+            self._end_hold(npc, hold)
+            if self._hold_turns.get(npc) is hold:
+                del self._hold_turns[npc]
+
+        conv.reply.add_done_callback(finished_turn)
         self.accepting.add(npc)
         entry = self.orders.talk.people[npc]
         band = set(self.parley.members(npc)) if self.parley and self.parley.bandit(npc) else set()
@@ -208,6 +220,8 @@ class Mercy:
             except (GameError, TimeoutError) as error:
                 log.info("%s: surrender hold unavailable: %s", member, error)
                 self._end_hold(npc, hold)
+                return
+            if self.holds.get(npc) is not hold:
                 return
             person = self.orders.talk.people[member]
             listener = self.dialogue.open(member, person.name, warm=False)
@@ -264,12 +278,12 @@ class Mercy:
     def _hit(self, hit: CombatHit) -> None:
         npc, attacker = hit.npc.upper(), hit.by.upper()
         if attacker in {"PLAYER", "PC_HERO"}:
-            for recipient, hold in list(self.holds.items()):
+            for recipient, hold in list(self._hold_turns.items()):
                 if npc in hold.members:
                     if hit.dead or hit.down:
                         self._dead.add(npc)
                     self.accepting.discard(recipient)
-                    self._end_hold(recipient, hold)
+                    self._end_hold(recipient, hold, force=hold.resumed)
                     return
         if self._ours(npc) or not self._ours(attacker):
             return
@@ -354,6 +368,8 @@ class Mercy:
             self.accepting.clear()
             for npc, hold in list(self.holds.items()):
                 self._release_hold(npc, hold)
+            self._hold_turns.clear()
+            self._fight_words.clear()
             for task in self._resuming.values():
                 task.cancel()
             self._resuming.clear()
@@ -364,6 +380,13 @@ class Mercy:
             return
         if self._loading:
             return
+        if isinstance(msg, LineStarted):
+            npc = msg.npc.upper()
+            if (line := self.dialogue._lines.get(msg.line)) and (
+                self.dialogue.fights_hero(npc) or self._fighting(npc) or self.held(npc)
+            ):
+                self._fight_words[npc] = line[0]
+            return
         if isinstance(msg, CombatHit):
             self._hit(msg)
             return
@@ -371,6 +394,8 @@ class Mercy:
             self._ticks = msg.t
             if isinstance(msg, NpcRoster):
                 for person in msg.npcs:
+                    if person.state != "ZS_ATTACK" and not self.held(person.id):
+                        self._fight_words.pop(person.id, None)
                     if person.id in self._hold_used and not self.held(person.id):
                         if person.state == "ZS_ATTACK":
                             self._hold_used[person.id] = True
@@ -600,10 +625,10 @@ class Mercy:
 
     async def _accept(self, conv: Conversation, call: ToolCall, snap: Snapshot | None) -> ToolOutcome:
         npc, now = conv.npc, self._now()
-        hold = self.holds.get(npc)
+        hold = self._hold_turns.get(npc)
         try:
             eligible = (npc in self.accepting and self._hero_turn(npc)
-                        and (hold is not None or await self._hero_fight(npc)))
+                        and (npc in self.holds or await self._hero_fight(npc)))
         except (GameError, TimeoutError) as error:
             return ToolOutcome(f"Отклонено: не удалось проверить бой с героем ({error}).", "rejected")
         if not eligible:
@@ -649,13 +674,11 @@ class Mercy:
             conv, intent, effects=[g.effect("self") for g in gives], native_attitude="ATT_FRIENDLY",
         )
         if not ok:
-            return ToolOutcome(f"Отклонено: {output}", "rejected")
-        if npc not in self.accepting:
-            if resume := self._resuming.get(npc):
-                await resume
             if hold is not None:
-                await self._resume_hold(hold)
-            return ToolOutcome("Отклонено: герой нарушил паузу боя.", "rejected")
+                self._end_hold(npc, hold, force=hold.resumed)
+                if resume := self._resuming.get(npc):
+                    await resume
+            return ToolOutcome(f"Отклонено: {output}", "rejected")
         if hold is not None and hold.resumed:
             for member in hold.members:
                 if member == npc or not self._alive(member):
@@ -665,8 +688,21 @@ class Mercy:
                 self.dialogue._change_intent(
                     listener, listening, self.link.snapshots.get(member), body=False,
                 )
-                await self.dialogue._calm(listener, listening, native_attitude="ATT_FRIENDLY")
-        if hold is not None and self._release_hold(npc, hold):
+                output, ok = await self.dialogue._calm(listener, listening, native_attitude="ATT_FRIENDLY")
+                if not ok:
+                    self._end_hold(npc, hold, force=True)
+                    if resume := self._resuming.get(npc):
+                        await resume
+                    return ToolOutcome(f"Отклонено: {output}", "rejected")
+        if npc not in self.accepting:
+            if resume := self._resuming.get(npc):
+                await resume
+            if hold is not None:
+                await self._resume_hold(hold)
+            return ToolOutcome("Отклонено: герой нарушил паузу боя.", "rejected")
+        if hold is not None:
+            self._release_hold(npc, hold)
+            self._hold_turns.pop(npc, None)
             for member in hold.members:
                 self._hold_used.pop(member, None)
         self.accepting.discard(npc)
