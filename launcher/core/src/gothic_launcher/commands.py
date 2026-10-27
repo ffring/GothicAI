@@ -253,6 +253,8 @@ def services(config: Config, layout: Layout, ports: Ports, cwd: Path) -> list[Pr
         if keys.inworld_api_key:
             env["INWORLD_API_KEY"] = keys.inworld_api_key
         argv = ["--port", str(ports.tts), "--provider", s.tts.provider, "--fallback", s.tts.fallback]
+        if not s.tts.original_voices:
+            argv.append("--no-original-voices")
         if s.tts.loudness is not None:
             level = s.tts.loudness if isinstance(s.tts.loudness, str) else f"{s.tts.loudness:g}"
             argv.append(f"--loudness={level}")  # one argument: a negative level is not an option

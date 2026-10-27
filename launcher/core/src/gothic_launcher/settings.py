@@ -104,6 +104,9 @@ class VoiceSettings(_Section):
 
 class TtsSettings(_Section):
     enabled: bool = Field(True, title="Озвучка NPC", description="Выключено: только субтитры")
+    original_voices: bool = Field(
+        True, title="Оригинальные голоса", description="Клоны оригинальных голосов сюжетных NPC в Inworld"
+    )
     provider: str = Field("inworld", title="Голоса", description="inworld, voxcpm или openai:…")
     fallback: str = Field("voxcpm", title="Запасные голоса", description="none: без запасного")
     voxcpm_url: str | None = Field(None, title="Адрес VoxCPM2")
