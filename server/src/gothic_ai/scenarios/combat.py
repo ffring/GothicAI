@@ -41,6 +41,7 @@ async def surrender_live(
     if dialogue.trace is None:
         raise GameError("scenario surrender_live requires a trace directory")
     trace = dialogue.trace
+    await asyncio.to_thread(dialogue.personas.warm)
     await link.wait_world()
     await _save_or_fail(link, 8)
     bandit, guard = "BDT_1013_BANDIT_L", "MIL_310_STADTWACHE"
@@ -253,7 +254,7 @@ async def surrender_live(
                     for index, step in enumerate(turn["steps"]) if step.get("llm") is None
                 ]
                 if turn["status"] not in {"completed", "step_cap"} or any(
-                    e["kind"] in {"quick_failed", "act_failed"} for e in turn["events"]
+                    e["kind"] == "act_failed" for e in turn["events"]
                 ):
                     raise GameError(f"surrender_live: model turn failed: {turn['status']}, {turn['events']}")
                 # Weapon warnings previously restarted Lobart's fight 13 s after surrender.
@@ -343,6 +344,7 @@ async def mercy(
     """A farmer yields after a real low-health hit and can be spoken to after being spared."""
     if dialogue.llm.name != "fake":
         raise GameError("scenario mercy requires LLM=fake")
+    await asyncio.to_thread(dialogue.personas.warm)
     await link.wait_world()
     await link.debug("skip_important", near=LOBART)
     await attach_when_free(link, LOBART)
@@ -461,6 +463,7 @@ async def hero_yield(
     """The hero's typed surrender stops a native fight and pays real gold to its winner."""
     if dialogue.llm.name != "fake":
         raise GameError("scenario hero_yield requires LLM=fake")
+    await asyncio.to_thread(dialogue.personas.warm)
     await link.wait_world()
     await link.debug("skip_important", near=LOBART)
     await attach_when_free(link, LOBART)

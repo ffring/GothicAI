@@ -2373,7 +2373,7 @@ class DialogueManager:
             # the quick model's words do not wait for the extensions: they ready the whole situation meanwhile
             situation_text, snap, sight = await self._situation(conv, body, brief=quick or react)
             trace.record["snapshot"] = snap.model_dump(mode="json") if snap is not None else None
-            if (quick or react) and not parallel:
+            if quick or react:
                 full = asyncio.create_task(self._situation(conv, body))
             if kind == "player":  # its first reaction at once: words (outside a fight) and a gesture
                 hint = Message("developer", f"{situation_text}\n{REACT_HINT}")
@@ -2420,7 +2420,7 @@ class DialogueManager:
                 ready = asyncio.Event()
                 quick_line = asyncio.create_task(self._quick_line(conv, state, request, trace, ready=ready))
                 await ready.wait()  # the situation must include the surrender probe's outcome
-                full = asyncio.create_task(self._situation(conv, body))
+                assert full is not None
                 status = await self._act_on_line(conv, state, trigger, full, sound, trace,
                                                  quick_line=quick_line)
                 if await quick_line:
@@ -2640,7 +2640,7 @@ class DialogueManager:
             conv.acting = True  # the hero may speak again: a new turn, not an interruption
             await self._status(conv, "idle")
         situation_text, _, state.sight = await full
-        if quick_line is None and self.hero_fight_held(conv.npc):
+        if self.hero_fight_held(conv.npc):
             situation_text, _, state.sight = await self._situation(conv, None)
         if state.dynamic_tools:
             state.tools = self._offered(conv.npc, state.sight)
