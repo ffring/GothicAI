@@ -17,7 +17,9 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -282,7 +284,19 @@ class InworldTTS:
             if voice.description:
                 body["description"] = voice.description[:500]
             # cloning takes 10-20 s before the answer comes: longer than a line's timeout
-            cloned = await self._call("POST", "/voices/v1/voices:clone", json=body, timeout=CLONE_TIMEOUT)
+            for attempt in range(6):
+                resp = await self._request(
+                    "POST", "/voices/v1/voices:clone", json=body, timeout=CLONE_TIMEOUT
+                )
+                if resp.status_code == 429 and attempt < 5:
+                    delay = _clone_retry_delay(resp)
+                    log.info("original voices: Inworld rate limit, waiting %g s", delay)
+                    await asyncio.sleep(delay)
+                    continue
+                if resp.status_code != 200:
+                    _raise(resp.status_code, resp.text)
+                cloned = resp.json()
+                break
             for checked in cloned.get("audioSamplesValidated", []):
                 if errors := [e.get("text", e) for e in checked.get("errors", [])]:
                     raise TtsError(f"inworld: the sample of {voice.id!r} was refused: {errors}")
@@ -358,6 +372,19 @@ def preview_text(language: str) -> str:
 
 def _describe(err: Exception) -> str:
     return f"{type(err).__name__}: {err}" if str(err) else type(err).__name__  # timeouts have no text
+
+
+def _clone_retry_delay(resp: httpx.Response) -> float:
+    retry_after = resp.headers.get("Retry-After", "")
+    try:
+        delay = float(retry_after)
+    except ValueError:
+        try:
+            delay = parsedate_to_datetime(retry_after).timestamp() - time.time()
+        except (ValueError, TypeError, OverflowError):
+            match = re.search(r"try again in (\d+(?:\.\d+)?) seconds?", resp.text, re.IGNORECASE)
+            delay = float(match[1]) if match else 30.0
+    return max(0.0, delay) + 1.0  # leave a second for Inworld's rate-limit window to reset
 
 
 def _raise(status: int, detail: str) -> None:
