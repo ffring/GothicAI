@@ -118,6 +118,10 @@ def test_notable_first_repeated_and_unusual_outcomes():
     for changes in ({"how": "amended"}, {"how": "dropped"}, {"pay": "none"}):
         unusual = {**ordinary, **changes}
         assert notable(6, unusual, [(5, ordinary), (6, unusual)])
+    monster = {"fact": "died", "npc": "MONSTER", "killer": "PLAYER", "monster": True}
+    for flag in (False, None):
+        human = {"fact": "died", "npc": "HUMAN", "killer": "PLAYER", "monster": flag}
+        assert notable(2, human, [(1, monster), (2, human)])
 
 
 def test_turns_require_the_related_earlier_deed():
@@ -182,6 +186,7 @@ def test_canon_rejects_each_invalid_field(changes, previous):
     ("Хильда", "Взял кошель у Хильды."),
     ("Лобарт", "Взял кошель у Лобарта."),
     ("Онар", "Договорился с Онаром."),
+    ("Лорд Хаген", "Обокрал лорда Хагена."),
 ])
 def test_canon_accepts_names_from_evidence_and_unchanged_proposal(name, text):
     raw = proposal()

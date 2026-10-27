@@ -158,7 +158,10 @@ def hero_view(seq: int, fact: Fact) -> Fact | None:
 
 def _pattern(fact: Fact) -> tuple[str, Any]:
     kind = fact["fact"]
-    key = {"crime": "kind", "quest_outcome": "how", "surrender": "status", "claim": "truth"}
+    key = {
+        "crime": "kind", "quest_outcome": "how", "surrender": "status", "claim": "truth",
+        "died": "monster",
+    }
     if kind == "broken":
         return kind, next(k for k in ("promise", "debt", "contract") if k in fact)
     return kind, fact.get(key[kind]) if kind in key else None
@@ -257,9 +260,12 @@ def canon(p: Proposal, trigger: int, window: list[tuple[int, Fact]], previous: l
     evidence_names = _names([(seq, f) for seq, f in window if seq in p.evidence])
     for name in sorted(_names(window) - evidence_names):
         # Match ordinary Russian case endings without treating a name as an arbitrary word prefix.
-        stem = name[:-1] if name.endswith(("а", "я", "ь", "й")) else name
-        if re.search(r"(?<!\w)" + re.escape(stem)
-                     + r"(?:а|я|у|ю|ом|ем|е|и|ы|ой|ей|ью|ь|й)?(?!\w)", words.casefold()):
+        parts = [
+            re.escape(part[:-1] if part.endswith(("а", "я", "ь", "й")) else part)
+            + r"(?:а|я|у|ю|ом|ем|е|и|ы|ой|ей|ью|ь|й)?"
+            for part in name.split()
+        ]
+        if re.search(r"(?<!\w)" + r"\s+".join(parts) + r"(?!\w)", words.casefold()):
             errors.append(f"Имя «{name}» отсутствует в доказательствах")
     if not p.emblem.strip() or len(p.emblem.split()) > 15:
         errors.append("Эмблема должна содержать от 1 до 15 слов")
