@@ -51,6 +51,8 @@ static std::string_view humansTorchOverlay = "_TORCH.MDS";
 
 namespace {
 
+constexpr float meleeMagnetTorsoGapCm = 18.f;
+
 std::string meleeShadowPoint(const Vec3& p) {
   std::ostringstream out;
   out.imbue(std::locale::classic());
@@ -108,6 +110,7 @@ void writeMeleeShadow(const std::string& row) {
 struct Npc::MeleeReach final {
   float advanceCm = std::numeric_limits<float>::infinity(), contactMs = 0, yawDeg = 0, cpuMs = 0;
   float uncoveredCm = std::numeric_limits<float>::infinity();
+  float torsoGapCm = std::numeric_limits<float>::infinity();
   };
 
 struct Npc::MeleeShadow final {
@@ -139,14 +142,18 @@ struct Npc::MeleeShadow final {
   size_t consumed = 0, targetsHit = 0;
   bool stopped = false, physicsHits = false;
   struct Magnet final {
+    const Npc* target = nullptr;
     Vec3 direction;
     float rawCm = std::numeric_limits<float>::infinity(), requestedCm = 0, offeredCm = 0;
     float combinedCm = 0, estimatedCm = 0, peakCmS = 0, estimatedPeakCmS = 0;
     float yawRequested = 0, yawApplied = 0, peakYawDegS = 0, durationMs = 0;
+    float forwardCm = 0, backwardCm = 0, safetyBackoffCm = 0;
+    float minTorsoGapCm = std::numeric_limits<float>::infinity(), previewTorsoGapCm = std::numeric_limits<float>::infinity();
+    uint64_t safetyFrames = 0, safetyClamps = 0;
     uint64_t contactObservedMs = 0;
     double lastFeedMs = 0;
     const char* contactKind = "none";
-    bool eligible = false, feasible = false, contactStopped = false;
+    bool eligible = false, feasible = false, contactStopped = false, forwardStopped = false;
     } magnet;
   std::string outcome = "miss";
   struct Diagnostic final {
@@ -1598,7 +1605,19 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
         blades.push_back({grip,knuckle,{0,1,0},6.f});
         if(forearm<sampled.boneCount()) blades.push_back({at(forearm,{}),grip,{0,1,0},4.f});
         }
-      else blades.push_back({grip,at(hand,{-length,0,0}),{0,1,0},2.f});
+      else {
+        const auto blade = at(hand,{-length,0,0})-grip;
+        // Plan contact on the working outer blade, not beside the grip.
+        blades.push_back({grip+blade*.5f,grip+blade*.85f,{0,1,0},2.f});
+        }
+      std::vector<HitZones::Posed> torso;
+      const auto matrix = mkPositionMatrix();
+      const float ownScale = Vec3(matrix.at(0,0),matrix.at(0,1),matrix.at(0,2)).length();
+      visual.hitZoneShape().posed(sampled.transform(),sampled.boneCount(),ownScale,torso);
+      for(auto& capsule:torso) {
+        capsule.a = rotate(capsule.a);
+        capsule.b = rotate(capsule.b);
+        }
       // Cast both ways: a short backward correction can put an overreaching
       // blade back through a close target. Preserve the raw distance for cap statistics.
       const float limit = distance+length+40.f;
@@ -1606,6 +1625,9 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
       const float backward = owner.physic()->meleeBladeAdvance(blades,body,-direction,limit);
       const auto consider = [&](float advance) {
         if(!std::isfinite(advance))
+          return;
+        const float gap = HitZones::horizontalBodyGap(torso,zones,direction*advance);
+        if(gap<meleeMagnetTorsoGapCm || Vec3::dotProduct(target.position()-position()-rootMotion-direction*advance,direction)<0.f)
           return;
         const float available = std::min(advance<0.f ? 40.f : 120.f,.6f*elapsed);
         const float uncovered = std::max(0.f,std::abs(advance)-available);
@@ -1631,10 +1653,18 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
           result.contactMs = elapsed;
           result.yawDeg = yaw;
           result.uncoveredCm = uncovered;
+          result.torsoGapCm = gap;
           }
         };
       consider(forward);
       consider(-backward);
+      if((forward==0.f || backward==0.f) && HitZones::horizontalBodyGap(torso,zones)<meleeMagnetTorsoGapCm) {
+        // Starting inside a target makes an ordinary cast return zero in both
+        // directions. Cast back from outside to retain a bounded retreat plan.
+        auto shifted = blades;
+        for(auto& segment:shifted) { segment.from-=direction*limit; segment.to-=direction*limit; }
+        consider(owner.physic()->meleeBladeAdvance(shifted,body,direction,2.f*limit)-limit);
+        }
       }
     if(tick==last) break;
     tick = std::min(last,tick+interval);
@@ -1736,6 +1766,7 @@ void Npc::syncMeleeShadowSwing() {
   if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget,60.f)) {
     auto& magnet = shadow.magnet;
     magnet.eligible = true;
+    magnet.target = currentTarget;
     auto direction = currentTarget->position()-position();
     direction.y = 0;
     if(direction.length()>0.f)
@@ -1755,6 +1786,7 @@ void Npc::syncMeleeShadowSwing() {
     shadow.diagnostic.previewCpuMs = reach.cpuMs;
     shadow.diagnostic.previewApproachCm = reach.advanceCm;
     magnet.rawCm = reach.advanceCm;
+    magnet.previewTorsoGapCm = reach.torsoGapCm;
     if(std::isfinite(reach.advanceCm)) {
       magnet.durationMs = reach.contactMs;
       magnet.yawRequested = reach.yawDeg;
@@ -1780,6 +1812,24 @@ void Npc::updateMeleeShadow() {
     body.push_back({capsule.a,capsule.b,capsule.r,capsule.bone,uint8_t(capsule.zone)});
   owner.physic()->updateShadowBody(this,body);
   meleeShadowBody = true;
+  if(TestBench::bodyTracing() && isHuman() && currentTarget!=nullptr && owner.npcId(currentTarget)!=uint32_t(-1)) {
+    std::vector<HitZones::Posed> targetZones;
+    currentTarget->visual.hitZonesPosed(targetZones);
+    const float gap = HitZones::horizontalBodyGap(zones,targetZones);
+    const auto radius = [](const std::vector<HitZones::Posed>& capsules) {
+      float largest = 0;
+      for(const auto& capsule:capsules)
+        if(capsule.zone==HitZones::Body) largest = std::max(largest,capsule.r);
+      return largest;
+      };
+    TestBench::bodyEvent(*this,currentTarget,"melee_torso_gap",owner.tickCount(),
+                        "\"gap_cm\":"+(std::isfinite(gap) ? std::to_string(gap) : "null")+
+                        ",\"overlap\":"+(gap<0.f ? "true" : "false")+
+                        ",\"attacker_down\":"+(isDown() ? "true" : "false")+
+                        ",\"target_down\":"+(currentTarget->isDown() ? "true" : "false")+
+                        ",\"attacker_body_radius_cm\":"+std::to_string(radius(zones))+
+                        ",\"target_body_radius_cm\":"+std::to_string(radius(targetZones)));
+    }
   syncMeleeShadowSwing();
   if(!meleeShadow || !meleeShadow->window)
     return;
@@ -1899,6 +1949,10 @@ auto Npc::meleeStep(uint64_t dt) -> Vec3 {
   auto& magnet = swing.magnet;
   if(!magnet.eligible || magnet.contactStopped || magnet.durationMs<=0.f || dt==0)
     return {};
+  if(magnet.target==nullptr || owner.npcId(magnet.target)==uint32_t(-1) || magnet.target->isDown()) {
+    magnet.forwardStopped = true;
+    return {};
+    }
   // Integrate only the part of this movement interval before the frozen deadline.
   const double deadline = double(swing.tick)+magnet.durationMs;
   const double end = std::min(double(owner.tickCount()),deadline);
@@ -1913,7 +1967,69 @@ auto Npc::meleeStep(uint64_t dt) -> Vec3 {
   magnet.yawApplied += yawStep;
   magnet.peakYawDegS = std::max(magnet.peakYawDegS,std::abs(yawStep)*1000.f/float(dt));
   const float left = magnet.requestedCm*fraction-magnet.offeredCm;
-  const float distance = std::clamp(left,-.6f*milliseconds,.6f*milliseconds);
+  float distance = std::clamp(left,-.6f*milliseconds,.6f*milliseconds);
+  const auto started = std::chrono::steady_clock::now();
+  const auto posedAtRoot = [](const Npc& npc) {
+    std::vector<HitZones::Posed> capsules;
+    npc.visual.hitZonesPosed(capsules);
+    // Bones still contain the previous published transform during movement.
+    // Rebase to the live root, including an opponent that moved earlier this tick.
+    auto inverse = npc.visual.transform();
+    inverse.inverse();
+    const auto current = npc.mkPositionMatrix();
+    for(auto& capsule:capsules) {
+      inverse.project(capsule.a); inverse.project(capsule.b);
+      current.project(capsule.a); current.project(capsule.b);
+      }
+    return capsules;
+    };
+  const auto torso = posedAtRoot(*this), targetTorso = posedAtRoot(*magnet.target);
+  const float gap = HitZones::horizontalBodyGap(torso,targetTorso);
+  magnet.minTorsoGapCm = std::min(magnet.minTorsoGapCm,gap);
+  ++magnet.safetyFrames;
+  const float planned = distance;
+  if(!std::isfinite(gap)) {
+    magnet.forwardStopped = true;
+    distance = 0;
+    }
+  else {
+    const float forward = std::max(0.f,gap-meleeMagnetTorsoGapCm);
+    if(distance>0.f) {
+      // Once the feed reaches its safety boundary, do not chase a retreating target.
+      distance = magnet.forwardStopped ? 0.f : std::min(distance,forward);
+      if(distance<planned)
+        magnet.forwardStopped = true;
+      }
+    if(gap<=meleeMagnetTorsoGapCm)
+      magnet.forwardStopped = true;
+    if(gap<meleeMagnetTorsoGapCm)
+      distance = std::min(distance,-std::min(meleeMagnetTorsoGapCm-gap,.6f*milliseconds));
+    distance = std::max(distance,-std::max(0.f,40.f-magnet.backwardCm));
+    if(distance<0.f) {
+      const float firstGap = HitZones::horizontalBodyGap(torso,targetTorso,magnet.direction*-std::min(1.f,-distance));
+      const float lastGap = HitZones::horizontalBodyGap(torso,targetTorso,magnet.direction*distance);
+      // Intersecting projected axes have a flat distance until they separate.
+      // Permit that escape plateau, but never move towards a smaller clearance.
+      if(firstGap<gap || lastGap<gap)
+        distance = 0;
+      }
+    }
+  const float after = HitZones::horizontalBodyGap(torso,targetTorso,magnet.direction*distance);
+  if(distance!=planned)
+    ++magnet.safetyClamps;
+  if(distance<planned && distance<0.f)
+    magnet.safetyBackoffCm += -distance;
+  if(distance>0.f) magnet.forwardCm += distance;
+  else magnet.backwardCm -= distance;
+  if(TestBench::bodyTracing())
+    TestBench::bodyEvent(*this,magnet.target,"melee_magnet_step",owner.tickCount(),
+                        "\"swing\":"+std::to_string(swing.id)+",\"dt_ms\":"+std::to_string(dt)+
+                        ",\"gap_cm\":"+(std::isfinite(gap) ? std::to_string(gap) : "null")+
+                        ",\"after_command_gap_cm\":"+(std::isfinite(after) ? std::to_string(after) : "null")+
+                        ",\"planned_cm\":"+std::to_string(planned)+",\"offered_cm\":"+std::to_string(distance)+
+                        ",\"backward_cm\":"+std::to_string(magnet.backwardCm)+
+                        ",\"forward_stopped\":"+(magnet.forwardStopped ? "true" : "false"));
+  owner.physic()->accountMeleeReachTime(std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count());
   magnet.offeredCm += distance;
   magnet.peakCmS = std::max(magnet.peakCmS,std::abs(distance)*1000.f/float(dt));
   if(distance!=0.f || yawStep!=0.f)
@@ -1931,7 +2047,7 @@ void Npc::noteMeleeStep(const Vec3& root, const Vec3& offered, const Vec3& moved
   const auto direction = Vec3::normalize(offered);
   const float accepted = Vec3::dotProduct(moved,direction);
   const float estimated = std::clamp(accepted-std::max(0.f,Vec3::dotProduct(root,direction)),0.f,offered.length());
-  const float sign = magnet.requestedCm<0.f ? -1.f : 1.f;
+  const float sign = Vec3::dotProduct(offered,magnet.direction)<0.f ? -1.f : 1.f;
   magnet.combinedCm += sign*accepted;
   magnet.estimatedCm += sign*estimated;
   magnet.estimatedPeakCmS = std::max(magnet.estimatedPeakCmS,estimated*1000.f/float(dt));
@@ -2198,6 +2314,14 @@ void Npc::finishMeleeShadowSwing(bool remove, bool discard) {
                   ",\"raw_cm\":" + (std::isfinite(shadow.magnet.rawCm) ? number(shadow.magnet.rawCm) : "null") +
                   ",\"requested_cm\":" + number(shadow.magnet.requestedCm) +
                   ",\"offered_cm\":" + number(shadow.magnet.offeredCm) +
+                  ",\"forward_cm\":" + number(shadow.magnet.forwardCm) +
+                  ",\"backward_cm\":" + number(shadow.magnet.backwardCm) +
+                  ",\"safety_backoff_cm\":" + number(shadow.magnet.safetyBackoffCm) +
+                  ",\"safety_frames\":" + number(shadow.magnet.safetyFrames) +
+                  ",\"safety_clamps\":" + number(shadow.magnet.safetyClamps) +
+                  ",\"forward_stopped\":" + (shadow.magnet.forwardStopped ? "true" : "false") +
+                  ",\"min_torso_gap_cm\":" + (std::isfinite(shadow.magnet.minTorsoGapCm) ? number(shadow.magnet.minTorsoGapCm) : "null") +
+                  ",\"preview_torso_gap_cm\":" + (std::isfinite(shadow.magnet.previewTorsoGapCm) ? number(shadow.magnet.previewTorsoGapCm) : "null") +
                   ",\"accepted_combined_cm\":" + number(shadow.magnet.combinedCm) +
                   ",\"estimated_moved_cm\":" + number(shadow.magnet.estimatedCm) +
                   ",\"estimate_method\":\"accepted_projection_minus_forward_root\"" +

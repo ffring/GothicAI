@@ -4018,6 +4018,29 @@ namespace {
               "mesh hit must retain its sector beyond 32 segments");
       }
 
+    {
+      std::vector<HitZones::Posed> first{{{0,80,0},{0,140,0},10.f,HitZones::Body,0}};
+      std::vector<HitZones::Posed> second{{{60,90,0},{60,150,0},12.f,HitZones::Body,0}};
+      requireNear(HitZones::horizontalBodyGap(first,second),38.f,.0001f,
+                  "torso gap must subtract both posed capsule radii");
+      requireNear(HitZones::horizontalBodyGap(first,second,{20,0,0}),18.f,.0001f,
+                  "a bounded forward feed must retain the eighteen-centimetre torso clearance");
+      requireNear(HitZones::horizontalBodyGap(first,second,{45,0,0}),-7.f,.0001f,
+                  "overlapping torso capsules must report negative clearance");
+      first.push_back({{60,80,0},{60,140,0},100.f,HitZones::Head,1});
+      second.push_back({{0,90,0},{0,150,0},100.f,HitZones::Limb,1});
+      requireNear(HitZones::horizontalBodyGap(first,second),38.f,.0001f,
+                  "head and limb contacts must not replace the torso safety gap");
+      first={{{-10,80,-10},{10,140,10},2.f,HitZones::Body,0}};
+      second={{{-10,400,10},{10,460,-10},3.f,HitZones::Body,0}};
+      requireNear(HitZones::horizontalBodyGap(first,second),-5.f,.0001f,
+                  "crossed torso axes must overlap in the horizontal projection despite different heights");
+      requireNear(HitZones::horizontalBodyGap(first,second,{-1,0,0}),-5.f,.0001f,
+                  "a retreat can begin on a flat projected-axis overlap without worsening the clearance");
+      require(HitZones::horizontalBodyGap(first,second,{-25,0,0})>-5.f,
+              "continued retreat must be able to leave the projected-axis overlap plateau");
+      }
+
     require(Npc::skipMeleeAlly(false,false,true,false,true),
             "an incidental same-guild contact must skip NPC damage even with hostile attitude");
     require(Npc::skipMeleeAlly(false,false,false,true,true),
