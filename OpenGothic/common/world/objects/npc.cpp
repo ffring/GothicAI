@@ -106,7 +106,8 @@ void writeMeleeShadow(const std::string& row) {
 }
 
 struct Npc::MeleeReach final {
-  float advanceCm = std::numeric_limits<float>::infinity(), contactMs = 0, cpuMs = 0;
+  float advanceCm = std::numeric_limits<float>::infinity(), contactMs = 0, yawDeg = 0, cpuMs = 0;
+  float uncoveredCm = std::numeric_limits<float>::infinity();
   };
 
 struct Npc::MeleeShadow final {
@@ -141,8 +142,11 @@ struct Npc::MeleeShadow final {
     Vec3 direction;
     float rawCm = std::numeric_limits<float>::infinity(), requestedCm = 0, offeredCm = 0;
     float combinedCm = 0, estimatedCm = 0, peakCmS = 0, estimatedPeakCmS = 0;
-    float yawRequested = 0, yawApplied = 0, windupMs = 0;
-    bool eligible = false;
+    float yawRequested = 0, yawApplied = 0, peakYawDegS = 0, durationMs = 0;
+    uint64_t contactObservedMs = 0;
+    double lastFeedMs = 0;
+    const char* contactKind = "none";
+    bool eligible = false, feasible = false, contactStopped = false;
     } magnet;
   std::string outcome = "miss";
   struct Diagnostic final {
@@ -1525,6 +1529,7 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
   const float distance = direction.length();
   if(distance<=0) {
     result.advanceCm = 0;
+    result.uncoveredCm = 0;
     return result;
     }
   direction /= distance;
@@ -1555,35 +1560,36 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
   const auto forearm = sampled.findNode(window.left ? "BIP01 L FOREARM" : "BIP01 R FOREARM");
   const auto finger = sampled.findNode(window.left ? "BIP01 L FINGER0" : "BIP01 R FINGER0");
   std::vector<MeleeBladeSegment> blades;
-  const auto object = mkPositionMatrix();
-  const float turn = yawDelta*float(M_PI)/180.f;
-  const float turnSin = std::sin(turn), turnCos = std::cos(turn);
-  Vec3 rootMotion;
-  const auto rotate = [&](Vec3 point) {
-    const auto origin = position()+rootMotion;
-    const auto offset = point-origin;
-    return origin+Vec3(turnCos*offset.x-turnSin*offset.z,offset.y,
-                      turnSin*offset.x+turnCos*offset.z);
-    };
+  std::vector<std::pair<float,Vec3>> rootSteps;
   auto previous = owner.tickCount();
   for(uint64_t tick=owner.tickCount();tick<=last;) {
+    const float elapsed = float(tick-owner.tickCount());
     if(tick>previous) {
       Vec3 displacement;
       mvAlgo.applyRotation(displacement,sampled.animMoveSpeed(tick,tick-previous));
       displacement.y = 0; // the ordinary human CharacterVirtual root policy
-      const float windup = float(activeBegin-double(owner.tickCount()));
-      const float progress = windup>0.f ? std::clamp(float(tick-owner.tickCount())/windup,0.f,1.f) : 1.f;
-      const float rootTurn = turn*progress;
-      rootMotion += Vec3(std::cos(rootTurn)*displacement.x-std::sin(rootTurn)*displacement.z,0,
-                         std::sin(rootTurn)*displacement.x+std::cos(rootTurn)*displacement.z);
-      auto moved = object;
-      moved.set(3,0,object.at(3,0)+rootMotion.x);
-      moved.set(3,2,object.at(3,2)+rootMotion.z);
-      sampled.setObjectMatrix(moved,false);
+      rootSteps.emplace_back(elapsed,displacement);
       }
     previous = tick;
     sampled.update(tick,true);
     if(double(tick)>=activeBegin && hand<sampled.boneCount()) {
+      // Each candidate is a complete, frozen plan ending at this contact time.
+      // Root deltas are sampled once, then integrated under that plan's turn.
+      const float yawLimit = std::min(30.f,.18f*elapsed);
+      const float yaw = std::clamp(yawDelta,-yawLimit,yawLimit);
+      const float turn = yaw*float(M_PI)/180.f;
+      const float turnSin = std::sin(turn), turnCos = std::cos(turn);
+      Vec3 rootMotion;
+      for(const auto& [time,displacement]:rootSteps) {
+        const float rootTurn = elapsed>0.f ? turn*time/elapsed : 0.f;
+        rootMotion += Vec3(std::cos(rootTurn)*displacement.x-std::sin(rootTurn)*displacement.z,0,
+                           std::sin(rootTurn)*displacement.x+std::cos(rootTurn)*displacement.z);
+        }
+      const auto rotate = [&](Vec3 point) {
+        const auto offset = point-position();
+        return position()+rootMotion+Vec3(turnCos*offset.x-turnSin*offset.z,offset.y,
+                                         turnSin*offset.x+turnCos*offset.z);
+        };
       const auto at = [&](size_t bone,Vec3 point) { sampled.bone(bone).project(point); return rotate(point); };
       const auto grip = at(hand,{});
       blades.clear();
@@ -1598,11 +1604,23 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
       const float limit = distance+length+40.f;
       const float forward = owner.physic()->meleeBladeAdvance(blades,body,direction,limit);
       const float backward = owner.physic()->meleeBladeAdvance(blades,body,-direction,limit);
-      const float advance = forward<=backward ? forward : -backward;
-      if(std::isfinite(advance) && std::abs(advance)<std::abs(result.advanceCm)) {
-        result.advanceCm = advance;
-        result.contactMs = float(tick-owner.tickCount());
-        }
+      const auto consider = [&](float advance) {
+        if(!std::isfinite(advance))
+          return;
+        const float available = std::min(advance<0.f ? 40.f : 120.f,.6f*elapsed);
+        const float uncovered = std::max(0.f,std::abs(advance)-available);
+        // A zero-time tangent must not defeat a later reachable contact. If
+        // nothing is reachable, retain the smallest gap after bounded feed.
+        if(uncovered<result.uncoveredCm ||
+           (uncovered==result.uncoveredCm && std::abs(advance)<std::abs(result.advanceCm))) {
+          result.advanceCm = advance;
+          result.contactMs = elapsed;
+          result.yawDeg = yaw;
+          result.uncoveredCm = uncovered;
+          }
+        };
+      consider(forward);
+      consider(-backward);
       }
     if(tick==last) break;
     tick = std::min(last,tick+interval);
@@ -1700,15 +1718,11 @@ void Npc::syncMeleeShadowSwing() {
     if(direction.length()>0.f)
       magnet.direction = Vec3::normalize(direction);
     const float yaw = std::remainder(angleDir(direction.x,direction.z)-angle,360.f);
-    const double activeBegin = double(shadow.start)+double(selected.beginMs)/shadow.speed;
-    magnet.windupMs = std::max(0.f,float(activeBegin-double(owner.tickCount())));
-    // Fix the goal at the start of this swing. Never follow a retreating target
-    // or extend the correction after the active window has opened.
-    const float yawLimit = std::min(30.f,.18f*magnet.windupMs); // 180 degrees/s
-    magnet.yawRequested = std::clamp(yaw,-yawLimit,yawLimit);
+    // Fix the goal at the start of this swing. The active window is unchanged;
+    // assistance ends at the chosen preview contact, never at a new target pose.
     const auto started = std::chrono::steady_clock::now();
     Pose sampled = pose;
-    auto reach = sampleMeleeReach(*currentTarget,sampled,*attack,magnet.yawRequested);
+    auto reach = sampleMeleeReach(*currentTarget,sampled,*attack,yaw);
     reach.cpuMs = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
     owner.physic()->accountMeleeReachTime(reach.cpuMs);
     shadow.reachCpuMs = shadow.reachCpuMaxMs = reach.cpuMs;
@@ -1718,8 +1732,14 @@ void Npc::syncMeleeShadowSwing() {
     shadow.diagnostic.previewCpuMs = reach.cpuMs;
     shadow.diagnostic.previewApproachCm = reach.advanceCm;
     magnet.rawCm = reach.advanceCm;
-    if(std::isfinite(reach.advanceCm))
-      magnet.requestedCm = std::clamp(reach.advanceCm,-40.f,120.f);
+    if(std::isfinite(reach.advanceCm)) {
+      magnet.durationMs = reach.contactMs;
+      magnet.yawRequested = reach.yawDeg;
+      magnet.feasible = reach.uncoveredCm==0.f;
+      const float backward = std::min(40.f,.6f*reach.contactMs);
+      const float forward = std::min(120.f,.6f*reach.contactMs);
+      magnet.requestedCm = std::clamp(reach.advanceCm,-backward,forward);
+      }
     }
   }
 
@@ -1853,20 +1873,27 @@ auto Npc::meleeStep(uint64_t dt) -> Vec3 {
     return {};
   auto& swing = *meleeShadow;
   auto& magnet = swing.magnet;
-  const double begin = double(swing.start)+double(swing.window->beginMs)/swing.speed;
-  const float remainingMs = float(begin-double(owner.tickCount()));
-  if(!magnet.eligible || remainingMs<=0.f || dt==0)
+  if(!magnet.eligible || magnet.contactStopped || magnet.durationMs<=0.f || dt==0)
     return {};
-  const float milliseconds = std::min(float(dt),remainingMs);
-  const float fraction = milliseconds/remainingMs;
-  const float yawLeft = magnet.yawRequested-magnet.yawApplied;
-  const float yawStep = std::clamp(yawLeft*fraction,-.18f*milliseconds,.18f*milliseconds);
+  // Integrate only the part of this movement interval before the frozen deadline.
+  const double deadline = double(swing.tick)+magnet.durationMs;
+  const double end = std::min(double(owner.tickCount()),deadline);
+  const double begin = std::max(double(owner.tickCount())-double(dt),double(swing.tick));
+  const float milliseconds = float(end-begin);
+  if(milliseconds<=0.f)
+    return {};
+  const float fraction = std::clamp(float(end-double(swing.tick))/magnet.durationMs,0.f,1.f);
+  const float yawLeft = magnet.yawRequested*fraction-magnet.yawApplied;
+  const float yawStep = std::clamp(yawLeft,-.18f*milliseconds,.18f*milliseconds);
   setDirection(angle+yawStep);
   magnet.yawApplied += yawStep;
-  const float left = magnet.requestedCm-magnet.offeredCm;
-  const float distance = std::clamp(left*fraction,-.4f*milliseconds,.4f*milliseconds);
+  magnet.peakYawDegS = std::max(magnet.peakYawDegS,std::abs(yawStep)*1000.f/float(dt));
+  const float left = magnet.requestedCm*fraction-magnet.offeredCm;
+  const float distance = std::clamp(left,-.6f*milliseconds,.6f*milliseconds);
   magnet.offeredCm += distance;
   magnet.peakCmS = std::max(magnet.peakCmS,std::abs(distance)*1000.f/float(dt));
+  if(distance!=0.f || yawStep!=0.f)
+    magnet.lastFeedMs = end;
   return magnet.direction*distance;
   }
 
@@ -1899,6 +1926,12 @@ void Npc::consumeMeleeContacts() {
   while(swing.consumed<swing.contacts.size()) {
     auto& entry = swing.contacts[swing.consumed++];
     const auto& hit = entry.hit;
+    // Walkable ground is a logged brush, not the target contact ending assistance.
+    if(swing.magnet.eligible && !swing.magnet.contactStopped && (!hit.world || hit.stopsSwing)) {
+      swing.magnet.contactStopped = true;
+      swing.magnet.contactObservedMs = owner.tickCount();
+      swing.magnet.contactKind = hit.world ? "wall" : "body";
+      }
     if(swing.stopped) {
       entry.result = "after_stop";
       continue;
@@ -2090,6 +2123,17 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                  ",\"jumpback\":" + (value.jumpback ? "true" : "false") +
                  ",\"window_completed\":" + (double(owner.tickCount())>=activeEnd ? "true" : "false") + "}";
     }
+  const auto& magnet = shadow.magnet;
+  const double deadline = double(shadow.tick)+magnet.durationMs;
+  const char* magnetStop = "none";
+  if(magnet.eligible) {
+    if(magnet.contactStopped && (!std::isfinite(magnet.rawCm) || double(magnet.contactObservedMs)<=deadline))
+      magnetStop = magnet.contactKind;
+    else if(!std::isfinite(magnet.rawCm))
+      magnetStop = "no_preview";
+    else
+      magnetStop = double(owner.tickCount())>=deadline ? "predicted" : "swing_end";
+    }
   writeMeleeShadow("{\"swing\":" + number(shadow.id) + ",\"world\":" + TestBench::bodyJson(owner.name()) +
                   ",\"game_time_ms\":" + number(shadow.tick) + ",\"end_time_ms\":" + number(owner.tickCount()) +
                   ",\"attacker\":" + shadow.attacker + ",\"weapon\":" + shadow.weapon +
@@ -2119,9 +2163,16 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                   ",\"estimate_method\":\"accepted_projection_minus_forward_root\"" +
                   ",\"peak_speed_cm_s\":" + number(shadow.magnet.peakCmS) +
                   ",\"estimated_peak_speed_cm_s\":" + number(shadow.magnet.estimatedPeakCmS) +
-                  ",\"windup_ms\":" + number(shadow.magnet.windupMs) +
+                  ",\"duration_ms\":" + number(shadow.magnet.durationMs) +
+                  ",\"predicted_contact_time_ms\":" + (std::isfinite(shadow.magnet.rawCm) ? number(double(shadow.tick)+shadow.magnet.durationMs) : "null") +
+                  ",\"contact_observed_time_ms\":" + (shadow.magnet.contactStopped ? number(shadow.magnet.contactObservedMs) : "null") +
+                  ",\"last_assist_time_ms\":" + (shadow.magnet.lastFeedMs>0 ? number(shadow.magnet.lastFeedMs) : "null") +
+                  ",\"stop_reason\":" + TestBench::bodyJson(magnetStop) +
+                  ",\"preview_feasible\":" + (shadow.magnet.feasible ? "true" : "false") +
+                  ",\"time_limited\":" + (std::isfinite(shadow.magnet.rawCm) && std::abs(shadow.magnet.rawCm)>.6f*shadow.magnet.durationMs ? "true" : "false") +
                   ",\"yaw_requested_deg\":" + number(shadow.magnet.yawRequested) +
                   ",\"yaw_applied_deg\":" + number(shadow.magnet.yawApplied) +
+                  ",\"peak_yaw_deg_s\":" + number(shadow.magnet.peakYawDegS) +
                   ",\"cap_forward\":" + (shadow.magnet.rawCm>=120.f && std::isfinite(shadow.magnet.rawCm) ? "true" : "false") +
                   ",\"cap_backward\":" + (shadow.magnet.rawCm<=-40.f ? "true" : "false") + "}" +
                   "},\"diagnostic\":" + diagnostic + ",\"comparison\":" + comparison + "}");
@@ -3384,7 +3435,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
   const auto ws = weaponState();
   const auto bs = bodyStateMasked();
   const bool magnetHeading = Gothic::physicsFlags().meleePhysicsHits && visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window &&
-                             meleeShadow->magnet.eligible && meleeShadow->magnet.windupMs>0.f;
+                             meleeShadow->magnet.eligible;
 
   if(bs==BS_HIT && (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
     traceCombatGate("melee_hit_lock");
@@ -4845,7 +4896,7 @@ void Npc::tick(uint64_t dt) {
       return;
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {
       const bool magnetHeading = Gothic::physicsFlags().meleePhysicsHits && visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window &&
-                                 meleeShadow->magnet.eligible && meleeShadow->magnet.windupMs>0.f;
+                                 meleeShadow->magnet.eligible;
       if(!magnetHeading)
         implTurnToFai(*currentTarget,dt);
       }

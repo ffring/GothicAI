@@ -288,6 +288,7 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
   const bool dive  = (state==Dive);
   const bool grav  = (state==InAir || state==Falling || state==JumpUp);
   const auto pos0  = npc.position();
+  const auto assist = virtualWalking ? npc.meleeStep(dt) : Tempest::Vec3{};
   auto       dp    = (!grav && state!=Slide) ? npcMoveSpeed(dt,moveFlg) : npcFallSpeed(dt);
   const bool walk  = bool(npc.wlkMode & WalkBit::WM_Walk) && (state==Run);
 
@@ -315,7 +316,6 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     if(state!=Slide && !attackRoot)
       dp.y = 0.f; // walking root bob cannot detach the controller from its support
     const auto root = dp;
-    const auto assist = npc.meleeStep(dt);
     dp += assist;
     const auto assistOrigin = npc.position();
     const bool moved = tickCharacterVirtual(dt,dp);
