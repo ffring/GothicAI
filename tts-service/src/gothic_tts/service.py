@@ -1,4 +1,4 @@
-"""WebSocket API of the service. It knows nothing about the game: text and a voice in, audio out.
+"""WebSocket TTS API, with original game voices prepared in the background.
 
     client  -> service {"type":"speak","id":"7","text":"...",
                         "voice":{"id":"xardas","description":"...","preset":null},
@@ -20,8 +20,11 @@ before starting the game.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
+import time
 from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
@@ -30,7 +33,9 @@ from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
+from . import originals
 from .providers import TtsError, TtsProvider, Voice
+from .providers.inworld import InworldTTS
 from .synthesizer import Synthesizer
 
 log = logging.getLogger(__name__)
@@ -48,8 +53,12 @@ def load_original_voices(directory: str | Path = DEFAULT_ORIGINAL_VOICES) -> dic
         log.info("original voices disabled: no %s", manifest)
         return {}
     voices: dict[str, Voice] = {}
-    for entry in json.loads(manifest.read_text()):
+    data = json.loads(manifest.read_text())
+    for entry in data.get("characters", []) if isinstance(data, dict) else data:
         cid = entry["id"]
+        if entry.get("error"):
+            log.warning("original voice %s skipped: %s", cid, entry["error"])
+            continue
         sample = Path(entry.get("file") or f"{cid}.wav").expanduser()
         if not sample.is_absolute():
             sample = directory / sample
@@ -70,13 +79,16 @@ class TtsService:
         port: int = 47820,
         *,
         original_voices_dir: str | Path | None = DEFAULT_ORIGINAL_VOICES,
+        game_dir: str | Path | None = None,
     ) -> None:
         self.synthesizer = synthesizer
         self.host = host
         self.port = port
-        self.original_voices = (
-            load_original_voices(original_voices_dir) if original_voices_dir is not None else {}
+        self.original_voices_dir = (
+            Path(original_voices_dir).expanduser() if original_voices_dir is not None else None
         )
+        self.game_dir = Path(game_dir).expanduser() if game_dir is not None else None
+        self.original_voices: dict[str, Voice] = {}
 
     async def serve_forever(self, started=None) -> None:
         async with serve(
@@ -84,9 +96,68 @@ class TtsService:
         ) as server:
             self.port = server.sockets[0].getsockname()[1]
             log.info("listening on ws://%s:%d", self.host, self.port)
-            if started is not None:
-                started.set()
-            await server.serve_forever()
+            preparation = (
+                asyncio.create_task(self._prepare_originals())
+                if self.original_voices_dir is not None else None
+            )
+            try:
+                if started is not None:
+                    started.set()
+                await server.serve_forever()
+            finally:
+                if preparation is not None:
+                    preparation.cancel()
+                    await asyncio.gather(preparation, return_exceptions=True)
+
+    async def _prepare_originals(self) -> None:
+        """Publish each cloned voice only after it is ready; game requests never create clones."""
+        if self.original_voices_dir is None:
+            return
+        started = time.monotonic()
+        try:
+            if self.game_dir is None:
+                raise ValueError("no game directory (--game-dir)")
+
+            def progress(done: int, total: int) -> None:
+                log.info("original voices: snapshots %d/%d", done, total)
+
+            await asyncio.to_thread(
+                originals.prepare, self.game_dir, self.original_voices_dir, progress=progress
+            )
+            snapshots = load_original_voices(self.original_voices_dir)
+        except Exception as err:
+            log.warning(
+                "original voices unavailable: %s; using designed voices", " ".join(str(err).split())
+            )
+            return
+        provider = self.synthesizer.primary
+        if not isinstance(provider, InworldTTS) or not os.environ.get(provider.api_key_env):
+            log.info(
+                "original voices: snapshots ready in %.1fs; Inworld cloning unavailable",
+                time.monotonic() - started,
+            )
+            return
+        voices = {voice.id: voice for voice in snapshots.values()}
+        ready = 0
+        for done, voice in enumerate(voices.values(), 1):
+            cid = voice.id.removesuffix("@original")
+            try:
+                voice_id = await provider.clone(voice)
+            except Exception as err:
+                log.warning("original voices: %s: %s", cid, " ".join(str(err).split()))
+            else:
+                # A preset bypasses the provider's sample/clone path, including its retry on a deleted
+                # library voice. A request can only use a clone which this background task prepared.
+                prepared = replace(voice, preset=voice_id, sample="")
+                self.original_voices.update(
+                    (alias, prepared) for alias, sample in snapshots.items() if sample.id == voice.id
+                )
+                ready += 1
+            log.info("original voices: clones %d/%d", done, len(voices))
+        log.info(
+            "original voices: %d/%d ready, %d failed in %.1fs",
+            ready, len(voices), len(voices) - ready, time.monotonic() - started,
+        )
 
     def _health(self, conn: ServerConnection, request: Request) -> Response | None:
         if request.path != "/health":

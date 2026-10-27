@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from gothic_tts import cli
+from gothic_tts import cli, service
 from gothic_tts.cli import load_env_file
 from gothic_tts.providers import TtsError, Voice
 from gothic_tts.providers.fake import FakeProvider
@@ -191,7 +191,7 @@ async def test_voice_cloned_from_a_recording_speaks_the_providers_language(api, 
     await p.aclose()
 
 
-async def test_original_voice_cache_preserves_the_designed_voice(api, tmp_path) -> None:
+async def test_original_voice_cache_preserves_the_designed_voice(api, tmp_path, monkeypatch) -> None:
     sample = tmp_path / "xardas.wav"
     sample.write_bytes(b"RIFF Xardas")
     (tmp_path / "manifest.json").write_text(json.dumps([
@@ -200,7 +200,9 @@ async def test_original_voice_cache_preserves_the_designed_voice(api, tmp_path) 
     p = _provider(api, tmp_path, keep_warm=0)
     synth = Synthesizer(p)
     designed = TtsService(synth, original_voices_dir=None)
-    original = TtsService(synth, original_voices_dir=tmp_path)
+    original = TtsService(synth, original_voices_dir=tmp_path, game_dir=tmp_path / "game")
+    monkeypatch.setattr(service.originals, "prepare", lambda *args, **kwargs: tmp_path / "manifest.json")
+    await original._prepare_originals()
     messages = []
 
     async def send(message):
@@ -226,6 +228,167 @@ async def test_original_voice_cache_preserves_the_designed_voice(api, tmp_path) 
     assert entries[XARDAS.id] == cached
     assert entries[f"{XARDAS.id}@original"]["voice_id"] == "ws__clone-voice-1"
     assert sum(isinstance(message, bytes) for message in messages) == 8
+
+
+async def test_original_preparation_never_delays_a_game_line(api, tmp_path, monkeypatch) -> None:
+    import threading
+
+    sample = tmp_path / "xardas.wav"
+    sample.write_bytes(b"RIFF Xardas")
+    (tmp_path / "manifest.json").write_text(json.dumps({"characters": [
+        {"id": XARDAS.id, "aliases": ["OTHER_XARDAS"], "file": sample.name},
+    ]}))
+    snapshots_started, clone_started, finish_clone = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    finish_snapshots = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def prepare(*args, progress):
+        loop.call_soon_threadsafe(snapshots_started.set)
+        assert finish_snapshots.wait(5)
+        progress(36, 36)
+        return tmp_path / "manifest.json"
+
+    async def transport(request):
+        if request.url.path == "/voices/v1/voices:clone":
+            clone_started.set()
+            await finish_clone.wait()
+        return api(request)
+
+    monkeypatch.setattr(service.originals, "prepare", prepare)
+    p = _provider(transport, tmp_path, keep_warm=0)
+    synth = Synthesizer(p)
+    svc = TtsService(synth, port=0, original_voices_dir=tmp_path, game_dir=tmp_path / "game")
+    listening = asyncio.Event()
+    server = asyncio.create_task(svc.serve_forever(listening))
+    request = {"id": "1", "text": "Да.", "voice": {"id": XARDAS.id, "description": XARDAS.description}}
+    messages = []
+
+    async def send(message):
+        messages.append(message)
+
+    conn = SimpleNamespace(send=send)
+    try:
+        await listening.wait()
+        await asyncio.wait_for(snapshots_started.wait(), 2)
+        await asyncio.wait_for(svc._speak(conn, request), 0.5)
+        assert api.cloned == 0 and api.streams()[-1]["voiceId"] == "ws__design-voice-1"
+        finish_snapshots.set()
+        await asyncio.wait_for(clone_started.wait(), 2)
+        await asyncio.wait_for(svc._speak(conn, request), 0.5)
+        assert not finish_clone.is_set() and api.streams()[-1]["voiceId"] == "ws__design-voice-1"
+        finish_clone.set()
+        for _ in range(100):
+            if svc.original_voices:
+                break
+            await asyncio.sleep(0.01)
+        request["voice"]["id"] = "other_xardas"
+        await svc._speak(conn, request)
+        assert api.streams()[-1]["voiceId"] == "ws__clone-voice-1"
+        assert api.cloned == 1
+        # If the library clone is deleted, a game request must still never create another clone.
+        api.voices.discard("ws__clone-voice-1")
+        await svc._speak(conn, request)
+        assert api.cloned == 1
+    finally:
+        finish_snapshots.set()
+        finish_clone.set()
+        server.cancel()
+        await asyncio.gather(server, return_exceptions=True)
+        await synth.aclose()
+
+
+@pytest.mark.parametrize("failure", ["network", "empty_voice"])
+async def test_background_clones_continue_and_retry_only_next_start(
+    api, tmp_path, monkeypatch, caplog, failure
+):
+    for cid in ("FIRST", "BAD", "LAST"):
+        (tmp_path / f"{cid}.wav").write_bytes(f"RIFF {cid}".encode())
+    (tmp_path / "manifest.json").write_text(json.dumps({"characters": [
+        {"id": cid, "file": f"{cid}.wav"} for cid in ("FIRST", "BAD", "LAST")
+    ]}))
+    monkeypatch.setattr(service.originals, "prepare", lambda *args, **kwargs: tmp_path / "manifest.json")
+    attempts = []
+    failing = True
+
+    def transport(request):
+        body = json.loads(request.content)
+        attempts.append(body["displayName"])
+        if failing and body["displayName"] == "gothic-ai BAD@original":
+            if failure == "network":
+                raise httpx.ReadTimeout("test timeout", request=request)
+            return httpx.Response(200, json={"voice": {"voiceId": ""}})
+        return api(request)
+
+    p = _provider(transport, tmp_path, keep_warm=0)
+    synth = Synthesizer(p)
+    svc = TtsService(synth, original_voices_dir=tmp_path, game_dir=tmp_path / "game")
+    try:
+        await svc._prepare_originals()
+        assert attempts == ["gothic-ai FIRST@original", "gothic-ai BAD@original", "gothic-ai LAST@original"]
+        assert set(svc.original_voices) == {"first", "last"}
+        assert "original voices: BAD:" in caplog.text
+        assert set(json.loads(p.cache.read_text())) == {"FIRST@original", "LAST@original"}
+        failing = False
+        # A new service run retries the failure, while successful sample hashes produce no requests.
+        again = TtsService(synth, original_voices_dir=tmp_path, game_dir=tmp_path / "game")
+        await again._prepare_originals()
+        assert attempts[-1] == "gothic-ai BAD@original" and len(attempts) == 4
+        assert set(again.original_voices) == {"first", "bad", "last"}
+    finally:
+        await synth.aclose()
+
+
+@pytest.mark.parametrize("provider_kind", ["disabled", "no_key", "other_provider"])
+async def test_background_preparation_gates(api, tmp_path, monkeypatch, provider_kind):
+    preparations = []
+
+    def prepare(*args, **kwargs):
+        preparations.append(True)
+        (tmp_path / "manifest.json").write_text("[]")
+
+    monkeypatch.setattr(service.originals, "prepare", prepare)
+    p = _provider(api, tmp_path, keep_warm=0)
+    if provider_kind == "no_key":
+        monkeypatch.delenv("INWORLD_API_KEY")
+    synth = Synthesizer(FakeProvider() if provider_kind == "other_provider" else p)
+    svc = TtsService(
+        synth, port=0, game_dir=tmp_path / "game",
+        original_voices_dir=None if provider_kind == "disabled" else tmp_path,
+    )
+    started = asyncio.Event()
+    task = asyncio.create_task(svc.serve_forever(started))
+    try:
+        await started.wait()
+        await asyncio.sleep(0.05)
+        assert preparations == ([] if provider_kind == "disabled" else [True])
+        assert api.requests == []
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await synth.aclose()
+        if provider_kind == "other_provider":
+            await p.aclose()
+
+
+def test_no_original_voices_flag_skips_snapshots_and_clones(api, tmp_path, monkeypatch):
+    def prepare(*args, **kwargs):
+        raise AssertionError("disabled preparation ran")
+
+    class OneShotService(TtsService):
+        async def serve_forever(self):
+            await self._prepare_originals()
+
+    monkeypatch.setattr(service.originals, "prepare", prepare)
+    monkeypatch.setattr(cli, "TtsService", OneShotService)
+    monkeypatch.setattr(cli, "_synthesizer", lambda args: Synthesizer(_provider(api, tmp_path, keep_warm=0)))
+    monkeypatch.setattr(cli, "load_env_file", lambda: None)
+    monkeypatch.setattr(sys, "argv", [
+        "gothic-tts", "serve", "--game-dir", str(tmp_path / "game"),
+        "--no-original-voices", "--no-warmup",
+    ])
+    with pytest.raises(SystemExit) as stopped:
+        cli.main()
+    assert stopped.value.code == 0 and api.requests == []
 
 
 async def test_pending_original_clone_does_not_delay_other_voices(api, tmp_path) -> None:
