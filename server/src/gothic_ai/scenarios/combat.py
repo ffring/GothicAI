@@ -150,6 +150,10 @@ async def surrender_live(
                     await link.debug("skip_important", near=CAVALORN)
                     await link.debug("npc_goto", npc=CAVALORN, waypoint=PARK)
                 await attach_when_free(link, npc)
+                # Cold original lines for the opponent or a witness must not block combat RPCs.
+                prepared = await link.snapshot(npc)
+                for person in [prepared.npc, *prepared.nearby_npcs]:
+                    await asyncio.to_thread(dialogue.personas.get, person.id, person.name)
                 if npc == BRAGO:
                     await link.debug("skip_important", near="BDT_1015_BANDIT_L")
                     await link.debug("player_goto", to=BRAGO, distance=200)
@@ -298,6 +302,9 @@ async def mercy(
     await link.wait_world()
     await link.debug("skip_important", near=LOBART)
     await attach_when_free(link, LOBART)
+    prepared = await link.snapshot(LOBART)
+    for person in [prepared.npc, *prepared.nearby_npcs]:
+        await asyncio.to_thread(dialogue.personas.get, person.id, person.name)
     await link.debug("teleport", near=LOBART, distance=200)
     await link.act(LOBART, "stop")
     await link.debug("player_hp", hp=2000)
@@ -416,6 +423,9 @@ async def hero_yield(
     await link.wait_world()
     await link.debug("skip_important", near=LOBART)
     await attach_when_free(link, LOBART)
+    prepared = await link.snapshot(LOBART)
+    for person in [prepared.npc, *prepared.nearby_npcs]:
+        await asyncio.to_thread(dialogue.personas.get, person.id, person.name)
     await link.debug("teleport", near=LOBART, distance=200)
     await link.act(LOBART, "stop")
     await link.debug("player_hp", hp=2000)
