@@ -28,7 +28,8 @@
 #       held kneeling and native exit after real Back input; records positions and game/wall times
 #   surrender_live: new game, LLM=chatgpt and live QUICK_URL (defaults to settings.toml);
 #       seven independent Lobart/bandit/guard/Brago scenes record real surrender decisions, tools, speech,
-#       transfers, humiliation and timings in surrender_live.json; any completed decision passes
+#       transfers, humiliation and timings in surrender_live.json; any completed decision passes;
+#       SURRENDER_CASES=B_guard,C_brago runs only those scenes
 #   svm_lines: new game, no SAVE, LLM=fake; QUICK_URL supplies ten live Gemma SVM lines, their native
 #       text and voice delays, then Cavalorn kills a beast and speaks its native script SVM.
 #       An unavailable QUICK_URL falls back after three errors; TTS=fake|inworld.
