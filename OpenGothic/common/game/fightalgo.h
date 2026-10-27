@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <array>
-#include <zenkit/addon/daedalus.hh>
+#include "game/definitions/definitiontypes.h"
 #include <Tempest/Vec>
 
 class Npc;
@@ -89,12 +89,12 @@ class FightAlgo final {
 
   private:
     void   fillQueue(Npc &npc, Npc &tg, GameScript& owner);
-    bool   fillQueue(const Npc& npc, GameScript& owner, const zenkit::IFightAi& src);
+    bool   fillQueue(const Npc& npc, GameScript& owner, const Def::FightAi& src);
 
     static bool   angleTest(const Npc& npc, const Npc& tg, float cosMax);
     static float  weaponRange(GameScript &owner,const Npc &npc);
 
-    zenkit::FightAiMove queueId = zenkit::FightAiMove::NOP;
+    Def::FightMove queueId = Def::FightMove::NOP;
     Action              tr   [MV_MAX]={};
     bool                hitFlg=false;
     uint64_t            traceChoice=0; // bench telemetry only, never serialized or used for decisions

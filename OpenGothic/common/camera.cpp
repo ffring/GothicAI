@@ -633,7 +633,7 @@ Camera::ListenerPos Camera::listenerPosition() const {
   return pos;
   }
 
-const zenkit::ICamera& Camera::cameraDef() const {
+const Def::Camera& Camera::cameraDef() const {
   auto& camd = Gothic::cameraDef();
   if(camMod==Dialog)
     return camd.dialogCam();

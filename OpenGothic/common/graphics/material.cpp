@@ -85,7 +85,7 @@ Material::Material(const asset::VisualDecal& decal)
   alphaWeight  = float(decal.alpha_weight)/255.f;
   }
 
-Material::Material(const zenkit::IParticleEffect& src) {
+Material::Material(const Def::ParticleEffect& src) {
   tex = Resources::loadTexture(src.vis_name_s);
   loadFrames(src.vis_name_s, src.vis_tex_ani_fps);
 

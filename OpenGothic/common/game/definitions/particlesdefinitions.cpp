@@ -58,7 +58,7 @@ const ParticleFx* ParticlesDefinitions::implGet(const ParticleFx& base, const Vi
   return elt.first->second.get();
   }
 
-std::shared_ptr<zenkit::IParticleEffect> ParticlesDefinitions::implGetDirect(std::string_view name, bool relaxed) {
+std::shared_ptr<Def::ParticleEffect> ParticlesDefinitions::implGetDirect(std::string_view name, bool relaxed) {
   if(!vm || name.empty())
     return nullptr;
 
@@ -72,7 +72,7 @@ std::shared_ptr<zenkit::IParticleEffect> ParticlesDefinitions::implGetDirect(std
     return nullptr;
     }
 
-  auto ret = std::make_shared<zenkit::IParticleEffect>();
+  auto ret = std::make_shared<Def::ParticleEffect>();
   ret->vis_tex_is_quadpoly = 1; // seem to be default
   vm->init_instance(ret, id);
   return ret;
@@ -80,11 +80,11 @@ std::shared_ptr<zenkit::IParticleEffect> ParticlesDefinitions::implGetDirect(std
 
 // The game's own stream (PEE, the S_PEE animation starts it) aimed at a kneeling hero a metre ahead
 // (mercy.py's humiliation): its look and gravity, a faster throw up in the npc's frame, gone at the hero
-std::shared_ptr<zenkit::IParticleEffect> ParticlesDefinitions::peeStream() {
+std::shared_ptr<Def::ParticleEffect> ParticlesDefinitions::peeStream() {
   auto id = vm->find_symbol_by_name("PEE");
   if(id==nullptr)
     return nullptr;
-  auto ret = std::make_shared<zenkit::IParticleEffect>();
+  auto ret = std::make_shared<Def::ParticleEffect>();
   ret->vis_tex_is_quadpoly = 1;
   vm->init_instance(ret, id);
   // one key a hundred seconds long: the model keeps an effect only for its preferred time (MdlVisual::tick);
