@@ -14,7 +14,7 @@ from gothic_ai.dialogue import DialogueManager
 from gothic_ai.game import GameError
 from gothic_ai.llm import FakeBackend, FakeStep, Message, ToolCall, ToolResult
 from gothic_ai.memory import MemoryStore
-from gothic_ai.mercy import PARDON, PEE_DISTANCE_CM, PEE_HOLD_MS, VICTOR, YIELDING, Mercy
+from gothic_ai.mercy import ACCEPT_QUIET_S, PARDON, PEE_DISTANCE_CM, PEE_HOLD_MS, VICTOR, YIELDING, Mercy
 from gothic_ai.orders import Fight, Orders, Standing
 from gothic_ai.parley import Parley
 from gothic_ai.persona import PersonaProvider
@@ -403,6 +403,9 @@ async def test_acceptance_without_hold_calms_allied_attackers_and_only_recipient
     assert rig.fake.npc_items.get(FRIEND, {}).get(GOLD, 0) == 0
     assert all(row["npc"] == NPC for row in rig.fake.story
                if any(op.get("do") == "give" for op in row.get("effects", [])))
+    # a native important dialog (a gate guard's FIRSTWARN) would swallow the words that follow
+    quiet = {"do": "refuse_talk", "seconds": ACCEPT_QUIET_S}
+    assert {row["npc"] for row in rig.fake.story if quiet in row.get("effects", [])} == {NPC, FRIEND}
     if guild == 9:
         assert FRIEND in rig.parley.truce(NPC)["members"]
 

@@ -45,6 +45,9 @@ PEE_HOLD_MS = 4000
 PEE_APPROACH_TIMEOUT_MS = 15000
 HUMILIATE_FORBIDDEN_GUILDS = {1, 4, 5, 14}  # PAL, KDF, NOV, KDW
 HERO_HOLD_S = 30
+# after accepting, the winner and its allies start no native talk (a gate guard's FIRSTWARN) for this long:
+# the engine would refuse their words and the humiliation scene while it runs
+ACCEPT_QUIET_S = 30
 
 PARDON = "Ты проиграл бой герою и сдался; он тебя пощадил"
 YIELDING = (
@@ -700,8 +703,9 @@ class Mercy:
             hold.timer.cancel()
         intent = Intent(attitude="wary")
         self.dialogue._change_intent(conv, intent, snap, body=False)
+        quiet = {"do": "refuse_talk", "seconds": ACCEPT_QUIET_S}
         output, ok = await self.dialogue._calm(
-            conv, intent, effects=[g.effect("self") for g in gives], native_attitude="ATT_FRIENDLY",
+            conv, intent, effects=[*(g.effect("self") for g in gives), quiet], native_attitude="ATT_FRIENDLY",
         )
         if not ok:
             if hold is not None:
@@ -720,7 +724,9 @@ class Mercy:
             self.dialogue._change_intent(
                 listener, listening, self.link.snapshots.get(member), body=False,
             )
-            output, ok = await self.dialogue._calm(listener, listening, native_attitude="ATT_FRIENDLY")
+            output, ok = await self.dialogue._calm(
+                listener, listening, effects=[quiet], native_attitude="ATT_FRIENDLY",
+            )
             if not ok:
                 if hold is not None:
                     self._end_hold(npc, hold, force=True)
