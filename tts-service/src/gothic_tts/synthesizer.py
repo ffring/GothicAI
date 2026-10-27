@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from .loudness import Leveler, Line
 from .providers import TtsError, TtsProvider, Voice
+from .providers.inworld import InworldTTS, _UnknownVoice
 
 log = logging.getLogger(__name__)
 
@@ -108,6 +109,12 @@ class Synthesizer:
             try:
                 audio_s = await p.synthesize(text, selected, chunk)
             except TtsError as err:
+                if (
+                    selected is original_voice and first is None
+                    and isinstance(p, InworldTTS) and isinstance(err, _UnknownVoice)
+                ):
+                    p._forget(selected.id)
+                    raise  # only this clone is gone; the service retries with the designed voice
                 log.warning("%s failed: %s", p.name, err)
                 self._mark_down(p)
                 if first is not None:

@@ -66,6 +66,8 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
         "voxcpm",
         "--fallback",
         "none",
+        "--game-dir",
+        "/games/G2",
         "--loudness=-16",
     ]
     assert tts.env["INWORLD_API_KEY"] == "iw-secret"
@@ -83,6 +85,7 @@ def test_services_get_their_settings_and_find_each_other(config, tmp_path):
     config.set("tts.original_voices", False)
     disabled = by_name(services(config, LAYOUT, PORTS, tmp_path))["tts"]
     assert "--no-original-voices" in disabled.argv
+    assert disabled.argv[disabled.argv.index("--game-dir") + 1] == "/games/G2"
 
 
 @pytest.mark.parametrize("key", [None, "iw-secret"])
