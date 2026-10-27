@@ -13,6 +13,14 @@
 #include <fcntl.h>
 #include <sys/file.h>
 #include <unistd.h>
+#else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -34,21 +42,47 @@ class BaseStore::Lock {
         throw std::system_error(error,std::generic_category(),"lock base");
         }
 #else
-      (void)path;
-      (void)mode;
-      throw std::runtime_error("automatic base import requires Unix file locks");
+      // LockFileEx is flock's counterpart: held per handle, shared or exclusive, released with the handle
+      // or the process. The lock files are never read or written, so its mandatory ranges block nothing.
+      file=::CreateFileW(path.c_str(),GENERIC_READ|GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,
+                         nullptr,OPEN_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
+      if(file==INVALID_HANDLE_VALUE)
+        throw std::system_error(int(::GetLastError()),std::system_category(),"open base lock");
+      DWORD flags=mode==Shared ? 0 : LOCKFILE_EXCLUSIVE_LOCK;
+      if(mode==TryExclusive)
+        flags|=LOCKFILE_FAIL_IMMEDIATELY;
+      OVERLAPPED whole={};
+      if(!::LockFileEx(file,flags,0,MAXDWORD,MAXDWORD,&whole)) {
+        const DWORD error=::GetLastError();
+        ::CloseHandle(file);
+        file=INVALID_HANDLE_VALUE;
+        if(mode==TryExclusive && error==ERROR_LOCK_VIOLATION) return;
+        throw std::system_error(int(error),std::system_category(),"lock base");
+        }
 #endif
       }
     ~Lock() {
 #ifndef _WIN32
       ::close(fd);
+#else
+      if(file!=INVALID_HANDLE_VALUE) {
+        OVERLAPPED whole={};
+        ::UnlockFileEx(file,0,MAXDWORD,MAXDWORD,&whole);
+        ::CloseHandle(file);
+        }
 #endif
       }
     Lock(const Lock&)=delete;
     Lock& operator=(const Lock&)=delete;
+#ifndef _WIN32
     bool acquired() const { return fd>=0; }
   private:
     int fd=-1;
+#else
+    bool acquired() const { return file!=INVALID_HANDLE_VALUE; }
+  private:
+    HANDLE file=INVALID_HANDLE_VALUE;
+#endif
   };
 
 namespace {
@@ -120,7 +154,12 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   const auto identity=BaseImport::identify(gothic,mounted);
   fs::path cache;
   if(const auto* env=std::getenv("OPENGOTHIC_BASE_CACHE")) cache=env;
+#ifdef _WIN32
+  // HOME is usually unset on Windows; the wide variable keeps a Cyrillic user name intact.
+  else if(const auto* local=_wgetenv(L"LOCALAPPDATA"); local && *local) cache=fs::path(local)/"gothic-ai"/"base";
+#else
   else if(const auto* home=std::getenv("HOME")) cache=fs::path(home)/".cache/gothic-ai/base";
+#endif
   if(cache.empty()) throw std::runtime_error("base cache path is empty");
   fs::create_directories(cache);
   Lock cacheLock(cache/".lock");

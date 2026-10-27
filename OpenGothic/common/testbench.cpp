@@ -33,6 +33,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#ifdef _WIN32
+// The MSVC runtime names the POSIX pipe functions with an underscore (bench video capture only).
+#define popen _popen
+#define pclose _pclose
+#endif
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
