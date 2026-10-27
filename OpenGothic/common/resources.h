@@ -233,7 +233,7 @@ class Resources final {
       void validate(const std::vector<std::pair<std::string,uintmax_t>>& mounted);
       void validateLoose(const std::filesystem::path& game);
       };
-    BaseIndex baseTextures, baseMeshes, baseZen, baseModels;
+    BaseIndex baseTextures, baseMeshes, baseZen, baseModels, baseFonts;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     BaseStore::Selection automaticBase;
     BaseImport::Progress baseProgress;

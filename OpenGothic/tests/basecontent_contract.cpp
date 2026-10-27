@@ -3,13 +3,16 @@
 #include "basemesh.h"
 #include "commandline.h"
 #include "contentcensus.h"
+#include "fontdata.h"
 #include "gltfmesh.h"
 #include "gothicglb.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "physics/physicvbo.h"
 #include "resources.h"
 #include "modeldata.h"
+#include "utils/gthfont.h"
 
+#include <zenkit/Font.hh>
 #include <zenkit/Stream.hh>
 #include <zenkit/Model.hh>
 #include <zenkit/ModelAnimation.hh>
@@ -25,6 +28,7 @@
 #include <Tempest/Dir>
 #include <Tempest/MemReader>
 #include <Tempest/File>
+#include <Tempest/Texture2d>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
@@ -604,6 +608,100 @@ struct BaseContentContract {
     return names.size();
     }
 
+  static void fontNames(const zenkit::VfsNode& directory, std::set<std::string>& names) {
+    for(const auto& node:directory.children()) {
+      if(node.type()==zenkit::VfsNodeType::DIRECTORY) {
+        fontNames(node,names);
+        continue;
+        }
+      auto name=node.name();
+      for(auto& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(name.ends_with(".FNT")) names.insert(std::move(name));
+      }
+    }
+
+  static void fontLayout(const zenkit::Font& source, const asset::Font& loaded, const std::string& name) {
+    // Build the old layout input directly from the independent parser, without fromZenKit.
+    asset::Font oracle;
+    oracle.name=source.name;
+    oracle.height=source.height;
+    for(const auto& glyph:source.glyphs)
+      oracle.glyphs.push_back({glyph.width,{glyph.uv[0],glyph.uv[1]}});
+    Tempest::Texture2d atlas;
+    GthFont expected(oracle,&atlas,Tempest::Color(1.f));
+    GthFont actual(loaded,&atlas,Tempest::Color(1.f));
+    const std::vector<std::string> samples={"", "Gothic II", "one  two three", " leading spaces",
+      "line\n   indented\n", "\n", "longwordwithoutspaces", "trailing  ", "\x80\xC0\xDF\xFF"};
+    for(const float scale:{0.f,.03125f,.5f,1.f,1.25f,2.f}) {
+      expected.setScale(scale);
+      actual.setScale(scale);
+      const auto field=name+" scale="+std::to_string(scale);
+      const int height=int(std::max(float(source.height)*scale,1.f));
+      equal(actual.pixelSize(),height,field+" height");
+      int width=0;
+      for(const char c:std::string_view("Gothic II"))
+        width+=int(float(source.glyphs[uint8_t(c)].width)*scale);
+      const auto plain=actual.textSize("Gothic II");
+      equal(plain.w,width,field+" independently summed advances");
+      equal(plain.h,height,field+" single-line height");
+      for(const auto& text:samples) {
+        const auto a=expected.textSize(text), b=actual.textSize(text);
+        equal(a.w,b.w,field+" unwrapped width");
+        equal(a.h,b.h,field+" unwrapped height");
+        for(const int wrap:{0,1,38,96,256}) {
+          const auto x=expected.textSize(wrap,text), y=actual.textSize(wrap,text);
+          equal(x.w,y.w,field+" wrapped width "+std::to_string(wrap));
+          equal(x.h,y.h,field+" wrapped height "+std::to_string(wrap));
+          equal(expected.lineCount(wrap,text),actual.lineCount(wrap,text),field+" line count "+std::to_string(wrap));
+          }
+        }
+      }
+    }
+
+  static size_t fonts(const fs::path& base, const Resources& resources) {
+    const auto index=json(base/"fonts/fonts.json");
+    require(index.HasMember("format") && index["format"].IsString() &&
+            std::string_view(index["format"].GetString())=="gothic-fonts" && index["version"]==1,
+            "font index must use gothic-fonts version 1");
+    require(index.HasMember("fonts") && index["fonts"].IsObject(),"font index must contain font records");
+    const auto& records=index["fonts"];
+    std::set<std::string> names;
+    fontNames(Resources::vdfsIndex().root(),names);
+    require(!names.empty(),"source font corpus must not be empty");
+    equal(names.size(),size_t(records.MemberCount()),"font index must include every mounted FNT basename");
+    equal(names.size(),resources.baseFonts.files.size(),"Resources font index count");
+    for(const auto& name:names) {
+      require(records.HasMember(name.c_str()) && records[name.c_str()].IsString(),name+": source font missing from base index");
+      require(std::string_view(records[name.c_str()].GetString())==name+".json",name+": font record filename");
+      require(resources.baseFonts.files.at(name)==name+".json",name+": Resources font record filename");
+      const auto* entry=Resources::vdfsIndex().find(name);
+      require(entry!=nullptr,name+": original font missing");
+      auto reader=entry->open_read();
+      zenkit::Font source;
+      source.load(reader.get());
+      std::string atlas;
+      const auto loaded=FontData::readFont(base/"fonts"/(name+".json"),&atlas);
+      require(source.name==loaded.name,name+": exact name bytes differ");
+      equal(source.height,loaded.height,name+" height");
+      equal(source.glyphs.size(),loaded.glyphs.size(),name+" glyph count");
+      equal(source.glyphs.size(),256u,name+" byte-indexed source glyph count");
+      for(size_t i=0;i<source.glyphs.size();++i) {
+        const auto field=name+" glyph["+std::to_string(i)+"]";
+        equal(source.glyphs[i].width,loaded.glyphs[i].width,field+" width");
+        for(size_t corner=0;corner<2;++corner) {
+          modelField(source.glyphs[i].uv[corner].x,loaded.glyphs[i].uv[corner].x,field+" uv x");
+          modelField(source.glyphs[i].uv[corner].y,loaded.glyphs[i].uv[corner].y,field+" uv y");
+          }
+        }
+      const auto stem=name.substr(0,name.size()-4);
+      require(atlas==stem+".TGA",name+": atlas must come from the requested FNT stem");
+      require(resources.baseTextures.files.count(stem)==1,name+": atlas must reference an existing base texture");
+      fontLayout(source,loaded,name);
+      }
+    std::printf("Fonts: %zu equal to independently parsed FNTs; every ordered glyph, UV bit, name, height and atlas equal; scaled sizes, wrapping and line counts equal\n",names.size());
+    return names.size();
+    }
+
   static void modelFixtures(const fs::path& temporary) {
     zenkit::ModelHierarchy hierarchy{};
     hierarchy.nodes={{-1,"ROOT",zenkit::Mat4::identity()},{0,"CHILD",zenkit::Mat4::identity()}};
@@ -703,10 +801,10 @@ struct BaseContentContract {
     std::puts("Model fixtures: complete script/MAN events, metadata, sample bits, skin weights, nested OBB and native attachment order equal");
     }
 
-  static void census(const fs::path& file, size_t meshes, size_t models) {
+  static void census(const fs::path& file, size_t meshes, size_t models, size_t fonts) {
     const auto data=json(file);
     equal(data["replacements"].Size(),meshes+models,"census base mesh/model count");
-    size_t selectedMeshes=0,selectedModels=0,sourceModels=0;
+    size_t selectedMeshes=0,selectedModels=0,sourceModels=0,sourceFonts=0;
     for(const auto& row:data["replacements"].GetArray()) {
       const std::string_view kind=row["kind"].GetString(),path=row["replacement"].GetString();
       if(kind=="basemodel") {
@@ -724,11 +822,16 @@ struct BaseContentContract {
     equal(selectedModels,models,"census selected model count");
     for(const auto& row:data["files"].GetArray()) {
       const std::string_view kind=row["kind"].GetString();
+      if(kind=="font") {
+        ++sourceFonts;
+        equal(row["opens"].GetUint64(),1u,std::string(row["name"].GetString())+": only independent font oracle may open FNT");
+        }
       if(kind!="model" && kind!="skeleton" && kind!="anim" && kind!="morph") continue;
       ++sourceModels;
       equal(row["opens"].GetUint64(),1u,std::string(row["name"].GetString())+": only independent source oracle may open the archive");
       }
     equal(sourceModels,models,"census independent source model count");
+    equal(sourceFonts,fonts,"census independent source font count");
     std::puts("Model census: each source opened once by the oracle; Resources selected each base record without original opens");
     }
 
@@ -992,17 +1095,18 @@ struct BaseContentContract {
     const auto censusPath=temporary/"census.json";
     setenv("OPENGOTHIC_CENSUS",censusPath.c_str(),1);
     std::string meshKey;
-    size_t textureCount=0,meshCount=0,modelCount=0,dds=0,png=0,tga=0,vertices=0,indices=0,meshlets=0;
+    size_t textureCount=0,meshCount=0,modelCount=0,fontCount=0,dds=0,png=0,tga=0,vertices=0,indices=0,meshlets=0;
     {
     Resources resources;
-    require(!resources.baseTextures.enabled && !resources.baseMeshes.enabled && !resources.baseModels.enabled,
+    require(!resources.baseTextures.enabled && !resources.baseMeshes.enabled && !resources.baseModels.enabled && !resources.baseFonts.enabled,
             "base must wait for mounted archives");
     Resources::loadVdfs({},true);
-    require(resources.baseTextures.enabled && resources.baseMeshes.enabled && resources.baseModels.enabled,
-            "matching archives must enable texture, mesh and model indices");
-    require(!resources.baseTextures.files.empty() && !resources.baseMeshes.files.empty() && !resources.baseModels.files.empty(),
-            "texture, mesh and model indices must contain files");
+    require(resources.baseTextures.enabled && resources.baseMeshes.enabled && resources.baseModels.enabled && resources.baseFonts.enabled,
+            "matching archives must enable texture, mesh, model and font indices");
+    require(!resources.baseTextures.files.empty() && !resources.baseMeshes.files.empty() && !resources.baseModels.files.empty() && !resources.baseFonts.files.empty(),
+            "texture, mesh, model and font indices must contain files");
     modelCount=models(base);
+    fontCount=fonts(base,resources);
     modelFixtures(temporary);
     for(const auto& [key,file]:resources.baseTextures.files) {
       auto* entry=Resources::vdfsIndex().find(key+"-C.TEX");
@@ -1044,7 +1148,7 @@ struct BaseContentContract {
       }
     meshKey=resources.baseMeshes.files.begin()->first;
     }
-    census(censusPath,meshCount,modelCount);
+    census(censusPath,meshCount,modelCount,fontCount);
     // Keep parser regression reads separate from the runtime-open census.
     {
     Resources resources;
@@ -1075,21 +1179,23 @@ struct BaseContentContract {
     catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
     require(rejected,"invalid explicit base must fail with recovery instructions");
 
-    const auto incomplete=temporary/"missing-model-index";
-    fs::create_directories(incomplete/"models");
-    fs::copy_file(base/"base.json",incomplete/"base.json");
-    for(const auto* kind:{"textures","meshes","zen","sources"})
-      fs::create_directory_symlink(base/kind,incomplete/kind);
-    setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
-    std::string missingModelIndexError;
-    try {
-      Resources resources;
-      Resources::loadVdfs({},true);
+    for(const std::string kind:{"models","fonts"}) {
+      const auto incomplete=temporary/("missing-"+kind+"-index");
+      fs::create_directories(incomplete/kind);
+      fs::copy_file(base/"base.json",incomplete/"base.json");
+      for(const auto* part:{"textures","meshes","zen","models","fonts","sources"})
+        if(part!=kind) fs::create_directory_symlink(base/part,incomplete/part);
+      setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
+      std::string missingIndexError;
+      try {
+        Resources resources;
+        Resources::loadVdfs({},true);
+        }
+      catch(const BaseStore::Error& error) { missingIndexError=error.what(); }
+      require(missingIndexError.find("base index missing: "+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
+              missingIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
+              "base without "+kind+"/"+kind+".json must fail with recovery instructions");
       }
-    catch(const BaseStore::Error& error) { missingModelIndexError=error.what(); }
-    require(missingModelIndexError.find("base index missing: "+(incomplete/"models/models.json").string())!=std::string::npos &&
-            missingModelIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
-            "base without models/models.json must fail with recovery instructions");
     setenv("OPENGOTHIC_BASE",base.c_str(),1);
     {
     Resources resources;

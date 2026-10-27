@@ -1,11 +1,13 @@
 #pragma once
 
+#include "font.h"
 #include "staticmesh.h"
 #include "modeltypes.h"
 #include "worldmesh.h"
 #include "worlddata.h"
 
 namespace zenkit {
+class Font;
 class Material;
 class Mesh;
 class MultiResolutionMesh;
@@ -32,6 +34,7 @@ ModelAnimation fromZenKit(const zenkit::ModelAnimation& source);
 ModelScript fromZenKit(const zenkit::ModelScript& source);
 MorphMesh fromZenKit(const zenkit::MorphMesh& source);
 Model fromZenKit(const zenkit::Model& source);
+Font fromZenKit(const zenkit::Font& source);
 // Original MAN codes, before host-specific floating-point decoding.
 // The reader retains its position on success.
 std::vector<QuantizedAnimationSample> animationSamplesFromZenKit(zenkit::Read* source,

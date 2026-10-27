@@ -10,11 +10,13 @@
 #include "asset/fromzenkit.h"
 #include "baseimport.h"
 #include "basemesh.h"
+#include "utils/gthfont.h"
 
 #include <Tempest/Device>
 #include <Tempest/Log>
 #include <Tempest/VulkanApi>
 #include <zenkit/Stream.hh>
+#include <zenkit/Font.hh>
 #include <zenkit/Model.hh>
 #include <zenkit/Vfs.hh>
 #include <miniz.h>
@@ -351,9 +353,16 @@ struct Fixture {
       first=false;
       }
     textFile(base/"meshes/meshes.json",meshes+"}}");
-    textFile(base/"textures/textures.json","{\"format\":\"gothic-textures\",\"version\":1,\"archives\":"+archives+",\"textures\":{}}");
+    std::string textures="{}";
+    if(std::filesystem::is_regular_file(root/"_work/ORIGINAL.FNT")) {
+      std::filesystem::copy_file(root/"materials/transparent-bc1.dds",base/"textures/FONT_ATLAS.dds",
+                                 std::filesystem::copy_options::overwrite_existing);
+      textures=R"({"ORIGINAL":"FONT_ATLAS.dds","ORIGINAL_HI":"FONT_ATLAS.dds"})";
+      }
+    textFile(base/"textures/textures.json","{\"format\":\"gothic-textures\",\"version\":1,\"archives\":"+archives+",\"textures\":"+textures+"}");
     textFile(base/"zen/zen.json","{\"format\":1,\"archives\":"+archives+",\"loose_files\":[],\"files\":{}}");
     require(BaseImport::convertModels(root,base/"models",false)==0,"synthetic models must import into their own base");
+    require(BaseImport::convertFonts(root,base/"fonts",false)==0,"synthetic fonts must import into their own base");
     // Synthetic installation without remaining-family inputs: a labelled empty manifest.
     std::filesystem::create_directories(base/"sources");
     textFile(base/"sources/sources.json","{\"format\":\"gothic-sources\",\"version\":1,\"synthetic\":\"mesh-gltf fixture without remaining-family inputs\"}\n");
@@ -1330,6 +1339,20 @@ void maskBc1Policy(const Fixture& fixture) {
     "OPAQUE_BC1.TGA":{"albedo":"opaque-bc1.dds"},
     "OPAQUE_BC3.TGA":{"albedo":"opaque-bc3.dds"}
   })");
+  for(const bool hi:{false,true}) {
+    zenkit::Font font;
+    font.name="METADATA_DOES_NOT_NAME_THE_ATLAS";
+    font.height=hi ? 25u : 17u;
+    font.glyphs.resize(256);
+    for(size_t i=0;i<font.glyphs.size();++i) {
+      auto& glyph=font.glyphs[i];
+      glyph.width=uint8_t(hi ? 2+i%5 : 3+i%11);
+      glyph.uv[0]={-.25f,0.f};
+      glyph.uv[1]={.75f,1.25f};
+      }
+    auto output=zenkit::Write::to(fixture.root/"_work"/(hi ? "ORIGINAL_HI.FNT" : "ORIGINAL.FNT"));
+    font.save(output.get());
+    }
   GlbOptions options;
   options.alpha = "MASK";
   glbFile(fixture.root/"meshes/test/own.glb",options);
@@ -1361,6 +1384,46 @@ void maskBc1Policy(const Fixture& fixture) {
     Shaders shaders;
     shaders.waitCompiler();
     fixture.mount();
+    const auto& font=Resources::font("ORIGINAL.extra.tga",Resources::FontType::Normal,1.25f);
+    require(font.pixelSize()==21 && font.textSize("A B")==Tempest::Size(35,21),
+            "native font must retain scaled source advances and height");
+    require(font.textSize(1,"A B")==Tempest::Size(16,42) && font.lineCount(1,"A B")==2,
+            "font atlas must resolve from the requested first-dot stem, despite unrelated font metadata");
+    require(&font==&Resources::font("ORIGINAL.extra.tga",Resources::FontType::Normal,1.25f),
+            "an exact repeated font request must reuse its cached instance");
+    const auto& red=Resources::font("ORIGINAL.extra.tga",Resources::FontType::Red,1.25f);
+    const auto& unscaled=Resources::font("ORIGINAL.extra.tga",Resources::FontType::Normal,1.f);
+    require(&red!=&font && red.textSize("A B")==font.textSize("A B") &&
+            &unscaled!=&font && unscaled.textSize("A B")==Tempest::Size(29,17),
+            "font cache keys must retain both type and exact scale");
+    const auto& hi=Resources::font("ORIGINAL.extra.tga",Resources::FontType::Hi,1.f);
+    require(hi.textSize(1,"A B")==Tempest::Size(3,50) && hi.textSize("A B")==Tempest::Size(9,25),
+            "Hi requests must use their own native metrics and atlas");
+    const auto& missing=Resources::font("ORIGINAL_HI.tga",Resources::FontType::Hi,3.f);
+    require(missing.pixelSize()==0 && missing.textSize("A")==Tempest::Size(10,0) &&
+            missing.lineCount(1,"A")==0 &&
+            &missing==&Resources::font("ORIGINAL_HI.tga",Resources::FontType::Hi,3.f),
+            "missing Hi font must cache the unscaled empty font without falling back to Normal");
+    const auto fontCensus=fixture.census();
+    size_t nativeFonts=0,missingFonts=0;
+    for(const auto& item:fontCensus["files"].GetArray())
+      require(std::string_view(item["kind"].GetString())!="font","Resources font loading must never open source FNTs");
+    for(const auto& item:fontCensus["replacements"].GetArray()) {
+      if(std::string_view(item["kind"].GetString())!="basefont") continue;
+      const std::string_view name=item["name"].GetString();
+      require(name=="ORIGINAL.FNT" || name=="ORIGINAL_HI.FNT","native font census request name");
+      require(std::string_view(item["replacement"].GetString())=="base/fonts/"+std::string(name)+".json" &&
+              item["opens"].GetUint64()==(name=="ORIGINAL.FNT" ? 3u : 1u),
+              "native font census must distinguish real native reads from cached requests");
+      ++nativeFonts;
+      }
+    for(const auto& item:fontCensus["base_misses"].GetArray()) {
+      if(std::string_view(item["kind"].GetString())!="font") continue;
+      require(std::string_view(item["name"].GetString())=="ORIGINAL_HI_HI.FNT" && item["count"].GetUint64()==1,
+              "missing Hi lookup must be recorded once without a source fallback");
+      ++missingFonts;
+      }
+    require(nativeFonts==2 && missingFonts==1,"font census must contain both native records and the missing Hi lookup");
     const auto* masked = Resources::loadMesh("OWN_MESH.3DS");
     require(masked!=nullptr && masked->attach.size()==1 && masked->attach[0].sub.size()==1,
             "MASK BC1 fixture must load through the ordinary ProtoMesh path");

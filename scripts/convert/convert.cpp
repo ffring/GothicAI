@@ -19,6 +19,9 @@
 //   content-convert models|verify-models <gothic dir> <dir>
 //       Model, hierarchy, script, skeletal and morph animation records as
 //       lossless JSON + binary arrays, including loose _work sources.
+//   content-convert fonts|verify-fonts <gothic dir> <dir>
+//       Every selected FNT as a lossless JSON + binary record (common/fontdata.h),
+//       chosen through the engine's runtime VFS; fonts.json indexes them.
 //   content-convert sources|verify-sources <gothic dir> <dir>
 //       sources.json: selected FNT/audio/BIK/music/DAT/OU inputs of the engine
 //       and server readers, their origin and SHA-256; no payload conversion.
@@ -31,10 +34,12 @@
 #include "sha256.h"
 #include "asset/fromzenkit.h"
 #include "basemesh.h"
+#include "fontdata.h"
 #include "worldchunks.h"
 #include "worlddata.h"
 #include "gothicglb.h"
 
+#include <zenkit/Font.hh>
 #include <zenkit/Logger.hh>
 #include <zenkit/MultiResolutionMesh.hh>
 #include <zenkit/Stream.hh>
@@ -48,6 +53,7 @@
 #include "miniz.h"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -185,6 +191,51 @@ int selfTest() {
   diff = compareBaseMeshes(mrm,readBaseMesh(dir/"mesh.glb"));
   require(diff.empty(),"mesh round trip: "+diff);
 
+  // A font through ZenKit's own writer and reader: latin-1 name, UV bits outside 0..1,
+  // -0.0, infinity and a NaN payload must reach the record and come back unchanged.
+  {
+  const float nan = std::bit_cast<float>(0x7FC12345u);
+  zenkit::Font fnt("FONT_\xE4_TEST",17,{});
+  fnt.glyphs.push_back({0,{{0.f,0.f},{0.f,0.f}}});
+  fnt.glyphs.push_back({9,{{-0.0f,1.5f},{-0.25f,nan}}});
+  fnt.glyphs.push_back({255,{{std::bit_cast<float>(0x7F800000u),0.125f},{1.f,2.f}}});
+  std::vector<std::byte> bytes;
+  fnt.save(zenkit::Write::to(&bytes).get());
+  zenkit::Font loaded;
+  loaded.load(zenkit::Read::from(&bytes).get());
+  const auto own = asset::fromZenKit(loaded);
+  require(own.name=="FONT_\xE4_TEST" && own.height==17 && own.glyphs.size()==3,"font header");
+  require(gothicglb::bits(own.glyphs[1].uv[1].y)==0x7FC12345u && gothicglb::bits(own.glyphs[1].uv[0].x)==0x80000000u,
+          "font UV bits through ZenKit");
+  require(FontData::atlasName("FONT_\xE4_TEST.fnt")=="FONT_\xE4_TEST.TGA","font atlas name");
+  const auto file = dir/"FONT_TEST.FNT.json";
+  FontData::writeFont(own,"FONT_TEST.TGA",file);
+  std::string atlas;
+  const auto read = FontData::readFont(file,&atlas);
+  diff = FontData::compare(own,read);
+  require(diff.empty(),"font round trip: "+diff);
+  require(atlas=="FONT_TEST.TGA" && gothicglb::bits(read.glyphs[1].uv[1].y)==0x7FC12345u,"font record bits");
+  auto changed = read;
+  changed.glyphs[2].uv[0].x = std::bit_cast<float>(0x7F800001u);
+  require(!FontData::compare(own,changed).empty(),"font compare must see float bits");
+  // A short binary and an unknown version are rejected, not read as a partial font.
+  const auto bin = dir/"FONT_TEST.FNT.bin";
+  fs::resize_file(bin,fs::file_size(bin)-1);
+  rejected = false;
+  try { FontData::readFont(file); } catch(const std::exception&) { rejected = true; }
+  require(rejected,"truncated font binary must be rejected");
+  FontData::writeFont(own,"FONT_TEST.TGA",file);
+  auto json = gothicglb::readFile(file);
+  const std::string text(json.begin(),json.end());
+  const auto at = text.find("\"version\":1");
+  require(at!=std::string::npos,"font record version");
+  json[at+10] = uint8_t('2');
+  gothicglb::writeFile(file,json.data(),json.size());
+  rejected = false;
+  try { FontData::readFont(file); } catch(const std::exception&) { rejected = true; }
+  require(rejected,"unsupported font record version must be rejected");
+  }
+
   WorldData::selfTest(dir/"world-data");
   fs::remove_all(dir);
   std::cout << "self-test passed\n";
@@ -214,6 +265,8 @@ int main(int argc, char** argv) {
       return BaseImport::convertMeshes(args[1],args[2],args[0]=="verify-meshes");
     if(args.size()==3 && (args[0]=="models" || args[0]=="verify-models"))
       return BaseImport::convertModels(args[1],args[2],args[0]=="verify-models");
+    if(args.size()==3 && (args[0]=="fonts" || args[0]=="verify-fonts"))
+      return BaseImport::convertFonts(args[1],args[2],args[0]=="verify-fonts");
     if(args.size()==3 && (args[0]=="sources" || args[0]=="verify-sources"))
       return BaseImport::convertSources(args[1],args[2],args[0]=="verify-sources");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
@@ -224,6 +277,7 @@ int main(int argc, char** argv) {
     std::cerr << "usage: content-convert world|verify-world <gothic dir> <WORLD.ZEN> <dir> [override]\n"
                  "       content-convert textures|verify-textures|meshes|verify-meshes|zen|verify-zen <gothic dir> <dir>\n"
                  "       content-convert models|verify-models <gothic dir> <dir>\n"
+                 "       content-convert fonts|verify-fonts <gothic dir> <dir>\n"
                  "       content-convert sources|verify-sources <gothic dir> <dir>\n"
                  "       content-convert base <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";
