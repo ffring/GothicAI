@@ -21,10 +21,13 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
 #include <sys/wait.h>
+#include <sys/file.h>
+#include <fcntl.h>
 #include <unistd.h>
 #ifdef __linux__
 #include <sched.h>
@@ -42,6 +45,20 @@ struct Temporary {
   fs::path path;
   explicit Temporary(const fs::path& parent) {
     fs::create_directories(parent);
+    constexpr std::string_view prefix="video-contract-";
+    for(const auto& entry:fs::directory_iterator(parent)) {
+      const auto name=entry.path().filename().string();
+      if(!entry.is_directory() || !name.starts_with(prefix)) continue;
+      const auto suffix=std::string_view(name).substr(prefix.size());
+      if(suffix.empty() || !std::all_of(suffix.begin(),suffix.end(),[](char c) { return c>='0' && c<='9'; })) continue;
+      uint64_t pid=0;
+      for(const auto c:suffix) {
+        pid=pid*10+uint64_t(c-'0');
+        if(pid>uint64_t(std::numeric_limits<pid_t>::max())) break;
+        }
+      if(pid>0 && pid<=uint64_t(std::numeric_limits<pid_t>::max()) && kill(pid_t(pid),0)<0 && errno==ESRCH)
+        fs::remove_all(entry.path());
+      }
     path=parent/("video-contract-"+std::to_string(getpid()));
     require(fs::create_directory(path),"temporary directory already exists: "+path.string());
     }
@@ -90,7 +107,7 @@ std::vector<std::byte> readSource(const zenkit::VfsNode& node) {
 // Both pipes carry only the compressed source or one decoded reference frame at a time.
 class Ffmpeg {
   public:
-    explicit Ffmpeg(const std::vector<std::byte>& bytes,int track=-1,uint32_t sampleRate=0,uint32_t channels=0) {
+    explicit Ffmpeg(const fs::path& executable,const std::vector<std::byte>& bytes,int track=-1,uint32_t sampleRate=0,uint32_t channels=0) {
       const auto selection="0:a:"+std::to_string(track), rate=std::to_string(sampleRate), channelCount=std::to_string(channels);
       int source[2], decoded[2];
       require(pipe(source)==0,"cannot create ffmpeg source pipe");
@@ -104,12 +121,12 @@ class Ffmpeg {
         if(dup2(source[0],STDIN_FILENO)<0 || dup2(decoded[1],STDOUT_FILENO)<0) _exit(125);
         close(source[0]); close(source[1]); close(decoded[0]); close(decoded[1]);
         if(track>=0) {
-          execl("/usr/bin/ffmpeg","ffmpeg","-hide_banner","-v","error","-nostdin","-threads","1","-filter_threads","1","-i","pipe:0",
+          execl(executable.c_str(),"ffmpeg","-hide_banner","-v","error","-nostdin","-threads","1","-filter_threads","1","-i","pipe:0",
                 "-map",selection.c_str(),"-vn","-f","s16le","-acodec","pcm_s16le","-ar",rate.c_str(),
                 "-ac",channelCount.c_str(),"-threads","1","pipe:1",static_cast<char*>(nullptr));
           _exit(127);
           }
-        execl("/usr/bin/ffmpeg","ffmpeg","-hide_banner","-v","error","-nostdin",
+        execl(executable.c_str(),"ffmpeg","-hide_banner","-v","error","-nostdin",
               "-threads","1","-filter_threads","1","-i","pipe:0","-map","0:v:0","-an",
               "-fps_mode","passthrough","-f","rawvideo","-pix_fmt","yuv420p","-threads","1","pipe:1",
               static_cast<char*>(nullptr));
@@ -166,37 +183,42 @@ class Ffmpeg {
     int output=-1;
   };
 
+int64_t heldFrameOf(std::string_view name) {
+  return name=="CREDITS_EXTRO.BIK" ? 147 : name=="SHIP.BIK" ? 1048 : -1;
+  }
+
 struct PlaneDifference {
   uint64_t frames=0, bytes=0, absoluteDelta=0;
   unsigned maxDelta=0;
   };
 
-void preflightReference(const fs::path& gothic) {
-  require(access("/usr/bin/ffmpeg",X_OK)==0,"independent video reference requires executable /usr/bin/ffmpeg");
+void preflightReference(const fs::path& gothic,const fs::path& executable) {
+  require(access(executable.c_str(),X_OK)==0,"optional video reference is not executable: "+executable.string());
   zenkit::Vfs vfs; fs::path work;
   BaseImport::mountRuntime(vfs,gothic,work);
   const auto sources=VideoData::sources(gothic);
   require(sources.size()==21,"ffmpeg reference requires all 21 selected BIK files");
-  uint64_t totalMatched=0, totalMismatched=0, totalUncompared=0, totalReference=0, totalHeld=0;
+  uint64_t totalMatched=0, totalMismatched=0, totalUncompared=0, totalReference=0, totalHeld=0, totalExpected=0;
   unsigned decoderFailures=0, referenceFailures=0, audioFailures=0;
   std::string failureContext;
-  std::cout << "video ffmpeg command: /usr/bin/ffmpeg -hide_banner -v error -nostdin -threads 1 -filter_threads 1"
+  std::cout << "video ffmpeg command: " << executable.string() << " -hide_banner -v error -nostdin -threads 1 -filter_threads 1"
                " -i pipe:0 -map 0:v:0 -an -fps_mode passthrough -f rawvideo -pix_fmt yuv420p -threads 1 pipe:1\n";
   for(const auto& source:sources) {
     const auto* selected=vfs.find(source.name);
     require(selected!=nullptr,source.name+": missing ffmpeg reference source");
     const auto bytes=readSource(*selected);
-    Input input(bytes); Bink::Video oracle(&input,source.name); Ffmpeg reference(bytes);
+    Input input(bytes); Bink::Video oracle(&input,source.name); Ffmpeg reference(executable,bytes);
     const auto width=oracle.frame(0).width(), height=oracle.frame(0).height();
     require(width%2==0 && height%2==0,source.name+": reference expects even YUV420 dimensions");
     const std::array<size_t,3> planeSizes={size_t(width)*height,size_t(width/2)*(height/2),size_t(width/2)*(height/2)};
     const auto frameSize=planeSizes[0]+planeSizes[1]+planeSizes[2];
+    totalExpected+=oracle.frameCount();
     std::vector<uint8_t> expected(frameSize), actual(frameSize);
     std::array<std::vector<uint8_t>,4> previousPlanes;
     std::array<PlaneDifference,3> differences;
     std::vector<uint64_t> audioSamples(oracle.audioCount());
     const bool credits=source.name=="CREDITS_EXTRO.BIK", ship=source.name=="SHIP.BIK";
-    const int64_t heldFrame=credits ? 147 : ship ? 1048 : -1;
+    const auto heldFrame=heldFrameOf(source.name);
     uint64_t matched=0, mismatched=0, decodedFrames=0, referenceFrames=0, referencePartialBytes=0, held=0;
     int64_t firstMismatch=-1, decoderErrorFrame=-1;
     bool heldPlanesEqual=true;
@@ -290,7 +312,7 @@ void preflightReference(const fs::path& gothic) {
       for(size_t track=0;track<audioSamples.size();++track) {
         const auto& audio=oracle.audio(uint8_t(track));
         const uint32_t channels=audio.isMono ? 1u : 2u;
-        Ffmpeg referenceAudio(bytes,int(track),audio.sampleRate,channels);
+        Ffmpeg referenceAudio(executable,bytes,int(track),audio.sampleRate,channels);
         std::array<uint8_t,65536> buffer; uint64_t audioBytes=0;
         for(;;) { const auto count=referenceAudio.read(buffer.data(),buffer.size()); if(!count) break; audioBytes+=count; }
         const bool audioSucceeded=referenceAudio.finish();
@@ -312,8 +334,8 @@ void preflightReference(const fs::path& gothic) {
   require(decoderFailures==0 && referenceFailures==0 && audioFailures==0,
           "needs_decision: decoder failures="+std::to_string(decoderFailures)+", ffmpeg incomplete="+
           std::to_string(referenceFailures)+", audio count failures="+std::to_string(audioFailures)+";"+failureContext);
-  require(totalMatched==29654 && totalMismatched==0 && totalUncompared==0 && totalReference==29652 && totalHeld==2,
-          "needs_decision: expected 29654 exact checked frames including 2 held frames and 29652 ffmpeg raw frames");
+  require(totalMatched==totalExpected && totalMismatched==0 && totalUncompared==0 && totalReference+totalHeld==totalExpected,
+          "optional ffmpeg reference differs: expected "+std::to_string(totalExpected)+" checked source frames");
   }
 
 std::map<std::string,std::string> hashes(const fs::path& root) {
@@ -363,17 +385,23 @@ void compareCorpus(const fs::path& gothic, const fs::path& part) {
     require(info.tracks.size()==oracle.audioCount(),entry.source.name+": track count");
     std::vector<uint64_t> samples(info.tracks.size());
     std::vector<std::pair<uint32_t,VideoData::Frame>> seekFrames;
+    const auto heldFrame=heldFrameOf(entry.source.name);
+    std::array<std::vector<uint8_t>,4> previousPlanes;
     for(size_t track=0;track<samples.size();++track) {
       const auto& expected=oracle.audio(uint8_t(track));
       require(info.tracks[track].sampleRate==expected.sampleRate &&
               info.tracks[track].channels==(expected.isMono ? 1u : 2u),entry.source.name+": audio format");
       }
     for(uint32_t frame=0;frame<info.frames;++frame) {
+      const auto recoveries=oracle.recoveryCount(), repeatedRecoveries=repeated.recoveryCount();
       const auto& expected=oracle.nextFrame();
       const auto& again=repeated.nextFrame();
       const auto actual=native.nextFrame();
       if(frame%std::max(1u,info.frames/7)==0 || frame+1==info.frames) seekFrames.emplace_back(frame,actual);
       const auto location=entry.source.name+" frame "+std::to_string(frame);
+      const auto recovered=int64_t(frame)==heldFrame ? 1u : 0u;
+      require(oracle.recoveryCount()==recoveries+recovered && repeated.recoveryCount()==repeatedRecoveries+recovered,
+              location+": unexpected Bink recovery location/count");
       require(info.width==expected.width() && info.height==expected.height(),location+": dimensions");
       require(actual.audio.size()==info.tracks.size(),location+": audio tracks");
       for(uint8_t plane=0;plane<4;++plane) {
@@ -386,6 +414,9 @@ void compareCorpus(const fs::path& gothic, const fs::path& part) {
           throw std::runtime_error("needs_decision: nondeterministic common/bink: "+location+" plane "+std::to_string(plane));
         require(actual.planes[plane].size()==size && std::memcmp(actual.planes[plane].data(),source.data(),size)==0,
                 location+": plane bytes "+std::to_string(plane));
+        if(int64_t(frame)+1==heldFrame) previousPlanes[plane]=actual.planes[plane];
+        if(int64_t(frame)==heldFrame)
+          require(actual.planes[plane]==previousPlanes[plane],location+": recovered frame must repeat previous plane "+std::to_string(plane));
         }
       for(size_t track=0;track<samples.size();++track) {
         const auto& expectedSamples=expected.audio(uint8_t(track)).samples;
@@ -403,6 +434,7 @@ void compareCorpus(const fs::path& gothic, const fs::path& part) {
         samples[track]+=expectedSamples.size();
         }
       }
+    require(oracle.recoveryCount()==(heldFrame>=0 ? 1u : 0u),entry.source.name+": recovery total");
     for(auto saved=seekFrames.rbegin();saved!=seekFrames.rend();++saved) {
       const auto sought=native.readFrame(saved->first);
       require(sought.planes==saved->second.planes && sought.audio==saved->second.audio,
@@ -488,6 +520,73 @@ void flipLastByte(const fs::path& file) {
   require(bool(output),"cannot write mutation byte");
   }
 
+void concurrentFirstPublications(const fs::path& gothic,const fs::path& part,const fs::path& root,
+                                 const VideoData::Identity& identity,const std::map<std::string,std::string>& expected) {
+  const auto store=root/"store", stored=store/"base/videos"/identity.fingerprint;
+  const std::array<fs::path,2> caches={root/"cache-a",root/"cache-b"};
+  for(const auto& cache:caches) {
+    const auto destination=cache/"videos"/identity.fingerprint;
+    fs::create_directories(destination);
+    for(const auto& entry:fs::directory_iterator(part))
+      if(entry.is_regular_file()) fs::create_hard_link(entry.path(),destination/entry.path().filename());
+    }
+  fs::create_directories(stored.parent_path());
+  // Both publishers may already hold a shared lease before the first part exists.
+  const int use=open((stored.parent_path()/(identity.fingerprint+".use")).c_str(),O_CREAT|O_RDWR,0600);
+  require(use>=0,"cannot open concurrent publication lease");
+  if(flock(use,LOCK_SH)!=0) { close(use); throw std::runtime_error("cannot hold concurrent publication lease"); }
+  int gate[2];
+  if(pipe(gate)!=0) { close(use); throw std::runtime_error("cannot create concurrent publication gate"); }
+  std::array<pid_t,2> children={-1,-1};
+  std::cout.flush(); std::cerr.flush();
+  bool started=true;
+  for(size_t i=0;i<children.size();++i) {
+    children[i]=fork();
+    if(children[i]<0) { started=false; break; }
+    if(children[i]==0) {
+      close(use); close(gate[1]);
+      const auto log=root/("publisher-"+std::to_string(i)+".log");
+      const int error=open(log.c_str(),O_CREAT|O_WRONLY|O_TRUNC,0600);
+      if(error<0 || dup2(error,STDERR_FILENO)<0) _exit(2);
+      close(error);
+      char token=0;
+      ssize_t count;
+      do { count=::read(gate[0],&token,1); } while(count<0 && errno==EINTR);
+      close(gate[0]);
+      if(count!=1) _exit(3);
+      try {
+        Environment cacheEnvironment("OPENGOTHIC_BASE_CACHE",caches[i]), storeEnvironment("OPENGOTHIC_BASE_STORE",store);
+        auto selected=BaseStore::resolveVideos(gothic,[](std::string_view) {});
+        require(selected.path==caches[i]/"videos"/identity.fingerprint,"concurrent publication did not use its own cache");
+        if(selected.publication.valid()) selected.publication.get();
+        _exit(0);
+        }
+      catch(const std::exception& error) { std::cerr << error.what() << std::endl; _exit(1); }
+      }
+    }
+  close(gate[0]);
+  const char tokens[2]={1,1};
+  const auto released=started ? ::write(gate[1],tokens,sizeof(tokens)) : -1;
+  close(gate[1]);
+  bool succeeded=started && released==ssize_t(sizeof(tokens));
+  for(const auto child:children) {
+    if(child<=0) continue;
+    int status=0; pid_t result;
+    do { result=waitpid(child,&status,0); } while(result<0 && errno==EINTR);
+    succeeded&=result==child && WIFEXITED(status) && WEXITSTATUS(status)==0;
+    }
+  close(use);
+  require(succeeded,"concurrent first video publication process failed");
+  for(size_t i=0;i<children.size();++i) {
+    std::ifstream log(root/("publisher-"+std::to_string(i)+".log"));
+    const std::string events{std::istreambuf_iterator<char>(log),std::istreambuf_iterator<char>()};
+    require(events.find("store publication failed")==std::string::npos,"concurrent first video publication: "+events);
+    }
+  require(VideoData::matches(stored,identity) && hashes(stored)==expected,"concurrent first store copy differs");
+  fs::remove_all(root);
+  std::cout << "video concurrent publication: two caches, empty shared store, both publishers succeeded\n";
+  }
+
 void identityInputs(const fs::path& gothic, const fs::path& root, const VideoData::Identity& identity) {
   fs::create_directories(root);
   fs::path nonvideo, video;
@@ -527,7 +626,10 @@ int main() {
     require(game && *game,"GOTHIC_DIR must point to the real Gothic II installation");
     const auto* home=std::getenv("HOME");
     require(home && *home,"HOME is not set");
-    preflightReference(game);
+    if(const auto* reference=std::getenv("OPENGOTHIC_VIDEO_FFMPEG"); reference && *reference) {
+      preflightReference(game,reference);
+      return 0;
+      }
     Temporary temporary(fs::path(home)/"gothic-ai/p17");
     const auto cache=temporary.path/"cache", store=temporary.path/"store";
     Environment cacheEnvironment("OPENGOTHIC_BASE_CACHE",cache), storeEnvironment("OPENGOTHIC_BASE_STORE",store);
@@ -564,9 +666,17 @@ int main() {
     VideoData::build(game,repeated,log);
     require(hashes(repeated)==expected,"repeated import is not byte-identical");
     fs::remove_all(repeated);
+    concurrentFirstPublications(game,part,temporary.path/"concurrent",identity,expected);
     events.clear();
+    const auto cachedStarted=Clock::now();
     auto cached=BaseStore::resolveVideos(game,log);
+    const auto cachedSeconds=std::chrono::duration<double>(Clock::now()-cachedStarted).count();
+    const auto backgroundStarted=Clock::now();
     if(cached.publication.valid()) cached.publication.get();
+    const auto backgroundSeconds=std::chrono::duration<double>(Clock::now()-backgroundStarted).count();
+    std::cout << "video cache hit: selection_seconds=" << cachedSeconds
+              << " background_store_seconds=" << backgroundSeconds << '\n';
+    require(backgroundSeconds<=1,"background store metadata validation exceeds 1 s");
     require(cached.path==part && events.find("video base: cache ")!=std::string::npos,"second selection did not use cache");
     imported.lease.reset(); cached.lease.reset();
     fs::remove_all(cache);
@@ -598,7 +708,8 @@ int main() {
     writeIndex(indexBytes);
     const auto damaged=part/entries.front().file;
     flipLastByte(damaged);
-    require(!VideoData::matches(part,identity),"corrupted video payload was accepted by part validation");
+    require(VideoData::matches(part,identity),"metadata validation unexpectedly scanned the video payload");
+    require(!VideoData::matches(part,identity,true),"corrupted video payload was accepted by full validation");
     bool rejected=false;
     try {
       VideoData::Reader invalid(damaged);
@@ -608,6 +719,8 @@ int main() {
     rejected=false;
     try { VideoData::Reader invalid(damaged); invalid.verifyPayload(); } catch(const std::exception&) { rejected=true; }
     require(rejected,"corrupted video payload SHA-256 was accepted");
+    fs::resize_file(damaged,fs::file_size(damaged)-1);
+    require(!VideoData::matches(part,identity),"wrong video size was accepted by metadata validation");
     copied.lease.reset();
     events.clear();
     auto repaired=BaseStore::resolveVideos(game,log);

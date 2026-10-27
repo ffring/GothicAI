@@ -56,7 +56,8 @@ std::string formatSha256();
 std::vector<Source> sources(const std::filesystem::path& gothic);
 Identity identify(const std::filesystem::path& gothic);
 std::vector<Entry> readIndex(const std::filesystem::path& dir);
-bool matches(const std::filesystem::path& dir, const Identity& identity);
+// Cache/store hits verify the index and file sizes; publication also verifies every file SHA-256.
+bool matches(const std::filesystem::path& dir, const Identity& identity, bool verifyFiles=false);
 void build(const std::filesystem::path& gothic, const std::filesystem::path& out,
            const BaseImport::Progress& progress = {});
 int convert(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly=false);

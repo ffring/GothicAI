@@ -82,9 +82,16 @@ struct Temporary {
     }
   };
 
+bool publicationMatches(const fs::path& directory,const BaseImport::Identity& identity) {
+  return BaseImport::matches(directory,identity);
+  }
+bool publicationMatches(const fs::path& directory,const VideoData::Identity& identity) {
+  return VideoData::matches(directory,identity,true);
+  }
+
 template<class Identity>
 void publish(const fs::path& temporary, const fs::path& destination, const Identity& identity) {
-  if(!matches(temporary,identity)) throw std::runtime_error("base metadata or payload does not match installation");
+  if(!publicationMatches(temporary,identity)) throw std::runtime_error("base metadata or payload does not match installation");
   // The caller holds the destination lock. Valid published directories are immutable.
   if(fs::exists(destination)) fs::remove_all(destination);
   fs::rename(temporary,destination);
@@ -216,6 +223,8 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
 BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const BaseImport::Progress& log) {
   const auto start=std::chrono::steady_clock::now();
   const auto identity=VideoData::identify(gothic);
+  log("video base: identified installation ("+std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now()-start).count())+" ms)");
   fs::path cache;
   if(const auto* env=std::getenv("OPENGOTHIC_BASE_CACHE")) cache=env;
   else if(const auto* home=std::getenv("HOME")) cache=fs::path(home)/".cache/gothic-ai/base";
@@ -256,8 +265,9 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
           Lock lock(store/(identity.fingerprint+".lock"));
           removeInterrupted(store,identity.fingerprint);
           const auto stored=store/identity.fingerprint;
-          if(!VideoData::matches(stored,identity)) {
-            {
+          const bool present=VideoData::matches(stored,identity);
+          if(!present) {
+            if(fs::exists(stored)) {
             Lock cleanup(store/".lock");
             storedLease.reset();
             storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::TryExclusive);
@@ -273,8 +283,8 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
           prune(store,stored);
           }
           const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
-          std::fprintf(stderr,"video base: published to store %s (%lld ms, background)\n",
-                       stored.string().c_str(),static_cast<long long>(ms));
+          std::fprintf(stderr,"video base: %s %s (%lld ms, background)\n",
+                       present ? "verified store" : "published to store",stored.string().c_str(),static_cast<long long>(ms));
           }
         catch(const std::exception& e) { std::fprintf(stderr,"video base: store publication failed: %s\n",e.what()); }
         });
@@ -285,7 +295,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
     };
   if(VideoData::matches(destination,identity)) return finish("cache");
   if(fs::exists(destination)) {
-    log("video base: rejected cache directory: video metadata or payload mismatch");
+    log("video base: rejected cache directory: video metadata mismatch");
     Lock replacement(cache/(identity.fingerprint+".use"),Lock::TryExclusive);
     if(!replacement.acquired()) throw std::runtime_error("cannot replace a video cache part in use");
     fs::remove_all(destination);

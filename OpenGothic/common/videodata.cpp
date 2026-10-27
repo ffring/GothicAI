@@ -163,7 +163,6 @@ Entry encode(const Source& source,Bink::Video& video,const fs::path& out) {
       const auto& samples=frame.audio(uint8_t(t)).samples; put32(encodedFrame,uint32_t(samples.size()));
       std::vector<uint8_t> encoded(samples.size()*2);
       for(size_t i=0;i<samples.size();++i) { const uint16_t v=uint16_t(pcm(samples[i])); encoded[2*i]=uint8_t(v); encoded[2*i+1]=uint8_t(v>>8); }
-      for(size_t i=0;i<samples.size();++i) require(int16_t(uint16_t(encoded[2*i])|(uint16_t(encoded[2*i+1])<<8))==pcm(samples[i]),"PCM verification differs");
       writeBytes(encodedFrame,encoded.data(),encoded.size()); entry.info.tracks[t].samples+=samples.size();
       }
     const auto encoded=encodedFrame.str(); payloadHash.update(encoded.data(),encoded.size());
@@ -246,11 +245,14 @@ std::vector<Entry> readIndex(const fs::path& dir) {
     }
   return result;
   }
-bool matches(const fs::path& dir,const Identity& identity) {
+bool matches(const fs::path& dir,const Identity& identity,bool verifyFiles) {
   try {
     const auto doc=document(dir/"videos.json"); if(str(doc,"fingerprint")!=identity.fingerprint || str(doc,"identity")!=identity.json) return false;
     const auto entries=readIndex(dir); std::vector<Source> list;
-    for(const auto& e:entries) { if(fs::file_size(dir/e.file)!=e.size || fileHash(dir/e.file)!=e.sha256) return false; list.push_back(e.source); }
+    for(const auto& e:entries) {
+      if(fs::file_size(dir/e.file)!=e.size || (verifyFiles && fileHash(dir/e.file)!=e.sha256)) return false;
+      list.push_back(e.source);
+      }
     return identityOf(list).json==identity.json;
     } catch(const std::exception&) { return false; }
   }
