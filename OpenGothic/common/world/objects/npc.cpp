@@ -1644,11 +1644,14 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
 
 void Npc::syncMeleeShadowSwing() {
   const auto mode = weaponState();
-  if(meleeShadowSuspended || !(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) || !isHuman() || isDown() ||
+  const bool enabled = Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits;
+  if(meleeShadowSuspended || !isHuman() || isDown() ||
      (mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)) {
     finishMeleeShadowSwing();
     return;
     }
+  if(!enabled && !(meleeShadow && meleeShadow->window))
+    return;
   const auto& pose = visual.pose();
   std::optional<Pose::CombatLayer> attack;
   for(const auto& layer:pose.combatLayers(owner.tickCount()))
@@ -1694,6 +1697,10 @@ void Npc::syncMeleeShadowSwing() {
     return;
   const auto selected = *window;
   finishMeleeShadowSwing(false);
+  if(!enabled) {
+    owner.physic()->removeShadowBlade(this);
+    return;
+    }
   shadow.window = selected;
   ++shadow.id;
   shadow.start = attack->start;
@@ -1758,7 +1765,8 @@ void Npc::syncMeleeShadowSwing() {
   }
 
 void Npc::updateMeleeShadow() {
-  if(meleeShadowSuspended || !(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits)) {
+  if(meleeShadowSuspended || (!(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) &&
+                              !(meleeShadow && meleeShadow->window))) {
     clearMeleeShadow();
     return;
     }
@@ -1883,7 +1891,7 @@ void Npc::resolveMeleeContacts() {
   }
 
 auto Npc::meleeStep(uint64_t dt) -> Vec3 {
-  if(!Gothic::physicsFlags().meleePhysicsHits || !meleeShadow || !meleeShadow->window || meleeShadow->stopped)
+  if(!meleeShadow || !meleeShadow->window || !meleeShadow->physicsHits || meleeShadow->stopped)
     return {};
   auto& swing = *meleeShadow;
   auto& magnet = swing.magnet;
@@ -1956,7 +1964,7 @@ void Npc::consumeMeleeContacts() {
         continue;
       swing.stopped = true;
       swing.outcome = "wall";
-      if(Gothic::physicsFlags().meleePhysicsHits) {
+      if(swing.physicsHits) {
         const auto* weapon = inventory().activeWeapon();
         Matrix4x4 at;
         at.identity();
@@ -1990,7 +1998,7 @@ void Npc::consumeMeleeContacts() {
                                                           hit.bladeFraction,hit.surfaceAngleDeg,swing.targetsHit++);
       swing.outcome = "hit";
       }
-    if(Gothic::physicsFlags().meleePhysicsHits) {
+    if(swing.physicsHits) {
       BodyObservations::noteEvent(*this,target,"applied",owner.tickCount());
       if(TestBench::bodyTracing())
         TestBench::bodyEvent(*this,target,"hit_attempt",owner.tickCount(),
@@ -2002,7 +2010,7 @@ void Npc::consumeMeleeContacts() {
     if(block) {
       swing.stopped = true;
       swing.outcome = "blocked";
-      if(Gothic::physicsFlags().meleePhysicsHits)
+      if(swing.physicsHits)
         stopMeleeSwing();
       }
     }
@@ -3449,7 +3457,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 
   const auto ws = weaponState();
   const auto bs = bodyStateMasked();
-  const bool magnetHeading = Gothic::physicsFlags().meleePhysicsHits && visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window &&
+  const bool magnetHeading = visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window && meleeShadow->physicsHits &&
                              meleeShadow->magnet.eligible;
 
   if(bs==BS_HIT && (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
@@ -4296,13 +4304,15 @@ void Npc::commitDamage() {
     if(TestBench::isActive())
       TestBench::destructionMeleeHit(*this,affected,weaponDamage+strength);
     }
+  auto* shadow = meleeShadow && meleeShadow->window ? meleeShadow.get() : nullptr;
+  const bool physicsHits = isHuman() && (shadow!=nullptr ? shadow->physicsHits : Gothic::physicsFlags().meleePhysicsHits);
   const auto hitTrace = [&](const char* result) {
-    if((Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) && meleeShadow && meleeShadow->window) {
+    if(shadow!=nullptr) {
       meleeShadow->legacyTarget = meleeShadowWho(currentTarget);
       meleeShadow->legacyNpc = currentTarget;
       meleeShadow->legacyResult = result;
       }
-    if(isHuman() && Gothic::physicsFlags().meleePhysicsHits)
+    if(physicsHits)
       return;
     BodyObservations::noteEvent(*this,currentTarget,result,owner.tickCount());
     if(TestBench::bodyTracing())
@@ -4322,7 +4332,6 @@ void Npc::commitDamage() {
     return;
     }
   hitTrace("applied");
-  auto* shadow = (Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) && meleeShadow && meleeShadow->window ? meleeShadow.get() : nullptr;
   auto* shadowTarget = shadow!=nullptr ? currentTarget : nullptr;
   int32_t hpBefore = 0;
   if(shadow!=nullptr) {
@@ -4339,7 +4348,7 @@ void Npc::commitDamage() {
                                                  (shadow->legacyDodge ? "evaded" : "applied"));
     hpBefore = currentTarget->attribute(ATR_HITPOINTS);
     }
-  if(!(isHuman() && Gothic::physicsFlags().meleePhysicsHits))
+  if(!physicsHits)
     currentTarget->takeDamage(*this,nullptr);
   if(shadow!=nullptr)
     shadow->damage = std::max(0,hpBefore-shadowTarget->attribute(ATR_HITPOINTS));
@@ -4910,7 +4919,7 @@ void Npc::tick(uint64_t dt) {
     if(physicalMovement)
       return;
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {
-      const bool magnetHeading = Gothic::physicsFlags().meleePhysicsHits && visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window &&
+      const bool magnetHeading = visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window && meleeShadow->physicsHits &&
                                  meleeShadow->magnet.eligible;
       if(!magnetHeading)
         implTurnToFai(*currentTarget,dt);
