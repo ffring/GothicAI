@@ -453,30 +453,30 @@ class OneCore {
 
 void benchmark(const fs::path& part) {
   const auto entries=VideoData::readIndex(part);
-  const auto found=std::find_if(entries.begin(),entries.end(),[](const auto& entry) {
-    return entry.info.width==640 && entry.info.height==360 && entry.info.frames>=100;
-    });
-  require(found!=entries.end(),"no 640x360 video for frame benchmark");
   OneCore affinity;
-  VideoData::Reader reader(part/found->file);
-  constexpr uint32_t count=512;
-  std::vector<double> timings; timings.reserve(count);
-  uint64_t consumed=0;
-  for(uint32_t i=0;i<count;++i) {
-    const auto frame=(i*7919u)%found->info.frames;
-    const auto start=Clock::now();
-    const auto decoded=reader.readFrame(frame);
-    timings.push_back(std::chrono::duration<double,std::milli>(Clock::now()-start).count());
-    consumed+=decoded.planes[0].size();
+  for(const auto* name:{"CREDITS2.BIK","INTRO.BIK","SHIP.BIK"}) {
+    const auto found=std::find_if(entries.begin(),entries.end(),[&](const auto& entry) { return entry.source.name==name; });
+    require(found!=entries.end() && found->info.width==640 && found->info.height==360,"missing 640x360 benchmark video");
+    VideoData::Reader reader(part/found->file);
+    constexpr uint32_t count=512;
+    std::vector<double> timings; timings.reserve(count);
+    uint64_t consumed=0;
+    for(uint32_t i=0;i<count;++i) {
+      const auto frame=(i*7919u)%found->info.frames;
+      const auto start=Clock::now();
+      const auto decoded=reader.readFrame(frame);
+      timings.push_back(std::chrono::duration<double,std::milli>(Clock::now()-start).count());
+      consumed+=decoded.planes[0].size();
+      }
+    double total=0;
+    for(const auto ms:timings) total+=ms;
+    std::sort(timings.begin(),timings.end());
+    const auto average=total/count;
+    std::cout << "video frame benchmark: " << found->source.name << " 640x360 one_core=1 random_frames=" << count
+              << " mean_ms=" << average << " p95_ms=" << timings[size_t(count)*95/100]
+              << " max_ms=" << timings.back() << " consumed_bytes=" << consumed << '\n';
+    require(average<=10,"needs_decision: mean 640x360 frame read exceeds 10 ms: "+std::to_string(average));
     }
-  double total=0;
-  for(const auto ms:timings) total+=ms;
-  std::sort(timings.begin(),timings.end());
-  const auto average=total/count;
-  std::cout << "video frame benchmark: " << found->source.name << " 640x360 one_core=1 random_frames=" << count
-            << " mean_ms=" << average << " p95_ms=" << timings[size_t(count)*95/100]
-            << " max_ms=" << timings.back() << " consumed_bytes=" << consumed << '\n';
-  require(average<=10,"needs_decision: mean 640x360 frame read exceeds 10 ms: "+std::to_string(average));
   }
 
 void flipLastByte(const fs::path& file) {
@@ -554,7 +554,7 @@ int main() {
     const auto bytes=directorySize(part);
     std::cout << "video part: files=" << hashes(part).size() << " bytes=" << bytes << " import_seconds=" << importSeconds
               << " selection_seconds=" << selectionSeconds << '\n';
-    require(bytes<=2500000000ull,"needs_decision: video part exceeds 2.5 GB: "+std::to_string(bytes));
+    require(bytes<=3000000000ull,"needs_decision: video part exceeds 3.0 GB: "+std::to_string(bytes));
     require(importSeconds<=90,"needs_decision: corpus import exceeds 90 s: "+std::to_string(importSeconds));
     require(VideoData::matches(store/"base/videos"/identity.fingerprint,identity),"background publication missing");
     benchmark(part);

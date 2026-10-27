@@ -40,13 +40,15 @@ class Reader {
     const Info& info() const { return meta; }
     Frame readFrame(uint32_t number);
     Frame nextFrame();
-    void verifyPayload(); // optional full payload pass; random frame reads verify only their own record
+    void verifyPayload(); // optional full payload pass; frame reads verify every record used for reconstruction
   private:
-    struct Position { uint64_t offset=0, size=0; std::string sha256; };
+    struct Position { uint64_t offset=0, size=0; uint32_t flags=0; std::string sha256; };
     std::ifstream input;
     Info meta;
     std::vector<Position> index;
+    std::array<std::vector<uint8_t>,4> previousPlanes;
     uint32_t next=0;
+    bool havePrevious=false;
     uint64_t payloadStart=0, fileSize=0;
     std::string payloadSha256;
   };

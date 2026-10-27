@@ -27,6 +27,8 @@ namespace fs=std::filesystem;
 namespace VideoData {
 namespace {
 constexpr uint64_t HeaderSize=128;
+constexpr int CompressionLevel=6;
+constexpr uint32_t KeyframeInterval=8;
 void require(bool ok,const std::string& reason) { if(!ok) throw std::runtime_error("video data: "+reason); }
 void require(bool ok,const char* reason) { if(!ok) throw std::runtime_error(std::string("video data: ")+reason); }
 uint32_t aligned(uint32_t n) { return ((n+15)/16)*16; }
@@ -51,6 +53,10 @@ std::string readText(const fs::path& path) {
   std::ifstream in(path,std::ios::binary); require(bool(in),"cannot open "+path.string()); return {std::istreambuf_iterator<char>(in),{}};
   }
 std::string fileHash(const fs::path& path) { return BaseImport::sha256File(path); }
+std::string frameHash(uint32_t flags,std::string_view data) {
+  uint8_t bytes[4]; for(size_t i=0;i<4;++i) bytes[i]=uint8_t(flags>>(i*8));
+  Sha256 hash; hash.update(bytes,sizeof(bytes)); hash.update(data.data(),data.size()); return hash.finish();
+  }
 void collect(const zenkit::VfsNode& node,const std::string& parent,std::map<const zenkit::VfsNode*,std::string>& paths,std::set<std::string>& names) {
   for(const auto& child:node.children()) {
     const auto path=parent+child.name();
@@ -101,32 +107,44 @@ Info infoOf(const Bink::Video& video) {
   for(size_t t=0;t<video.audioCount();++t) { const auto& a=video.audio(uint8_t(t)); ret.tracks.push_back({a.sampleRate,a.isMono ? 1u : 2u,0}); }
   return ret;
   }
-struct Position { uint64_t offset=0, size=0; std::string sha256=std::string(64,'0'); };
+struct Position { uint64_t offset=0, size=0; uint32_t flags=0; std::string sha256=std::string(64,'0'); };
 void writeInfo(std::ostream& out,const Info& info,const std::vector<Position>& index,uint64_t fileSize,const std::string& hash) {
-  out.seekp(0); writeBytes(out,"GVIDEO1\0",8); put32(out,1); put32(out,uint32_t(HeaderSize+32+16*info.tracks.size()+80*index.size())); put64(out,fileSize);
+  out.seekp(0); writeBytes(out,"GVIDEO2\0",8); put32(out,2); put32(out,uint32_t(HeaderSize+32+16*info.tracks.size()+84*index.size())); put64(out,fileSize);
   writeBytes(out,hash.data(),64); put32(out,info.width); put32(out,info.height); put32(out,info.frames); put32(out,info.fpsNum); put32(out,info.fpsDen); put32(out,uint32_t(info.tracks.size()));
   const uint8_t reserved[16]={}; writeBytes(out,reserved,16);
   for(const auto& p:info.planes) { put32(out,p.stride); put32(out,p.rows); }
   for(const auto& t:info.tracks) { put32(out,t.sampleRate); put32(out,t.channels); put64(out,t.samples); }
-  for(const auto& f:index) { put64(out,f.offset); put64(out,f.size); writeBytes(out,f.sha256.data(),64); }
+  for(const auto& f:index) { put64(out,f.offset); put64(out,f.size); put32(out,f.flags); writeBytes(out,f.sha256.data(),64); }
   }
-void encodePlane(std::ostream& out,const uint8_t* data,size_t size,uint32_t stride) {
+bool encodePlane(std::ostream& out,const uint8_t* data,size_t size,uint32_t stride,const std::vector<uint8_t>* previous) {
   std::vector<uint8_t> predicted(size);
   for(size_t i=0;i<size;++i) predicted[i]=uint8_t(data[i]-(i>=stride ? data[i-stride] : 0));
   mz_ulong length=mz_compressBound(mz_ulong(size)); std::vector<uint8_t> compressed(length);
-  require(mz_compress2(compressed.data(),&length,predicted.data(),mz_ulong(size),1)==MZ_OK,"deflate failed"); compressed.resize(length);
+  require(mz_compress2(compressed.data(),&length,predicted.data(),mz_ulong(size),CompressionLevel)==MZ_OK,"deflate failed"); compressed.resize(length);
+  bool temporal=false;
+  if(previous) {
+    require(previous->size()==size,"previous plane size differs");
+    for(size_t i=0;i<size;++i) predicted[i]=uint8_t(data[i]-(*previous)[i]);
+    mz_ulong deltaSize=mz_compressBound(mz_ulong(size)); std::vector<uint8_t> delta(deltaSize);
+    require(mz_compress2(delta.data(),&deltaSize,predicted.data(),mz_ulong(size),CompressionLevel)==MZ_OK,"deflate failed");
+    if(deltaSize<compressed.size()) { delta.resize(deltaSize); compressed=std::move(delta); temporal=true; }
+    }
   std::vector<uint8_t> restored(size); mz_ulong restoredSize=mz_ulong(size);
-  require(mz_uncompress(restored.data(),&restoredSize,compressed.data(),length)==MZ_OK && restoredSize==size,"deflate verification failed");
-  for(size_t i=stride;i<size;++i) restored[i]=uint8_t(restored[i]+restored[i-stride]);
+  require(mz_uncompress(restored.data(),&restoredSize,compressed.data(),mz_ulong(compressed.size()))==MZ_OK && restoredSize==size,"deflate verification failed");
+  if(temporal) {
+    for(size_t i=0;i<size;++i) restored[i]=uint8_t(restored[i]+(*previous)[i]);
+    } else {
+    for(size_t i=stride;i<size;++i) restored[i]=uint8_t(restored[i]+restored[i-stride]);
+    }
   require(std::memcmp(restored.data(),data,size)==0,"decoded plane differs after compression");
-  put32(out,uint32_t(length)); writeBytes(out,compressed.data(),compressed.size());
+  put32(out,uint32_t(compressed.size())); writeBytes(out,compressed.data(),compressed.size()); return temporal;
   }
 Entry encode(const Source& source,Bink::Video& video,const fs::path& out) {
   Entry entry; entry.source=source; entry.file=source.name+".gvideo"; entry.info=infoOf(video);
   const auto file=out/entry.file; std::fstream output(file,std::ios::binary|std::ios::in|std::ios::out|std::ios::trunc); require(bool(output),"cannot write "+file.string());
   std::vector<Position> positions(entry.info.frames);
   writeInfo(output,entry.info,positions,0,std::string(64,'0'));
-  Sha256 payloadHash;
+  Sha256 payloadHash; std::array<std::vector<uint8_t>,4> previousPlanes;
   for(uint32_t f=0;f<entry.info.frames;++f) {
     const Bink::Frame* decoded=nullptr;
     try { decoded=&video.nextFrame(); }
@@ -135,8 +153,11 @@ Entry encode(const Source& source,Bink::Video& video,const fs::path& out) {
       }
     const auto& frame=*decoded; const uint64_t start=uint64_t(output.tellp());
     std::ostringstream encodedFrame(std::ios::binary|std::ios::out);
+    uint32_t flags=0;
     for(uint8_t p=0;p<4;++p) {
-      const auto& pi=entry.info.planes[p]; encodePlane(encodedFrame,frame.plane(p).data(),size_t(pi.stride)*pi.rows,pi.stride);
+      const auto& pi=entry.info.planes[p]; const auto* data=frame.plane(p).data(); const size_t size=size_t(pi.stride)*pi.rows;
+      if(encodePlane(encodedFrame,data,size,pi.stride,f%KeyframeInterval ? &previousPlanes[p] : nullptr)) flags|=1u<<p;
+      previousPlanes[p].assign(data,data+size);
       }
     for(size_t t=0;t<entry.info.tracks.size();++t) {
       const auto& samples=frame.audio(uint8_t(t)).samples; put32(encodedFrame,uint32_t(samples.size()));
@@ -146,7 +167,7 @@ Entry encode(const Source& source,Bink::Video& video,const fs::path& out) {
       writeBytes(encodedFrame,encoded.data(),encoded.size()); entry.info.tracks[t].samples+=samples.size();
       }
     const auto encoded=encodedFrame.str(); payloadHash.update(encoded.data(),encoded.size());
-    positions[f]={start,encoded.size(),Sha256::hash(encoded)}; writeBytes(output,encoded.data(),encoded.size());
+    positions[f]={start,encoded.size(),flags,frameHash(flags,encoded)}; writeBytes(output,encoded.data(),encoded.size());
     }
   entry.size=uint64_t(output.tellp()); const auto hash=payloadHash.finish();
   writeInfo(output,entry.info,positions,entry.size,hash); output.close(); entry.sha256=fileHash(file); return entry;
@@ -234,34 +255,57 @@ bool matches(const fs::path& dir,const Identity& identity) {
     } catch(const std::exception&) { return false; }
   }
 Reader::Reader(const fs::path& file):input(file,std::ios::binary) {
-  require(bool(input),"cannot open "+file.string()); char magic[8]; readBytes(input,magic,8); require(std::memcmp(magic,"GVIDEO1\0",8)==0 && get32(input)==1,"invalid container header");
+  require(bool(input),"cannot open "+file.string()); char magic[8]; readBytes(input,magic,8); require(std::memcmp(magic,"GVIDEO2\0",8)==0 && get32(input)==2,"invalid container header");
   payloadStart=get32(input); fileSize=get64(input); require(fs::file_size(file)==fileSize && payloadStart<=fileSize,"container size differs");
   char expectedHash[64]; readBytes(input,expectedHash,64); payloadSha256.assign(expectedHash,64); meta.width=get32(input); meta.height=get32(input); meta.frames=get32(input); meta.fpsNum=get32(input); meta.fpsDen=get32(input); const auto tracks=get32(input); char reserved[16]; readBytes(input,reserved,16);
   require(meta.width>0 && meta.height>0 && meta.width<65536 && meta.height<65536 && meta.frames>0 && meta.fpsNum>0 && meta.fpsDen>0 && tracks<=255,"invalid video metadata");
-  require(uint64_t(payloadStart)==HeaderSize+32+16*uint64_t(tracks)+80*uint64_t(meta.frames),"invalid frame index size");
+  require(uint64_t(payloadStart)==HeaderSize+32+16*uint64_t(tracks)+84*uint64_t(meta.frames),"invalid frame index size");
   for(size_t p=0;p<4;++p) { auto& plane=meta.planes[p]; plane={get32(input),get32(input)}; const bool chroma=p==1 || p==2; require(plane.stride==aligned(chroma ? meta.width/2 : meta.width) && plane.rows==aligned(chroma ? meta.height/2 : meta.height),"invalid plane dimensions"); }
   for(uint32_t t=0;t<tracks;++t) { Track track{get32(input),get32(input),get64(input)}; require(track.sampleRate>0 && (track.channels==1 || track.channels==2),"invalid audio metadata"); meta.tracks.push_back(track); }
   uint64_t end=payloadStart;
-  for(uint32_t f=0;f<meta.frames;++f) { Position p{get64(input),get64(input),{}}; char hash[64]; readBytes(input,hash,64); p.sha256.assign(hash,64); require(p.offset==end && p.size<=fileSize-p.offset,"invalid frame offset"); end+=p.size; index.push_back(p); }
+  for(uint32_t f=0;f<meta.frames;++f) {
+    Position p{get64(input),get64(input),get32(input),{}}; char hash[64]; readBytes(input,hash,64); p.sha256.assign(hash,64);
+    require((p.flags&~15u)==0 && (f%KeyframeInterval!=0 || p.flags==0),"invalid plane predictor flags");
+    require(p.offset==end && p.size<=fileSize-p.offset,"invalid frame offset"); end+=p.size; index.push_back(p);
+    }
   require(end==fileSize,"unindexed payload bytes");
   }
 Frame Reader::readFrame(uint32_t number) {
-  require(number<meta.frames,"frame number out of range"); input.clear(); input.seekg(std::streamoff(index[number].offset));
-  std::string encoded(size_t(index[number].size),'\0'); readBytes(input,encoded.data(),encoded.size()); require(Sha256::hash(encoded)==index[number].sha256,"frame payload SHA-256 differs");
-  std::istringstream frameInput(encoded,std::ios::binary|std::ios::in); Frame ret;
-  uint64_t remaining=index[number].size;
-  for(size_t p=0;p<4;++p) {
-    require(remaining>=4,"truncated plane size"); const uint32_t size=get32(frameInput); remaining-=4; require(size<=remaining,"truncated plane"); remaining-=size;
-    std::vector<uint8_t> compressed(size); readBytes(frameInput,compressed.data(),size); auto& plane=ret.planes[p]; const auto& pi=meta.planes[p]; plane.resize(size_t(pi.stride)*pi.rows); mz_ulong decoded=mz_ulong(plane.size());
-    require(mz_uncompress(plane.data(),&decoded,compressed.data(),size)==MZ_OK && decoded==plane.size(),"invalid deflate plane");
-    for(size_t i=pi.stride;i<plane.size();++i) plane[i]=uint8_t(plane[i]+plane[i-pi.stride]);
+  require(number<meta.frames,"frame number out of range");
+  std::array<uint32_t,4> first; first.fill(number);
+  if(!havePrevious || number!=next)
+    for(size_t p=0;p<4;++p)
+      while(index[first[p]].flags&(1u<<p)) --first[p];
+  havePrevious=false;
+  Frame ret; ret.audio.resize(meta.tracks.size());
+  for(uint32_t frame=*std::min_element(first.begin(),first.end());frame<=number;++frame) {
+    const auto& position=index[frame]; input.clear(); input.seekg(std::streamoff(position.offset));
+    std::string encoded(size_t(position.size),'\0'); readBytes(input,encoded.data(),encoded.size());
+    require(frameHash(position.flags,encoded)==position.sha256,"frame payload SHA-256 differs");
+    std::istringstream frameInput(encoded,std::ios::binary|std::ios::in); uint64_t remaining=position.size;
+    for(size_t p=0;p<4;++p) {
+      require(remaining>=4,"truncated plane size"); const uint32_t size=get32(frameInput); remaining-=4; require(size<=remaining,"truncated plane"); remaining-=size;
+      if(frame<first[p]) { frameInput.seekg(size,std::ios::cur); continue; }
+      std::vector<uint8_t> compressed(size); readBytes(frameInput,compressed.data(),size); const auto& pi=meta.planes[p];
+      std::vector<uint8_t> plane(size_t(pi.stride)*pi.rows); mz_ulong decoded=mz_ulong(plane.size());
+      require(mz_uncompress(plane.data(),&decoded,compressed.data(),size)==MZ_OK && decoded==plane.size(),"invalid deflate plane");
+      if(position.flags&(1u<<p)) {
+        require(previousPlanes[p].size()==plane.size(),"missing temporal reference plane");
+        for(size_t i=0;i<plane.size();++i) plane[i]=uint8_t(plane[i]+previousPlanes[p][i]);
+        } else {
+        for(size_t i=pi.stride;i<plane.size();++i) plane[i]=uint8_t(plane[i]+plane[i-pi.stride]);
+        }
+      previousPlanes[p]=std::move(plane);
+      }
+    for(auto& track:ret.audio) {
+      require(remaining>=4,"truncated PCM size"); const uint32_t samples=get32(frameInput); remaining-=4; require(uint64_t(samples)*2<=remaining,"truncated PCM"); remaining-=uint64_t(samples)*2;
+      if(frame!=number) { frameInput.seekg(std::streamoff(uint64_t(samples)*2),std::ios::cur); continue; }
+      std::vector<uint8_t> pcmBytes(size_t(samples)*2); readBytes(frameInput,pcmBytes.data(),pcmBytes.size()); track.resize(samples);
+      for(size_t i=0;i<samples;++i) track[i]=int16_t(uint16_t(pcmBytes[2*i])|(uint16_t(pcmBytes[2*i+1])<<8));
+      }
+    require(remaining==0,"trailing frame bytes");
     }
-  ret.audio.resize(meta.tracks.size());
-  for(auto& track:ret.audio) {
-    require(remaining>=4,"truncated PCM size"); const uint32_t samples=get32(frameInput); remaining-=4; require(uint64_t(samples)*2<=remaining,"truncated PCM"); remaining-=uint64_t(samples)*2;
-    std::vector<uint8_t> encoded(size_t(samples)*2); readBytes(frameInput,encoded.data(),encoded.size()); track.resize(samples); for(size_t i=0;i<samples;++i) track[i]=int16_t(uint16_t(encoded[2*i])|(uint16_t(encoded[2*i+1])<<8));
-    }
-  require(remaining==0,"trailing frame bytes"); next=number+1; return ret;
+  ret.planes=previousPlanes; next=number+1; havePrevious=true; return ret;
   }
 Frame Reader::nextFrame() { return readFrame(next); }
 void Reader::verifyPayload() { input.clear(); input.seekg(std::streamoff(payloadStart)); require(hashRange(input,fileSize-payloadStart)==payloadSha256,"payload SHA-256 differs"); }
