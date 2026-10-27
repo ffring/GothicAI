@@ -157,8 +157,6 @@ class MdlVisual final {
 
     bool                           hasAnim(AnimationSolver::Anim a, WeaponState st, WalkBit wlk) const;
     bool                           hasAnim(std::string_view scheme) const;
-    const Animation::Sequence*     meleeAttackSequence(AnimationSolver::Anim a, WeaponState st, WalkBit wlk) const;
-    bool                           previewMeleeAttack(const Npc& npc, AnimationSolver::Anim a, WeaponState st, WalkBit wlk, uint64_t now, Pose& sampled, bool stopWalk) const;
 
     const Animation::Sequence*     startAnimAndGet(std::string_view name, uint64_t tickCount, bool forceAnim = false);
     const Animation::Sequence*     startAnimAndGet(Npc& npc, std::string_view      name, uint8_t comb, BodyState bs);

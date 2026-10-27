@@ -4036,6 +4036,11 @@ namespace {
               "blade reach must reject a lateral miss despite sufficient forward projection");
       require(!std::isfinite(reach.meleeBladeAdvance({{{0,150,0},{100,150,0},{0,0,1},2.f}},target,{1,0,0},60)),
               "blade reach must reject a height miss despite sufficient forward projection");
+      const std::vector<MeleeBodyCapsule> behind{{{-30,90,0},{-30,110,0},6.f,0,1}};
+      require(!std::isfinite(reach.meleeBladeAdvance(blade,behind,{1,0,0},40)),
+              "a blade beyond a close target cannot correct by moving forward");
+      requireNear(reach.meleeBladeAdvance(blade,behind,{-1,0,0},40),22.f,.02f,
+                  "backward magnet must retain the signed capsule contact distance");
       auto targets=target;
       targets.insert(targets.begin(),{{160,90,0},{160,110,0},6.f,1,1});
       requireNear(reach.meleeBladeAdvance(blade,targets,{1,0,0},80),22.f,.02f,

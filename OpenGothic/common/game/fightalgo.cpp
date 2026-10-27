@@ -10,7 +10,6 @@
 #include "gothic.h"
 #include "serialize.h"
 #include "testbench.h"
-#include "bodycontroller.h"
 
 // According to Gothic1 scripts:
 // W  - Weapon Range (FIGHT_RANGE_FIST * 3)
@@ -46,7 +45,7 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
 
   const bool focus = isInFocusAngle(npc,tg);
 
-  if(tg.isPrehit() && isInNativeWRange(tg,npc,owner) && isInFocusAngle(tg,npc) && focus){
+  if(tg.isPrehit() && isInWRange(tg,npc,owner) && isInFocusAngle(tg,npc) && focus){
     if(tg.bodyStateMasked()==BS_RUN)
       if(fillQueue(npc,owner,ai.enemy_stormprehit))
         return;
@@ -55,7 +54,7 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
     }
 
   if(ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H) {
-    if(isInNativeWRange(npc,tg,owner)) {
+    if(isInWRange(npc,tg,owner)) {
       if(focus && npc.bodyStateMasked()==BS_RUN)
         if(fillQueue(npc,owner,ai.my_w_runto))
           return;
@@ -77,14 +76,14 @@ void FightAlgo::fillQueue(Npc &npc, Npc &tg, GameScript& owner) {
     }
 
   if(ws==WeaponState::Mage) {
-    if(isInNativeWRange(npc,tg,owner))
+    if(isInWRange(npc,tg,owner))
       if(fillQueue(npc,owner,ai.my_fk_focus_mag))
         return;
     if(fillQueue(npc,owner,ai.my_fk_nofocus_mag))
       return;
     }
 
-  if(isInNativeWRange(npc,tg,owner) && focus)
+  if(isInWRange(npc,tg,owner) && focus)
     if(fillQueue(npc,owner,ai.my_fk_focus_far))
       return;
   if(fillQueue(npc,owner,ai.my_fk_nofocus_far))
@@ -269,26 +268,6 @@ float FightAlgo::prefferedAttackDistance(const Npc& npc, const Npc& tg,  GameScr
   float  baseTg  = float(gv.fight_range_base[tg.guild()]);
   float  baseNpc = float(gv.fight_range_base[npc.guild()]);
   return baseTg + baseNpc + weaponRange(owner,npc);
-  }
-
-float FightAlgo::nativeAttackDistance(const Npc& npc, const Npc& tg, GameScript& owner, Action attack) const {
-  const auto mode = npc.weaponState();
-  if(Gothic::physicsFlags().meleePhysicsHits && npc.isHuman() && !BodyController::owns(npc) &&
-     (mode==WeaponState::Fist || mode==WeaponState::W1H || mode==WeaponState::W2H)) {
-    const float approach = prefferedGDistance(npc,tg,owner);
-    if(qDistTo(npc,tg)>approach*approach)
-      return prefferedAttackDistance(npc,tg,owner);
-    const auto animation = attack==MV_ATTACKL ? Npc::Anim::AttackL : attack==MV_ATTACKR ? Npc::Anim::AttackR : Npc::Anim::Attack;
-    // Generic approach stops walking before FAI chooses the next attack.
-    // An explicitly selected attack still uses its actual, possibly running pose.
-    return npc.meleeBladeAttackDistance(tg,mode==WeaponState::Fist ? Npc::Anim::Attack : animation,attack==MV_NULL);
-    }
-  return prefferedAttackDistance(npc,tg,owner);
-  }
-
-bool FightAlgo::isInNativeWRange(const Npc& npc, const Npc& tg, GameScript& owner, Action attack) const {
-  const auto distance = nativeAttackDistance(npc,tg,owner,attack);
-  return qDistTo(npc,tg)<=distance*distance;
   }
 
 float FightAlgo::prefferedGDistance(const Npc& npc, const Npc& tg, GameScript &owner) const {

@@ -106,14 +106,7 @@ void writeMeleeShadow(const std::string& row) {
 }
 
 struct Npc::MeleeReach final {
-  const Npc* target = nullptr;
-  const Animation::Sequence* requested = nullptr;
-  const Animation::Sequence* sequence = nullptr;
-  uint64_t tick = uint64_t(-1);
-  Vec3 origin, targetOrigin;
-  float yaw = 0;
-  uint32_t window = 0;
-  float approachCm = std::numeric_limits<float>::infinity(), stepCm = 0, contactMs = 0, cpuMs = 0;
+  float advanceCm = std::numeric_limits<float>::infinity(), contactMs = 0, cpuMs = 0;
   };
 
 struct Npc::MeleeShadow final {
@@ -132,8 +125,6 @@ struct Npc::MeleeShadow final {
     int32_t damage = 0;
     };
   std::vector<Window> windows;
-  // Current attack and post-stop approach must not share a pose-dependent result.
-  std::array<std::array<MeleeReach,3>,2> reach;
   float reachCpuMs = 0, reachCpuMaxMs = 0;
   uint64_t reachQueries = 0;
   std::optional<Window> window;
@@ -146,8 +137,13 @@ struct Npc::MeleeShadow final {
   std::vector<Contact> contacts;
   size_t consumed = 0, targetsHit = 0;
   bool stopped = false, physicsHits = false;
-  Vec3 stepRemaining;
-  float stepRequestedCm = 0, stepMovedCm = 0;
+  struct Magnet final {
+    Vec3 direction;
+    float rawCm = std::numeric_limits<float>::infinity(), requestedCm = 0, offeredCm = 0;
+    float combinedCm = 0, estimatedCm = 0, peakCmS = 0, estimatedPeakCmS = 0;
+    float yawRequested = 0, yawApplied = 0, windupMs = 0;
+    bool eligible = false;
+    } magnet;
   std::string outcome = "miss";
   struct Diagnostic final {
     const Npc* target = nullptr;
@@ -231,7 +227,7 @@ Vec3 Npc::GoTo::target() const {
 
 bool Npc::GoTo::isClose(const Npc& self, float dist) const {
   if(flag==GT_Enemy)
-    return self.fghAlgo.isInNativeWRange(self, *npc, self.owner.script()); // consistent with native approach
+    return self.fghAlgo.isInWRange(self, *npc, self.owner.script()); // consistent with implAttack
   if(npc!=nullptr && pointDistance>0.f && !self.canSeeNpc(*npc,true))
     return false;
   if(npc!=nullptr)
@@ -1500,14 +1496,8 @@ void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, 
     }
   }
 
-Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Pose::CombatLayer& attack) const {
+Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Pose::CombatLayer& attack, float yawDelta) const {
   MeleeReach result;
-  result.target = &target;
-  result.sequence = attack.sequence;
-  result.tick = owner.tickCount();
-  result.origin = position();
-  result.targetOrigin = target.position();
-  result.yaw = angle;
   const auto mode = weaponState();
   const auto* item = mode==WeaponState::Fist ? nullptr : invent.activeWeapon();
   float length = 12.f;
@@ -1530,12 +1520,11 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
   if(selected==nullptr)
     throw std::runtime_error("Physical melee reach requires an active attack window");
   const auto window = *selected;
-  result.window = window.index;
   auto direction = target.position()-position();
   direction.y = 0;
   const float distance = direction.length();
   if(distance<=0) {
-    result.approachCm = 0;
+    result.advanceCm = 0;
     return result;
     }
   direction /= distance;
@@ -1567,14 +1556,26 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
   const auto finger = sampled.findNode(window.left ? "BIP01 L FINGER0" : "BIP01 R FINGER0");
   std::vector<MeleeBladeSegment> blades;
   const auto object = mkPositionMatrix();
+  const float turn = yawDelta*float(M_PI)/180.f;
+  const float turnSin = std::sin(turn), turnCos = std::cos(turn);
   Vec3 rootMotion;
+  const auto rotate = [&](Vec3 point) {
+    const auto origin = position()+rootMotion;
+    const auto offset = point-origin;
+    return origin+Vec3(turnCos*offset.x-turnSin*offset.z,offset.y,
+                      turnSin*offset.x+turnCos*offset.z);
+    };
   auto previous = owner.tickCount();
   for(uint64_t tick=owner.tickCount();tick<=last;) {
     if(tick>previous) {
       Vec3 displacement;
       mvAlgo.applyRotation(displacement,sampled.animMoveSpeed(tick,tick-previous));
       displacement.y = 0; // the ordinary human CharacterVirtual root policy
-      rootMotion += displacement;
+      const float windup = float(activeBegin-double(owner.tickCount()));
+      const float progress = windup>0.f ? std::clamp(float(tick-owner.tickCount())/windup,0.f,1.f) : 1.f;
+      const float rootTurn = turn*progress;
+      rootMotion += Vec3(std::cos(rootTurn)*displacement.x-std::sin(rootTurn)*displacement.z,0,
+                         std::sin(rootTurn)*displacement.x+std::cos(rootTurn)*displacement.z);
       auto moved = object;
       moved.set(3,0,object.at(3,0)+rootMotion.x);
       moved.set(3,2,object.at(3,2)+rootMotion.z);
@@ -1583,7 +1584,7 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
     previous = tick;
     sampled.update(tick,true);
     if(double(tick)>=activeBegin && hand<sampled.boneCount()) {
-      const auto at = [&](size_t bone,Vec3 point) { sampled.bone(bone).project(point); return point; };
+      const auto at = [&](size_t bone,Vec3 point) { sampled.bone(bone).project(point); return rotate(point); };
       const auto grip = at(hand,{});
       blades.clear();
       if(mode==WeaponState::Fist) {
@@ -1592,62 +1593,21 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
         if(forearm<sampled.boneCount()) blades.push_back({at(forearm,{}),grip,{0,1,0},4.f});
         }
       else blades.push_back({grip,at(hand,{-length,0,0}),{0,1,0},2.f});
-      const float advance = owner.physic()->meleeBladeAdvance(blades,body,direction,distance+length);
-      const float elapsed = float(tick-owner.tickCount());
-      const float gap = advance-std::min(60.f,.3f*elapsed);
-      if(gap<result.approachCm) {
-        result.approachCm = gap;
-        result.stepCm = advance;
-        result.contactMs = elapsed;
+      // Cast both ways: a short backward correction can put an overreaching
+      // blade back through a close target. Preserve the raw distance for cap statistics.
+      const float limit = distance+length+40.f;
+      const float forward = owner.physic()->meleeBladeAdvance(blades,body,direction,limit);
+      const float backward = owner.physic()->meleeBladeAdvance(blades,body,-direction,limit);
+      const float advance = forward<=backward ? forward : -backward;
+      if(std::isfinite(advance) && std::abs(advance)<std::abs(result.advanceCm)) {
+        result.advanceCm = advance;
+        result.contactMs = float(tick-owner.tickCount());
         }
       }
     if(tick==last) break;
     tick = std::min(last,tick+interval);
     }
   return result;
-  }
-
-const Npc::MeleeReach& Npc::previewMeleeReach(const Npc& target, Anim attack, bool stopWalk) const {
-  if(!meleeShadow)
-    meleeShadow = std::make_unique<MeleeShadow>();
-  auto& shadow = *meleeShadow;
-  auto& cached = shadow.reach[size_t(stopWalk)][size_t(attack)-size_t(Anim::Attack)];
-  const auto* requested = visual.meleeAttackSequence(attack,weaponState(),walkMode());
-  if(cached.tick==owner.tickCount() && cached.target==&target && cached.requested==requested &&
-     cached.origin==position() && cached.targetOrigin==target.position() && cached.yaw==angle)
-    return cached;
-  const auto started = std::chrono::steady_clock::now();
-  Pose sampled;
-  cached = {};
-  cached.target = &target;
-  cached.requested = requested;
-  cached.tick = owner.tickCount();
-  cached.origin = position();
-  cached.targetOrigin = target.position();
-  cached.yaw = angle;
-  // An unavailable animation keeps the infinite gap: approach must continue
-  // until the transition permits the selected attack.
-  if(visual.previewMeleeAttack(*this,attack,weaponState(),walkMode(),owner.tickCount(),sampled,stopWalk)) {
-    std::optional<Pose::CombatLayer> next;
-    for(const auto& layer:sampled.combatLayers(owner.tickCount()))
-      if(layer.sequence->isAttackAnim())
-        next = layer;
-    if(next) {
-      cached = sampleMeleeReach(target,sampled,*next);
-      cached.requested = requested;
-      }
-    }
-  cached.cpuMs = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
-  owner.physic()->accountMeleeReachTime(cached.cpuMs);
-  shadow.reachCpuMs += cached.cpuMs;
-  shadow.reachCpuMaxMs = std::max(shadow.reachCpuMaxMs,cached.cpuMs);
-  ++shadow.reachQueries;
-  return cached;
-  }
-
-float Npc::meleeBladeAttackDistance(const Npc& target, Anim attack, bool stopWalk) const {
-  const auto& reach = previewMeleeReach(target,attack,stopWalk);
-  return std::isfinite(reach.approachCm) ? std::max(0.f,fightDistanceTo(target).length()-reach.approachCm) : 0.f;
   }
 
 void Npc::syncMeleeShadowSwing() {
@@ -1724,47 +1684,42 @@ void Npc::syncMeleeShadowSwing() {
   shadow.stopped = false;
   shadow.physicsHits = Gothic::physicsFlags().meleePhysicsHits;
   shadow.outcome = "miss";
-  shadow.stepRemaining = {};
-  shadow.stepRequestedCm = shadow.stepMovedCm = 0;
+  shadow.magnet = {};
+  shadow.reachCpuMs = shadow.reachCpuMaxMs = 0;
+  shadow.reachQueries = 0;
   shadow.diagnostic = {};
   if(TestBench::bodyTracing() && currentTarget!=nullptr) {
     shadow.diagnostic.target = currentTarget;
     shadow.diagnostic.who = meleeShadowWho(currentTarget);
     }
-  if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget)) {
-    const MeleeReach* reach = nullptr;
-    for(const auto& cached:shadow.reach[0])
-      if(cached.tick==owner.tickCount() && cached.target==currentTarget && cached.sequence==seq &&
-         cached.window==selected.index && cached.origin==position() && cached.targetOrigin==currentTarget->position() && cached.yaw==angle) {
-        reach = &cached;
-        break;
-        }
-    MeleeReach active;
-    if(reach==nullptr) {
-      const auto started = std::chrono::steady_clock::now();
-      // The actor already started this attack: preview its current layer once,
-      // without restarting it or attempting another combo on the private copy.
-      Pose sampled = pose;
-      active = sampleMeleeReach(*currentTarget,sampled,*attack);
-      active.cpuMs = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
-      owner.physic()->accountMeleeReachTime(active.cpuMs);
-      shadow.reachCpuMs += active.cpuMs;
-      shadow.reachCpuMaxMs = std::max(shadow.reachCpuMaxMs,active.cpuMs);
-      ++shadow.reachQueries;
-      reach = &active;
-      }
-    shadow.diagnostic.previewAdvanceCm = reach->stepCm;
-    shadow.diagnostic.previewContactMs = reach->contactMs;
-    shadow.diagnostic.previewCpuMs = reach->cpuMs;
-    shadow.diagnostic.previewApproachCm = reach->approachCm;
-    if(reach->approachCm<=0.f && reach->stepCm>0.f && reach->stepCm<=60.f) {
-      auto direction = currentTarget->position()-position();
-      direction.y = 0;
-      if(direction.length()>0.f) {
-        shadow.stepRemaining = Vec3::normalize(direction)*reach->stepCm;
-        shadow.stepRequestedCm = reach->stepCm;
-        }
-      }
+  if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget,60.f)) {
+    auto& magnet = shadow.magnet;
+    magnet.eligible = true;
+    auto direction = currentTarget->position()-position();
+    direction.y = 0;
+    if(direction.length()>0.f)
+      magnet.direction = Vec3::normalize(direction);
+    const float yaw = std::remainder(angleDir(direction.x,direction.z)-angle,360.f);
+    const double activeBegin = double(shadow.start)+double(selected.beginMs)/shadow.speed;
+    magnet.windupMs = std::max(0.f,float(activeBegin-double(owner.tickCount())));
+    // Fix the goal at the start of this swing. Never follow a retreating target
+    // or extend the correction after the active window has opened.
+    const float yawLimit = std::min(30.f,.18f*magnet.windupMs); // 180 degrees/s
+    magnet.yawRequested = std::clamp(yaw,-yawLimit,yawLimit);
+    const auto started = std::chrono::steady_clock::now();
+    Pose sampled = pose;
+    auto reach = sampleMeleeReach(*currentTarget,sampled,*attack,magnet.yawRequested);
+    reach.cpuMs = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+    owner.physic()->accountMeleeReachTime(reach.cpuMs);
+    shadow.reachCpuMs = shadow.reachCpuMaxMs = reach.cpuMs;
+    shadow.reachQueries = 1;
+    shadow.diagnostic.previewAdvanceCm = reach.advanceCm;
+    shadow.diagnostic.previewContactMs = reach.contactMs;
+    shadow.diagnostic.previewCpuMs = reach.cpuMs;
+    shadow.diagnostic.previewApproachCm = reach.advanceCm;
+    magnet.rawCm = reach.advanceCm;
+    if(std::isfinite(reach.advanceCm))
+      magnet.requestedCm = std::clamp(reach.advanceCm,-40.f,120.f);
     }
   }
 
@@ -1897,27 +1852,41 @@ auto Npc::meleeStep(uint64_t dt) -> Vec3 {
   if(!Gothic::physicsFlags().meleePhysicsHits || !meleeShadow || !meleeShadow->window || meleeShadow->stopped)
     return {};
   auto& swing = *meleeShadow;
-  const double end = double(swing.tick)+200.;
-  if(double(owner.tickCount())>end) {
-    swing.stepRemaining = {};
+  auto& magnet = swing.magnet;
+  const double begin = double(swing.start)+double(swing.window->beginMs)/swing.speed;
+  const float remainingMs = float(begin-double(owner.tickCount()));
+  if(!magnet.eligible || remainingMs<=0.f || dt==0)
     return {};
-    }
-  const float left = swing.stepRemaining.length();
-  const float distance = std::min(left,.3f*float(dt)); // at most 3 m/s for the first 200 ms
-  if(left<=0.f)
-    return {};
-  const auto step = swing.stepRemaining*(distance/left);
-  swing.stepRemaining -= step;
-  return step;
+  const float milliseconds = std::min(float(dt),remainingMs);
+  const float fraction = milliseconds/remainingMs;
+  const float yawLeft = magnet.yawRequested-magnet.yawApplied;
+  const float yawStep = std::clamp(yawLeft*fraction,-.18f*milliseconds,.18f*milliseconds);
+  setDirection(angle+yawStep);
+  magnet.yawApplied += yawStep;
+  const float left = magnet.requestedCm-magnet.offeredCm;
+  const float distance = std::clamp(left*fraction,-.4f*milliseconds,.4f*milliseconds);
+  magnet.offeredCm += distance;
+  magnet.peakCmS = std::max(magnet.peakCmS,std::abs(distance)*1000.f/float(dt));
+  return magnet.direction*distance;
   }
 
-void Npc::noteMeleeStep(float movedCm, float requestedCm) {
-  if(meleeShadow && requestedCm>0.f)
-    meleeShadow->stepMovedCm += std::min(movedCm,requestedCm);
+void Npc::noteMeleeStep(const Vec3& root, const Vec3& offered, const Vec3& moved, uint64_t dt) {
+  if(!meleeShadow || offered.quadLength()==0.f || dt==0)
+    return;
+  auto& magnet = meleeShadow->magnet;
+  // One CV solve owns root and assistance together. Record that accepted
+  // projection separately; root subtraction is a conservative attribution,
+  // not a second, hypothetical solve with assistance removed.
+  const auto direction = Vec3::normalize(offered);
+  const float accepted = Vec3::dotProduct(moved,direction);
+  const float estimated = std::clamp(accepted-std::max(0.f,Vec3::dotProduct(root,direction)),0.f,offered.length());
+  const float sign = magnet.requestedCm<0.f ? -1.f : 1.f;
+  magnet.combinedCm += sign*accepted;
+  magnet.estimatedCm += sign*estimated;
+  magnet.estimatedPeakCmS = std::max(magnet.estimatedPeakCmS,estimated*1000.f/float(dt));
   }
 
 void Npc::stopMeleeSwing() {
-  meleeShadow->stepRemaining = {};
   owner.physic()->removeShadowBlade(this);
   visual.interrupt();
   setAnim(Anim::StumbleB);
@@ -2107,7 +2076,7 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                  ",\"sample_time_ms\":" + number(value.sample) +
                  ",\"sampled\":" + (value.sampled ? "true" : "false") +
                  ",\"reach_cm\":" + number(window.reachCm) +
-                 ",\"preview_advance_cm\":" + number(value.previewAdvanceCm) +
+                 ",\"preview_advance_cm\":" + (std::isfinite(value.previewAdvanceCm) ? number(value.previewAdvanceCm) : "null") +
                  ",\"preview_contact_ms\":" + number(value.previewContactMs) +
                  ",\"preview_approach_cm\":" + (std::isfinite(value.previewApproachCm) ? number(value.previewApproachCm) : "null") +
                  ",\"preview_cpu_ms\":" + number(value.previewCpuMs) +
@@ -2140,8 +2109,21 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                   "},\"physical\":{\"targets\":" + physical + ",\"world\":" + world + ",\"world_contacts\":" + worldContacts +
                   "},\"decision\":{\"physics_hits\":" + (shadow.physicsHits ? "true" : "false") +
                   ",\"outcome\":" + TestBench::bodyJson(shadow.outcome) +
-                  ",\"step_requested_cm\":" + number(shadow.stepRequestedCm) +
-                  ",\"step_moved_cm\":" + number(shadow.stepMovedCm) +
+                  ",\"magnet\":{\"eligible\":" + (shadow.magnet.eligible ? "true" : "false") +
+                  ",\"preview_contact\":" + (std::isfinite(shadow.magnet.rawCm) ? "true" : "false") +
+                  ",\"raw_cm\":" + (std::isfinite(shadow.magnet.rawCm) ? number(shadow.magnet.rawCm) : "null") +
+                  ",\"requested_cm\":" + number(shadow.magnet.requestedCm) +
+                  ",\"offered_cm\":" + number(shadow.magnet.offeredCm) +
+                  ",\"accepted_combined_cm\":" + number(shadow.magnet.combinedCm) +
+                  ",\"estimated_moved_cm\":" + number(shadow.magnet.estimatedCm) +
+                  ",\"estimate_method\":\"accepted_projection_minus_forward_root\"" +
+                  ",\"peak_speed_cm_s\":" + number(shadow.magnet.peakCmS) +
+                  ",\"estimated_peak_speed_cm_s\":" + number(shadow.magnet.estimatedPeakCmS) +
+                  ",\"windup_ms\":" + number(shadow.magnet.windupMs) +
+                  ",\"yaw_requested_deg\":" + number(shadow.magnet.yawRequested) +
+                  ",\"yaw_applied_deg\":" + number(shadow.magnet.yawApplied) +
+                  ",\"cap_forward\":" + (shadow.magnet.rawCm>=120.f && std::isfinite(shadow.magnet.rawCm) ? "true" : "false") +
+                  ",\"cap_backward\":" + (shadow.magnet.rawCm<=-40.f ? "true" : "false") + "}" +
                   "},\"diagnostic\":" + diagnostic + ",\"comparison\":" + comparison + "}");
   shadow.contacts.clear();
   shadow.window.reset();
@@ -3314,8 +3296,7 @@ bool Npc::implWhirlTo(const Npc &oth, uint64_t dt) {
 bool Npc::implGoTo(uint64_t dt) {
   float dist = 0;
   if(go2.npc) {
-    dist = go2.nativeCombatTarget==go2.npc ? fghAlgo.nativeAttackDistance(*this,*go2.npc,owner.script()) :
-                                              fghAlgo.prefferedAttackDistance(*this,*go2.npc,owner.script());
+    dist = fghAlgo.prefferedAttackDistance(*this,*go2.npc,owner.script());
     } else {
     // use smaller threshold, to avoid edge-looping in script
     dist = MoveAlgo::closeToPointThreshold*0.5f;
@@ -3402,11 +3383,14 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 
   const auto ws = weaponState();
   const auto bs = bodyStateMasked();
+  const bool magnetHeading = Gothic::physicsFlags().meleePhysicsHits && visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window &&
+                             meleeShadow->magnet.eligible && meleeShadow->magnet.windupMs>0.f;
 
   if(bs==BS_HIT && (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
     traceCombatGate("melee_hit_lock");
     //NOTE: 'storm' attack has BS_RUN state and not meant to be auto-rotated
-    implTurnToFai(*currentTarget,dt);
+    if(!magnetHeading)
+      implTurnToFai(*currentTarget,dt);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
@@ -3430,19 +3414,14 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 
   if(faiWaitTime>=owner.tickCount() || waitTime>=owner.tickCount()) {
     traceCombatGate("fai_or_script_wait");
-    implTurnToFai(*currentTarget,dt);
+    if(!magnetHeading)
+      implTurnToFai(*currentTarget,dt);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
 
   const auto act = bodyOverride ? bodyAction : fghAlgo.nextFromQueue(*this,*currentTarget,owner.script());
-  const bool selectedAttack = act==FightAlgo::MV_ATTACK || act==FightAlgo::MV_ATTACKL || act==FightAlgo::MV_ATTACKR;
-  const bool bladeRange = !bodyOverride && !BodyController::owns(*this) && Gothic::physicsFlags().meleePhysicsHits && isHuman() &&
-                          (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H);
-  bool closeBackoff = false;
   const auto consume = [&] {
-    if(closeBackoff && selectedAttack)
-      return; // Keep the chosen attack until the existing backoff has made room.
     if(bodyOverride) { BodyController::consumed(*this); return; }
     const auto before = fghAlgo.queuedAction();
     BodyTrajectory::nativeConsumed(*this);
@@ -3461,7 +3440,6 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
   nativeResolution.inCloseup = fghAlgo.isInCloseupRange(*this,*currentTarget,owner.script());
   nativeResolution.focus30 = nativeResolution.inCloseup && fghAlgo.isInFocusAngle(*this,*currentTarget);
   const bool jmp = FightAlgo::resolveNative(FightAlgo::MV_WAIT,nativeResolution)==FightAlgo::MV_JUMPBACK;
-  closeBackoff = bladeRange && nativeResolution.inCloseup && (selectedAttack || act==FightAlgo::MV_MOVE);
 
   // vanilla behavior, required for orcs in G1 orcgraveyard
   if(ws==WeaponState::NoWeapon && isAiQueueEmpty() && canSwitchWeapon()) {
@@ -3477,7 +3455,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     // separate shared policy mask invalid. Hidden geometry never enters capture features.
     auto resolver=nativeResolution;
     resolver.focus5=fghAlgo.isInFocusAngle(*this,*currentTarget,5.f);
-    resolver.inWRange=fghAlgo.isInNativeWRange(*this,*currentTarget,owner.script());
+    resolver.inWRange=fghAlgo.isInWRange(*this,*currentTarget,owner.script());
     trajectoryEffective=FightAlgo::resolveNative(act,resolver);
     // Native TURN uses the same approach executor as MOVE outside weapon range. Inside
     // range that branch only rotates. Policy TurnToTarget uses TURN2HIT, so labels must
@@ -3487,16 +3465,8 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
       else if(!resolver.focus5) trajectoryEffective=FightAlgo::MV_TURN2HIT;
       }
     }
-  if(closeBackoff)
-    trajectoryEffective = nativeResolution.focus30 ? FightAlgo::MV_JUMPBACK : FightAlgo::MV_TURN2HIT;
   BodyTrajectory::Attempt trajectory(*this,!bodyOverride,int(act),int(trajectoryEffective),
                                     fghAlgo.traceChoiceId(),fghAlgo.traceParentInstruction(),fghAlgo.traceEntrySerial());
-
-  if(closeBackoff && !nativeResolution.focus30) {
-    traceCombatGate("closeup_turn_to_focus");
-    implTurnToFai(*currentTarget,dt);
-    return true;
-    }
 
   if(act==FightAlgo::MV_BLOCK) {
     if(!fghAlgo.isInFocusAngle(*this, *currentTarget)) {
@@ -3523,7 +3493,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     return true;
     }
 
-  if(selectedAttack && !closeBackoff) {
+  if(act==FightAlgo::MV_ATTACK || act==FightAlgo::MV_ATTACKL || act==FightAlgo::MV_ATTACKR) {
     //NOTE: FIGHT_DIST_CANCEL in scipts is often longer, than senses_range of npc
     const auto sense = fghAlgo.isInFocusAngle(*this,*currentTarget,5.f);
     nativeResolution.focus5=sense;
@@ -3539,18 +3509,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 #endif
 
     static const Anim ani[4] = {Anim::Attack, Anim::AttackL, Anim::AttackR};
-    if(bladeRange && !fghAlgo.isInNativeWRange(*this,*currentTarget,owner.script(),act)) {
-      // Retain this selected attack while closing its actual forward blade gap.
-      traceCombatGate("attack_approach_blade_reach");
-      setAnim(AnimationSolver::Move);
-      go2.set(currentTarget,GT_Enemy);
-      go2.nativeCombatTarget = currentTarget;
-      mvAlgo.tick(dt,MoveAlgo::FaiMove);
-      go2.clear();
-      wayPath.clear();
-      return true;
-      }
-    if(!bladeRange && (act!=FightAlgo::MV_ATTACK && bodyState()!=BS_RUN) &&
+    if((act!=FightAlgo::MV_ATTACK && bodyState()!=BS_RUN) &&
        !fghAlgo.isInWRange(*this,*currentTarget,owner.script())) {
       consume();
       return true;
@@ -3674,9 +3633,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     return true;
     }
 
-  if(closeBackoff || act==FightAlgo::MV_JUMPBACK || (act==FightAlgo::MV_WAIT && jmp) || (act==FightAlgo::MV_TURN && jmp)) {
-    if(closeBackoff)
-      traceCombatGate("closeup_backoff");
+  if(act==FightAlgo::MV_JUMPBACK || (act==FightAlgo::MV_WAIT && jmp) || (act==FightAlgo::MV_TURN && jmp)) {
     if(isSwim()) {
       consume();
       return true;
@@ -3705,15 +3662,8 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
       return true;
       }
 
-    if(bladeRange && !fghAlgo.isInFocusAngle(*this,*currentTarget,5.f)) {
-      // A pose-dependent range must not prevent the turn that makes it usable.
-      traceCombatGate("approach_turn_to_focus");
-      implTurnToFai(*currentTarget,dt);
-      return true;
-      }
-
     const bool prGRange = fghAlgo.isInGRange(*this, *currentTarget, owner.script());
-    const bool prWRange = fghAlgo.isInNativeWRange(*this, *currentTarget, owner.script());
+    const bool prWRange = fghAlgo.isInWRange(*this, *currentTarget, owner.script());
     const auto prBs     = bs;
 
     const float distance = qDistTo(*currentTarget);
@@ -3759,7 +3709,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
       }
 
     const bool isGRange = fghAlgo.isInGRange(*this, *currentTarget, owner.script());
-    const bool isWRange = fghAlgo.isInNativeWRange(*this, *currentTarget, owner.script());
+    const bool isWRange = fghAlgo.isInWRange(*this, *currentTarget, owner.script());
     const bool isFocus  = fghAlgo.isInFocusAngle(*this, *currentTarget, 5.f);
 
     if((isWRange || (isGRange!=prGRange) || prBs!=bodyStateMasked()) && isFocus) {
@@ -4894,7 +4844,10 @@ void Npc::tick(uint64_t dt) {
     if(physicalMovement)
       return;
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {
-      implTurnToFai(*currentTarget,dt);
+      const bool magnetHeading = Gothic::physicsFlags().meleePhysicsHits && visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window &&
+                                 meleeShadow->magnet.eligible && meleeShadow->magnet.windupMs>0.f;
+      if(!magnetHeading)
+        implTurnToFai(*currentTarget,dt);
       }
     mvAlgo.tick(dt,MoveAlgo::WaitMove);
     return;
