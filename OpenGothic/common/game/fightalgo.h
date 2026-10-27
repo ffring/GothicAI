@@ -75,7 +75,7 @@ class FightAlgo final {
 
     float  baseDistance           (const Npc &npc, const Npc &tg, GameScript &owner) const;
     float  prefferedAttackDistance(const Npc &npc, const Npc &tg, GameScript &owner) const;
-    float  nativeAttackDistance  (const Npc &npc, const Npc &tg, GameScript &owner, Action attack=MV_ATTACK) const;
+    float  nativeAttackDistance  (const Npc &npc, const Npc &tg, GameScript &owner, Action attack=MV_NULL) const;
     float  prefferedGDistance     (const Npc &npc, const Npc &tg, GameScript &owner) const;
     float  attackFinishDistance   (GameScript &owner) const;
 
@@ -83,7 +83,7 @@ class FightAlgo final {
     bool   isInFinishRange        (const Npc &npc, const Npc &tg, GameScript &owner) const;
     bool   isInCloseupRange       (const Npc &npc, const Npc &tg, GameScript &owner) const;
     bool   isInWRange             (const Npc &npc, const Npc &tg, GameScript &owner) const;
-    bool   isInNativeWRange       (const Npc &npc, const Npc &tg, GameScript &owner, Action attack=MV_ATTACK) const;
+    bool   isInNativeWRange       (const Npc &npc, const Npc &tg, GameScript &owner, Action attack=MV_NULL) const;
     bool   isInGRange             (const Npc &npc, const Npc &tg, GameScript &owner) const;
     bool   isInFocusAngle         (const Npc &npc, const Npc &tg) const;
     bool   isInFocusAngle         (const Npc &npc, const Npc &tg, float ang) const;

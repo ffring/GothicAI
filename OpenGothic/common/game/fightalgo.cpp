@@ -279,7 +279,9 @@ float FightAlgo::nativeAttackDistance(const Npc& npc, const Npc& tg, GameScript&
     if(qDistTo(npc,tg)>approach*approach)
       return prefferedAttackDistance(npc,tg,owner);
     const auto animation = attack==MV_ATTACKL ? Npc::Anim::AttackL : attack==MV_ATTACKR ? Npc::Anim::AttackR : Npc::Anim::Attack;
-    return npc.meleeBladeAttackDistance(tg,mode==WeaponState::Fist ? Npc::Anim::Attack : animation);
+    // Generic approach stops walking before FAI chooses the next attack.
+    // An explicitly selected attack still uses its actual, possibly running pose.
+    return npc.meleeBladeAttackDistance(tg,mode==WeaponState::Fist ? Npc::Anim::Attack : animation,attack==MV_NULL);
     }
   return prefferedAttackDistance(npc,tg,owner);
   }

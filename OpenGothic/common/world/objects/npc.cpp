@@ -132,7 +132,8 @@ struct Npc::MeleeShadow final {
     int32_t damage = 0;
     };
   std::vector<Window> windows;
-  std::array<MeleeReach,3> reach;
+  // Current attack and post-stop approach must not share a pose-dependent result.
+  std::array<std::array<MeleeReach,3>,2> reach;
   float reachCpuMs = 0, reachCpuMaxMs = 0;
   uint64_t reachQueries = 0;
   std::optional<Window> window;
@@ -1606,11 +1607,11 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
   return result;
   }
 
-const Npc::MeleeReach& Npc::previewMeleeReach(const Npc& target, Anim attack) const {
+const Npc::MeleeReach& Npc::previewMeleeReach(const Npc& target, Anim attack, bool stopWalk) const {
   if(!meleeShadow)
     meleeShadow = std::make_unique<MeleeShadow>();
   auto& shadow = *meleeShadow;
-  auto& cached = shadow.reach[size_t(attack)-size_t(Anim::Attack)];
+  auto& cached = shadow.reach[size_t(stopWalk)][size_t(attack)-size_t(Anim::Attack)];
   const auto* requested = visual.meleeAttackSequence(attack,weaponState(),walkMode());
   if(cached.tick==owner.tickCount() && cached.target==&target && cached.requested==requested &&
      cached.origin==position() && cached.targetOrigin==target.position() && cached.yaw==angle)
@@ -1624,7 +1625,9 @@ const Npc::MeleeReach& Npc::previewMeleeReach(const Npc& target, Anim attack) co
   cached.origin = position();
   cached.targetOrigin = target.position();
   cached.yaw = angle;
-  if(visual.previewMeleeAttack(*this,attack,weaponState(),walkMode(),owner.tickCount(),sampled)) {
+  // An unavailable animation keeps the infinite gap: approach must continue
+  // until the transition permits the selected attack.
+  if(visual.previewMeleeAttack(*this,attack,weaponState(),walkMode(),owner.tickCount(),sampled,stopWalk)) {
     std::optional<Pose::CombatLayer> next;
     for(const auto& layer:sampled.combatLayers(owner.tickCount()))
       if(layer.sequence->isAttackAnim())
@@ -1634,11 +1637,6 @@ const Npc::MeleeReach& Npc::previewMeleeReach(const Npc& target, Anim attack) co
       cached.requested = requested;
       }
     }
-  else {
-    // Preserve the native animation gate while the current layer cannot yield.
-    // The real doAttack still rejects it; no physical contact is fabricated.
-    cached.approachCm = 0;
-    }
   cached.cpuMs = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
   owner.physic()->accountMeleeReachTime(cached.cpuMs);
   shadow.reachCpuMs += cached.cpuMs;
@@ -1647,8 +1645,8 @@ const Npc::MeleeReach& Npc::previewMeleeReach(const Npc& target, Anim attack) co
   return cached;
   }
 
-float Npc::meleeBladeAttackDistance(const Npc& target, Anim attack) const {
-  const auto& reach = previewMeleeReach(target,attack);
+float Npc::meleeBladeAttackDistance(const Npc& target, Anim attack, bool stopWalk) const {
+  const auto& reach = previewMeleeReach(target,attack,stopWalk);
   return std::isfinite(reach.approachCm) ? std::max(0.f,fightDistanceTo(target).length()-reach.approachCm) : 0.f;
   }
 
@@ -1735,7 +1733,7 @@ void Npc::syncMeleeShadowSwing() {
     }
   if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget)) {
     const MeleeReach* reach = nullptr;
-    for(const auto& cached:shadow.reach)
+    for(const auto& cached:shadow.reach[0])
       if(cached.tick==owner.tickCount() && cached.target==currentTarget && cached.sequence==seq &&
          cached.window==selected.index && cached.origin==position() && cached.targetOrigin==currentTarget->position() && cached.yaw==angle) {
         reach = &cached;
@@ -3438,7 +3436,13 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     }
 
   const auto act = bodyOverride ? bodyAction : fghAlgo.nextFromQueue(*this,*currentTarget,owner.script());
+  const bool selectedAttack = act==FightAlgo::MV_ATTACK || act==FightAlgo::MV_ATTACKL || act==FightAlgo::MV_ATTACKR;
+  const bool bladeRange = !bodyOverride && !BodyController::owns(*this) && Gothic::physicsFlags().meleePhysicsHits && isHuman() &&
+                          (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H);
+  bool closeBackoff = false;
   const auto consume = [&] {
+    if(closeBackoff && selectedAttack)
+      return; // Keep the chosen attack until the existing backoff has made room.
     if(bodyOverride) { BodyController::consumed(*this); return; }
     const auto before = fghAlgo.queuedAction();
     BodyTrajectory::nativeConsumed(*this);
@@ -3457,6 +3461,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
   nativeResolution.inCloseup = fghAlgo.isInCloseupRange(*this,*currentTarget,owner.script());
   nativeResolution.focus30 = nativeResolution.inCloseup && fghAlgo.isInFocusAngle(*this,*currentTarget);
   const bool jmp = FightAlgo::resolveNative(FightAlgo::MV_WAIT,nativeResolution)==FightAlgo::MV_JUMPBACK;
+  closeBackoff = bladeRange && nativeResolution.inCloseup && (selectedAttack || act==FightAlgo::MV_MOVE);
 
   // vanilla behavior, required for orcs in G1 orcgraveyard
   if(ws==WeaponState::NoWeapon && isAiQueueEmpty() && canSwitchWeapon()) {
@@ -3482,8 +3487,16 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
       else if(!resolver.focus5) trajectoryEffective=FightAlgo::MV_TURN2HIT;
       }
     }
+  if(closeBackoff)
+    trajectoryEffective = nativeResolution.focus30 ? FightAlgo::MV_JUMPBACK : FightAlgo::MV_TURN2HIT;
   BodyTrajectory::Attempt trajectory(*this,!bodyOverride,int(act),int(trajectoryEffective),
                                     fghAlgo.traceChoiceId(),fghAlgo.traceParentInstruction(),fghAlgo.traceEntrySerial());
+
+  if(closeBackoff && !nativeResolution.focus30) {
+    traceCombatGate("closeup_turn_to_focus");
+    implTurnToFai(*currentTarget,dt);
+    return true;
+    }
 
   if(act==FightAlgo::MV_BLOCK) {
     if(!fghAlgo.isInFocusAngle(*this, *currentTarget)) {
@@ -3510,7 +3523,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     return true;
     }
 
-  if(act==FightAlgo::MV_ATTACK || act==FightAlgo::MV_ATTACKL || act==FightAlgo::MV_ATTACKR) {
+  if(selectedAttack && !closeBackoff) {
     //NOTE: FIGHT_DIST_CANCEL in scipts is often longer, than senses_range of npc
     const auto sense = fghAlgo.isInFocusAngle(*this,*currentTarget,5.f);
     nativeResolution.focus5=sense;
@@ -3526,8 +3539,6 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 #endif
 
     static const Anim ani[4] = {Anim::Attack, Anim::AttackL, Anim::AttackR};
-    const bool bladeRange = !bodyOverride && Gothic::physicsFlags().meleePhysicsHits && isHuman() &&
-                            (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H);
     if(bladeRange && !fghAlgo.isInNativeWRange(*this,*currentTarget,owner.script(),act)) {
       // Retain this selected attack while closing its actual forward blade gap.
       traceCombatGate("attack_approach_blade_reach");
@@ -3663,7 +3674,9 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     return true;
     }
 
-  if(act==FightAlgo::MV_JUMPBACK || (act==FightAlgo::MV_WAIT && jmp) || (act==FightAlgo::MV_TURN && jmp)) {
+  if(closeBackoff || act==FightAlgo::MV_JUMPBACK || (act==FightAlgo::MV_WAIT && jmp) || (act==FightAlgo::MV_TURN && jmp)) {
+    if(closeBackoff)
+      traceCombatGate("closeup_backoff");
     if(isSwim()) {
       consume();
       return true;
@@ -3689,6 +3702,13 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     if(currentTarget->isDown()) {
       if(setAnim(Anim::Idle))
         consume();
+      return true;
+      }
+
+    if(bladeRange && !fghAlgo.isInFocusAngle(*this,*currentTarget,5.f)) {
+      // A pose-dependent range must not prevent the turn that makes it usable.
+      traceCombatGate("approach_turn_to_focus");
+      implTurnToFai(*currentTarget,dt);
       return true;
       }
 
