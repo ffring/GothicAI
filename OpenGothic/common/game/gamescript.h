@@ -2,7 +2,6 @@
 
 #include <zenkit/DaedalusVm.hh>
 #include <zenkit/addon/daedalus.hh>
-#include <zenkit/CutsceneLibrary.hh>
 
 #include <memory>
 #include <set>
@@ -19,6 +18,7 @@
 #include "game/aistate.h"
 #include "game/questlog.h"
 #include "game/ownsymbols.h"
+#include "asset/worldtypes.h"
 
 class GameSession;
 class World;
@@ -488,7 +488,7 @@ class GameScript final {
 
     std::set<std::pair<size_t,size_t>>                          dlgKnownInfos;
     std::vector<std::shared_ptr<zenkit::IInfo>>                 dialogsInfo;
-    zenkit::CutsceneLibrary                                     dialogs;
+    std::vector<std::shared_ptr<asset::CutsceneBlock>>           dialogs;
     std::unordered_map<size_t,AiState>                          aiStates;
     std::unique_ptr<AiOuputPipe>                                aiDefaultPipe;
 

@@ -1308,17 +1308,19 @@ struct JsonReader {
     }
   };
 
-rapidjson::Document document(const fs::path& path) {
-  const auto bytes=gothicglb::readFile(path);
+rapidjson::Document document(const std::vector<uint8_t>& bytes, const std::string& what) {
   rapidjson::Document d;
   d.Parse<rapidjson::kParseFullPrecisionFlag|rapidjson::kParseValidateEncodingFlag>(
       reinterpret_cast<const char*>(bytes.data()),bytes.size());
-  require(!d.HasParseError(),path.string()+": JSON error at "+std::to_string(d.GetErrorOffset())+
+  require(!d.HasParseError(),what+": JSON error at "+std::to_string(d.GetErrorOffset())+
           ": "+rapidjson::GetParseError_En(d.GetParseError()));
-  require(d.IsObject(),path.string()+": expected object");
+  require(d.IsObject(),what+": expected object");
   const auto& version=member(d,"format");
-  require(version.IsInt() && version.GetInt()==1,path.string()+": unsupported format");
+  require(version.IsInt() && version.GetInt()==1,what+": unsupported format");
   return d;
+  }
+rapidjson::Document document(const fs::path& path) {
+  return document(gothicglb::readFile(path),path.string());
   }
 void writeJson(const fs::path& path, const std::string& text) {
   gothicglb::writeFile(path,text.data(),text.size());
@@ -1646,6 +1648,8 @@ void writeZen(const ZenFile& data, const fs::path& file) {
   w("kind",d.kind);
   if(d.kind=="world" || d.kind=="cameras") {
     w("vobs",d.vobs); w("waynet",d.waynet);
+    } else if(d.kind=="cutscene_library") {
+    w("blocks",d.blocks);
     } else {
     require(d.kind=="light_presets","unknown ZEN kind "+d.kind);
     w("light_presets",d.light_presets);
@@ -1654,10 +1658,16 @@ void writeZen(const ZenFile& data, const fs::path& file) {
   writeJson(file,"{"+w.out+"}\n");
   }
 ZenFile readZen(const fs::path& file) {
-  auto doc=document(file); ReadContext ctx; JsonReader r{ctx,doc};
+  return parseZen(gothicglb::readFile(file),file.string());
+  }
+ZenFile parseZen(const std::vector<uint8_t>& bytes, const std::string& what) {
+  auto doc=document(bytes,what); ReadContext ctx; JsonReader r{ctx,doc};
   ZenFile d; r("source",d.source); r("kind",d.kind);
   if(d.kind=="world" || d.kind=="cameras") {
     r("vobs",d.vobs); r("waynet",d.waynet);
+    } else if(d.kind=="cutscene_library") {
+    r("blocks",d.blocks);
+    for(const auto& block:d.blocks) require(block!=nullptr,"null cutscene library root");
     } else {
     require(d.kind=="light_presets","unknown ZEN kind "+d.kind);
     r("light_presets",d.light_presets);
@@ -1670,6 +1680,9 @@ std::string compareZen(const ZenFile& a, const ZenFile& b) {
     require(a.kind==b.kind,"ZEN kind differs");
     auto diff=recordDifference(a.vobs,b.vobs,"vobs"); if(!diff.empty()) return a.source.world+": "+diff;
     diff=recordDifference(a.waynet,b.waynet,"waynet"); if(!diff.empty()) return a.source.world+": "+diff;
+    if(a.kind=="cutscene_library") {
+      diff=recordDifference(a.blocks,b.blocks,"blocks"); if(!diff.empty()) return a.source.world+": "+diff;
+      }
     return recordDifference(a.light_presets,b.light_presets,"light presets");
     }
   catch(const std::exception& e) { return a.source.world+": "+e.what(); }

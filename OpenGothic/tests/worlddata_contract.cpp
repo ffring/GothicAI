@@ -222,82 +222,156 @@ struct WorldDataContract {
     require(game,"existing GameSession construction must load the actual game program");
     for(const auto* name:{"Camera.dat","Fight.dat","Sfx.dat","Music.dat","ParticleFx.dat","VisualFx.dat","MENU.DAT"})
       require(loaded.count(name)==1,std::string(name)+": all eight inputs must load native programs");
-    for(const auto& row:doc["files"].GetArray())
-      require(std::string_view(row["kind"].GetString())!="script","native runtime must add zero original DAT opens");
-    const auto& selections=sources["selections"];
+    require(sources["selections"].Empty(),"native programs and OU must not report original source parses");
     const auto basename=[](const char* path) {
       auto name=fs::path(path).filename().string();
       for(auto& c:name) if(c>='a' && c<='z') c=char(c-'a'+'A');
       return name;
       };
-    std::map<std::pair<std::string,std::string>,uint64_t> selected,opened;
-    for(const auto& row:selections.GetArray())
-      ++selected[{basename(row["path"].GetString()),row["source"].GetString()}];
-    for(const auto& row:doc["files"].GetArray())
-      opened[{row["name"].GetString(),row["source"].GetString()}]+=row["opens"].GetUint64();
-    // Check before independent oracle reads add their own opens. Failed OU candidates
-    // can have opens without a successful selection and are intentionally not counted.
-    for(const auto& [key,count]:selected)
-      require(opened[key]==count,key.first+": runtime source hashing inflated original opens");
+    const auto binName=std::string(gothic.defaultOutputUnits())+".BIN";
+    const auto datName=std::string(gothic.defaultOutputUnits())+".DAT";
+    for(const auto& row:doc["files"].GetArray()) {
+      const std::string_view kind=row["kind"].GetString(),name=row["name"].GetString();
+      require(kind!="script","native runtime must add zero original DAT opens");
+      require(kind!="cutscene" && name!=basename(binName.c_str()) && name!=basename(datName.c_str()),
+              "native runtime must add zero original OU opens");
+      }
+    const auto& outputUnits=doc["runtime_outputunits"];
+    require(std::string_view(outputUnits["coverage"].GetString())=="loaded_base_records" &&
+            !outputUnits["complete_corpus"].GetBool(),"runtime native OU must distinguish base reads from full corpus coverage");
+    require(!outputUnits["selections"].Empty(),"existing GameSession construction must load native OU");
     const auto relative=[](const fs::path& path) {
       if(path.empty() || path.is_absolute()) return false;
       for(const auto& part:path) if(part=="..") return false;
       return true;
       };
-    const auto checkBytes=[](zenkit::Read& reader, const rapidjson::Value& row) {
+    const auto checkBytes=[](zenkit::Read& reader, const OutputUnits::Source& selected) {
       reader.seek(0,zenkit::Whence::END);
       std::string bytes(reader.tell(),'\0');
       reader.seek(0,zenkit::Whence::BEG);
-      require(reader.read(bytes.data(),bytes.size())==bytes.size(),"incomplete runtime source oracle read");
-      require(row["size"].GetUint64()==bytes.size() && row["sha256"].GetString()==Sha256::hash(bytes),
-              std::string(row["request"].GetString())+": runtime source identity differs from actual bytes");
+      require(reader.read(bytes.data(),bytes.size())==bytes.size(),"incomplete imported OU oracle read");
+      require(selected.size==bytes.size() && selected.sha256==Sha256::hash(bytes),
+              selected.path+": imported OU provenance differs from independent source bytes");
       };
     std::vector<BaseImport::RuntimeArchive> archives;
-    bool ou=false;
-    for(const auto& row:selections.GetArray()) {
-      const std::string request=row["request"].GetString(),source=row["source"].GetString();
-      const fs::path path=row["path"].GetString();
-      require(source!="unknown" && path!="unknown" && relative(source) && relative(path),
-              request+": runtime source paths must be known and installation-relative");
+    std::vector<std::shared_ptr<asset::CutsceneBlock>> blocks;
+    for(const auto& row:outputUnits["selections"].GetArray()) {
+      const std::string request=row["request"].GetString(),branch=row["branch"].GetString();
       require(std::string_view(row["consumer"].GetString())=="GameScript::loadDialogOU" &&
-              (request==std::string(gothic.defaultOutputUnits())+".BIN" || request==std::string(gothic.defaultOutputUnits())+".DAT") &&
-              row["language"].GetInt()==language,"only successful OU parses belong in runtime_sources");
-      ou=true;
-      if(std::string_view(row["location"].GetString())=="vfs") {
+              (request==binName || request==datName) && row["language"].GetInt()==language,
+              request+": native OU consumer/request/language differs");
+      const auto& imported=row["imported_source"];
+      const fs::path path=imported["path"].GetString();
+      require(relative(path),request+": imported OU path must remain installation-relative");
+      const OutputUnits::Source* selected=nullptr;
+      if(branch=="vfs_find_request" || branch=="vfs_find_basename") {
+        std::string_view selectedBranch;
+        selected=resources.baseOutputUnits.findVfs(request,&selectedBranch);
+        require(selectedBranch==branch,request+": native OU VFS branch differs from the index");
         const auto& vfs=Resources::vdfsIndex();
         const auto* node=vfs.resolve(path.generic_string());
-        const auto branch=std::string_view(row["branch"].GetString());
-        require(branch=="vfs_find_request" || branch=="vfs_find_basename",request+": unexpected VFS branch");
         const auto lookup=branch=="vfs_find_basename" ? fs::path(request).filename().string() : request;
-        require(node!=nullptr && node==vfs.find(lookup),request+": full VFS path does not identify the selected node");
-        auto reader=node->open_read();
-        checkBytes(*reader,row);
+        require(node!=nullptr && node==vfs.find(lookup),request+": native OU provenance must retain the selected VFS path");
         }
       else {
-        require(std::string_view(row["location"].GetString())=="host" && path==source,
-                request+": host source must identify the chosen installation-relative path");
+        require(branch=="host_ordinary" || branch=="host_localized",request+": unexpected native OU host branch");
+        selected=resources.baseOutputUnits.findHost(path.generic_string());
         }
-      if(fs::path(source).has_parent_path()) {
-        auto reader=zenkit::Read::from(gothicDir/source);
-        require(reader!=nullptr,request+": provenance host file is missing");
-        checkBytes(*reader,row);
+      require(selected!=nullptr && selected->skipped.empty() &&
+              selected->origin==imported["origin"].GetString() && selected->path==path.generic_string() &&
+              selected->size==imported["size"].GetUint64() && selected->sha256==imported["sha256"].GetString(),
+              request+": imported OU identity differs from the index");
+      require(selected->archive.empty() ? imported["archive"].IsNull() :
+              imported["archive"].IsString() && selected->archive==imported["archive"].GetString(),
+              request+": imported OU archive differs from the index");
+      const auto file=resources.baseOutputUnits.path(*selected);
+      std::ifstream native(file,std::ios::binary);
+      require(bool(native),request+": cannot read native OU oracle");
+      const std::string nativeBytes{std::istreambuf_iterator<char>(native),std::istreambuf_iterator<char>()};
+      const auto digest=Sha256::hash(nativeBytes);
+      require(std::string(row["record"]["json"].GetString())=="base/outputunits/"+file.filename().string() &&
+              digest==row["record"]["sha256"].GetString() && digest==selected->recordSha256 &&
+              resources.baseOutputUnits.records.at(selected->record)==digest,
+              request+": native OU identity differs from actual JSON bytes");
+      blocks=OutputUnits::sortedBlocks(OutputUnits::readLibrary(file));
+      // Original reads below are independent test oracles, after zero runtime opens were checked.
+      if(selected->origin=="host") {
+        auto reader=zenkit::Read::from(gothicDir/path);
+        require(reader!=nullptr,request+": imported OU host source is missing");
+        checkBytes(*reader,*selected);
         }
       else {
         if(archives.empty()) archives=BaseImport::runtimeArchives(gothicDir);
         const auto found=std::find_if(archives.begin(),archives.end(),[&](const auto& archive) {
-          return archive.path.filename()==source;
+          return archive.name==selected->archive;
           });
-        require(found!=archives.end(),request+": provenance archive is not an installation source");
+        require(found!=archives.end(),request+": imported OU archive is not an installation source");
         zenkit::Vfs archive;
         archive.mount_disk(found->path);
         const auto* node=archive.resolve(path.generic_string());
-        require(node!=nullptr,request+": selected virtual path is absent from the provenance archive");
+        require(node!=nullptr,request+": imported OU path is absent from its archive");
         auto reader=node->open_read();
-        checkBytes(*reader,row);
+        checkBytes(*reader,*selected);
         }
       }
-    require(ou,"existing GameSession construction must observe successful OU parsing");
-    std::puts("Runtime census: active profile, all eight native programs with actual JSON+BIN identities, zero DAT opens, and successful OU source bytes verified");
+    messageBehavior(gothic,blocks);
+    std::puts("Runtime census: active profile, eight native programs and native OU identities verified; zero Resources DAT/OU opens");
+    }
+  static void messageBehavior(Gothic& gothic, const std::vector<std::shared_ptr<asset::CutsceneBlock>>& blocks) {
+    const auto named=std::find_if(blocks.begin(),blocks.end(),[&](const auto& block) {
+      const auto selected=OutputUnits::blockByName(blocks,block->name);
+      const auto message=OutputUnits::message(*selected);
+      return !block->name.empty() && message!=nullptr && !message->text.empty();
+      });
+    require(named!=blocks.end(),"message behavior needs a named native text line");
+    const auto message=OutputUnits::message(*OutputUnits::blockByName(blocks,(*named)->name));
+    const auto first=OutputUnits::message(*blocks.front());
+    auto* session=gothic.gameSession();
+    require(session!=nullptr && session->script()!=nullptr,"message behavior needs the existing GameSession");
+    auto& script=*session->script();
+    auto oldMessage=std::move(gothic.externalMessageFn);
+    auto oldSound=std::move(gothic.externalSoundFn);
+    require(script.messageByName((*named)->name)==message->text,"messageByName must retain raw native OU bytes");
+    require(script.messageByName("")==(first!=nullptr ? std::string_view(first->text) : std::string_view{}),
+            "messageByName must retain lower_bound's first result");
+    // Fixed mono PCM16 at 1000 Hz; zero frames selects the existing text-duration fallback.
+    const auto pcm=[](uint32_t frames) {
+      std::vector<uint8_t> bytes{
+        'R','I','F','F',0,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,1,0,1,0,
+        0xE8,0x03,0,0,0xD0,0x07,0,0,2,0,16,0,'d','a','t','a',0,0,0,0};
+      bytes.resize(44+2*frames);
+      for(size_t i=0;i<4;++i) {
+        bytes[4+i]=uint8_t((36+2*frames)>>(8*i));
+        bytes[40+i]=uint8_t((2*frames)>>(8*i));
+        }
+      return bytes;
+      };
+    size_t soundCalls=0;
+    std::string soundRequest;
+    gothic.externalSoundFn=[&](std::string_view request,std::vector<uint8_t>& bytes) {
+      ++soundCalls; soundRequest=request; bytes=pcm(1000); return true;
+      };
+    require(script.messageTime("")==1000 && soundCalls==1 && soundRequest==".WAV",
+            "messageTime must load requested ID.WAV, independently of the OU audio name");
+    const std::string externalText="External OU text";
+    gothic.externalMessageFn=[&](std::string_view,std::string_view& text,uint32_t& duration) {
+      text=externalText; duration=4321; return true;
+      };
+    require(script.messageByName("")==externalText && script.messageTime("")==4321 && soundCalls==1,
+            "external message text and duration must precede native OU, cached duration and audio loading");
+    gothic.externalMessageFn={};
+    gothic.externalSoundFn=[&](std::string_view request,std::vector<uint8_t>& bytes) {
+      ++soundCalls; soundRequest=request; bytes=pcm(0); return true;
+      };
+    const auto* time=script.getVm().find_symbol_by_name("VIEW_TIME_PER_CHAR");
+    float perChar=time!=nullptr ? time->get_float() : 550.f;
+    if(perChar<=0.f) perChar=550.f;
+    const auto expected=std::min(uint32_t(float(message->text.length())*perChar),16000u);
+    require(script.messageTime((*named)->name)==expected && soundCalls==2 &&
+            soundRequest==(*named)->name+".WAV","messageTime must retain capped raw-byte text duration fallback");
+    gothic.externalMessageFn=std::move(oldMessage);
+    gothic.externalSoundFn=std::move(oldSound);
+    std::puts("OU messages: native byte text, external text/duration priority, requested WAV id and text fallback verified");
     }
   static void write(const fs::path& path, const rapidjson::Document& doc) {
     rapidjson::StringBuffer text; rapidjson::Writer<rapidjson::StringBuffer> writer(text); doc.Accept(writer);

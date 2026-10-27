@@ -284,6 +284,15 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
         throw std::runtime_error("loose file differs from program base index: "+path);
       }
     Log::i("base: ",inst->basePrograms.programs.size()," programs from \"",inst->basePrograms.dir.string(),"\"");
+    if(inst->baseOutputUnits.archives!=mounted)
+      throw std::runtime_error("mounted archives differ from output units base index: "+inst->baseOutputUnits.dir.string());
+    for(const auto& [path,size]:inst->baseOutputUnits.looseFiles) {
+      std::error_code error;
+      const auto actual = std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/path,error);
+      if(error || actual!=size)
+        throw std::runtime_error("loose file differs from output units base index: "+path);
+      }
+    Log::i("base: ",inst->baseOutputUnits.records.size()," output units records from \"",inst->baseOutputUnits.dir.string(),"\"");
     inst->baseProgress={};
     }
   catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
@@ -437,6 +446,47 @@ zenkit::DaedalusScript Resources::loadBaseProgram(std::string_view request, int 
   catch(const std::exception& error) {
     if(inst->census) inst->census->missing(request,error.what());
     throw BaseStore::Error("program "+std::string(request)+": "+error.what());
+    }
+  }
+
+bool Resources::loadBaseOutputUnits(std::string_view request, int language, std::string_view branch,
+                                   std::vector<std::shared_ptr<asset::CutsceneBlock>>& blocks,
+                                   std::u16string_view hostPath) {
+  try {
+    const auto& index = inst->baseOutputUnits;
+    const OutputUnits::Source* source = nullptr;
+    if(hostPath.empty()) {
+      std::string_view selectedBranch;
+      source = index.findVfs(request,&selectedBranch);
+      if(source==nullptr || selectedBranch!=branch)
+        throw std::runtime_error("selected VFS source missing from output units base index");
+      }
+    else {
+      source = index.findHost(censusSourcePath(std::filesystem::path(hostPath)));
+      if(source==nullptr)
+        throw std::runtime_error("selected host source missing from output units base index");
+      if(!source->skipped.empty())
+        return false;
+      }
+    if(!source->skipped.empty())
+      throw std::runtime_error("selected VFS output units source skipped: "+source->skipped);
+    const auto file = index.path(*source);
+    std::string actualSha256;
+    auto library = OutputUnits::readLibrary(file,&actualSha256);
+    if(actualSha256!=source->recordSha256)
+      throw std::runtime_error("output units record identity differs from base index");
+    auto loaded = OutputUnits::sortedBlocks(library);
+    blocks = std::move(loaded);
+    if(inst->census) {
+      const auto record = "base/outputunits/"+file.filename().generic_string();
+      inst->census->replaced(request,record);
+      inst->census->outputUnits("GameScript::loadDialogOU",request,language,branch,record,actualSha256,*source);
+      }
+    return true;
+    }
+  catch(const std::exception& error) {
+    if(inst->census) inst->census->missing(request,error.what());
+    throw BaseStore::Error("output units "+std::string(request)+": "+error.what());
     }
   }
 
@@ -709,6 +759,7 @@ void Resources::indexBaseContent() {
   baseModels.load(root,"models");
   baseFonts.load(root,"fonts");
   basePrograms = ProgramData::readIndex(root/"programs");
+  baseOutputUnits = OutputUnits::readIndex(root/"outputunits");
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {

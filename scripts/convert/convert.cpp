@@ -26,6 +26,12 @@
 //       Every Daedalus program the engine VFS, the _compiled directories or the
 //       server can select, as field-by-field records (common/programdata.h);
 //       programs.json maps the original choices to them.
+//   content-convert outputunits|verify-outputunits <gothic dir> <dir>
+//       The dialog line library (OU.BIN/OU.DAT) of every engine, server and storygraph choice as
+//       WorldData ZenFile records of kind cutscene_library (common/outputunits.h); the import fails
+//       when the server's native message view differs from its original scanner.
+//   content-convert outputunits-file <OU.BIN|OU.DAT> <record.json>
+//       One external library to a native record, e.g. for storygraph --ou. Import only.
 //   content-convert sources|verify-sources <gothic dir> <dir>
 //       sources.json: selected FNT/audio/BIK/music/DAT/OU inputs of the engine
 //       and server readers, their origin and SHA-256; no payload conversion.
@@ -40,10 +46,13 @@
 #include "basemesh.h"
 #include "fontdata.h"
 #include "programdata.h"
+#include "outputunits.h"
 #include "worldchunks.h"
 #include "worlddata.h"
 #include "gothicglb.h"
 
+#include <zenkit/Archive.hh>
+#include <zenkit/CutsceneLibrary.hh>
 #include <zenkit/Font.hh>
 #include <zenkit/Logger.hh>
 #include <zenkit/MultiResolutionMesh.hh>
@@ -298,6 +307,83 @@ int selfTest() {
   require(rejected,"truncated program binary must be rejected");
   }
 
+  // A dialog line library: archive order, duplicate names, a nested block shared by two roots, a null
+  // message and raw bytes, through the import, the record and the three views.
+  {
+  const auto msg = [](std::string text, std::string name) {
+    auto m = std::make_shared<zenkit::ConversationMessageEvent>();
+    m->text = std::move(text); m->name = std::move(name);
+    return m;
+    };
+  const auto atomic = [](std::shared_ptr<zenkit::ConversationMessageEvent> m) {
+    auto a = std::make_shared<zenkit::CutsceneAtomicBlock>();
+    a->message = std::move(m);
+    return a;
+    };
+  const auto block = [](std::string name, auto inner) {
+    auto b = std::make_shared<zenkit::CutsceneBlock>();
+    b->name = std::move(name); b->block = inner;
+    return b;
+    };
+  const std::string nestedText = "\x98 nested\xA0";
+  auto shared = block("DIA_B_NESTED",atomic(msg(nestedText,"DIA_B_NESTED_01_01.WAV")));
+  auto library = std::make_shared<zenkit::CutsceneLibrary>();
+  library->blocks = {block("DIA_C_02_01",atomic(msg(std::string("c\0d",3),"DIA_C_02_01.WAV"))),
+                     block("DIA_A_01_01",atomic(msg("first","DIA_A_01_01.WAV"))),
+                     block("DIA_A_01_01",atomic(msg("second","DIA_A_01_01.WAV"))),
+                     block("DIA_B_OUTER",shared),
+                     block("DIA_E",shared),
+                     block("DIA_D_NULL",atomic(nullptr))};
+  std::vector<std::byte> bytes;
+  {
+  auto stream = zenkit::Write::to(&bytes);
+  auto archive = zenkit::WriteArchive::to(stream.get(),zenkit::ArchiveFormat::BINSAFE);
+  archive->write_object(library,zenkit::GameVersion::GOTHIC_2);
+  archive->write_header();
+  }
+  const auto ouFile = dir/"OU.BIN";
+  gothicglb::writeFile(ouFile,bytes.data(),bytes.size());
+  WorldData::ZenFile own;
+  WorldData::loadCutsceneLibrary(bytes,{"OU.BIN",bytes.size(),worldChunkCrc32(bytes.data(),bytes.size())},own);
+  const auto names = [](const std::vector<std::shared_ptr<asset::CutsceneBlock>>& blocks) {
+    std::string out;
+    for(const auto& b:blocks) out += b->name+";";
+    return out;
+    };
+  require(own.kind=="cutscene_library" &&
+          names(own.blocks)=="DIA_C_02_01;DIA_A_01_01;DIA_A_01_01;DIA_B_OUTER;DIA_E;DIA_D_NULL;",
+          "cutscene library roots must keep archive order");
+  const auto nestedOf = [](const asset::CutsceneBlock& b) { return std::get<std::shared_ptr<asset::CutsceneBlock>>(b.block); };
+  require(nestedOf(*own.blocks[3])==nestedOf(*own.blocks[4]),"a shared nested block must stay one object");
+  const auto record = dir/"ou.json";
+  const auto identity = OutputUnits::writeLibrary(own,record);
+  std::string actual;
+  const auto read = OutputUnits::readLibrary(record,&actual);
+  require(actual==identity,"cutscene library record identity");
+  diff = WorldData::compareZen(own,read);
+  require(diff.empty(),"cutscene library round trip: "+diff);
+  require(nestedOf(*read.blocks[3])==nestedOf(*read.blocks[4]),"a shared nested block must stay one object in the record");
+  const auto sorted = OutputUnits::sortedBlocks(read);
+  require(names(sorted)=="DIA_A_01_01;DIA_A_01_01;DIA_B_OUTER;DIA_C_02_01;DIA_D_NULL;DIA_E;","engine view order");
+  require(OutputUnits::blockByName(sorted,"A")->name=="DIA_A_01_01" &&
+          OutputUnits::blockByName(sorted,"DIA_A_01_02")->name=="DIA_B_OUTER" &&
+          OutputUnits::blockByName(sorted,"ZZZ")==nullptr,
+          "block lookup must keep lower_bound successor behavior");
+  require(OutputUnits::message(*OutputUnits::blockByName(sorted,"DIA_D_NULL"))==nullptr,"null message");
+  require(OutputUnits::message(*OutputUnits::blockByName(sorted,"DIA_B_OUTER"))->text==nestedText,"nested message bytes");
+  const auto messages = OutputUnits::messagesInArchiveOrder(read);
+  require(messages.size()==4 && messages[0]->text==std::string("c\0d",3) && messages[1]->text=="first" &&
+          messages[2]->text=="second" && messages[3]->text==nestedText,
+          "server view: archive definition order, aliases once, raw bytes");
+  require(BaseImport::convertOutputUnitsFile(ouFile,dir/"ou-file.json")==0 &&
+          WorldData::compareZen(own,OutputUnits::readLibrary(dir/"ou-file.json")).empty(),
+          "one-file conversion must give the same record");
+  fs::resize_file(record,fs::file_size(record)-2);
+  rejected = false;
+  try { OutputUnits::readLibrary(record); } catch(const std::exception&) { rejected = true; }
+  require(rejected,"truncated cutscene library record must be rejected");
+  }
+
   WorldData::selfTest(dir/"world-data");
   fs::remove_all(dir);
   std::cout << "self-test passed\n";
@@ -331,6 +417,10 @@ int main(int argc, char** argv) {
       return BaseImport::convertFonts(args[1],args[2],args[0]=="verify-fonts");
     if(args.size()==3 && (args[0]=="programs" || args[0]=="verify-programs"))
       return BaseImport::convertPrograms(args[1],args[2],args[0]=="verify-programs");
+    if(args.size()==3 && (args[0]=="outputunits" || args[0]=="verify-outputunits"))
+      return BaseImport::convertOutputUnits(args[1],args[2],args[0]=="verify-outputunits");
+    if(args.size()==3 && args[0]=="outputunits-file")
+      return BaseImport::convertOutputUnitsFile(args[1],args[2]);
     if(args.size()==3 && (args[0]=="sources" || args[0]=="verify-sources"))
       return BaseImport::convertSources(args[1],args[2],args[0]=="verify-sources");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
@@ -343,6 +433,8 @@ int main(int argc, char** argv) {
                  "       content-convert models|verify-models <gothic dir> <dir>\n"
                  "       content-convert fonts|verify-fonts <gothic dir> <dir>\n"
                  "       content-convert programs|verify-programs <gothic dir> <dir>\n"
+                 "       content-convert outputunits|verify-outputunits <gothic dir> <dir>\n"
+                 "       content-convert outputunits-file <OU.BIN|OU.DAT> <record.json>\n"
                  "       content-convert sources|verify-sources <gothic dir> <dir>\n"
                  "       content-convert base <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";

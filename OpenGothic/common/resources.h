@@ -11,6 +11,7 @@
 #include "asset/modeltypes.h"
 #include "basestore.h"
 #include "programdata.h"
+#include "outputunits.h"
 #include "asset/worldtypes.h"
 
 #include <tuple>
@@ -202,6 +203,10 @@ class Resources final {
     static bool                      hasFile    (std::string_view fname);
     static zenkit::DaedalusScript     loadBaseProgram(std::string_view request, int language,
                                                      std::string_view branch, std::u16string_view hostPath = {});
+    static bool                      loadBaseOutputUnits(std::string_view request, int language,
+                                                        std::string_view branch,
+                                                        std::vector<std::shared_ptr<asset::CutsceneBlock>>& blocks,
+                                                        std::u16string_view hostPath = {});
 
     static const zenkit::Vfs&        vdfsIndex();
     static std::filesystem::path      worldBaseDir(std::string_view world);
@@ -238,6 +243,7 @@ class Resources final {
       };
     BaseIndex baseTextures, baseMeshes, baseZen, baseModels, baseFonts;
     ProgramData::Index basePrograms;
+    OutputUnits::Index baseOutputUnits;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     BaseStore::Selection automaticBase;
     BaseImport::Progress baseProgress;

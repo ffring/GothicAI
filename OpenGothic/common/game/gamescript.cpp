@@ -461,31 +461,20 @@ void GameScript::loadDialogOU() {
   const std::string prefix = std::string(Gothic::inst().defaultOutputUnits());
   const std::array<std::string,2> names = {prefix + ".BIN", prefix + ".DAT"};
 
-  const auto version = Gothic::inst().version().game==1 ? zenkit::GameVersion::GOTHIC_1
-                                                        : zenkit::GameVersion::GOTHIC_2;
-
   for(auto& OU:names) {
     if(Resources::hasFile(OU)) {
-      std::unique_ptr<zenkit::Read> read;
-      Resources::CensusSource source;
-      auto zen = Resources::openReader(OU, read, &source);
-      dialogs = std::move(*zen->read_object<zenkit::CutsceneLibrary>(version));
-      Resources::censusSelected("GameScript::loadDialogOU",OU,vmLang,"vfs_find_request",source,*read);
+      Resources::loadBaseOutputUnits(OU,vmLang,"vfs_find_request",dialogs);
       return;
       }
 
     const size_t segment = OU.find_last_of("\\/");
     if(segment!=std::string::npos && Resources::hasFile(OU.substr(segment+1))) {
-      std::unique_ptr<zenkit::Read> read;
-      Resources::CensusSource source;
-      auto zen = Resources::openReader(OU.substr(segment+1), read, &source);
-      dialogs = std::move(*zen->read_object<zenkit::CutsceneLibrary>(version));
-      Resources::censusSelected("GameScript::loadDialogOU",OU,vmLang,"vfs_find_basename",source,*read);
+      Resources::loadBaseOutputUnits(OU,vmLang,"vfs_find_basename",dialogs);
       return;
       }
 
     char16_t str16[256] = {};
-    for(size_t i=0; OU[i] && i<255; ++i)
+    for(size_t i=0; i<OU.size() && i<255; ++i)
       str16[i] = char16_t(OU[i]);
 
     auto gcutscene = CommandLine::inst().cutscenePath();
@@ -497,22 +486,8 @@ void GameScript::loadDialogOU() {
       branch = "host_localized";
       }
 
-    try {
-      auto buf = zenkit::Read::from(full);
-      if(buf==nullptr)
-        continue;
-      Resources::censusFile(full);
-      auto zen = zenkit::ReadArchive::from(buf.get());
-      if(zen==nullptr)
-        continue;
-      // auto zen = Resources::openReader(full);
-      dialogs = std::move(*zen->read_object<zenkit::CutsceneLibrary>(version));
-      Resources::censusSelected("GameScript::loadDialogOU",OU,vmLang,branch,full,*buf);
+    if(FileUtil::exists(std::u16string(full)) && Resources::loadBaseOutputUnits(OU,vmLang,branch,dialogs,full))
       return;
-      }
-    catch(...){
-      // loop to next possible path
-      }
     }
   Log::e("none of Zen-files for OU could be loaded");
   }
@@ -1428,10 +1403,10 @@ std::string_view GameScript::messageByName(std::string_view id) const {
   if(auto& fn = Gothic::inst().externalMessageFn; fn && fn(id,ext,extTime))
     return ext;
 
-  auto blk = dialogs.block_by_name(id);
+  auto blk = OutputUnits::blockByName(dialogs,id);
   if(blk == nullptr)
     return "";
-  auto msg = blk->get_message();
+  auto msg = OutputUnits::message(*blk);
   if(msg == nullptr)
     return "";
   return msg->text;

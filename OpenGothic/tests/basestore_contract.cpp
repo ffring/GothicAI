@@ -2,6 +2,7 @@
 #include "basestore.h"
 #include "commandline.h"
 #include "programdata.h"
+#include "outputunits.h"
 #include "resources.h"
 #include <zenkit/Archive.hh>
 #include <zenkit/CutsceneLibrary.hh>
@@ -121,12 +122,41 @@ std::string instrument(char guid, const std::string& file) {
               riff("LIST","DMRF",chunk("guid",std::string(16,guid))+chunk("file",utf16z(file))));
   }
 
-std::string cutsceneArchive(bool library) {
+std::string cutsceneArchive(bool library, bool populated=false) {
   std::vector<std::byte> bytes;
   {
   auto stream=zenkit::Write::to(&bytes);
-  auto archive=zenkit::WriteArchive::to(stream.get(),zenkit::ArchiveFormat::ASCII);
-  if(library) archive->write_object(std::make_shared<zenkit::CutsceneLibrary>(),zenkit::GameVersion::GOTHIC_2);
+  auto archive=populated ? zenkit::WriteArchive::to_save(stream.get(),zenkit::ArchiveFormat::BINSAFE) :
+                          zenkit::WriteArchive::to(stream.get(),zenkit::ArchiveFormat::ASCII);
+  if(library) {
+    auto lib=std::make_shared<zenkit::CutsceneLibrary>();
+    if(populated) {
+      auto nested=std::make_shared<zenkit::CutsceneBlock>();
+      nested->name="NESTED";
+      auto shared=std::get<0>(nested->block)->message;
+      shared->type=0xfedcba98;
+      shared->name="AUDIO_7.WAV";
+      shared->text=std::string(" \x98\xa0raw\0tail ",12);
+      shared->high_priority=true; shared->used=true; shared->deleted=true;
+      for(const char* name:{"Z_BLOCK","A_BLOCK"}) {
+        auto root=std::make_shared<zenkit::CutsceneBlock>();
+        root->name=name; root->block=nested;
+        lib->blocks.push_back(root);
+        }
+      for(const char* text:{"first duplicate","last duplicate"}) {
+        auto root=std::make_shared<zenkit::CutsceneBlock>();
+        root->name="DUP_BLOCK";
+        root->set_message(std::make_shared<zenkit::ConversationMessageEvent>());
+        root->get_message()->name="DUP_AUDIO_9.WAV";
+        root->get_message()->text=text;
+        lib->blocks.push_back(root);
+        }
+      auto empty=std::make_shared<zenkit::CutsceneBlock>();
+      empty->name="EMPTY_BLOCK"; empty->set_message(nullptr);
+      lib->blocks.push_back(empty);
+      }
+    archive->write_object(lib,zenkit::GameVersion::GOTHIC_2);
+    }
   else        archive->write_object(std::make_shared<zenkit::CutsceneBlock>(),zenkit::GameVersion::GOTHIC_2);
   archive->write_header();
   }
@@ -160,16 +190,23 @@ void syntheticSources(const fs::path& game) {
   const std::string sfx="RIFF-sfx", speech="RIFF-speech-copy", loose="RIFF-loose-sfx";
   const std::string dat("\x32\0\0\0\0\0\0\0\0",9); // version, no symbols, no code
   const auto archiveDat=std::string(1,'\x33')+le32(0)+le32(1)+std::string(1,'\x3c');
+  std::string archiveOu;
   const auto archives=[&](time_t a, time_t b) {
     writeVdf(game/"Data/A.VDF",{{"/_WORK/DATA/SOUND/SFX/SVM_X.WAV",sfx},{"/_WORK/DATA/SOUND/SPEECH/SVM_X.WAV",speech},
                               {"/_WORK/DATA/SCRIPTS/_COMPILED/GOTHIC.DAT",archiveDat},{"/_WORK/DATA/SCRIPTS/_COMPILED/BAD.DAT","not a program"}},a);
-    writeVdf(game/"Data/B.VDF",{{"/_WORK/DATA/SOUND/SFX/OTHER.WAV",sfx}},b);
+    std::vector<std::pair<std::string,std::string>> extra{{"/_WORK/DATA/SOUND/SFX/OTHER.WAV",sfx}};
+    if(!archiveOu.empty()) {
+      extra.emplace_back("/OU.BIN",archiveOu);
+      extra.emplace_back("/BROKEN.BIN","ZenGin Archive\nbroken body");
+      extra.emplace_back("/NONZEN.BIN","not a zengin archive");
+      }
+    writeVdf(game/"Data/B.VDF",extra,b);
     };
   archives(1000000000,1100000000);
   write(game/"_work/Data/Sound/SFX/SVM_X.WAV",loose);
   for(const char* name:{"CAMERA","FIGHT","SFX","MUSIC","PARTICLEFX","VISUALFX","MENU","GOTHIC"})
     write(game/"_work/Data/Scripts/_compiled"/(std::string(name)+".DAT"),dat);
-  const auto ou=game/"_work/Data/Scripts/content/CUTSCENE/OU.BIN";
+  const auto ou=game/"_work/Data/Scripts/CONTENT/CUTSCENE/OU.BIN";
   write(ou,cutsceneArchive(true));
   const auto band=riff("RIFF","DMBD",chunk("guid",std::string(16,'b'))+riff("LIST","lbil",
     instrument('m',"missing.dls")+instrument('g',"Real.DLS")+instrument('g',"alias.dls")));
@@ -319,6 +356,127 @@ void syntheticSources(const fs::path& game) {
     }
   write(ou,valid);
   std::cout << "synthetic OU: wrong type, bad body and bad header rejected\n";
+
+  // P14: the engine's archive winner and Python's physical host selection are distinct libraries.
+  archiveOu=cutsceneArchive(true,true);
+  archives(1000000000,1100000000);
+  write(ou.parent_path()/"OU.DAT","unreached bad DAT");
+  write(ou.parent_path()/"HOST_BAD.BIN","host skipped source");
+  write(game/"_work/Data/Scripts_RU/LOCAL.DAT",cutsceneArchive(true));
+  const auto output=game.parent_path()/"synthetic-outputunits";
+  require(BaseImport::convertOutputUnits(game,output,false)==0,"synthetic output units must import");
+  require(BaseImport::convertOutputUnits(game,output,true)==0,"synthetic output units must reproduce byte-for-byte");
+  const auto units=OutputUnits::readIndex(output);
+  std::string_view ouBranch;
+  const auto* engineOu=units.findVfs("ou.bin \t",&ouBranch);
+  const auto* pythonOu=units.serverOuPy();
+  require(engineOu && engineOu->origin=="archive" && engineOu->archive=="B.VDF" &&
+          engineOu->sha256==BaseImport::sha256(archiveOu) && ouBranch=="vfs_find_request",
+          "engine OU must select the archive BIN with exact imported provenance");
+  require(units.findVfs("missing\\OU.BIN \t",&ouBranch)==engineOu && ouBranch=="vfs_find_basename",
+          "OU basename fallback must preserve its branch and source");
+  require(pythonOu && pythonOu->origin=="host" && pythonOu->sha256==BaseImport::sha256(valid) &&
+          units.findHost("_WORK/DATA/SCRIPTS/CONTENT/CUTSCENE/ou.bin")==pythonOu && pythonOu->record!=engineOu->record,
+          "Python's exact-directory physical OU source must remain distinct from the engine winner");
+  require(units.findHost("_work/Data/Scripts_RU/LOCAL.DAT") &&
+          !units.findHost("_work/Data/Scripts_RU/LOCAL.DAT")->record.empty(),"localized direct-directory OU candidates must be indexed");
+  for(const char* request:{"OU.DAT","BROKEN.BIN","NONZEN.BIN","GOTHIC.DAT"}) {
+    const auto* bad=units.findVfs(request);
+    require(bad && !bad->skipped.empty() && bad->record.empty(),std::string(request)+": skipped VFS source must remain present");
+    }
+  const auto* badHost=units.findHost("_work/Data/Scripts/CONTENT/CUTSCENE/HOST_BAD.BIN");
+  require(badHost && !badHost->skipped.empty() && !units.findHost("_work/Data/Scripts/CONTENT/CUTSCENE/NOT_IMPORTED.BIN"),
+          "an existing skipped host source must differ from a source absent from the index");
+  require(units.selections.size()==9,"valid BIN must end every language selection before the unreached bad DAT");
+  for(const auto& row:units.selections)
+    require(row.candidate=="OU.BIN" && row.step=="vfs_find_request" && row.source &&
+            &units.sources.at(*row.source)==engineOu,"BIN must win over DAT and host/localized sources for every language");
+  std::string ouDigest;
+  const auto library=OutputUnits::readLibrary(units.path(*engineOu),&ouDigest);
+  require(ouDigest==engineOu->recordSha256 && ouDigest==BaseImport::sha256File(units.path(*engineOu)) &&
+          library.blocks.size()==5 && library.blocks[0]->name=="Z_BLOCK" && library.blocks[1]->name=="A_BLOCK",
+          "native OU must hash the actual decoded record and preserve archive root order");
+  const auto nested=std::get<1>(library.blocks[0]->block);
+  require(nested==std::get<1>(library.blocks[1]->block),"native OU must preserve shared nested references");
+  const auto rawMessage=OutputUnits::message(*library.blocks[0]);
+  require(rawMessage && rawMessage->type==0xfedcba98 && rawMessage->name=="AUDIO_7.WAV" &&
+          rawMessage->text==std::string(" \x98\xa0raw\0tail ",12) && rawMessage->high_priority && rawMessage->used && rawMessage->deleted &&
+          !OutputUnits::message(*library.blocks.back()),"native OU must preserve raw bytes, audio/block distinction, save flags and null messages");
+  const auto ownMessages=OutputUnits::messagesInArchiveOrder(library);
+  require(ownMessages.size()==3 && ownMessages[0]==rawMessage && ownMessages[1]->text=="first duplicate" &&
+          ownMessages[2]->text=="last duplicate","native server messages must keep archive order and visit aliases once");
+  const auto sortedOu=OutputUnits::sortedBlocks(library);
+  require(OutputUnits::blockByName(sortedOu,"B_MISSING")->name=="DUP_BLOCK" &&
+          OutputUnits::blockByName(sortedOu,"")->name=="A_BLOCK" && !OutputUnits::blockByName(sortedOu,"~AFTER"),
+          "OU lookup must preserve absent-name successor behavior before, between and after roots");
+  const auto rawLibraryBytes=std::vector<std::byte>(reinterpret_cast<const std::byte*>(archiveOu.data()),
+                                                   reinterpret_cast<const std::byte*>(archiveOu.data())+archiveOu.size());
+  auto legacyStream=zenkit::Read::from(&rawLibraryBytes);
+  auto legacyArchive=zenkit::ReadArchive::from(legacyStream.get());
+  const auto legacyLibrary=legacyArchive->read_object<zenkit::CutsceneLibrary>(zenkit::GameVersion::GOTHIC_2);
+  require(legacyLibrary && legacyLibrary->blocks.size()==sortedOu.size(),"synthetic original OU sorted root count");
+  for(size_t i=0;i<sortedOu.size();++i) {
+    const auto a=legacyLibrary->blocks[i]->get_message();
+    const auto b=OutputUnits::message(*sortedOu[i]);
+    require(legacyLibrary->blocks[i]->name==sortedOu[i]->name && bool(a)==bool(b) && (!a || a->text==b->text),
+            "synthetic duplicate roots must retain the original platform std::sort order");
+    }
+  const auto recordFile=units.path(*engineOu);
+  const auto nativeBytes=read(recordFile);
+  fs::remove(recordFile);
+  bool ouRejected=false;
+  try { (void)OutputUnits::readLibrary(recordFile); } catch(const std::runtime_error&) { ouRejected=true; }
+  require(ouRejected,"missing native OU payload must fail without reading the intact original");
+  write(recordFile,"{broken");
+  ouRejected=false;
+  try { (void)OutputUnits::readLibrary(recordFile); } catch(const std::runtime_error&) { ouRejected=true; }
+  require(ouRejected,"corrupt native OU payload must fail without reading the intact original");
+  write(recordFile,nativeBytes);
+  const auto indexBytes=read(output/"outputunits.json");
+  fs::remove(output/"outputunits.json");
+  ouRejected=false;
+  try { (void)OutputUnits::readIndex(output); } catch(const std::runtime_error&) { ouRejected=true; }
+  require(ouRejected,"missing native OU index must fail");
+  write(output/"outputunits.json",indexBytes);
+  const auto emptyGame=game.parent_path()/"synthetic-empty-ou";
+  fs::create_directories(emptyGame/"Data");
+  const auto emptyOut=game.parent_path()/"synthetic-empty-outputunits";
+  require(BaseImport::convertOutputUnits(emptyGame,emptyOut,false)==0,"installation without OU inputs must import");
+  const auto emptyUnits=OutputUnits::readIndex(emptyOut);
+  require(emptyUnits.sources.empty() && emptyUnits.records.empty() && emptyUnits.vfs.empty() && emptyUnits.host.empty() &&
+          !emptyUnits.serverOuPy(),"installation without OU inputs must retain a valid empty index");
+  // No BIN: the same selector must proceed to DAT; a present bad VFS BIN must stop it instead.
+  fs::rename(ou,ou.parent_path()/"HOST_ONLY.BIN");
+  write(ou.parent_path()/"OU.DAT",valid);
+  archiveOu.clear();
+  archives(1000000000,1100000000);
+  const auto datOut=game.parent_path()/"synthetic-outputunits-dat";
+  require(BaseImport::convertOutputUnits(game,datOut,false)==0,"DAT-only OU selection must import");
+  const auto datUnits=OutputUnits::readIndex(datOut);
+  size_t selectedDat=0;
+  for(const auto& row:datUnits.selections) {
+    if(!row.source) continue;
+    ++selectedDat;
+    require(row.candidate=="OU.DAT" && row.step=="vfs_find_request" &&
+            datUnits.sources.at(*row.source).skipped.empty(),"a missing BIN must fall through to valid DAT");
+    }
+  require(selectedDat==9 && !datUnits.serverOuPy(),"DAT-only engine selection must not invent a Python OU.BIN source");
+  const auto skippedOut=game.parent_path()/"synthetic-outputunits-skipped";
+  for(const std::string badOu:{"not a zengin archive","ZenGin Archive\nbroken body"}) {
+    archiveOu=badOu;
+    archives(1000000000,1100000000);
+    require(BaseImport::convertOutputUnits(game,skippedOut,false)==0,"selected malformed VFS source must remain explicit in the index");
+    const auto skippedUnits=OutputUnits::readIndex(skippedOut);
+    require(skippedUnits.selections.size()==9,"a present bad VFS BIN must stop before valid DAT");
+    for(const auto& row:skippedUnits.selections)
+      require(row.candidate=="OU.BIN" && row.source && !skippedUnits.sources.at(*row.source).skipped.empty(),
+              "selected skipped VFS BIN must not become an absent row or fall through to DAT");
+    }
+  fs::rename(ou.parent_path()/"HOST_ONLY.BIN",ou);
+  write(ou.parent_path()/"OU.DAT","unreached bad DAT");
+  archiveOu=cutsceneArchive(true,true);
+  archives(1000000000,1100000000);
+  std::cout << "synthetic OU: archive/host/language selections, skipped-vs-absent rows, graph aliases, raw flags/text, native failures and empty index verified\n";
 
   const auto programs=game.parent_path()/"synthetic-programs";
   require(BaseImport::convertPrograms(game,programs,false)==0,"synthetic programs must import");

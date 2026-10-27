@@ -1997,6 +1997,7 @@ void testPoseActualDriverSave() {
   require(BaseImport::convertZen(root,base/"zen",false)==0,"pose driver ZEN index must import");
   require(BaseImport::convertFonts(root,base/"fonts",false)==0,"pose driver font index must import");
   require(BaseImport::convertPrograms(root,base/"programs",false)==0,"pose driver program index must import");
+  require(BaseImport::convertOutputUnits(root,base/"outputunits",false)==0,"pose driver output unit index must import");
   {
     // Synthetic installation without remaining-family inputs: a labelled empty manifest.
     std::filesystem::create_directories(base/"sources");

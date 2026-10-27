@@ -5,6 +5,7 @@ import pytest
 
 from gothic_ai import persona as persona_module
 from gothic_ai.characters import Card
+from gothic_ai.gamedata import ou
 from gothic_ai.gamedata.ou import voice_index
 from gothic_ai.persona import (
     BRIEF_SAMPLES,
@@ -48,7 +49,7 @@ def _lines(key: str, voice: str, n: int) -> list[tuple[str, str]]:
 
 
 @pytest.fixture
-def game_dir(tmp_path: Path) -> Path:
+def game_dir(tmp_path: Path, monkeypatch) -> Path:
     """OU.BIN with Babera's lines (and one of the hero's in her dialog), Edda's, Matteo's and Hilda's."""
     lines = _lines("BABERA", "16", 6) + [("DIA_BABERA_TALK0_15_01", "Что нового?")]
     lines += _lines("EDDA", "17", 6) + _lines("MATTEO", "09", 6) + _lines("HILDA", "17", 6)
@@ -56,6 +57,9 @@ def game_dir(tmp_path: Path) -> Path:
     cutscene.mkdir(parents=True)
     data = b"ZenGin Archive\nEND\n" + b"".join(_binsafe_line(name, text) for name, text in lines)
     (cutscene / "OU.BIN").write_bytes(data)
+    # This pseudo archive tests persona behavior; strict native import is exercised on real archives.
+    messages = [(f"{name}.WAV".encode("ascii"), text.encode("cp1251")) for name, text in lines]
+    monkeypatch.setattr(ou, "native_messages", lambda game: messages)
     return tmp_path / "game"
 
 

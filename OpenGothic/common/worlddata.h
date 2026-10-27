@@ -45,10 +45,15 @@ struct ZenFile {
   std::vector<std::shared_ptr<asset::VirtualObject>> vobs;
   std::shared_ptr<asset::WayNet> waynet;
   std::vector<asset::LightPreset> light_presets;
+  // Only for kind "cutscene_library" (OU.BIN/OU.DAT): the library's roots in archive order, before
+  // CutsceneLibrary::load sorts them. Other kinds never write or read this member.
+  std::vector<std::shared_ptr<asset::CutsceneBlock>> blocks;
   };
 
 void writeZen(const ZenFile& data, const std::filesystem::path& file);
 ZenFile readZen(const std::filesystem::path& file);
+// readZen from bytes the caller already holds; `what` names them in errors.
+ZenFile parseZen(const std::vector<uint8_t>& bytes, const std::string& what);
 std::string compareZen(const ZenFile& expected, const ZenFile& actual);
 
 
