@@ -440,9 +440,10 @@ PORT="${PORT:-47827}"
 ASR_PORT="${ASR_PORT:-47829}"
 TTS_PORT="${TTS_PORT:-47840}"
 TTS="${TTS:-fake}"
-# Inworld bills every line. Tests check our code, not its voices: fake or voxcpm does that for free.
+# Inworld bills every line. Tests check our code, not its voices: fake does that for free (voxcpm too, when its
+# GPU service is started again; it is stopped since 2026-10-27).
 if [[ ( "$TTS" == inworld || "$TTS" == inworld:* ) && "${PAID_TTS:-0}" != 1 ]]; then
-  echo "TTS=$TTS is paid Inworld; use TTS=fake or TTS=voxcpm, or set PAID_TTS=1 when a step needs its voices" >&2
+  echo "TTS=$TTS is paid Inworld; use TTS=fake, or set PAID_TTS=1 when a step needs its voices" >&2
   exit 2
 fi
 # Inworld writes its voice cache through one fixed .tmp file. Keep that write

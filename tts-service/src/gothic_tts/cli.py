@@ -133,8 +133,9 @@ def _write(path: str, data: bytes) -> None:
 
 
 def _add_provider_args(p: argparse.ArgumentParser) -> None:
-    # Inworld TTS-2, and self-hosted VoxCPM2 while Inworld is unavailable; with neither the game shows
-    # subtitles. Never `codex` by default: its conversational voice paraphrases (see providers/codex.py)
+    # Inworld TTS-2 with no fallback: while Inworld is unavailable the game shows subtitles. Self-hosted
+    # VoxCPM2 (`--fallback voxcpm`) is off since the voices are Inworld's alone.
+    # Never `codex` by default: its conversational voice paraphrases (see providers/codex.py)
     p.add_argument(
         "--provider",
         default=os.environ.get("GOTHIC_TTS_PROVIDER", "inworld"),
@@ -142,7 +143,7 @@ def _add_provider_args(p: argparse.ArgumentParser) -> None:
     )
     p.add_argument(
         "--fallback",
-        default=os.environ.get("GOTHIC_TTS_FALLBACK", "voxcpm"),
+        default=os.environ.get("GOTHIC_TTS_FALLBACK", "none"),
         help="fallback provider spec, or none",
     )
     p.add_argument(
