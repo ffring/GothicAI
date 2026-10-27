@@ -474,6 +474,32 @@ async def test_surrender_hold_resumes_native_fight_and_cannot_repeat(rig, monkey
     await end_hero_hold(rig, conv)
 
 
+async def test_hits_after_broken_hold_offer_npc_surrender_without_restarting_attacks(rig, monkeypatch):
+    rig.talk.people[FRIEND] = rig.talk.people[FRIEND].model_copy(update={"guild": 8})
+    rig.fake.native_fights[FRIEND] = True
+    rig.fake.native_targets[FRIEND] = "PC_HERO"
+    conv, _ = await begin_hero_hold(rig, monkeypatch)
+    offer = AsyncMock()
+    monkeypatch.setattr(rig.mercy, "_offer", offer)
+    hit(rig, npc=NPC, hp=80)
+    await rig.mercy._resuming[NPC]
+    assert not conv.reply.done()
+
+    before_second = time.monotonic()
+    hit(rig, npc=NPC, hp=20)
+    battle = rig.mercy.battles[NPC]
+    assert battle.hp == 20 and battle.last >= before_second
+    assert not conv.reply.done()
+    await asyncio.gather(*rig.dialogue._background)
+    offer.assert_awaited_once()
+    assert offer.await_args.args[0] == NPC and offer.await_args.args[1] is battle
+    assert offer.await_args.args[2].hp == 20 and offer.await_args.args[3] is True
+    attacks = [row["npc"] for row in rig.fake.story
+               if any(op.get("do") == "attack" for op in row.get("effects", []))]
+    assert attacks == [NPC, FRIEND]
+    await end_hero_hold(rig, conv)
+
+
 async def test_no_surrender_signal_keeps_native_combat_running(rig, monkeypatch):
     conv, probe = await begin_hero_hold(rig, monkeypatch, surrendering=False)
     assert probe.await_count == 1 and not rig.mercy.holds and rig.fake.attack_state

@@ -297,11 +297,12 @@ class Mercy:
         if attacker in {"PLAYER", "PC_HERO"}:
             for recipient, hold in list(self._hold_turns.items()):
                 if npc in hold.members:
-                    if hit.dead or hit.down:
-                        self._dead.add(npc)
                     self.accepting.discard(recipient)
-                    self._end_hold(recipient, hold, force=hold.resumed)
-                    return
+                    if self.holds.get(recipient) is hold:
+                        if hit.dead or hit.down:
+                            self._dead.add(npc)
+                        self._end_hold(recipient, hold)
+                        return
         if self._ours(npc) or not self._ours(attacker):
             return
         entry = self.orders.talk.people.get(npc)
