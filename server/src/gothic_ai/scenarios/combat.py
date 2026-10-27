@@ -14,7 +14,7 @@ from ..game import GameError, GameLink
 from ..llm import ToolCall
 from ..llm.fake import FakeBackend, FakeStep
 from ..mercy import PARDON, PEE_DISTANCE_CM, Mercy
-from ..protocol import CombatHit, GameMessage, LineStarted, Session, Snapshot
+from ..protocol import CombatHit, GameMessage, LineStarted, PttStart, Session, Snapshot
 from ..talk import TalkDesk, fights
 from ..trace import read as read_trace
 from ..turn import ToolOutcome
@@ -74,6 +74,9 @@ async def surrender_live(
     def record(msg: GameMessage) -> None:
         if isinstance(msg, CombatHit):
             hits.append(msg)
+        if current is not None and isinstance(msg, PttStart):
+            current["ptt_started_at"] = time.time()
+            current["ptt_focus"] = msg.focus
         if current is None or not started:
             return
         elapsed = round((time.monotonic() - started) * 1000)
@@ -205,6 +208,13 @@ async def surrender_live(
                         raise GameError("surrender_live preparation: hero focus is not the intended opponent")
                 if text is None:
                     await health(npc, 250)
+                else:
+                    # The real talk key opens Sol's connection while the hero is still speaking.
+                    await link.debug("ptt", state="start")
+                    try:
+                        await asyncio.sleep(1.5)
+                    finally:
+                        await link.debug("ptt", state="cancel")  # discard microphone audio; type below
                 started, wall_started = time.monotonic(), time.time()
                 current["started_at"] = wall_started
                 if text is None:
@@ -212,6 +222,7 @@ async def surrender_live(
                     if not any(h.npc == npc and 0 < h.hp < h.hp_max * 0.3 for h in hits):
                         raise GameError("surrender_live preparation: no living low-health hit")
                 else:
+                    current["ptt_lead_ms"] = round((wall_started - current["ptt_started_at"]) * 1000)
                     current["native_attack_exit_ms"] = None
                     attack_watch = asyncio.create_task(watch_attack(npc, current))
                     await link.debug("type", text=text)
@@ -229,6 +240,18 @@ async def surrender_live(
                 current["turn_id"], current["turn_status"] = turn["id"], turn["status"]
                 current["speech_model"] = turn["steps"][0].get("llm")
                 current["turn_ms"] = round((turn["t"] + turn["total_s"] - wall_started) * 1000)
+                offset = turn["t"] - wall_started
+                current["sol_steps"] = [
+                    {"step": index,
+                     "start_ms": round((offset + step["started_s"]) * 1000),
+                     "end_ms": round((offset + step["ended_s"]) * 1000),
+                     "timing": step.get("timing"), "usage": step.get("usage"),
+                     "tools": [{"name": event["name"],
+                                "start_ms": round((offset + event["at_s"]) * 1000)}
+                               for event in turn["events"]
+                               if event["kind"] == "tool_start" and event["step"] == index]}
+                    for index, step in enumerate(turn["steps"]) if step.get("llm") is None
+                ]
                 if turn["status"] not in {"completed", "step_cap"} or any(
                     e["kind"] in {"quick_failed", "act_failed"} for e in turn["events"]
                 ):

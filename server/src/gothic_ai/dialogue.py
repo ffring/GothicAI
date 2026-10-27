@@ -2350,6 +2350,7 @@ class DialogueManager:
         conv.trigger = trigger
         await self._status(conv, "thinking")
         quick = kind != "mercy" and self._fighting(conv)  # surrender is the conversational model's decision
+        parallel = quick and kind == "player" and self.fights_hero(conv.npc)
         # the hero's phrase (not on the move): the quick model's first words, the answer goes on from them
         react = kind == "player" and not overlay and not quick and self.quick is not None
         trace = TurnTrace(
@@ -2367,11 +2368,12 @@ class DialogueManager:
             self._yield_to(conv.npc)
         first: asyncio.Task[str] | None = None
         full: asyncio.Task[tuple[str, Snapshot | None, Sight | None]] | None = None
+        quick_line: asyncio.Task[bool] | None = None
         try:
             # the quick model's words do not wait for the extensions: they ready the whole situation meanwhile
             situation_text, snap, sight = await self._situation(conv, body, brief=quick or react)
             trace.record["snapshot"] = snap.model_dump(mode="json") if snap is not None else None
-            if quick or react:
+            if (quick or react) and not parallel:
                 full = asyncio.create_task(self._situation(conv, body))
             if kind == "player":  # its first reaction at once: words (outside a fight) and a gesture
                 hint = Message("developer", f"{situation_text}\n{REACT_HINT}")
@@ -2414,7 +2416,17 @@ class DialogueManager:
         trace.record["tools"] = [t.name for t in state.tools]
         speaker = self.llm
         try:
-            if quick and full is not None and await self._quick_line(conv, state, request, trace):
+            if parallel:
+                ready = asyncio.Event()
+                quick_line = asyncio.create_task(self._quick_line(conv, state, request, trace, ready=ready))
+                await ready.wait()  # the situation must include the surrender probe's outcome
+                full = asyncio.create_task(self._situation(conv, body))
+                status = await self._act_on_line(conv, state, trigger, full, sound, trace,
+                                                 quick_line=quick_line)
+                if await quick_line:
+                    assert self.quick is not None
+                    speaker = self.quick
+            elif quick and full is not None and await self._quick_line(conv, state, request, trace):
                 assert self.quick is not None
                 speaker = self.quick
                 status = await self._act_on_line(conv, state, trigger, full, sound, trace)
@@ -2461,6 +2473,9 @@ class DialogueManager:
             raise
         finally:
             conv.acting = False
+            if quick_line is not None:
+                quick_line.cancel()
+                await asyncio.gather(quick_line, return_exceptions=True)
             if full is not None:
                 full.cancel()  # done by now, unless the turn ended before the line
 
@@ -2502,6 +2517,7 @@ class DialogueManager:
         trace: TurnTrace,
         *,
         speak: bool = True,
+        quick_line: asyncio.Task[bool] | None = None,
     ) -> str:
         """The conversational model's steps of a turn; tool calls are handled after each (see turn.py).
         `speak` False: the quick model said the npc's line, these steps only act on it, their words unsaid.
@@ -2514,21 +2530,46 @@ class DialogueManager:
             while True:
                 said = state.text.strip()
                 try:
+                    st.started_s = round(time.time() - trace.started, 3)
                     done = await self._step(conv, state, request, tool_choice(step), st, speak=speak)
                     break
                 except LLMError as err:
                     # asked again only if nothing of this step was said: else the npc would repeat it
-                    if not err.retryable or retries <= 0 or state.text.strip() != said:
+                    if not err.retryable or retries <= 0 or (speak and state.text.strip() != said):
                         raise
                     retries -= 1
                     log.warning("%s: %s; asking the model again", conv.npc, err)
                     trace.event("retry", error=str(err))
+            if quick_line is not None:
+                if await quick_line:
+                    conv.acting = True
+                    await self._status(conv, "idle")
+                    if not state.overlay:  # tool words are overlays; let an ordinary line finish first
+                        if conv.voice is not None:
+                            await conv.voice.join()
+                        while self.audible(conv.npc):  # noqa: ASYNC110 - playback ends by clock, not event
+                            await asyncio.sleep(0.05)
+                else:
+                    # Gemma said nothing: voice this already completed response, without asking Sol again.
+                    speak = True
+                    st.silent = False
+                    trace.event("quick_fallback", step=trace.steps.index(st))
+                    if done.text:
+                        state.first_delta = time.monotonic() - state.started
+                        pieces = state.spoken(
+                            state.moods.feed(done.text),
+                            {t.name for t in self._request_tools(state.tools)}, conv.npc,
+                        )
+                        await self._feed_lines(conv, state, pieces)
+                        await self._say_rest(conv, state)
+                quick_line = None
             if state.relevant is not None and not state.relevant() and not (speak and state.text.strip()):
                 raise StaleTurn  # the incident is over: nothing said yet, or only late acts are left
             calls = [i for i in done.items if isinstance(i, ToolCall)]
             outcomes = []
             for call in calls:
                 before = [t.name for t in state.tools]
+                trace.event("tool_start", step=trace.steps.index(st), name=call.name, call_id=call.call_id)
                 outcomes.append(await self._tool(conv, call, state))
                 after = [t.name for t in state.tools]
                 if before != after:
@@ -2552,7 +2593,8 @@ class DialogueManager:
         return "completed"
 
     async def _quick_line(
-        self, conv: Conversation, state: TurnState, request: list[Item], trace: TurnTrace
+        self, conv: Conversation, state: TurnState, request: list[Item], trace: TurnTrace,
+        *, ready: asyncio.Event | None = None,
     ) -> bool:
         """The npc's line in a fight, from the quick model. False if it said nothing (it failed or went
         quiet first): the conversational model speaks then, as in any other turn."""
@@ -2562,8 +2604,12 @@ class DialogueManager:
         if slot is not None:
             self._quick_busy[slot] += 1  # keep the speaker's prefix while the other slot classifies
         try:
-            if slot is not None and self.surrender_hold is not None:
-                await self.surrender_hold(conv, request)
+            try:
+                if slot is not None and self.surrender_hold is not None:
+                    await self.surrender_hold(conv, request)
+            finally:
+                if ready is not None:
+                    ready.set()
             st = trace.step(request, None, llm=getattr(self.quick, "model", None) or self.quick.name)
             try:
                 await self._step(conv, state, request, None, st, quick=True)
@@ -2584,26 +2630,32 @@ class DialogueManager:
         full: asyncio.Task[tuple[str, Snapshot | None, Sight | None]],
         sound: str,
         trace: TurnTrace,
+        *,
+        quick_line: asyncio.Task[bool] | None = None,
     ) -> str:
         """After the quick model's line: the conversational model, on the whole situation, decides what the
         npc does about it (a bandit that shouted "Держи его!" attacks). Its words are not said; a failure
         only loses the acts, the line is said already."""
-        conv.acting = True  # the hero may speak again: a new turn, not an interruption
-        await self._status(conv, "idle")
+        if quick_line is None:
+            conv.acting = True  # the hero may speak again: a new turn, not an interruption
+            await self._status(conv, "idle")
         situation_text, _, state.sight = await full
-        if self.hero_fight_held(conv.npc):
+        if quick_line is None and self.hero_fight_held(conv.npc):
             situation_text, _, state.sight = await self._situation(conv, None)
         if state.dynamic_tools:
             state.tools = self._offered(conv.npc, state.sight)
-        said = " ".join(s for s in (sound, state.text.strip()) if s)
-        situation_text += (
-            f"\nТы уже сказал вслух: «{said}». Новых слов не нужно: реши, что ты делаешь, и сделай это "
-            "инструментами, если нужно."
-        )
+        if quick_line is None:
+            said = " ".join(s for s in (sound, state.text.strip()) if s)
+            situation_text += (
+                f"\nТы уже сказал вслух: «{said}». Новых слов не нужно: реши, что ты делаешь, и сделай это "
+                "инструментами, если нужно."
+            )
         request: list[Item] = [*conv.history, Message("developer", situation_text), trigger]
         try:
-            return await self._steps(conv, state, request, trace, speak=False)
+            return await self._steps(conv, state, request, trace, speak=False, quick_line=quick_line)
         except LLMError as err:
+            if quick_line is not None and not await quick_line:
+                raise  # neither model supplied a line
             log.warning("%s: no acts on its line: %s", conv.npc, err)
             self.journal.add("llm_error", npc=conv.npc, name=conv.persona.name, detail=str(err))
             trace.event("act_failed", error=str(err))
