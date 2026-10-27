@@ -7,6 +7,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
+
+namespace zenkit { class Read; }
 
 // Session-only accounting. Resources creates this object only with OPENGOTHIC_CENSUS.
 class ContentCensus final {
@@ -16,6 +19,10 @@ class ContentCensus final {
     void opened(std::string_view name, std::string_view source) noexcept;
     void replaced(std::string_view name, std::string_view replacement) noexcept;
     void missing(std::string_view name, std::string_view reason) noexcept;
+    void profile(std::string_view game, std::string_view outputUnits, int language) noexcept;
+    void selected(std::string_view consumer, std::string_view request, int language,
+                  std::string_view branch, std::string_view location, std::string_view path,
+                  std::string_view source, zenkit::Read& read) noexcept;
     bool write() noexcept;
 
   private:
@@ -25,4 +32,13 @@ class ContentCensus final {
     std::map<Key, uint64_t> files;
     std::map<Key, uint64_t> replacements;
     std::map<Key, uint64_t> misses;
+    struct Selection {
+      std::string consumer, request, branch, location, path, source, sha256;
+      int language = -1;
+      uint64_t size = 0;
+      };
+    std::string game, outputUnits;
+    int language = -1;
+    bool hasProfile = false;
+    std::vector<Selection> selections;
   };

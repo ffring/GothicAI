@@ -354,7 +354,10 @@ struct Fixture {
     textFile(base/"textures/textures.json","{\"format\":\"gothic-textures\",\"version\":1,\"archives\":"+archives+",\"textures\":{}}");
     textFile(base/"zen/zen.json","{\"format\":1,\"archives\":"+archives+",\"loose_files\":[],\"files\":{}}");
     require(BaseImport::convertModels(root,base/"models",false)==0,"synthetic models must import into their own base");
-    textFile(base/"base.json",BaseImport::identify(root).json);
+    // Synthetic installation without remaining-family inputs: a labelled empty manifest.
+    std::filesystem::create_directories(base/"sources");
+    textFile(base/"sources/sources.json","{\"format\":\"gothic-sources\",\"version\":1,\"synthetic\":\"mesh-gltf fixture without remaining-family inputs\"}\n");
+    BaseImport::writeBaseMetadata(base,BaseImport::identify(root));
     if(mountOriginal)
       Resources::mountWork(root/"_work");
     Resources::loadVdfs({},false);

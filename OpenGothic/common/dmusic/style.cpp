@@ -1,10 +1,7 @@
-#include "mixer.h"
 #include "style.h"
 
 #include <stdexcept>
-#include <Tempest/Log>
 
-using namespace Tempest;
 using namespace Dx8;
 
 Style::Part::Part(Riff &input) {

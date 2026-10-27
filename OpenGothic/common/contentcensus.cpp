@@ -1,9 +1,11 @@
 #include "contentcensus.h"
+#include "sha256.h"
 
 #include <Tempest/Log>
 #include <Tempest/TextCodec>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
+#include <zenkit/Stream.hh>
 
 #include <algorithm>
 #include <fstream>
@@ -102,6 +104,56 @@ void ContentCensus::missing(std::string_view name, std::string_view reason) noex
   catch(...) { Tempest::Log::e("census: unable to record base miss"); }
   }
 
+void ContentCensus::profile(std::string_view game, std::string_view outputUnits, int language) noexcept {
+  try {
+    std::lock_guard<std::mutex> guard(sync);
+    this->game = game;
+    this->outputUnits = outputUnits;
+    this->language = language;
+    hasProfile = true;
+    }
+  catch(...) { Tempest::Log::e("census: unable to record active profile"); }
+  }
+
+void ContentCensus::selected(std::string_view consumer, std::string_view request, int language,
+                             std::string_view branch, std::string_view location, std::string_view path,
+                             std::string_view source, zenkit::Read& read) noexcept {
+  // Hash the same successfully parsed stream, without changing the parser's cursor.
+  struct RestorePosition {
+    zenkit::Read& read;
+    size_t position;
+    ~RestorePosition() { read.seek(static_cast<std::ptrdiff_t>(position),zenkit::Whence::BEG); }
+    } restore{read,read.tell()};
+  try {
+    read.seek(0,zenkit::Whence::END);
+    const auto size = read.tell();
+    read.seek(0,zenkit::Whence::BEG);
+    Sha256 hash;
+    char buffer[65536];
+    size_t remaining = size;
+    while(remaining>0) {
+      const auto count = read.read(buffer,std::min(remaining,sizeof(buffer)));
+      if(count==0)
+        throw std::runtime_error("short source read");
+      hash.update(buffer,count);
+      remaining -= count;
+      }
+    Selection entry;
+    entry.consumer = consumer;
+    entry.request = request;
+    entry.language = language;
+    entry.branch = branch;
+    entry.location = location;
+    entry.path = path.empty() ? "unknown" : path;
+    entry.source = source.empty() ? "unknown" : source;
+    entry.sha256 = hash.finish();
+    entry.size = size;
+    std::lock_guard<std::mutex> guard(sync);
+    selections.push_back(std::move(entry));
+    }
+  catch(...) { Tempest::Log::e("census: unable to record parsed source"); }
+  }
+
 bool ContentCensus::write() noexcept {
   try {
     std::lock_guard<std::mutex> guard(sync);
@@ -150,6 +202,38 @@ bool ContentCensus::write() noexcept {
       json.EndObject();
       }
     json.EndArray();
+    json.Key("active_profile");
+    if(hasProfile) {
+      json.StartObject();
+      json.Key("game"); string(game);
+      json.Key("output_units"); string(outputUnits);
+      json.Key("language"); json.Int(language);
+      json.EndObject();
+      }
+    else {
+      json.Null();
+      }
+    json.Key("runtime_sources");
+    json.StartObject();
+    json.Key("coverage"); string("observed_successful_parses");
+    json.Key("complete_corpus"); json.Bool(false);
+    json.Key("selections");
+    json.StartArray();
+    for(const auto& entry:selections) {
+      json.StartObject();
+      json.Key("consumer"); string(entry.consumer);
+      json.Key("request"); string(entry.request);
+      json.Key("language"); json.Int(entry.language);
+      json.Key("branch"); string(entry.branch);
+      json.Key("location"); string(entry.location);
+      json.Key("path"); string(entry.path);
+      json.Key("source"); string(entry.source);
+      json.Key("size"); json.Uint64(entry.size);
+      json.Key("sha256"); string(entry.sha256);
+      json.EndObject();
+      }
+    json.EndArray();
+    json.EndObject();
     json.EndObject();
 
     if(!output.parent_path().empty())

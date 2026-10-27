@@ -1996,10 +1996,13 @@ void testPoseActualDriverSave() {
   require(BaseImport::convertMeshes(root,base/"meshes",false)==0,"pose driver mesh index must import");
   require(BaseImport::convertZen(root,base/"zen",false)==0,"pose driver ZEN index must import");
   {
-    std::ofstream output(base/"base.json",std::ios::binary);
-    output<<BaseImport::identify(root).json;
-    require(bool(output),"pose driver base identity must be written");
+    // Synthetic installation without remaining-family inputs: a labelled empty manifest.
+    std::filesystem::create_directories(base/"sources");
+    std::ofstream output(base/"sources/sources.json",std::ios::binary);
+    output<<"{\"format\":\"gothic-sources\",\"version\":1,\"synthetic\":\"pose driver fixture without remaining-family inputs\"}\n";
+    require(bool(output),"pose driver source manifest must be written");
   }
+  BaseImport::writeBaseMetadata(base,BaseImport::identify(root));
   const auto* oldBase=std::getenv("OPENGOTHIC_BASE");
   const bool hadBase=oldBase!=nullptr;
   const std::string previousBase=hadBase ? oldBase : "";

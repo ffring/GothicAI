@@ -761,18 +761,23 @@ std::unique_ptr<zenkit::DaedalusVm> Gothic::createPhoenixVm(std::string_view dat
   }
 
 zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const ScriptLang lang) {
+  const auto request = datFile;
   if(Resources::hasFile(datFile)) {
-    auto buf = Resources::getFileBuffer(datFile);
+    Resources::CensusSource source;
+    auto buf = Resources::getFileBuffer(datFile,&source);
     zenkit::DaedalusScript script;
     script.load(buf.get());
+    Resources::censusSelected("Gothic::loadScript",request,int(lang),"vfs_find_request",source,*buf);
     return script;
     }
 
   const size_t segment = datFile.find_last_of("\\/");
   if(segment!=std::string::npos && Resources::hasFile(datFile.substr(segment+1))) {
-    auto buf = Resources::getFileBuffer(datFile.substr(segment+1));
+    Resources::CensusSource source;
+    auto buf = Resources::getFileBuffer(datFile.substr(segment+1),&source);
     zenkit::DaedalusScript script;
     script.load(buf.get());
+    Resources::censusSelected("Gothic::loadScript",request,int(lang),"vfs_find_basename",source,*buf);
     return script;
     }
 
@@ -782,9 +787,11 @@ zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const Script
 
   auto gscript = CommandLine::inst().scriptPath();
   auto path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
+  const char* branch = "host_ordinary";
   if(!FileUtil::exists(path) && int(lang)>=0) {
     gscript = CommandLine::inst().scriptPath(lang);
     path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
+    branch = "host_localized_full";
     }
   if(!FileUtil::exists(path) && int(lang)>=0) {
     datFile = datFile.substr(segment+1);
@@ -793,6 +800,7 @@ zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const Script
     str16[datFile.size()] = u'\0';
     gscript = CommandLine::inst().scriptPath(lang);
     path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
+    branch = "host_localized_basename";
     }
 
   auto buf = zenkit::Read::from(path);
@@ -800,6 +808,7 @@ zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const Script
     Resources::censusFile(path);
   zenkit::DaedalusScript script;
   script.load(buf.get());
+  Resources::censusSelected("Gothic::loadScript",request,int(lang),branch,path,*buf);
   return script;
   }
 
@@ -971,6 +980,7 @@ void Gothic::refreshPhysicsFlags() {
   }
 
 void Gothic::setupSettings() {
+  Resources::censusProfile(gameDatDef,ouDef,settingsGetI("GAME","language"));
   // settingsSetI/S/F emit onSettingsChanged synchronously. Publish before any
   // same-dispatch actor creation, prepare or input query can consume the change.
   refreshPhysicsFlags();

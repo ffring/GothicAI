@@ -19,6 +19,9 @@
 //   content-convert models|verify-models <gothic dir> <dir>
 //       Model, hierarchy, script, skeletal and morph animation records as
 //       lossless JSON + binary arrays, including loose _work sources.
+//   content-convert sources|verify-sources <gothic dir> <dir>
+//       sources.json: selected FNT/audio/BIK/music/DAT/OU inputs of the engine
+//       and server readers, their origin and SHA-256; no payload conversion.
 //   content-convert --self-test
 //       Round trips of synthetic meshes, world data and presets; no game files.
 //
@@ -211,6 +214,8 @@ int main(int argc, char** argv) {
       return BaseImport::convertMeshes(args[1],args[2],args[0]=="verify-meshes");
     if(args.size()==3 && (args[0]=="models" || args[0]=="verify-models"))
       return BaseImport::convertModels(args[1],args[2],args[0]=="verify-models");
+    if(args.size()==3 && (args[0]=="sources" || args[0]=="verify-sources"))
+      return BaseImport::convertSources(args[1],args[2],args[0]=="verify-sources");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
       return BaseImport::convertTextures(args[1],args[2],args[0]=="verify-textures");
     if((args.size()==4 || args.size()==5) && args[0]=="verify-world") {
@@ -219,6 +224,7 @@ int main(int argc, char** argv) {
     std::cerr << "usage: content-convert world|verify-world <gothic dir> <WORLD.ZEN> <dir> [override]\n"
                  "       content-convert textures|verify-textures|meshes|verify-meshes|zen|verify-zen <gothic dir> <dir>\n"
                  "       content-convert models|verify-models <gothic dir> <dir>\n"
+                 "       content-convert sources|verify-sources <gothic dir> <dir>\n"
                  "       content-convert base <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";
     return 2;

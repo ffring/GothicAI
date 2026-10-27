@@ -3,6 +3,7 @@
 #include "commandline.h"
 #include "gothic.h"
 #include "resources.h"
+#include "sha256.h"
 #include "worldbase.h"
 #include "world/world.h"
 #include "world/objects/interactive.h"
@@ -16,6 +17,7 @@
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -151,6 +153,103 @@ struct WorldDataContract {
         count+=file["opens"].GetUint64();
     return count;
     }
+  static void runtimeSources(const fs::path& census, const fs::path& gothicDir, Resources& resources, Gothic& gothic) {
+    require(Resources::writeCensus(),"cannot write runtime source census");
+    const auto doc=json(census);
+    const auto& profile=doc["active_profile"];
+    const auto language=gothic.settingsGetI("GAME","language");
+    require(std::string_view(profile["game"].GetString())==gothic.defaultGameDatFile() &&
+            std::string_view(profile["output_units"].GetString())==gothic.defaultOutputUnits() &&
+            profile["language"].GetInt()==language,"runtime census active profile differs from Gothic");
+    const auto& sources=doc["runtime_sources"];
+    require(std::string_view(sources["coverage"].GetString())=="observed_successful_parses" &&
+            !sources["complete_corpus"].GetBool(),"runtime census must distinguish observed parses from the declared corpus");
+    const auto& selections=sources["selections"];
+    const auto basename=[](const char* path) {
+      auto name=fs::path(path).filename().string();
+      for(auto& c:name) if(c>='a' && c<='z') c=char(c-'a'+'A');
+      return name;
+      };
+    std::map<std::pair<std::string,std::string>,uint64_t> selected,opened;
+    for(const auto& row:selections.GetArray())
+      ++selected[{basename(row["path"].GetString()),row["source"].GetString()}];
+    for(const auto& row:doc["files"].GetArray())
+      opened[{row["name"].GetString(),row["source"].GetString()}]+=row["opens"].GetUint64();
+    // Check before independent oracle reads add their own opens. Failed OU candidates
+    // can have opens without a successful selection and are intentionally not counted.
+    for(const auto& [key,count]:selected)
+      require(opened[key]==count,key.first+": runtime source hashing inflated original opens");
+    const auto relative=[](const fs::path& path) {
+      if(path.empty() || path.is_absolute()) return false;
+      for(const auto& part:path) if(part=="..") return false;
+      return true;
+      };
+    const auto checkBytes=[](zenkit::Read& reader, const rapidjson::Value& row) {
+      reader.seek(0,zenkit::Whence::END);
+      std::string bytes(reader.tell(),'\0');
+      reader.seek(0,zenkit::Whence::BEG);
+      require(reader.read(bytes.data(),bytes.size())==bytes.size(),"incomplete runtime source oracle read");
+      require(row["size"].GetUint64()==bytes.size() && row["sha256"].GetString()==Sha256::hash(bytes),
+              std::string(row["request"].GetString())+": runtime source identity differs from actual bytes");
+      };
+    std::vector<BaseImport::RuntimeArchive> archives;
+    bool game=false,ou=false;
+    for(const auto& row:selections.GetArray()) {
+      const std::string request=row["request"].GetString(),source=row["source"].GetString();
+      const fs::path path=row["path"].GetString();
+      require(source!="unknown" && path!="unknown" && relative(source) && relative(path),
+              request+": runtime source paths must be known and installation-relative");
+      if(std::string_view(row["consumer"].GetString())=="Gothic::loadScript") {
+        if(request==gothic.defaultGameDatFile()) game=true;
+        require(row["language"].GetInt()==(request==gothic.defaultGameDatFile() ? language : int(ScriptLang::NONE)),
+                request+": DAT census did not retain the language argument");
+        }
+      else {
+        require(std::string_view(row["consumer"].GetString())=="GameScript::loadDialogOU" &&
+                (request==std::string(gothic.defaultOutputUnits())+".BIN" || request==std::string(gothic.defaultOutputUnits())+".DAT") &&
+                row["language"].GetInt()==language,"OU census did not retain the successful request and language");
+        ou=true;
+        }
+      if(std::string_view(row["location"].GetString())=="vfs") {
+        const auto& vfs=Resources::vdfsIndex();
+        const auto* node=vfs.resolve(path.generic_string());
+        const auto branch=std::string_view(row["branch"].GetString());
+        require(branch=="vfs_find_request" || branch=="vfs_find_basename",request+": unexpected VFS branch");
+        const auto lookup=branch=="vfs_find_basename" ? fs::path(request).filename().string() : request;
+        require(node!=nullptr && node==vfs.find(lookup),request+": full VFS path does not identify the selected node");
+        auto reader=node->open_read();
+        checkBytes(*reader,row);
+        }
+      else {
+        require(std::string_view(row["location"].GetString())=="host" && path==source,
+                request+": host source must identify the chosen installation-relative path");
+        }
+      if(fs::path(source).has_parent_path()) {
+        auto reader=zenkit::Read::from(gothicDir/source);
+        require(reader!=nullptr,request+": provenance host file is missing");
+        checkBytes(*reader,row);
+        }
+      else {
+        if(archives.empty()) archives=BaseImport::runtimeArchives(gothicDir);
+        const auto found=std::find_if(archives.begin(),archives.end(),[&](const auto& archive) {
+          return archive.path.filename()==source;
+          });
+        require(found!=archives.end(),request+": provenance archive is not an installation source");
+        zenkit::Vfs archive;
+        archive.mount_disk(found->path);
+        const auto* node=archive.resolve(path.generic_string());
+        require(node!=nullptr,request+": selected virtual path is absent from the provenance archive");
+        auto reader=node->open_read();
+        checkBytes(*reader,row);
+        }
+      }
+    require(game && ou,"existing GameSession construction must observe the actual game DAT and successful OU");
+    for(const auto* name:{"Camera.dat","Fight.dat","Sfx.dat","Music.dat","ParticleFx.dat","VisualFx.dat"})
+      require(std::any_of(selections.Begin(),selections.End(),[&](const auto& row) {
+        return std::string_view(row["request"].GetString())==name;
+        }),std::string(name)+": existing global script construction must observe the definition DAT");
+    std::puts("Runtime census: active profile, DAT/OU selected nodes, source bytes and unchanged original-open counts verified");
+    }
   static void write(const fs::path& path, const rapidjson::Document& doc) {
     rapidjson::StringBuffer text; rapidjson::Writer<rapidjson::StringBuffer> writer(text); doc.Accept(writer);
     std::ofstream out(path); out << text.GetString(); require(bool(out),"cannot write "+path.string());
@@ -163,7 +262,7 @@ struct WorldDataContract {
     fs::copy(supplied,base,fs::copy_options::recursive);
     const auto reference=root/"archive-reference";
     fs::create_directory(reference);
-    for(const char* part:{"base.json","textures","meshes","zen"})
+    for(const char* part:{"base.json","textures","meshes","zen","sources"})
       fs::create_symlink(base/part,reference/part);
     setenv("OPENGOTHIC_CONTENT","",1); setenv("OPENGOTHIC_TEXTURES","",1);
     setenv("OPENGOTHIC_FRACTURE","",1); setenv("OPENGOTHIC_PHYSICS_THREADS","0",1);
@@ -216,6 +315,8 @@ struct WorldDataContract {
         gothic.setGame(std::make_unique<GameSession>(file));
         if(useBase)
           require(zenOpens(census)==before,file+": base GameSession opened ZEN");
+        if(name==worlds.front() && useBase)
+          runtimeSources(census,gothicDir,resources,gothic);
         const auto actual=snapshot(*gothic.world(),original);
         if(useBase) compare(expected,actual,file); else expected=actual;
         gothic.clearGame().reset();

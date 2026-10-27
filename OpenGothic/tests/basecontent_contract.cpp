@@ -1,6 +1,8 @@
 #include "asset/fromzenkit.h"
+#include "baseimport.h"
 #include "basemesh.h"
 #include "commandline.h"
+#include "contentcensus.h"
 #include "gltfmesh.h"
 #include "gothicglb.h"
 #include "graphics/mesh/submesh/packedmesh.h"
@@ -20,7 +22,9 @@
 #include <zenkit/Logger.hh>
 #include <zenkit/Texture.hh>
 #include <zenkit/addon/texcvt.hh>
+#include <Tempest/Dir>
 #include <Tempest/MemReader>
+#include <Tempest/File>
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 
@@ -32,9 +36,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 #include <type_traits>
 
 namespace fs = std::filesystem;
@@ -726,6 +732,34 @@ struct BaseContentContract {
     std::puts("Model census: each source opened once by the oracle; Resources selected each base record without original opens");
     }
 
+  static void censusSource(const fs::path& file) {
+    ContentCensus census(file.c_str());
+    const std::string_view bytes="abc";
+    auto reader=zenkit::Read::from(reinterpret_cast<const std::byte*>(bytes.data()),bytes.size());
+    reader->seek(1,zenkit::Whence::BEG);
+    census.profile("GAME.DAT","DIALOGUE",4);
+    census.selected("contract","GAME.DAT",4,"host_ordinary","host","_work/GAME.DAT","_work/GAME.DAT",*reader);
+    equal(reader->tell(),1u,"census must preserve parsed reader position");
+    equal(reader->read_char(),'b',"census must preserve the next parsed byte");
+    require(census.write(),"cannot write source census fixture");
+    const auto data=json(file);
+    require(data["files"].Empty() && data["replacements"].Empty() && data["base_misses"].Empty(),
+            "source observations must not add original opens, replacements or misses");
+    const auto& profile=data["active_profile"];
+    require(std::string_view(profile["game"].GetString())=="GAME.DAT" &&
+            std::string_view(profile["output_units"].GetString())=="DIALOGUE" && profile["language"].GetInt()==4,
+            "source census must retain the active profile and raw language");
+    const auto& sources=data["runtime_sources"];
+    require(std::string_view(sources["coverage"].GetString())=="observed_successful_parses" &&
+            !sources["complete_corpus"].GetBool(),"runtime source census must not claim a complete corpus");
+    equal(sources["selections"].Size(),1u,"source census selection count");
+    const auto& selected=sources["selections"][0];
+    equal(selected["size"].GetUint64(),3u,"source census size");
+    require(std::string_view(selected["sha256"].GetString())==
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "source census must hash the whole already-open stream");
+    }
+
   static Resources::TextureData decodeArchive(zenkit::Read& input, bool compiled, bool forceMips) {
     if(compiled) {
       zenkit::Texture tex;
@@ -884,7 +918,75 @@ struct BaseContentContract {
     std::puts("Model tag: BLATTCRAWLER.MSB bone and following animation match source; no parser errors");
     }
 
+  static void archiveOrder() {
+    struct LegacyArchive {
+      std::u16string path;
+      int64_t timestamp = -1;
+      uint16_t ordinal = 0;
+      bool mod = false;
+      uintmax_t size = 0;
+      };
+    std::vector<LegacyArchive> expected;
+    // Independent oracle: Resources::detectVdf/vdfTimestamp/loadVdfs before P10.
+    const auto timestamp = [](const std::u16string& path) {
+      uint32_t count=0, value=0;
+      char signature[16]={};
+      try {
+        Tempest::RFile file(path);
+        file.seek(256);
+        file.read(signature,sizeof(signature));
+        file.read(&count,sizeof(count));
+        file.seek(4);
+        file.read(&value,sizeof(value));
+        return int64_t(value);
+        }
+      catch(...) { return int64_t(-1); }
+      };
+    std::function<void(const std::u16string&)> scan;
+    scan = [&](const std::u16string& root) {
+      Tempest::Dir::scan(root,[&](const std::u16string& name, Tempest::Dir::FileType type) {
+        if(type==Tempest::Dir::FT_File) {
+          LegacyArchive archive;
+          archive.path = root+name;
+          archive.timestamp = timestamp(archive.path);
+          archive.ordinal = uint16_t(expected.size());
+          archive.mod = name.rfind(u".mod")==name.size()-4;
+          archive.size = fs::file_size(archive.path);
+          if(archive.size>0)
+            expected.push_back(std::move(archive));
+          return;
+          }
+        if(name.find(u".NX.")!=std::u16string::npos)
+          return;
+        if(type==Tempest::Dir::FT_Dir && name!=u".." && name!=u".")
+          scan(root+name+u"/");
+        });
+      };
+    scan(CommandLine::inst().nestedPath({u"Data"},Tempest::Dir::FT_Dir));
+    std::stable_sort(expected.begin(),expected.end(),[](const LegacyArchive& a, const LegacyArchive& b) {
+      return std::make_tuple(a.mod ? 1 : -1,a.timestamp,int(a.ordinal)) >
+             std::make_tuple(b.mod ? 1 : -1,b.timestamp,int(b.ordinal));
+      });
+    const auto actual = BaseImport::runtimeArchives(fs::path(CommandLine::inst().rootPath()));
+    equal(actual.size(),expected.size(),"legacy archive scan count");
+    for(size_t i=0; i<expected.size(); ++i) {
+      const auto path = fs::absolute(fs::path(expected[i].path)).lexically_normal();
+      const auto field = "archive order["+std::to_string(i)+"] "+path.filename().string();
+      require(fs::absolute(actual[i].path).lexically_normal()==path,field+": path differs from legacy scan");
+      auto name = path.filename().string();
+      for(auto& c:name)
+        c = char(std::toupper(static_cast<unsigned char>(c)));
+      require(actual[i].name==name,field+": uppercase name differs");
+      equal(actual[i].size,expected[i].size,field+" size");
+      equal(actual[i].timestamp,expected[i].timestamp,field+" timestamp");
+      equal(actual[i].mod,expected[i].mod,field+" mod flag");
+      }
+    std::printf("Archive order: %zu entries equal to independent legacy scan, including mods\n",expected.size());
+    }
+
   static void run(const fs::path& base, const fs::path& temporary) {
+    archiveOrder();
+    censusSource(temporary/"source-census.json");
     setenv("OPENGOTHIC_CONTENT","",1);
     setenv("OPENGOTHIC_TEXTURES","",1);
     const auto censusPath=temporary/"census.json";
@@ -976,7 +1078,7 @@ struct BaseContentContract {
     const auto incomplete=temporary/"missing-model-index";
     fs::create_directories(incomplete/"models");
     fs::copy_file(base/"base.json",incomplete/"base.json");
-    for(const auto* kind:{"textures","meshes","zen"})
+    for(const auto* kind:{"textures","meshes","zen","sources"})
       fs::create_directory_symlink(base/kind,incomplete/kind);
     setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
     std::string missingModelIndexError;
