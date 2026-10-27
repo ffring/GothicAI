@@ -108,7 +108,7 @@ class TtsSettings(_Section):
         True, title="Оригинальные голоса", description="Клоны оригинальных голосов сюжетных NPC в Inworld"
     )
     provider: str = Field("inworld", title="Голоса", description="inworld, voxcpm или openai:…")
-    fallback: str = Field("voxcpm", title="Запасные голоса", description="none: без запасного")
+    fallback: str = Field("none", title="Запасные голоса", description="none: без запасного")
     voxcpm_url: str | None = Field(None, title="Адрес VoxCPM2")
     loudness: float | Literal["none"] | None = Field(
         None,
