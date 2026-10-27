@@ -26,4 +26,7 @@ struct Selection {
 // Empty has the same meaning as unset: automatic resolution.
 Selection resolve(const std::filesystem::path& gothic, const BaseImport::Files& mounted,
                   const BaseImport::Progress& log);
+// P17: the independently fingerprinted video part. OPENGOTHIC_BASE does not
+// select this part; its cache and store are below the normal cache/store roots.
+Selection resolveVideos(const std::filesystem::path& gothic, const BaseImport::Progress& log);
 }

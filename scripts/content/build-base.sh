@@ -18,4 +18,6 @@ cmake --build "$BUILD" --parallel 4 >/dev/null
 tool="$BUILD/content-convert"
 "$tool" --self-test
 "$tool" base "$GOTHIC_DIR" "$OUT"
-du -sh "$OUT"
+# The independent video part is a sibling, never included in base.json or its fingerprint.
+"$tool" videos "$GOTHIC_DIR" "${OUT}-videos"
+du -sh "$OUT" "${OUT}-videos"
