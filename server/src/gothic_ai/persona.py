@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
@@ -17,7 +18,7 @@ from typing import TYPE_CHECKING
 from . import characters
 from .brain.day import Habit
 from .characters import Card
-from .gamedata.ou import load_npc_lines, voice_index
+from .gamedata.ou import game_lines, npc_lines, voice_index
 from .protocol import Mood
 
 if TYPE_CHECKING:
@@ -230,6 +231,24 @@ class PersonaProvider:
         self.game_dir = game_dir
         self.cards = characters.load() if cards is None else cards  # gamedata/characters.json
         self.people = people  # the director's characters on this branch (cast.py), by id
+        self._lines: dict[str, str] | None = None  # the game's dialog lines, read once (gamedata/ou.py)
+        self._lines_read = False
+        self._lines_lock = threading.Lock()
+
+    def warm(self) -> None:
+        """Read the game's lines ahead, in a thread of its own (cli.py): reading takes seconds, and the first
+        npc's persona would stall the event loop for them."""
+        try:
+            self._game_lines()
+        except RuntimeError as error:
+            log.warning("original lines are not read ahead: %s", error)
+
+    def _game_lines(self) -> dict[str, str] | None:
+        with self._lines_lock:
+            if not self._lines_read and self.game_dir is not None:
+                self._lines = game_lines(self.game_dir)
+                self._lines_read = True
+            return self._lines
 
     def get(self, npc: str, name: str) -> Persona:
         npc = npc.upper()
@@ -301,7 +320,7 @@ class PersonaProvider:
         game."""
         if self.game_dir is None:
             return (), None
-        lines = load_npc_lines(self.game_dir, npc)
+        lines = npc_lines(self._game_lines() or {}, npc)
         samples = tuple(pick_samples([text for _, text in lines]))
         index = voice_index(lines)
         log.info("persona %s: %d original lines, %d samples, voice %s", npc, len(lines), len(samples), index)
