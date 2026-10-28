@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
+from .. import feat_art
 from ..chronicle import Fact
 from ..feats import CATEGORIES, WRITE, Feats
 from ..game import GameError, GameLink
@@ -13,6 +15,11 @@ from ..llm import ToolCall
 from ..llm.fake import FakeBackend
 from ..protocol import FeatToastCmd, Session
 from .common import _logged, _save_or_fail, _until, wait_message
+
+
+class ScenarioArtist(feat_art.Artist):
+    async def _generate(self, tmp: Path, emblem: str) -> Path | None:
+        return feat_art.KIT / "anchors/chest.jpg"
 
 
 async def feats(link: GameLink, chronicler: Feats, journal: Journal, slot: int = 8) -> dict[str, str]:
@@ -24,6 +31,8 @@ async def feats(link: GameLink, chronicler: Feats, journal: Journal, slot: int =
         return ok
 
     if not check("fake_model", chronicler.model.llm.name == "fake", "requires LLM=fake"):
+        return _logged(results)
+    if not check("fake_artist", isinstance(chronicler.artist, ScenarioArtist), "requires scenario artist"):
         return _logged(results)
 
     chronicle = chronicler.chronicle
@@ -86,15 +95,29 @@ async def feats(link: GameLink, chronicler: Feats, journal: Journal, slot: int =
             and award.get("category") in CATEGORIES,
             f"trigger={trigger}, evidence={award.get('evidence')}, category={award.get('category')}",
         )
-        await _until(lambda: any(toast.feat == award["id"] for toast in toasts), 5)
+        await _until(lambda: any(toast.feat == award["id"] for toast in toasts), 30)
+        image_dir = chronicler.artist.root / award["id"]
+        icon = image_dir / "icon.png"
         check(
-            "toast", any(toast.feat == award["id"] and toast.icon for toast in toasts),
+            "toast", any(toast.feat == award["id"] and toast.icon == str(icon) for toast in toasts),
             f"feat={award['id']}, icons={[toast.icon for toast in toasts]}",
+        )
+        check("image_file", icon.is_file(), str(icon))
+        check(
+            "feat_image", any(fact.get("id") == award["id"] and fact.get("hash")
+                              and fact.get("style") == feat_art.STYLE_VERSION
+                              for fact in chronicle.facts("feat_image")),
+            f"feat={award['id']}, images={chronicle.facts('feat_image')}",
         )
         check(
             "journal", any(entry.get("kind") == "feat" and entry.get("id") == award["id"]
                            and entry.get("category") == award["category"] for entry in entries),
             f"feat={award['id']}",
+        )
+        check(
+            "image_journal", any(entry.get("kind") == "feat_image" and entry.get("id") == award["id"]
+                                 and entry.get("dir") == str(image_dir) for entry in entries),
+            f"feat={award['id']}, dir={image_dir}",
         )
         check("model_call", len(backend.calls) == 1, f"calls={len(backend.calls)}")
 
@@ -109,6 +132,9 @@ async def feats(link: GameLink, chronicler: Feats, journal: Journal, slot: int =
             f"branch={session.branch}, parent={session.parent}, parent_seq={session.parent_seq}, "
             f"feats={len(chronicler.feats)}",
         )
+        check("image_rollback", not chronicle.facts("feat_image"),
+              f"images={chronicle.facts('feat_image')}")
+        check("image_retained", image_dir.is_dir() and icon.is_file(), str(image_dir))
         return _logged(results)
     except (GameError, TimeoutError, RuntimeError) as error:
         check("error", False, str(error) or type(error).__name__)
