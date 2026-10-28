@@ -217,6 +217,8 @@
 | `launcher/` | `core/` поднимает сервисы и игру одной командой; `app/` — окно (Tauri, Svelte); на Ryzen — значок GNOME с Ptyxis | ядро — Mac и Linux, приложение — Mac | `up --continue`, временные `--no-voice` и `--smoke`; [Ryzen](launcher.md#ryzen-linux) |
 | `libs/chatgpt-auth/` | вход через ChatGPT (OAuth PKCE), общее хранилище токенов | Mac или Ryzen, отдельный вход на каждой машине | — |
 
+Рядом с `body-service/` находятся [`scripts/body_net.py`](../scripts/body_net.py) (`export`, `golden`, `check`) и [`scripts/body_net_numpy.py`](../scripts/body_net_numpy.py): выгрузка актёра P30 в `.bodynet`, золотые решения Torch и NumPy-эталон для будущей проверки C++ в движке. Это только инструмент, в игре не используется; [формат и команды](../body-service/README.md#bodynet-export-and-numpy-reference).
+
 Настройки сервисов — `.env` по образцу [`.env.example`](../.env.example). Развёртывание GPU-сервисов — `scripts/deploy-gpu.sh`.
 
 Оригинальные голоса TTS: `gothic-tts serve --game-dir DIR` через модуль [`gothic_tts.originals`](../tts-service/src/gothic_tts/originals.py) сам в фоне режет 36 снапшотов игры без ffmpeg и заранее готовит клоны Inworld; до готовности звучат придуманные голоса. Снапшоты остаются у игрока в `~/.local/share/gothic-ai/voices/original/`, повторная нарезка нужна только при смене отпечатка источника или алгоритма. Ручные [`voice_snapshots.py`](../tts-service/scripts/voice_snapshots.py) и `gothic-tts clone-originals [--dir DIR] [ID ...]` сохранены. Сервис принимает `--original-voices-dir DIR` и `--no-original-voices`; лаунчер — `tts.original_voices` (по умолчанию `true`), шортсы выключают всю подготовку. [Текущее поведение и команды](MVP.md#как-работает-сейчас).
