@@ -4645,6 +4645,10 @@ bool Npc::tickMeleePosture(uint64_t dt) {
     // until the existing get-up transition accepts it, then let it finish.
     if(meleeRiseTick==0 && setAnim(Anim::Idle))
       meleeRiseTick = now;
+    // Wounded-to-stand has no successor. Ordinary NPC ticking resumes Idle
+    // after that transition ends; this isolated live fall must do the same.
+    if(meleeRiseTick!=0 && !visual.pose().hasAnim())
+      setAnim(Anim::Idle);
     if(visual.pose().isStanding() || !enabled || now-meleeFallTick+dt>=4000) {
       const bool forced = !visual.pose().isStanding();
       if(forced) {
