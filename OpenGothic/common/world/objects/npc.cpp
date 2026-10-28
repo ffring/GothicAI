@@ -505,6 +505,7 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
   meleeKnockdown = false;
   meleeGetupForced = false;
   meleeFallTick = meleeRiseTick = 0;
+  meleeSlowSince = 0;
   releaseRagdoll(false);
   ragdollDormant.reset();
   ragdollRecovering = false;
@@ -910,6 +911,7 @@ void Npc::resetNavigationEpisode() {
   meleeKnockdown = false;
   meleeGetupForced = false;
   meleeFallTick = meleeRiseTick = 0;
+  meleeSlowSince = 0;
   ragdollLastVelocity = {};
   ragdollQuestReturn = {};
   ragdollQuestSpellThrow = false;
@@ -1001,6 +1003,7 @@ bool Npc::checkHealth(bool onChange, bool allowUnconscious) {
 
 void Npc::onNoHealth(bool death, HitSound sndMask) {
   meleeKnockdown = false;
+  meleeSlowSince = 0;
   meleePosture.reset();
   living.reset();
   ragdollQuestSpellThrow = false;
@@ -4603,6 +4606,7 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
       meleeFallTick = owner.tickCount();
       meleeRiseTick = 0;
       meleeGetupForced = false;
+      meleeSlowSince = 0;
       meleeReturnCount = ragdollQuestReturns;
       ragdoll->addImpulse(impulse,&attacker);
       fghAlgo.onTakeHit();
@@ -4641,8 +4645,24 @@ bool Npc::tickMeleePosture(uint64_t dt) {
   if(ragdoll && (now-meleeFallTick>=1200 || !enabled)) {
     // Use the same settled-body gate as KO, with a deadline for starting
     // the authored get-up rather than a deadline for finishing it.
-    if(!recoverRagdoll() && (now-meleeFallTick>=3000 || !enabled))
-      meleeGetupForced = recoverRagdoll(true) && enabled;
+    if(!recoverRagdoll()) {
+      bool rested = false;
+      if(enabled) {
+        // The live fall can recover before native sleep: require every part
+        // below 20 cm/s and 0.5 rad/s continuously for 300 ms.
+        const auto state = ragdoll->state();
+        const bool slow = std::all_of(state.parts.begin(),state.parts.end(),[](const auto& part) {
+          return part.linearVelocityMeters.quadLength()<=.04f && part.angularVelocity.quadLength()<=.25f;
+          });
+        if(!slow)
+          meleeSlowSince = 0;
+        else if(meleeSlowSince==0)
+          meleeSlowSince = now;
+        rested = meleeSlowSince!=0 && now-meleeSlowSince>=300;
+        }
+      if(rested || now-meleeFallTick>=3000 || !enabled)
+        meleeGetupForced = recoverRagdoll(true) && enabled && !rested;
+      }
     }
   if(!ragdoll) {
     // The wounded loop may reject Idle on its very first frame. Retry only
@@ -4666,10 +4686,11 @@ bool Npc::tickMeleePosture(uint64_t dt) {
       meleeKnockdown = false;
       ragdollRecovering = false;
       meleePosture.recover(now);
-      writeMeleePosture("{\"event\":\"recover\",\"tick_ms\":"+std::to_string(now)+
+      writeMeleePosture("{\"event\":"+TestBench::bodyJson(enabled ? "recover" : "cancel")+",\"tick_ms\":"+std::to_string(now)+
                        ",\"target\":"+meleeShadowWho(this)+",\"fall_ms\":"+std::to_string(meleeFallTick)+
                        ",\"getup_ms\":"+std::to_string(meleeRiseTick)+",\"rise_ms\":"+std::to_string(now)+
-                       ",\"getup_duration_ms\":"+std::to_string(now-meleeRiseTick)+
+                       (enabled && meleeRiseTick!=0 ? ",\"getup_duration_ms\":"+std::to_string(now-meleeRiseTick) : "")+
+                       (!enabled ? ",\"reason\":\"feature_disabled\"" : "")+
                        ",\"returned\":"+(ragdollQuestReturns!=meleeReturnCount ? "true" : "false")+"}");
       if(!enabled)
         meleePosture.reset();

@@ -948,6 +948,7 @@ class Npc final {
     bool                          meleeKnockdown = false;
     bool                          meleeGetupForced = false;
     uint64_t                      meleeFallTick = 0, meleeRiseTick = 0;
+    uint64_t                      meleeSlowSince = 0;
     uint32_t                      meleeReturnCount = 0;
     Tempest::Vec3                 meleeSavePosition;
     RagdollSave::QuestReturn       ragdollQuestReturn;
