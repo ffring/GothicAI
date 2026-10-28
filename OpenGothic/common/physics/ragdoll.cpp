@@ -876,11 +876,21 @@ struct Ragdoll::Impl final {
   // A body that dies keeps its living shape for a moment and loses it part by
   // part: the legs give first, then the arms, the trunk and the neck last.
   // The motors hold the joint angles of the moment of death, never a new pose.
-  static void fadeTiming(std::string_view name, float& hold, float& fade) {
-    if(named(name,"THIGH") || named(name,"CALF") || named(name,"FOOT") || named(name,"TOE") || named(name,"LEG")) { hold=0.f; fade=.15f; }
-    else if(named(name,"SPINE")) { hold=.1f; fade=.6f; }
+  // Knocked off the feet, the legs keep their stance while the trunk tips over them
+  // and give on the way down, and the trunk stays whole longer: a fall, not a faint.
+  static void fadeTiming(std::string_view name, bool knockedOff, float& hold, float& fade) {
+    if(named(name,"THIGH") || named(name,"CALF") || named(name,"FOOT") || named(name,"TOE") || named(name,"LEG")) {
+      hold=knockedOff ? .12f : 0.f; fade=knockedOff ? .5f : .15f;
+      }
+    else if(named(name,"SPINE")) { hold=knockedOff ? .25f : .1f; fade=knockedOff ? .8f : .6f; }
     else if(named(name,"NECK") || named(name,"HEAD")) { hold=.15f; fade=.7f; }
     else { hold=.05f; fade=.45f; }
+    }
+
+  static float fadeStrength(std::string_view name) {
+    if(named(name,"THIGH") || named(name,"CALF") || named(name,"FOOT") || named(name,"TOE") || named(name,"LEG")) return 4.f;
+    if(named(name,"SPINE")) return 2.f;
+    return 1.f;
     }
 
   void startFade(JPH::PhysicsSystem& system) {
@@ -903,7 +913,9 @@ struct Ragdoll::Impl final {
       if(index<0 || parent<0) continue;
       auto* joint=static_cast<JPH::SwingTwistConstraint*>(native->GetConstraint(index));
       float hold=0,fade=1;
-      fadeTiming(rig->parts[i].name,hold,fade);
+      fadeTiming(rig->parts[i].name,knockedOff,hold,fade);
+      // a living stance carries the body: thrown, the legs bear it while the trunk tips
+      const float strength=knockedOff ? fadeStrength(rig->parts[i].name) : 1.f;
       const float t=std::clamp((fadeAge-hold)/fade,0.f,1.f);
       const float weight=1.f-t*t*(3.f-2.f*t);
       if(weight<=0.f) {
@@ -917,7 +929,7 @@ struct Ragdoll::Impl final {
       const float partMass=settings->mParts[i].mMassPropertiesOverride.mMass;
       for(auto* motor:{&joint->GetSwingMotorSettings(),&joint->GetTwistMotorSettings()}) {
         motor->mSpringSettings=JPH::SpringSettings(JPH::ESpringMode::FrequencyAndDamping,6.f,1.f);
-        motor->SetTorqueLimit(partMass*8.f*weight);
+        motor->SetTorqueLimit(partMass*8.f*weight*strength);
         }
       joint->SetSwingMotorState(JPH::EMotorState::Position);
       joint->SetTwistMotorState(JPH::EMotorState::Position);
@@ -960,6 +972,7 @@ struct Ragdoll::Impl final {
   std::vector<size_t> reactionBones;
   float reactionStrength=0.f,reactionWeight=0.f,reactionAge=0.f,reactionStiffness=1.f,stepSeconds=0.f;
   float fadeAge=-1.f;
+  bool  knockedOff=false;
   std::vector<JPH::Quat> fadeTargets;
   std::vector<JPH::Mat44> targets, scratch;
   std::vector<bool> dirty;
@@ -1595,6 +1608,31 @@ void Ragdoll::addImpulse(const Tempest::Vec3& impulse, Npc* culprit) {
     const auto* settings=impl->native->GetRagdollSettings();
     const float ratio=settings->mParts[i].mMassPropertiesOverride.mMass/mass();
     interface.AddImpulse(impl->native->GetBodyID(int(i)),JPH::Vec3(impulse.x,impulse.y,impulse.z)*ratio);
+    }
+  }
+
+void Ragdoll::knockOff(const Tempest::Vec3& direction, float impulseNs, Npc* culprit) {
+  if(!valid() || impl->kinematic || !finite(direction) || !std::isfinite(impulseNs)) return;
+  Tempest::Vec3 d(direction.x,0.f,direction.z);
+  if(d.length()<1e-3f) return;
+  d=Tempest::Vec3::normalize(d);
+  setNoiseCulprit(culprit);
+  impl->knockedOff=true;
+  // The blow alone moves 75 kg by under a metre a second; a man thrown down moves
+  // his trunk at about two. The heavier the blow, the harder he goes down.
+  const float speed=std::clamp(1.4f+1.2f*impulseNs/60.f,1.4f,2.6f);
+  auto& interface=impl->world->physicsSystem().GetBodyInterface();
+  const auto* settings=impl->native->GetRagdollSettings();
+  for(size_t i=0;i<partCount();++i) {
+    const auto& name=impl->rig->parts[i].name;
+    float share=1.f;
+    if(named(name,"THIGH") || named(name,"CALF") || named(name,"FOOT") || named(name,"TOE") || named(name,"LEG"))
+      share=0.f; else
+    if(named(name,"PELVIS"))
+      share=.4f;
+    if(share<=0.f) continue;
+    const float partMass=settings->mParts[i].mMassPropertiesOverride.mMass;
+    interface.AddImpulse(impl->native->GetBodyID(int(i)),JPH::Vec3(d.x,0.f,d.z)*(speed*share*partMass));
     }
   }
 

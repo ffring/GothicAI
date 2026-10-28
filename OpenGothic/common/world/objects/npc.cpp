@@ -4636,7 +4636,13 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
       meleeGetupForced = false;
       meleeSlowSince = 0;
       meleeReturnCount = ragdollQuestReturns;
-      ragdoll->addImpulse(impulse,&attacker);
+      // thrown along the blade's sweep and away from the one who struck: a chop from
+      // above has little sweep left over the ground, the step behind it still pushes
+      Vec3 away = position()-attacker.position();
+      away.y = 0;
+      if(away.length()>1e-3f)
+        away = Vec3::normalize(away)*(impulse.length()*.5f);
+      ragdoll->knockOff(Vec3(impulse.x,0,impulse.z)+away,impulse.length(),&attacker);
       fghAlgo.onTakeHit();
       clearSpeed();
       writeMeleePosture("{\"event\":\"knockdown_health\",\"tick_ms\":"+std::to_string(meleeFallTick)+

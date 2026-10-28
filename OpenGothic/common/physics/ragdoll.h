@@ -115,6 +115,9 @@ class Ragdoll final {
     void setAllowSleeping(bool allow);
     // Total impulse, distributed by mass over the parts (newton seconds).
     void addImpulse(const Tempest::Vec3& impulse, Npc* culprit = nullptr);
+    // A living body knocked off its feet: the trunk is thrown along the blow while the
+    // feet stay, so it topples over them; the legs hold a moment longer than in death.
+    void knockOff(const Tempest::Vec3& direction, float impulseNs, Npc* culprit = nullptr);
     State state() const;
     // Rejects incompatible, nonfinite or malformed states without changing bodies.
     bool restore(const State& state);
