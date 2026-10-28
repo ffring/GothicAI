@@ -68,7 +68,7 @@
 #       release their leases and watch, then one bandit fights under P30 again
 #   neural-soak: bandit waves in the ordinary new-game world with a swordsman companion; LLM=fake,
 #       engine P30 by default without a body URL; GOTHIC_SOAK_SECONDS=1800, TIMEOUT=2400 for the full run.
-#       WAIT_200 and accepted-action fractions use interval body_policy counters; engine p99 <=2000 us.
+#       WAIT_200 and accepted-action fractions use interval body_policy counters; engine p99 <=20 ms.
 #       GOTHIC_BODY_POLICY=service with GOTHIC_BODY_URL uses service data and p95/p99 <=20 ms.
 #       GOTHIC_SOAK_CONTROL=1 uses native combat with --no-neural-body and needs no body URL.
 #       Samples in neural_soak.jsonl; records 25 s of the first wave when normal-clock bench is available

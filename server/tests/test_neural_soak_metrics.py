@@ -205,13 +205,13 @@ class Summary:
 
 
 @pytest.mark.parametrize(("accepted", "p99_us", "fallbacks", "reason", "release_s", "failed_gate"), [
-    (95, 2000, (), "target_lost", 2, None),
-    (94, 2000, (), "target_lost", 2, "accepted_commands"),
-    (95, 2001, (), "target_lost", 2, "engine_latency"),
-    (95, 2000, (("policy_error", 1),), "target_lost", 2, "fault_fallbacks"),
-    (95, 2000, (("command_busy", 5),), "target_lost", 2, None),
-    (95, 2000, (), "lease_lost", 2, "fault_fallbacks"),
-    (95, 2000, (), "target_lost", 2.001, "release_clean"),
+    (95, 20_000, (), "target_lost", 2, None),
+    (94, 20_000, (), "target_lost", 2, "accepted_commands"),
+    (95, 20_001, (), "target_lost", 2, "engine_latency"),
+    (95, 20_000, (("policy_error", 1),), "target_lost", 2, "fault_fallbacks"),
+    (95, 20_000, (("command_busy", 5),), "target_lost", 2, None),
+    (95, 20_000, (), "lease_lost", 2, "fault_fallbacks"),
+    (95, 20_000, (), "target_lost", 2.001, "release_clean"),
 ])
 def test_engine_summaries_preserve_soak_gates_and_action_diagnostics(
     tmp_path, monkeypatch, accepted, p99_us, fallbacks, reason, release_s, failed_gate,

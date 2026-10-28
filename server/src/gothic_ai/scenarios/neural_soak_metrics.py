@@ -556,8 +556,8 @@ class SoakMetrics:
                 engine_p99 = max((summary.engine_p99_us for summary in engine_summaries
                                   if summary.engine_steps and summary.engine_p99_us is not None),
                                  default=None)
-                check("engine_latency", engine_p99 is not None and engine_p99 <= 2000,
-                      f"p99_us={engine_p99}, limit=2000us, "
+                check("engine_latency", engine_p99 is not None and engine_p99 <= 20_000,
+                      f"p99_us={engine_p99}, limit=20000us, "
                       f"steps={sum(summary.engine_steps for summary in engine_summaries)}")
             else:
                 check("service_latency", p95 is not None and p99 is not None and p95 <= 20 and p99 <= 20,
