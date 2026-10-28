@@ -641,6 +641,63 @@ void snapshotSelection(const fs::path& gothic, const fs::path& root, const fs::p
   BaseImport::Files mounted;
   for(const auto& archive:BaseImport::runtimeArchives(game))
     if(!archive.mod) mounted.emplace_back(archive.name,archive.size);
+  // A cold video import must not hold the lock needed to select a ready main base.
+  {
+    const auto coldCache=root/"cold-cache", coldBase=coldCache/mainIdentity.fingerprint;
+    fs::create_directories(coldCache);
+    fs::copy(mainBase,coldBase,fs::copy_options::recursive);
+    Environment coldEnvironment("OPENGOTHIC_BASE_CACHE",coldCache);
+    require(BaseStore::resolve(game,mounted,[](std::string_view) {}).path==coldBase,
+            "cold video fixture did not prime the ready main pointer");
+    int importing[2], release[2];
+    require(pipe(importing)==0 && pipe(release)==0,"cold video import pipes failed");
+    std::cout.flush(); std::cerr.flush();
+    const auto video=fork(); require(video>=0,"cold video import fork failed");
+    if(video==0) {
+      close(importing[0]); close(release[1]); alarm(30);
+      try {
+        (void)BaseStore::resolveVideos(game,[&](std::string_view message) {
+          if(message!="video base: importing installation") return;
+          require(::write(importing[1],"x",1)==1,"cold video import signal failed");
+          char token=0;
+          require(::read(release[0],&token,1)==1,"cold video import gate failed");
+          throw std::runtime_error("cold video import gate released");
+          });
+        }
+      catch(const std::exception& error) {
+        _exit(std::string_view(error.what())=="cold video import gate released" ? 0 : 1);
+        }
+      _exit(2);
+      }
+    close(importing[1]); close(release[0]);
+    char token=0;
+    const bool started=::read(importing[0],&token,1)==1;
+    close(importing[0]);
+    pid_t main=-1;
+    int mainStatus=0;
+    bool mainCompleted=false;
+    if(started) {
+      main=fork();
+      if(main==0) {
+        close(release[1]); alarm(5);
+        try {
+          auto selected=BaseStore::resolve(game,mounted,[](std::string_view) {});
+          _exit(selected.path==coldBase ? 0 : 1);
+          }
+        catch(...) { _exit(1); }
+        }
+      if(main>0) mainCompleted=waitpid(main,&mainStatus,0)==main;
+      require(::write(release[1],"x",1)==1,"cold video import release failed");
+      }
+    close(release[1]);
+    int videoStatus=0;
+    const bool videoCompleted=waitpid(video,&videoStatus,0)==video;
+    require(started && mainCompleted && WIFEXITED(mainStatus) && WEXITSTATUS(mainStatus)==0,
+            "ready main base selection waited for the cold video import");
+    require(videoCompleted && WIFEXITED(videoStatus) && WEXITSTATUS(videoStatus)==0,
+            "cold video import did not stop at its gate");
+    std::cout << "cold video import: ready main base selected before import gate release\n";
+  }
   int gate[2]; require(pipe(gate)==0,"combined pointer gate failed");
   std::cout.flush(); std::cerr.flush();
   pid_t children[2];

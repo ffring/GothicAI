@@ -75,7 +75,7 @@ fs::path cacheRoot() {
   if(const auto* env=std::getenv("OPENGOTHIC_BASE_CACHE")) cache=env;
   else if(const auto* home=std::getenv("HOME")) cache=fs::path(home)/".cache/gothic-ai/base";
   if(cache.empty()) throw std::runtime_error("base cache path is empty");
-  return fs::absolute(cache).lexically_normal();
+  return fs::weakly_canonical(fs::absolute(cache));
   }
 
 bool hasInstallation(const fs::path& gothic) {
@@ -86,20 +86,15 @@ bool hasInstallation(const fs::path& gothic) {
     });
   }
 
-// Both parts update this document under the root cache lock, preserving the other part.
+// Only pointer I/O holds this lock; imports keep their independent cache locks.
 class Current {
   public:
-    Current(const fs::path& cache, const fs::path& gothic):gothic(fs::weakly_canonical(gothic).generic_string()) {
+    Current(const fs::path& cache, const fs::path& gothic, const std::atomic_bool* cancelled=nullptr)
+      :gothic(fs::weakly_canonical(gothic).generic_string()),cancelled(cancelled) {
       file=cache/"current"/(BaseImport::sha256(this->gothic)+".json");
-      std::ifstream input(file,std::ios::binary);
-      const std::string bytes{std::istreambuf_iterator<char>(input),{}};
-      json.Parse(bytes.c_str());
-      if(json.HasParseError() || !json.IsObject() || !json.HasMember("version") || json["version"]!=1 ||
-         !json.HasMember("gothic") || !json["gothic"].IsString() || json["gothic"].GetString()!=this->gothic) {
-        json.SetObject();
-        json.AddMember("version",1,json.GetAllocator());
-        json.AddMember("gothic",string(this->gothic),json.GetAllocator());
-        }
+      fs::create_directories(file.parent_path());
+      Lock lock(file.parent_path()/".lock",Lock::Exclusive,cancelled);
+      read();
       }
 
     template<class Identity>
@@ -117,6 +112,9 @@ class Current {
 
     template<class Identity>
     void save(const char* name, const fs::path& path, const Identity& identity, const std::string& snapshot) {
+      Lock lock(file.parent_path()/".lock",Lock::Exclusive,cancelled);
+      // The other part may have finished its selection since this object was read.
+      read();
       std::string savedSnapshot=snapshot;
       if(snapshot.empty() && json.HasMember(name) && json[name].IsObject()) {
         const auto& previous=json[name];
@@ -136,7 +134,6 @@ class Current {
       rapidjson::StringBuffer bytes;
       rapidjson::Writer<rapidjson::StringBuffer> writer(bytes);
       json.Accept(writer);
-      fs::create_directories(file.parent_path());
       const fs::path temporary=file.string()+".tmp-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
       try {
         std::ofstream output(temporary,std::ios::binary|std::ios::trunc);
@@ -148,12 +145,24 @@ class Current {
       catch(...) { std::error_code error; fs::remove(temporary,error); throw; }
       }
   private:
+    void read() {
+      std::ifstream input(file,std::ios::binary);
+      const std::string bytes{std::istreambuf_iterator<char>(input),{}};
+      json.Parse(bytes.c_str());
+      if(json.HasParseError() || !json.IsObject() || !json.HasMember("version") || json["version"]!=1 ||
+         !json.HasMember("gothic") || !json["gothic"].IsString() || json["gothic"].GetString()!=gothic) {
+        json.SetObject();
+        json.AddMember("version",1,json.GetAllocator());
+        json.AddMember("gothic",string(gothic),json.GetAllocator());
+        }
+      }
     rapidjson::Value string(const std::string& text) {
       return rapidjson::Value(text.data(),rapidjson::SizeType(text.size()),json.GetAllocator());
       }
     std::string gothic;
     fs::path file;
     rapidjson::Document json;
+    const std::atomic_bool* cancelled;
   };
 
 std::runtime_error missingBase(const fs::path& gothic, const std::string& reason={}) {
@@ -308,8 +317,12 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   const auto start=std::chrono::steady_clock::now();
   const auto cache=cacheRoot();
   fs::create_directories(cache);
-  Lock cacheLock(cache/".lock");
-  removeInterrupted(cache);
+  const auto* explicitBase=std::getenv("OPENGOTHIC_BASE");
+  std::unique_ptr<Lock> cacheLock;
+  if(!explicitBase || !*explicitBase) {
+    cacheLock=std::make_unique<Lock>(cache/".lock");
+    removeInterrupted(cache);
+    }
   Current current(cache,gothic);
   const bool installed=hasInstallation(gothic);
   const auto snapshot=installed ? BaseImport::snapshot(gothic,mounted) : std::string();
@@ -320,7 +333,7 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     log("base: identifying installation");
     return BaseImport::identify(gothic,mounted);
     };
-  if(const auto* explicitBase=std::getenv("OPENGOTHIC_BASE"); explicitBase && *explicitBase) {
+  if(explicitBase && *explicitBase) {
     if(installed && reused) {
       rapidjson::Document previous, selected;
       previous.Parse(identity.json.c_str());
@@ -330,13 +343,13 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
       }
     if(!installed) identity=BaseImport::readIdentity(explicitBase);
     else if(!reused) identity=identify();
+    Selection selected{explicitBase,{},{}};
+    if(fs::weakly_canonical(fs::path(explicitBase).parent_path())==cache)
+      selected.lease=std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared);
     std::string reason;
     if(!BaseImport::matches(explicitBase,identity,false,&reason))
       throw std::runtime_error(std::string("OPENGOTHIC_BASE does not match this installation or importer: ")+explicitBase+": "+reason);
     current.save("base",explicitBase,identity,snapshot);
-    Selection selected{explicitBase,{},{}};
-    if(fs::weakly_canonical(fs::path(explicitBase).parent_path())==fs::weakly_canonical(cache))
-      selected.lease=std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared);
     return selected;
     }
   std::string rejection;
@@ -441,8 +454,10 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
   const auto start=std::chrono::steady_clock::now();
   const auto root=cacheRoot();
   fs::create_directories(root);
-  Lock pointerLock(root/".lock",Lock::Exclusive,cancelled.get());
-  Current current(root,gothic);
+  const auto cache=root/"videos";
+  fs::create_directories(cache);
+  Lock cacheLock(cache/".lock",Lock::Exclusive,cancelled.get());
+  Current current(root,gothic,cancelled.get());
   const bool installed=hasInstallation(gothic);
   const auto snapshot=installed ? BaseImport::snapshot(gothic) : std::string();
   VideoData::Identity identity;
@@ -460,9 +475,6 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
     log("video base: identified installation ("+std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now()-start).count())+" ms)");
     }
-  const auto cache=root/"videos";
-  fs::create_directories(cache);
-  Lock cacheLock(cache/".lock",Lock::Exclusive,cancelled.get());
   checkVideoCancelled(cancelled.get());
   removeInterrupted(cache,{},cancelled.get());
   const auto destination=reused ? pointed : cache/identity.fingerprint;

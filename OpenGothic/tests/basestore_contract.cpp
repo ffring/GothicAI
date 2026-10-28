@@ -13,6 +13,7 @@
 #include <rapidjson/writer.h>
 
 #include <chrono>
+#include <cerrno>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -24,6 +25,7 @@
 #include <sys/wait.h>
 #include <sys/file.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -64,7 +66,7 @@ void equal(const fs::path& a, const fs::path& b) {
   }
 
 struct Temporary {
-  fs::path path=fs::temp_directory_path()/("gothic-base-store-"+std::to_string(getpid()));
+  fs::path path=fs::weakly_canonical(fs::temp_directory_path())/("gothic-base-store-"+std::to_string(getpid()));
   Temporary() { require(fs::create_directory(path),"temporary directory exists"); }
   ~Temporary() { std::error_code error; fs::remove_all(path,error); }
   };
@@ -138,6 +140,32 @@ void snapshotSelection(const fs::path& root) {
   setenv("OPENGOTHIC_BASE",base.c_str(),1);
   require(BaseStore::resolve(game,mounted,observe).path==base && identifies==0,
           "explicit base with a matching snapshot must skip full source identification");
+  {
+    const int lock=::open((cache/".lock").c_str(),O_RDWR);
+    require(lock>=0 && flock(lock,LOCK_EX)==0,"cannot hold cache import lock");
+    int result[2]; require(pipe(result)==0,"explicit selection pipe failed");
+    std::cout.flush(); std::cerr.flush();
+    const auto child=fork(); require(child>=0,"explicit selection fork failed");
+    if(child==0) {
+      close(lock); close(result[0]);
+      alarm(10);
+      try {
+        const auto selected=BaseStore::resolve(game,mounted,observe);
+        if(selected.path!=base || identifies!=0 || ::write(result[1],"x",1)!=1) _exit(1);
+        _exit(0);
+        }
+      catch(...) { _exit(1); }
+      }
+    close(result[1]);
+    pollfd ready{result[0],POLLIN,0};
+    char token=0;
+    const bool completed=poll(&ready,1,5000)>0 && ::read(result[0],&token,1)==1 && token=='x';
+    flock(lock,LOCK_UN); close(lock); close(result[0]);
+    int status=0;
+    require(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0 && completed,
+            "explicit base selection must complete while another process holds the cache import lock");
+    std::cout << "explicit base: completed while cache import lock remained held\n";
+  }
   // An in-place rebuild can leave a current base behind an old importer's pointer.
   {
     rapidjson::Document stalePointer, staleIdentity;
@@ -247,6 +275,51 @@ void snapshotSelection(const fs::path& root) {
             "concurrent pointer writer failed");
     }
   checkPointer(cache,game,base);
+  {
+    const auto alias=root/"cache-link", store=root/"alias-store";
+    fs::create_directory_symlink(fs::absolute(cache),alias);
+    std::vector<fs::path> old;
+    for(int i=0;i<3;++i) {
+      old.push_back(cache/std::string(64,char('0'+i)));
+      fs::create_directory(old.back());
+      fs::last_write_time(old.back(),fs::file_time_type::clock::now()-std::chrono::hours(i+1));
+      }
+    setenv("OPENGOTHIC_BASE_CACHE",alias.c_str(),1);
+    setenv("OPENGOTHIC_BASE_STORE",store.c_str(),1);
+    identifies=0;
+    std::string logs;
+    const auto aliasLog=[&](std::string_view message) { observe(message); logs+=std::string(message)+"\n"; };
+    {
+      auto selected=BaseStore::resolve(game,mounted,aliasLog);
+      require(selected.path==fs::weakly_canonical(base) && selected.lease && selected.publication.valid(),
+              "symlinked cache selection must retain its lease and background publication");
+      selected.publication.get();
+      }
+    require(!fs::exists(old.back()) && BaseImport::matches(store/"base"/identity.fingerprint,identity,true),
+            "symlinked cache selection must prune old bases and publish the selected base");
+    setenv("OPENGOTHIC_BASE_STORE","",1);
+    logs.clear();
+    auto selected=BaseStore::resolve(game,mounted,aliasLog);
+    require(selected.path==fs::weakly_canonical(base) && selected.lease && identifies==0 &&
+            logs.find("base: cache ")!=std::string::npos,
+            "repeat selection through a cache symlink must remain a leased cache hit");
+    std::cout.flush(); std::cerr.flush();
+    const auto child=fork(); require(child>=0,"symlink lease fork failed");
+    if(child==0) {
+      selected.lease.reset();
+      const int lock=::open((cache/(identity.fingerprint+".use")).c_str(),O_RDWR);
+      if(lock<0) _exit(1);
+      const bool busy=flock(lock,LOCK_EX|LOCK_NB)!=0 && (errno==EWOULDBLOCK || errno==EAGAIN);
+      close(lock);
+      _exit(busy ? 0 : 1);
+      }
+    int status=0;
+    require(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0,
+            "another process must not exclusively lock a base selected through a cache symlink");
+    for(const auto& directory:old) fs::remove_all(directory);
+    setenv("OPENGOTHIC_BASE_CACHE",cache.c_str(),1);
+    std::cout << "symlink cache: repeated cache hit, lease exclusion, prune and publication verified\n";
+  }
   std::cout << "snapshot selection: zero source identifies on repeat/explicit/offline; foreign offline pointers; VDF mtime/size and importer refresh; missing/pruned pointer; two atomic writers verified\n";
   }
 
