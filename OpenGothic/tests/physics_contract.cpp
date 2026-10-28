@@ -4097,6 +4097,12 @@ namespace {
     require(!Npc::skipMeleeAlly(false,true,false,true,false),
             "the selected party target must receive NPC damage");
 
+    require(Npc::canAccumulateMeleePosture(true,false,false,false),"an enabled live human hit must accumulate posture");
+    require(!Npc::canAccumulateMeleePosture(false,false,false,false),"posture OFF must retain the old hit path");
+    require(!Npc::canAccumulateMeleePosture(true,true,false,false),"a blocked hit must leave posture unchanged");
+    require(!Npc::canAccumulateMeleePosture(true,false,true,false),"a knockdown must not accumulate another knockdown");
+    require(!Npc::canAccumulateMeleePosture(true,false,false,true),"death or unconsciousness must retain the old path");
+
     // The actual melee damage multiplier is bounded before cleave attenuation.
     requireNear(DamageCalculator::meleeMultiplier(0,1000,0,0,0),.5f,.0001f,"slow grip contacts must respect the lower damage bound");
     requireNear(DamageCalculator::meleeMultiplier(10000,1000,1,90,0),1.5f,.0001f,"fast tip contacts must respect the upper damage bound");

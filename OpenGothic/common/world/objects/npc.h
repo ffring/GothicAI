@@ -395,6 +395,9 @@ class Npc final {
     bool      isUnconscious() const;
     bool      isDown() const;
     bool      isMeleeKnockedDown() const { return meleeKnockdown; }
+    static bool canAccumulateMeleePosture(bool enabled, bool blocked, bool knockedDown, bool down) {
+      return enabled && !blocked && !knockedDown && !down;
+      }
     bool      isAttack() const;
     bool      isTalk() const;
     // whom this npc talks or listens to, for a while: it looks at them (gaze)

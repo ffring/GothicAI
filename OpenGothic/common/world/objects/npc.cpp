@@ -14,6 +14,7 @@
 #include "game/herodeed.h"
 #include "game/deedwitness.h"
 #include "game/bodyobservations.h"
+#include "game/bodyarena.h"
 #include "game/bodycontroller.h"
 #include "game/bodytrajectory.h"
 #include "game/npckeys.h"
@@ -110,7 +111,12 @@ void writeMeleePosture(const std::string& row) {
   std::lock_guard<std::mutex> guard(mutex);
   static std::ofstream out("melee-posture.jsonl",std::ios::app);
   if(out) {
-    out << row << '\n';
+    out << "{\"arena_seed\":";
+    if(BodyArena::enabled())
+      out << BodyArena::seed();
+    else
+      out << "null";
+    out << ',' << row.substr(1) << '\n';
     out.flush();
     }
   }
@@ -1185,7 +1191,7 @@ bool Npc::recoverRagdoll(bool force) {
   if(isDead())
     return false;
   checkRagdollQuestHazard();
-  const bool returnToAnchor = needsRagdollQuestReturn();
+  bool returnToAnchor = needsRagdollQuestReturn();
   if(!force && !returnToAnchor && !ragdoll->isSleeping() && (owner.tickCount()-ragdollStartTick<500 || !ragdoll->settled()))
     return false;
 
@@ -1195,6 +1201,13 @@ bool Npc::recoverRagdoll(bool force) {
   const auto floor = owner.physic()->landRay(at+Vec3(0,80,0),380.f);
   if(floor.hasCol && floor.n.y>0.25f)
     at.y = floor.v.y;
+  // A timed live get-up must not release the body into a ravine before the
+  // usual ten-metre hazard has had time to arm the quest return.
+  if(meleeKnockdown && !floor.hasCol && ragdollQuestReturn.armed &&
+     ragdollQuestReturn.hasAnchor && Gothic::physicsFlags().questGuard && !isPlayer()) {
+    ragdollQuestReturn.hazards |= RagdollSave::QuestReturn::fell;
+    returnToAnchor = true;
+    }
 
   if(returnToAnchor) {
     ragdollQuestFrom = position();
@@ -1239,7 +1252,7 @@ void Npc::updateRagdollQuestAnchor() {
   if(isPlayer() || !isHuman() || isDown() || ragdoll || interactive()!=nullptr ||
      ragdollQuestReturn.armed ||
      !Gothic::physicsFlags().questGuard ||
-     !Gothic::physicsFlags().ragdoll || mvAlgo.state()!=MoveAlgo::Run)
+     (!Gothic::physicsFlags().ragdoll && !Gothic::physicsFlags().meleePosture) || mvAlgo.state()!=MoveAlgo::Run)
     return;
   const auto now = owner.tickCount();
   if(ragdollQuestReturn.hasAnchor && now>=ragdollQuestSampleTick && now-ragdollQuestSampleTick<250)
@@ -4570,7 +4583,8 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
   const auto impulse = MeleeImpact::impulse(weapon,velocity,angleDeg);
   const float before = meleePosture.value;
   bool knocked = false;
-  if(!blocked && !meleeKnockdown && meleePosture.hit(impulse.length(),physicsMass(),owner.tickCount())) {
+  if(canAccumulateMeleePosture(Gothic::physicsFlags().meleePosture,blocked,meleeKnockdown,isDown()) &&
+     meleePosture.hit(impulse.length(),physicsMass(),owner.tickCount())) {
     updateRagdollQuestAnchor();
     const auto hazards = ragdollQuestReturn.armed ? ragdollQuestReturn.hazards : uint8_t(0);
     ragdollQuestReturn.armed = !isPlayer() && Gothic::physicsFlags().questGuard && ragdollQuestReturn.hasAnchor;
@@ -4578,6 +4592,7 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
     meleeSavePosition = position();
     living.reset();
     finishMeleeShadowSwing(true);
+    const auto hpBeforeFall = attribute(ATR_HITPOINTS);
     if(createRagdoll()) {
       meleeKnockdown = true;
       // Keep an ordinary live animation underneath the native body, so a save
@@ -4590,6 +4605,10 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
       ragdoll->addImpulse(impulse,&attacker);
       fghAlgo.onTakeHit();
       clearSpeed();
+      writeMeleePosture("{\"event\":\"knockdown_health\",\"tick_ms\":"+std::to_string(meleeFallTick)+
+                       ",\"target\":"+meleeShadowWho(this)+",\"hp_before\":"+std::to_string(hpBeforeFall)+
+                       ",\"hp_after\":"+std::to_string(attribute(ATR_HITPOINTS))+
+                       ",\"unconscious\":"+(isUnconscious() ? "true" : "false")+"}");
       knocked = true;
       }
     }
@@ -4626,9 +4645,11 @@ bool Npc::tickMeleePosture(uint64_t dt) {
       }
     }
   if(!ragdoll) {
-    if(visual.pose().isStanding() || !enabled || now-meleeFallTick>=4000) {
-      if(!visual.pose().isStanding())
+    if(visual.pose().isStanding() || !enabled || now-meleeFallTick+dt>=4000) {
+      if(!visual.pose().isStanding()) {
+        visual.pose().stopAllAnim();
         setAnim(Anim::Idle);
+        }
       meleeKnockdown = false;
       ragdollRecovering = false;
       meleePosture.recover(now);

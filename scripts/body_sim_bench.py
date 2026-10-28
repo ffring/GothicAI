@@ -70,29 +70,23 @@ def damage_rows(output: Path) -> list[dict]:
 
 
 def add_posture_metrics(episodes: list[dict], path: Path, *, enabled: bool) -> dict:
-    """Match fork-reset journal groups to duels and count subsequent defeats."""
-    groups = []
-    previous = -1
+    """Match journal rows by the configured duel seed and count subsequent defeats."""
+    groups = {}
     for line in path.read_text().splitlines() if path.is_file() else ():
         row = json.loads(line)
-        tick = row["tick_ms"]
-        if not groups or tick < previous:
-            groups.append([])
-        groups[-1].append(row)
-        previous = tick
-    active = [episode for episode in episodes if any(d["damage_kind"] == "melee" and d["has_hit"]
-                                                   for d in episode["damage"])]
-    if (groups or enabled) and len(groups) != len(active):
-        raise RuntimeError(f"posture journal has {len(groups)} duel groups for {len(active)} duels with hits")
+        groups.setdefault(row["arena_seed"], []).append(row)
+    seeds = {episode["seed"] for episode in episodes}
+    if groups.keys()-seeds:
+        raise RuntimeError("posture journal contains an unknown duel seed")
     for episode in episodes:
-        episode["knockdowns"] = 0
-        episode["knockdown_defeats_within_3s"] = 0
-    for episode, rows in zip(active, groups):
+        rows = groups.get(episode["seed"], [])
+        if enabled and not rows and any(d["damage_kind"] == "melee" and d["has_hit"] for d in episode["damage"]):
+            raise RuntimeError(f"posture journal is missing duel seed {episode['seed']}")
         falls = [row for row in rows if row["event"] == "knockdown"]
         defeats = [row for row in episode["damage"] if row["down"] or row["dead"]]
         episode["knockdowns"] = len(falls)
         episode["knockdown_defeats_within_3s"] = sum(
-            any(d["target"] == fall["target"]["name"] and 0 <= d["t_game"]-fall["tick_ms"] <= 3000
+            any(d["actor"] == fall["target"]["name"] and 0 <= d["t_game"]-fall["tick_ms"] <= 3000
                 for d in defeats) for fall in falls)
     outcomes = Counter(episode["reason"] for episode in episodes)
     knockdowns = sum(episode["knockdowns"] for episode in episodes)
