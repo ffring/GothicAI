@@ -81,6 +81,8 @@ void parityAndFallback() {
     row["t_game_ms"].SetUint64(tick*50);
     row["sim_step"].SetUint64(tick*3);
     row["self"]["hp_fraction"].SetDouble(0.3+0.001*double(tick));
+    // A swing every two seconds keeps the fight engaged: the stall limit is checked separately.
+    row["self"]["attack_anim"].SetBool(tick%40==0);
     setMask(row,tick%7!=0);
     const auto now=tick*50+(tick%13==0 ? 150 : 0);
     const bool eligible=row["can_decide"].GetBool() && now-tick*50<=100;
@@ -137,6 +139,64 @@ void parityAndFallback() {
   expect(metrics["final"].GetBool() && metrics["fallbacks"]["unsupported_sampling_rate"].GetUint64()==1,"fallback telemetry immediately reports its refusal reason");
   }
 
+void stalledPolicyChoosesActivePrimitives() {
+  auto row=firstObservation();
+  row["self"]["weapon_state"].SetUint64(2);
+  row["self"]["attack_anim"].SetBool(false);
+  row["target"]["attack_anim"].SetBool(false);
+  row["self"]["hp"].SetInt64(300);
+  row["target"]["hp"].SetInt64(300);
+  const auto identity=BodyNet::actorIdentity(row);
+  const BodyNet directNet(GOTHIC_BODY_ENGINE_NET);
+  BodyPolicyRuntime direct(directNet,100,100,true);
+  direct.beginEpisode(identity[0],identity[1],0);
+  BodyEnginePolicy policy(identity[0],identity[1],identity[2],identity[3],0,0);
+  const auto passive=[](int action) { return action==3 || action==4 || action==5 || action>=9; };
+  size_t free=0,limited=0,redirected=0;
+  for(uint64_t tick=1;tick<=400;++tick) {
+    const uint64_t game=tick*50;
+    row["observation_seq"].SetUint64(tick);
+    row["t_game_ms"].SetUint64(game);
+    row["sim_step"].SetUint64(tick);
+    // Engaged at the first row, a hero hit at 10 s, then stalled again until a swing at 16 s.
+    if(tick==200) row["target"]["hp"].SetInt64(290);
+    row["self"]["attack_anim"].SetBool(tick==320);
+    setMask(row,true);
+    if(tick>=100 && tick<140) {
+      // Only passive primitives are available: the policy's choice stands even when stalled.
+      for(rapidjson::SizeType i:{1u,2u,6u,7u,8u}) {
+        row["action_mask"][i].SetBool(false);
+        row["availability_mask"][i].SetBool(false);
+        }
+      }
+    Json request(rapidjson::kObjectType);
+    auto& a=request.GetAllocator();
+    request.AddMember("observation",rapidjson::Value(row,a),a);
+    request.AddMember("stream_seq",tick,a);
+    request.AddMember("now_game_ms",game,a);
+    request.AddMember("command_enabled",true,a);
+    request.AddMember("memory_only",false,a);
+    expect(direct.process(request).status!="fallback","direct runtime accepts the stall sequence");
+    const auto expected=direct.arbitrate(row,tick);
+    const bool stalled=(tick>=81 && tick<200) || (tick>=280 && tick<320) || tick>=400;
+    const bool onlyPassive=tick>=100 && tick<140;
+    expect(policy.process(row,game,[&](int action,const rapidjson::Value&) {
+      expect(expected.actionId.has_value(),"a direct decision exists for every applied engine action");
+      if(!stalled || onlyPassive) {
+        expect(action==*expected.actionId,"an engaged fight, or one without active primitives, keeps the policy's choice");
+        ++free;
+        } else {
+        expect(!passive(action),"a stalled fight chooses approach, turn or an attack");
+        ++limited;
+        if(action!=*expected.actionId) ++redirected;
+        }
+      return std::string{};
+      }).empty(),"the stall limit retains the lease");
+    }
+  expect(free>0 && limited>0 && redirected>0,"the sequence covers free, limited and redirected decisions");
+  std::cout << "stall free=" << free << " limited=" << limited << " redirected=" << redirected << '\n';
+  }
+
 void transientActionRefusals() {
   auto row=firstObservation();
   row["self"]["weapon_state"].SetUint64(2);
@@ -170,6 +230,7 @@ int main() {
     setenv("OPENGOTHIC_BODY_NET",GOTHIC_BODY_ENGINE_NET,1);
     BodyEnginePolicy::initialize();
     parityAndFallback();
+    stalledPolicyChoosesActivePrimitives();
     transientActionRefusals();
     std::cout << "{\"type\":\"body_engine_test\",\"passed\":true,\"assertions\":" << assertions
               << ",\"decisions\":" << decisions << "}\n";

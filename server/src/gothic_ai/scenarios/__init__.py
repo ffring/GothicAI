@@ -64,6 +64,7 @@ from .load import load_rewind as load_rewind
 from .memprobe import memprobe_scenario as memprobe_scenario
 from .neural_load import neural_load_scenario as neural_load_scenario
 from .neural_soak import neural_soak_scenario as neural_soak_scenario
+from .neural_still import neural_still_scenario as neural_still_scenario
 from .npc_deeds import npc_deeds as npc_deeds
 from .npc_director import npc_director as npc_director
 from .npc_far import npc_far as npc_far

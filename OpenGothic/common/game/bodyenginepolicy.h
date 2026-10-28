@@ -5,11 +5,15 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <optional>
 
 // Per-lease P30 driver. The immutable network is shared by all leases.
 class BodyEnginePolicy final {
   public:
     using Apply = std::function<std::string(int,const rapidjson::Value&)>;
+    // P30 waits out a passive opponent. After this long without a swing by either side
+    // and without damage either way, its choice is limited to approach, turn and attacks.
+    static constexpr uint64_t StallGameMs = 4000;
     static void initialize();
     static std::string netStatusJson();
     static bool requested(const rapidjson::Value& request);
@@ -27,6 +31,8 @@ class BodyEnginePolicy final {
     uint64_t session,world,minimumSequence,streamSequence=0,lastSequence=0,acceptedSimStep=0;
     unsigned transientRejections=0;
     bool needsReset=false;
+    std::optional<uint64_t> engagedGameMs;
+    std::optional<int64_t> ownHp, targetHp;
     BodyNet::Identity identity;
     uint64_t decisions=0;
     std::map<std::string,uint64_t> fallbacks;
