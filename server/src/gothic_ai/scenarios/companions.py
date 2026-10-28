@@ -42,6 +42,7 @@ from ..talk import TalkDesk
 from .common import (
     FixedDecider,
     _ByNpc,
+    _clear_beasts,
     _logged,
     _m5b_player_weapon,
     _OnWords,
@@ -750,6 +751,7 @@ async def _neural_fight_scenario(
     link.raw_body_listeners.append(observe)
     started = time.monotonic()
     try:
+        log.info("neural arena before combat: beasts_cleared=%d", await _clear_beasts(link, npc))
         if companion:
             await link.debug("npc_goto", npc=npc, waypoint=arena, face="PC_HERO")
             await link.debug("npc_goto", npc=target, to=npc, distance=250, face=npc)
