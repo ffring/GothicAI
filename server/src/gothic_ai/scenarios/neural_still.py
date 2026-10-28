@@ -23,6 +23,8 @@ log = logging.getLogger("gothic_ai.scenarios")
 ACTIONS = ("continue", "approach", "turn_to_target", "strafe_left", "strafe_right", "jump_back",
            "attack_front", "attack_left", "attack_right", "block", "wait_200", "wait_300")
 HIT_WINDOW_S = 30.0
+# A lease this long without its own hit is a P30 failure even if native combat struck first.
+HELD_WITHOUT_HIT_S = 10.0
 
 
 async def neural_still_scenario(link: GameLink, pilot: BodyPilot | None, log_dir: Path) -> dict[str, str]:
@@ -145,11 +147,13 @@ async def neural_still_scenario(link: GameLink, pilot: BodyPilot | None, log_dir
         link.raw_body_listeners.remove(observe)
     hit = [t for t in trials if _first_hit(t) is not None]
     first = sorted(_first_hit(t) / 1000 for t in hit)
-    native = sum(any(not h["p30"] for h in t["hits"]) for t in trials)
+    native = [t for t in trials if _first_hit(t) is None and any(
+        h["ms"] <= HIT_WINDOW_S * 1000 for h in t["hits"]) and _held_s(t) < HELD_WITHOUT_HIT_S]
+    ok = len(hit) + len(native) == len(trials)
     return _logged({
-        "neural_still_hits": f"{'done' if len(hit) == len(trials) else 'failed'} "
+        "neural_still_hits": f"{'done' if ok else 'failed'} "
                              f"({len(hit)}/{len(trials)} P30 hit within {HIT_WINDOW_S:g} s, npc={npc}, "
-                             f"runs with a native hit before the lease={native}, "
+                             f"native hit first and P30 held < {HELD_WITHOUT_HIT_S:g} s: {len(native)}, "
                              f"first_hit_s median={statistics.median(first) if first else None} "
                              f"max={first[-1] if first else None}, rows in {out})",
     })
@@ -157,6 +161,11 @@ async def neural_still_scenario(link: GameLink, pilot: BodyPilot | None, log_dir
 
 def _first_hit(trial: dict[str, Any]) -> int | None:
     return min((h["ms"] for h in trial["hits"] if h["p30"] and h["ms"] <= HIT_WINDOW_S * 1000), default=None)
+
+
+def _held_s(trial: dict[str, Any]) -> float:
+    rows = trial["rows"]
+    return (rows[-1]["ms"] - rows[0]["ms"]) / 1000 if rows else 0.0
 
 
 def _summary(trial: dict[str, Any]) -> dict[str, Any]:
@@ -168,7 +177,8 @@ def _summary(trial: dict[str, Any]) -> dict[str, Any]:
     return {
         "hit_ms": _first_hit(trial), "native_hits": sum(not h["p30"] for h in trial["hits"]),
         "error": trial.get("error"),
-        "rows": len(trial["rows"]), "decide_rows": sum(r["can_decide"] for r in trial["rows"]),
+        "held_s": _held_s(trial), "rows": len(trial["rows"]),
+        "decide_rows": sum(r["can_decide"] for r in trial["rows"]),
         "accepted": dict(accepted), "started": dict(started), "rejected": dict(rejected),
         "distance_min": min(distances) if distances else None,
         "distance_med": round(statistics.median(distances)) if distances else None,

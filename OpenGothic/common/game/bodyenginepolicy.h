@@ -11,8 +11,9 @@
 class BodyEnginePolicy final {
   public:
     using Apply = std::function<std::string(int,const rapidjson::Value&)>;
-    // P30 waits out a passive opponent. After this long without a swing by either side
-    // and without damage either way, its choice is limited to approach, turn and attacks.
+    // P30 waits out a passive opponent. After this long without a swing by the target
+    // and without damage either way, its choice is limited to approach, turn and attacks,
+    // each attack tried once before any repeats.
     static constexpr uint64_t StallGameMs = 4000;
     static void initialize();
     static std::string netStatusJson();
@@ -33,6 +34,7 @@ class BodyEnginePolicy final {
     bool needsReset=false;
     std::optional<uint64_t> engagedGameMs;
     std::optional<int64_t> ownHp, targetHp;
+    uint32_t stallAttacks=0;
     BodyNet::Identity identity;
     uint64_t decisions=0;
     std::map<std::string,uint64_t> fallbacks;

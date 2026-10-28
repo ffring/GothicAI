@@ -98,9 +98,13 @@ std::string BodyEnginePolicy::process(const rapidjson::Value& row,uint64_t nowGa
     const auto& own=row["self"];
     const auto& target=row["target"];
     const auto ownNow=hitPoints(own), targetNow=hitPoints(target);
-    if(!engagedGameMs || game<*engagedGameMs || flag(own,"attack_anim") || flag(target,"attack_anim") ||
-       (ownNow && ownHp && *ownNow<*ownHp) || (targetNow && targetHp && *targetNow<*targetHp))
+    // A swing of its own that causes no damage does not end a stall: a blade that cannot
+    // reach from this distance would otherwise restart the wait after every miss.
+    if(!engagedGameMs || game<*engagedGameMs || flag(target,"attack_anim") ||
+       (ownNow && ownHp && *ownNow<*ownHp) || (targetNow && targetHp && *targetNow<*targetHp)) {
       engagedGameMs=game;
+      stallAttacks=0;
+      }
     if(ownNow) ownHp=ownNow;
     if(targetNow) targetHp=targetNow;
     if(needsReset) {
@@ -121,11 +125,17 @@ std::string BodyEnginePolicy::process(const rapidjson::Value& row,uint64_t nowGa
     auto result=processed;
     if(processed.status!="fallback" && eligible)
       result=runtime.arbitrate(row,streamSequence);
-    if(result.status=="decision" && result.actionId && game-*engagedGameMs>=StallGameMs) {
-      // The policy's own preference among the active primitives the same mask allows.
+    const bool stalled=game-*engagedGameMs>=StallGameMs;
+    if(result.status=="decision" && result.actionId && stalled) {
+      // The policy's own preference among the active primitives the same mask allows;
+      // attacks tried in this stall wait until every allowed attack has been tried.
+      uint32_t attacks=0;
+      for(int action:{6,7,8})
+        if(processed.effectiveActionMask[size_t(action)]) attacks|=1u<<action;
+      if(attacks!=0 && (stallAttacks & attacks)==attacks) stallAttacks=0;
       std::optional<int> active;
       for(int action:{1,2,6,7,8})
-        if(processed.effectiveActionMask[size_t(action)] &&
+        if(processed.effectiveActionMask[size_t(action)] && (stallAttacks & (1u<<action))==0 &&
            (!active || processed.logits[size_t(action)]>processed.logits[size_t(*active)]))
           active=action;
       if(active) result.actionId=active;
@@ -152,6 +162,8 @@ std::string BodyEnginePolicy::process(const rapidjson::Value& row,uint64_t nowGa
       return "policy_fallback:body_action_rejected";
       }
     transientRejections=0;
+    if(stalled && *result.actionId>=6 && *result.actionId<=8)
+      stallAttacks|=1u<<*result.actionId;
     acceptedSimStep=row["sim_step"].GetUint64();
     ++decisions;
     return {};

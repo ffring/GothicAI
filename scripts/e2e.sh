@@ -52,8 +52,9 @@
 #   neural: a one-handed bandit fights the hero under the P30 body pilot through the full lease cycle;
 #       requires a new game, >=10 decisions, no fallback, engine step p99 <=2000 us
 #   neural-still: BDT_1013 attacks the hero who stands still with a drawn sword (the surrender_live
-#       setup without a model), GOTHIC_NEURAL_STILL_RUNS=20 loads of one save; every run must hit within
-#       30 s; actions, distance and masks per run in neural_still.jsonl; GOTHIC_NEURAL_STILL_NPC picks the npc
+#       setup without a model), GOTHIC_NEURAL_STILL_RUNS=20 loads of one save; P30 must hit within 30 s
+#       (a run where native struck before the lease passes if P30 then held the body <10 s); actions,
+#       distance and masks per run in neural_still.jsonl; GOTHIC_NEURAL_STILL_NPC picks the npc
 #   neural-companion: the bandit attacks the hero's swordsman companion, >=10 decisions (service >=6), no fallback,
 #       a companion target in the fight summary, natural fight end and confirmed release
 #   neural-group: three one-handed bandits fight the hero and his swordsman companion under P30 at once;

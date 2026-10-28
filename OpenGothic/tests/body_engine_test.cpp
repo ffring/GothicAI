@@ -81,8 +81,8 @@ void parityAndFallback() {
     row["t_game_ms"].SetUint64(tick*50);
     row["sim_step"].SetUint64(tick*3);
     row["self"]["hp_fraction"].SetDouble(0.3+0.001*double(tick));
-    // A swing every two seconds keeps the fight engaged: the stall limit is checked separately.
-    row["self"]["attack_anim"].SetBool(tick%40==0);
+    // A target swing every two seconds keeps the fight engaged: the stall limit is checked separately.
+    row["target"]["attack_anim"].SetBool(tick%40==0);
     setMask(row,tick%7!=0);
     const auto now=tick*50+(tick%13==0 ? 150 : 0);
     const bool eligible=row["can_decide"].GetBool() && now-tick*50<=100;
@@ -152,15 +152,19 @@ void stalledPolicyChoosesActivePrimitives() {
   direct.beginEpisode(identity[0],identity[1],0);
   BodyEnginePolicy policy(identity[0],identity[1],identity[2],identity[3],0,0);
   const auto passive=[](int action) { return action==3 || action==4 || action==5 || action>=9; };
-  size_t free=0,limited=0,redirected=0;
+  size_t free=0,limited=0,redirected=0,rotated=0;
+  uint32_t tried=0;
   for(uint64_t tick=1;tick<=400;++tick) {
     const uint64_t game=tick*50;
     row["observation_seq"].SetUint64(tick);
     row["t_game_ms"].SetUint64(game);
     row["sim_step"].SetUint64(tick);
-    // Engaged at the first row, a hero hit at 10 s, then stalled again until a swing at 16 s.
+    // Engaged at the first row, a hero hit at 10 s, then stalled again until the hero swings at 16 s.
+    // The NPC's own swings without damage never end a stall.
     if(tick==200) row["target"]["hp"].SetInt64(290);
-    row["self"]["attack_anim"].SetBool(tick==320);
+    row["self"]["attack_anim"].SetBool(tick%3==0);
+    row["target"]["attack_anim"].SetBool(tick==320);
+    if(tick==200 || tick==320) tried=0;
     setMask(row,true);
     if(tick>=100 && tick<140) {
       // Only passive primitives are available: the policy's choice stands even when stalled.
@@ -189,12 +193,20 @@ void stalledPolicyChoosesActivePrimitives() {
         expect(!passive(action),"a stalled fight chooses approach, turn or an attack");
         ++limited;
         if(action!=*expected.actionId) ++redirected;
+        if(action>=6 && action<=8) {
+          // Every attack the mask allows is tried once before any of them repeats.
+          if(tried==((1u<<6)|(1u<<7)|(1u<<8))) tried=0;
+          expect((tried & (1u<<action))==0,"a stalled fight tries another attack before repeating one");
+          if(tried!=0) ++rotated;
+          tried|=1u<<action;
+          }
         }
       return std::string{};
       }).empty(),"the stall limit retains the lease");
     }
-  expect(free>0 && limited>0 && redirected>0,"the sequence covers free, limited and redirected decisions");
-  std::cout << "stall free=" << free << " limited=" << limited << " redirected=" << redirected << '\n';
+  expect(free>0 && limited>0 && redirected>0 && rotated>0,"the sequence covers free, limited, redirected and rotated decisions");
+  std::cout << "stall free=" << free << " limited=" << limited << " redirected=" << redirected
+            << " rotated=" << rotated << '\n';
   }
 
 void transientActionRefusals() {
