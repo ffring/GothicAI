@@ -237,7 +237,7 @@ class PersonaProvider:
         self._lines_retry_at = 0.0
         self._lines_warned = False
         self._lines_loading = False
-        self._lines_lock = threading.Lock()
+        self._lines_lock = threading.Condition()
 
     def warm(self) -> None:
         """Read the game's lines ahead, in a thread of its own (cli.py): reading takes seconds, and the first
@@ -246,6 +246,8 @@ class PersonaProvider:
 
     def _game_lines(self, *, background: bool = True) -> dict[str, str] | None:
         with self._lines_lock:
+            while self._lines_loading and self._lines_retry_at == 0.0:
+                self._lines_lock.wait()
             if (
                 self._lines_read
                 or self._lines_loading
@@ -279,6 +281,7 @@ class PersonaProvider:
         finally:
             with self._lines_lock:
                 self._lines_loading = False
+                self._lines_lock.notify_all()
 
     def get(self, npc: str, name: str) -> Persona:
         npc = npc.upper()

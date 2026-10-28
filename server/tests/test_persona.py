@@ -116,6 +116,48 @@ def test_the_game_lines_are_read_once(game_dir, monkeypatch):
     assert calls == [game_dir]
 
 
+def test_get_waits_for_the_first_warm_read(game_dir, monkeypatch):
+    loading, resume, requesting, warmed = (threading.Event() for _ in range(4))
+    load = persona_module.game_lines
+
+    def blocked(path):
+        loading.set()
+        if not resume.wait(2.0):
+            raise TimeoutError("first OU read was not released")
+        return load(path)
+
+    monkeypatch.setattr(persona_module, "game_lines", blocked)
+    personas = PersonaProvider(game_dir, {})
+    result = []
+
+    def warm():
+        personas.warm()
+        warmed.set()
+
+    def get():
+        requesting.set()
+        result.append(personas.get(BABERA, "Babera"))
+
+    warmer = threading.Thread(target=warm, daemon=True)
+    reader = threading.Thread(target=get, daemon=True)
+    warmer.start()
+    try:
+        assert loading.wait(1.0)
+        reader.start()
+        assert requesting.wait(1.0)
+        reader.join(0.1)
+        assert reader.is_alive(), "get returned before the first OU read finished"
+    finally:
+        resume.set()
+        warmer.join(2.0)
+        if reader.ident is not None:
+            reader.join(2.0)
+    assert warmed.is_set() and not warmer.is_alive() and not reader.is_alive()
+    assert len(result) == 1
+    assert "Реплика babera номер" in result[0].instructions
+    assert result[0].voice == FEMALE_VOICE
+
+
 def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeypatch, caplog):
     game, selected, cache = tmp_path / "game", tmp_path / "base", tmp_path / "cache"
     game.mkdir()
