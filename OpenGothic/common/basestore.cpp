@@ -24,6 +24,7 @@ class BaseStore::Lock {
     enum Mode { Exclusive, Shared, TryExclusive };
     explicit Lock(const fs::path& path, Mode mode=Exclusive, const std::atomic_bool* cancelled=nullptr) {
 #ifndef _WIN32
+      if(cancelled && cancelled->load()) throw std::runtime_error("video preparation cancelled");
       fd=::open(path.c_str(),O_CREAT|O_RDWR|O_CLOEXEC,0600);
       if(fd<0) throw std::system_error(errno,std::generic_category(),"open base lock");
       const int operation=(mode==Shared ? LOCK_SH : LOCK_EX) | ((mode==TryExclusive || cancelled!=nullptr) ? LOCK_NB : 0);
@@ -33,7 +34,7 @@ class BaseStore::Lock {
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
           continue;
           }
-        if(error==EINTR) continue;
+        if(error==EINTR && (!cancelled || !cancelled->load())) continue;
         ::close(fd);
         fd=-1;
         if(cancelled && cancelled->load()) throw std::runtime_error("video preparation cancelled");
@@ -66,24 +67,49 @@ bool fingerprintName(std::string_view name) {
   return name.size()==64 && name.find_first_not_of("0123456789abcdef")==std::string_view::npos;
   }
 
+void checkVideoCancelled(const std::atomic_bool* cancelled) {
+  if(cancelled && cancelled->load()) throw std::runtime_error("video preparation cancelled");
+  }
+
+void removeVideoDirectory(const fs::path& path, const std::atomic_bool* cancelled) {
+  checkVideoCancelled(cancelled);
+  if(!fs::exists(path)) return;
+  for(const auto& entry:fs::directory_iterator(path)) {
+    checkVideoCancelled(cancelled);
+    if(entry.is_directory() && !entry.is_symlink()) removeVideoDirectory(entry.path(),cancelled);
+    else fs::remove(entry.path());
+    }
+  checkVideoCancelled(cancelled);
+  fs::remove(path);
+  }
+
 // Called only while holding the cache lock or this store fingerprint's lock.
-void removeInterrupted(const fs::path& root, const std::string& fingerprint={}) {
+void removeInterrupted(const fs::path& root, const std::string& fingerprint={}, const std::atomic_bool* cancelled=nullptr) {
   for(const auto& entry:fs::directory_iterator(root)) {
+    checkVideoCancelled(cancelled);
     const auto name=entry.path().filename().string();
     if(name.size()>69 && fingerprintName(std::string_view(name).substr(0,64)) &&
        name.compare(64,5,".tmp-")==0 && name.find_first_not_of("0123456789",69)==std::string::npos &&
-       (fingerprint.empty() || name.compare(0,64,fingerprint)==0) && entry.is_directory())
-      fs::remove_all(entry.path());
+       (fingerprint.empty() || name.compare(0,64,fingerprint)==0) && entry.is_directory()) {
+      if(cancelled) removeVideoDirectory(entry.path(),cancelled);
+      else fs::remove_all(entry.path());
+      }
     }
   }
 
 struct Temporary {
   fs::path path;
-  explicit Temporary(const fs::path& destination) {
+  const std::atomic_bool* cancelled=nullptr;
+  explicit Temporary(const fs::path& destination, const std::atomic_bool* cancelled=nullptr):cancelled(cancelled) {
     path=destination.string()+".tmp-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     if(!fs::create_directory(path)) throw std::runtime_error("base temporary directory already exists");
     }
   ~Temporary() {
+    if(cancelled) {
+      // Cancellation leaves the partial directory for the next startup.
+      try { removeVideoDirectory(path,cancelled); } catch(...) {}
+      return;
+      }
     std::error_code error;
     fs::remove_all(path,error);
     }
@@ -108,10 +134,6 @@ void copy(const fs::path& source, const fs::path& destination, const Identity& i
   publish(temporary.path,destination,identity);
   }
 
-void checkVideoCancelled(const std::atomic_bool* cancelled) {
-  if(cancelled && cancelled->load()) throw std::runtime_error("video preparation cancelled");
-  }
-
 void publishVideo(const fs::path& temporary, const fs::path& destination,
                   const VideoData::Identity& identity, const std::atomic_bool* cancelled) {
   checkVideoCancelled(cancelled);
@@ -120,14 +142,14 @@ void publishVideo(const fs::path& temporary, const fs::path& destination,
     throw std::runtime_error("video metadata or payload does not match installation");
     }
   checkVideoCancelled(cancelled);
-  if(fs::exists(destination)) fs::remove_all(destination);
+  removeVideoDirectory(destination,cancelled);
   fs::rename(temporary,destination);
   }
 
 void copyVideo(const fs::path& source, const fs::path& destination,
                const VideoData::Identity& identity, const std::atomic_bool* cancelled) {
-  Temporary temporary(destination);
-  std::vector<char> buffer(1<<20);
+  Temporary temporary(destination,cancelled);
+  std::vector<char> buffer(1<<16);
   for(const auto& entry:fs::recursive_directory_iterator(source)) {
     checkVideoCancelled(cancelled);
     const auto target=temporary.path/fs::relative(entry.path(),source);
@@ -139,6 +161,7 @@ void copyVideo(const fs::path& source, const fs::path& destination,
       checkVideoCancelled(cancelled);
       input.read(buffer.data(),std::streamsize(buffer.size()));
       const auto count=input.gcount();
+      checkVideoCancelled(cancelled);
       output.write(buffer.data(),count);
       if(!output || (!input && !input.eof())) throw std::runtime_error("cannot copy video part");
       if(input.eof()) break;
@@ -147,10 +170,12 @@ void copyVideo(const fs::path& source, const fs::path& destination,
   publishVideo(temporary.path,destination,identity,cancelled);
   }
 
-void prune(const fs::path& cache, const fs::path& current) {
+void prune(const fs::path& cache, const fs::path& current, const std::atomic_bool* cancelled=nullptr) {
+  checkVideoCancelled(cancelled);
   fs::last_write_time(current,fs::file_time_type::clock::now());
   std::vector<fs::directory_entry> older;
   for(const auto& entry:fs::directory_iterator(cache)) {
+    checkVideoCancelled(cancelled);
     const auto name=entry.path().filename().string();
     if(entry.path()==current || !entry.is_directory() || !fingerprintName(name)) continue;
     older.push_back(entry);
@@ -158,7 +183,10 @@ void prune(const fs::path& cache, const fs::path& current) {
   std::sort(older.begin(),older.end(),[](const auto& a,const auto& b) { return a.last_write_time()>b.last_write_time(); });
   for(size_t i=2;i<older.size();++i) {
     Lock unused(cache/(older[i].path().filename().string()+".use"),Lock::TryExclusive);
-    if(unused.acquired()) fs::remove_all(older[i].path());
+    if(unused.acquired()) {
+      if(cancelled) removeVideoDirectory(older[i].path(),cancelled);
+      else fs::remove_all(older[i].path());
+      }
     }
   }
 }
@@ -277,7 +305,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
   fs::create_directories(cache);
   Lock cacheLock(cache/".lock",Lock::Exclusive,cancelled.get());
   checkVideoCancelled(cancelled.get());
-  removeInterrupted(cache);
+  removeInterrupted(cache,{},cancelled.get());
   const auto destination=cache/identity.fingerprint;
   fs::path store;
   if(const auto* env=std::getenv("OPENGOTHIC_BASE_STORE")) store=env;
@@ -294,7 +322,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
   const auto finish=[&](const char* source, bool upload=true) {
     checkVideoCancelled(cancelled.get());
     Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared,cancelled.get()),{}};
-    try { prune(cache,destination); }
+    try { prune(cache,destination,cancelled.get()); }
     catch(const std::exception& e) { log(std::string("video base cache cleanup: ")+e.what()); }
     const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
     log(std::string("video base: ")+source+" "+destination.string()+" ("+std::to_string(ms)+" ms)");
@@ -309,7 +337,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
           storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared,cancelled.get());
           }
           Lock lock(store/(identity.fingerprint+".lock"),Lock::Exclusive,cancelled.get());
-          removeInterrupted(store,identity.fingerprint);
+          removeInterrupted(store,identity.fingerprint,cancelled.get());
           const auto stored=store/identity.fingerprint;
           const bool present=VideoData::matches(stored,identity,false,cancelled.get());
           checkVideoCancelled(cancelled.get());
@@ -319,7 +347,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
             storedLease.reset();
             storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::TryExclusive);
             if(!storedLease->acquired()) throw std::runtime_error("cannot replace a video store part in use");
-            if(fs::exists(stored)) fs::remove_all(stored);
+            removeVideoDirectory(stored,cancelled.get());
             storedLease.reset();
             storedLease=std::make_shared<Lock>(store/(identity.fingerprint+".use"),Lock::Shared,cancelled.get());
             }
@@ -327,7 +355,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
             }
           {
           Lock cleanup(store/".lock",Lock::Exclusive,cancelled.get());
-          prune(store,stored);
+          prune(store,stored,cancelled.get());
           }
           const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-started).count();
           std::fprintf(stderr,"video base: %s %s (%lld ms, background)\n",
@@ -347,7 +375,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
     log("video base: rejected cache directory: video metadata mismatch");
     Lock replacement(cache/(identity.fingerprint+".use"),Lock::TryExclusive);
     if(!replacement.acquired()) throw std::runtime_error("cannot replace a video cache part in use");
-    fs::remove_all(destination);
+    removeVideoDirectory(destination,cancelled.get());
     }
 
   std::unique_ptr<Lock> storeLock;
@@ -363,7 +391,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
       }
       log("video base: waiting for store lock");
       storeLock=std::make_unique<Lock>(store/(identity.fingerprint+".lock"),Lock::Exclusive,cancelled.get());
-      removeInterrupted(store,identity.fingerprint);
+      removeInterrupted(store,identity.fingerprint,cancelled.get());
       }
     catch(const std::exception& e) {
       log(std::string("video base: store unavailable: ")+e.what());
@@ -376,7 +404,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
         copyVideo(stored,destination,identity,cancelled.get());
         try {
           Lock cleanup(store/".lock",Lock::Exclusive,cancelled.get());
-          prune(store,stored);
+          prune(store,stored,cancelled.get());
           }
         catch(const std::exception& e) { log(std::string("video base store cleanup: ")+e.what()); }
         return finish("store",false);
@@ -388,7 +416,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
       }
     }
   checkVideoCancelled(cancelled.get());
-  Temporary temporary(destination);
+  Temporary temporary(destination,cancelled.get());
   log("video base: importing installation");
   VideoData::build(gothic,temporary.path,log,cancelled.get(),workers);
   storeLock.reset();

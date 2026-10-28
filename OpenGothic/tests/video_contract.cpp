@@ -628,7 +628,9 @@ int main() {
       preflightReference(game,reference);
       return 0;
       }
-    Temporary temporary(fs::temp_directory_path());
+    const auto* home=std::getenv("HOME");
+    require(home && *home,"HOME must point to the user's directory");
+    Temporary temporary(fs::path(home)/"gothic-ai");
     const auto cache=temporary.path/"cache", store=temporary.path/"store";
     Environment cacheEnvironment("OPENGOTHIC_BASE_CACHE",cache), storeEnvironment("OPENGOTHIC_BASE_STORE",store);
     const auto identity=VideoData::identify(game);

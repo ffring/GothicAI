@@ -76,6 +76,10 @@ MainWindow::MainWindow(Device& device)
 
   Gothic::inst().onVideo       .bind(this,&MainWindow::onVideo);
 
+  if(CommandLine::inst().doIntro() && !Gothic::inst().isBenchmarkMode() &&
+     Gothic::settingsGetI("GAME","scaleVideos")>=0)
+    Resources::startVideoBase();
+
   Gothic::inst().onBenchmarkFinished.bind(this,&MainWindow::onBenchmarkFinished);
 
   if(!Gothic::inst().defaultSave().empty()){
@@ -1196,9 +1200,10 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   update();
   }
 
-void MainWindow::onVideo(std::string_view fname) {
+void MainWindow::onVideo(std::string_view fname, bool explicitRequest) {
   // -nointro (autotests): no videos, Xardas's first dialog plays the addon's intro for over a minute
-  if(Gothic::inst().isBenchmarkMode() || !CommandLine::inst().doIntro())
+  if(!explicitRequest && (Gothic::inst().isBenchmarkMode() || !CommandLine::inst().doIntro() ||
+                         Gothic::settingsGetI("GAME","scaleVideos")<0))
     return;
   video.pushVideo(fname);
   }

@@ -309,7 +309,8 @@ bool Marvin::exec(std::string_view v) {
     case C_Census:
       return Resources::writeCensus();
     case C_PlayVideo:
-      return Gothic::inst().playvideo(ret.argv[0]);
+      Gothic::inst().onVideo(ret.argv[0],true);
+      return true;
     case C_None:
       return true;
     case C_Incomplete:

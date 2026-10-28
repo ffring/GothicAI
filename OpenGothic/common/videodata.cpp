@@ -29,6 +29,7 @@ namespace {
 constexpr uint64_t HeaderSize=128;
 constexpr int CompressionLevel=6;
 constexpr uint32_t KeyframeInterval=4;
+constexpr size_t CancellationChunk=1<<16;
 void require(bool ok,const std::string& reason) { if(!ok) throw std::runtime_error("video data: "+reason); }
 void require(bool ok,const char* reason) { if(!ok) throw std::runtime_error(std::string("video data: ")+reason); }
 void checkCancelled(const std::atomic_bool* cancelled) {
@@ -39,8 +40,13 @@ std::string upper(std::string name) { for(auto& c:name) if(c>='a' && c<='z') c=c
 std::string quoted(const std::string& value) {
   rapidjson::StringBuffer b; rapidjson::Writer<rapidjson::StringBuffer> w(b); w.String(value.c_str(),rapidjson::SizeType(value.size())); return b.GetString();
   }
-void writeBytes(std::ostream& out,const void* data,size_t size) {
-  out.write(static_cast<const char*>(data),std::streamsize(size)); require(bool(out),"write failed");
+void writeBytes(std::ostream& out,const void* data,size_t size,const std::atomic_bool* cancelled=nullptr) {
+  const auto* bytes=static_cast<const char*>(data);
+  for(size_t offset=0;offset<size;offset+=CancellationChunk) {
+    checkCancelled(cancelled);
+    out.write(bytes+offset,std::streamsize(std::min(size-offset,CancellationChunk)));
+    require(bool(out),"write failed");
+    }
   }
 void put32(std::ostream& out,uint32_t value) { uint8_t b[4]; for(size_t i=0;i<4;++i) b[i]=uint8_t(value>>(i*8)); writeBytes(out,b,4); }
 void put64(std::ostream& out,uint64_t value) { uint8_t b[8]; for(size_t i=0;i<8;++i) b[i]=uint8_t(value>>(i*8)); writeBytes(out,b,8); }
@@ -59,18 +65,30 @@ std::string fileHash(const fs::path& path,const std::atomic_bool* cancelled=null
   std::ifstream in(path,std::ios::binary); require(bool(in),"cannot open "+path.string());
   return hashRange(in,fs::file_size(path),cancelled);
   }
-std::string frameHash(uint32_t flags,std::string_view data) {
-  uint8_t bytes[4]; for(size_t i=0;i<4;++i) bytes[i]=uint8_t(flags>>(i*8));
-  Sha256 hash; hash.update(bytes,sizeof(bytes)); hash.update(data.data(),data.size()); return hash.finish();
+void updateHash(Sha256& hash,std::string_view data,const std::atomic_bool* cancelled) {
+  for(size_t offset=0;offset<data.size();offset+=CancellationChunk) {
+    checkCancelled(cancelled);
+    hash.update(data.data()+offset,std::min(data.size()-offset,CancellationChunk));
+    }
+  checkCancelled(cancelled);
   }
-void collect(const zenkit::VfsNode& node,const std::string& parent,std::map<const zenkit::VfsNode*,std::string>& paths,std::set<std::string>& names) {
+std::string dataHash(std::string_view data,const std::atomic_bool* cancelled) {
+  Sha256 hash; updateHash(hash,data,cancelled); return hash.finish();
+  }
+std::string frameHash(uint32_t flags,std::string_view data,const std::atomic_bool* cancelled=nullptr) {
+  uint8_t bytes[4]; for(size_t i=0;i<4;++i) bytes[i]=uint8_t(flags>>(i*8));
+  Sha256 hash; hash.update(bytes,sizeof(bytes)); updateHash(hash,data,cancelled); return hash.finish();
+  }
+void collect(const zenkit::VfsNode& node,const std::string& parent,std::map<const zenkit::VfsNode*,std::string>& paths,std::set<std::string>& names,const std::atomic_bool* cancelled) {
   for(const auto& child:node.children()) {
+    checkCancelled(cancelled);
     const auto path=parent+child.name();
-    if(child.type()==zenkit::VfsNodeType::DIRECTORY) collect(child,path+"/",paths,names);
+    if(child.type()==zenkit::VfsNodeType::DIRECTORY) collect(child,path+"/",paths,names,cancelled);
     else if(upper(fs::path(child.name()).extension().string())==".BIK") { paths[&child]=path; names.insert(upper(child.name())); }
     }
   }
 std::vector<uint8_t> bytes(const zenkit::VfsNode& node,const std::atomic_bool* cancelled=nullptr) {
+  checkCancelled(cancelled);
   auto in=node.open_read(); std::vector<uint8_t> data; std::array<uint8_t,1<<16> buffer;
   for(;;) { checkCancelled(cancelled); const size_t n=in->read(buffer.data(),buffer.size()); if(!n) break; data.insert(data.end(),buffer.begin(),buffer.begin()+ptrdiff_t(n)); }
   return data;
@@ -80,9 +98,11 @@ struct Selected {
   std::vector<Source> list;
   std::vector<const zenkit::VfsNode*> nodes;
   explicit Selected(const fs::path& gothic,const std::atomic_bool* cancelled=nullptr) {
+    checkCancelled(cancelled);
     fs::path work; BaseImport::mountRuntime(vfs,gothic,work);
+    checkCancelled(cancelled);
     std::map<const zenkit::VfsNode*,std::string> paths; std::set<std::string> names;
-    collect(vfs.root(),"",paths,names);
+    collect(vfs.root(),"",paths,names,cancelled);
     for(const auto& name:names) {
       checkCancelled(cancelled);
       const auto* node=vfs.find(name); require(node!=nullptr,"unresolved BIK "+name);
@@ -101,10 +121,11 @@ Identity identityOf(const std::vector<Source>& list) {
   }
 struct Input final:Bink::Video::Input {
   const std::vector<uint8_t>& data; size_t at=0;
-  explicit Input(const std::vector<uint8_t>& d):data(d) {}
-  void read(void* out,size_t n) override { require(at<=data.size() && n<=data.size()-at,"truncated BIK"); std::memcpy(out,data.data()+at,n); at+=n; }
-  void seek(size_t n) override { require(n<=data.size(),"BIK seek past end"); at=n; }
-  void skip(size_t n) override { require(at<=data.size() && n<=data.size()-at,"BIK skip past end"); at+=n; }
+  const std::atomic_bool* cancelled=nullptr;
+  explicit Input(const std::vector<uint8_t>& d,const std::atomic_bool* cancelled=nullptr):data(d),cancelled(cancelled) {}
+  void read(void* out,size_t n) override { checkCancelled(cancelled); require(at<=data.size() && n<=data.size()-at,"truncated BIK"); std::memcpy(out,data.data()+at,n); at+=n; }
+  void seek(size_t n) override { checkCancelled(cancelled); require(n<=data.size(),"BIK seek past end"); at=n; }
+  void skip(size_t n) override { checkCancelled(cancelled); require(at<=data.size() && n<=data.size()-at,"BIK skip past end"); at+=n; }
   };
 int16_t pcm(float v) { return v < -1.00004566f ? int16_t(-32768) : (v > 1.00001514f ? int16_t(32767) : int16_t(v*32767.5f)); }
 Info infoOf(const Bink::Video& video) {
@@ -123,28 +144,36 @@ void writeInfo(std::ostream& out,const Info& info,const std::vector<Position>& i
   for(const auto& t:info.tracks) { put32(out,t.sampleRate); put32(out,t.channels); put64(out,t.samples); }
   for(const auto& f:index) { put64(out,f.offset); put64(out,f.size); put32(out,f.flags); writeBytes(out,f.sha256.data(),64); }
   }
-bool encodePlane(std::ostream& out,const uint8_t* data,size_t size,uint32_t stride,const std::vector<uint8_t>* previous) {
+bool encodePlane(std::ostream& out,const uint8_t* data,size_t size,uint32_t stride,const std::vector<uint8_t>* previous,const std::atomic_bool* cancelled) {
+  checkCancelled(cancelled);
   std::vector<uint8_t> predicted(size);
-  for(size_t i=0;i<size;++i) predicted[i]=uint8_t(data[i]-(i>=stride ? data[i-stride] : 0));
+  for(size_t i=0;i<size;++i) { if(i%CancellationChunk==0) checkCancelled(cancelled); predicted[i]=uint8_t(data[i]-(i>=stride ? data[i-stride] : 0)); }
   mz_ulong length=mz_compressBound(mz_ulong(size)); std::vector<uint8_t> compressed(length);
+  checkCancelled(cancelled);
   require(mz_compress2(compressed.data(),&length,predicted.data(),mz_ulong(size),CompressionLevel)==MZ_OK,"deflate failed"); compressed.resize(length);
+  checkCancelled(cancelled);
   bool temporal=false;
   if(previous) {
     require(previous->size()==size,"previous plane size differs");
-    for(size_t i=0;i<size;++i) predicted[i]=uint8_t(data[i]-(*previous)[i]);
+    for(size_t i=0;i<size;++i) { if(i%CancellationChunk==0) checkCancelled(cancelled); predicted[i]=uint8_t(data[i]-(*previous)[i]); }
     mz_ulong deltaSize=mz_compressBound(mz_ulong(size)); std::vector<uint8_t> delta(deltaSize);
+    checkCancelled(cancelled);
     require(mz_compress2(delta.data(),&deltaSize,predicted.data(),mz_ulong(size),CompressionLevel)==MZ_OK,"deflate failed");
+    checkCancelled(cancelled);
     if(deltaSize<compressed.size()) { delta.resize(deltaSize); compressed=std::move(delta); temporal=true; }
     }
   std::vector<uint8_t> restored(size); mz_ulong restoredSize=mz_ulong(size);
+  checkCancelled(cancelled);
   require(mz_uncompress(restored.data(),&restoredSize,compressed.data(),mz_ulong(compressed.size()))==MZ_OK && restoredSize==size,"deflate verification failed");
+  checkCancelled(cancelled);
   if(temporal) {
-    for(size_t i=0;i<size;++i) restored[i]=uint8_t(restored[i]+(*previous)[i]);
+    for(size_t i=0;i<size;++i) { if(i%CancellationChunk==0) checkCancelled(cancelled); restored[i]=uint8_t(restored[i]+(*previous)[i]); }
     } else {
-    for(size_t i=stride;i<size;++i) restored[i]=uint8_t(restored[i]+restored[i-stride]);
+    for(size_t i=stride;i<size;++i) { if(i%CancellationChunk==0) checkCancelled(cancelled); restored[i]=uint8_t(restored[i]+restored[i-stride]); }
     }
   require(std::memcmp(restored.data(),data,size)==0,"decoded plane differs after compression");
-  put32(out,uint32_t(compressed.size())); writeBytes(out,compressed.data(),compressed.size()); return temporal;
+  checkCancelled(cancelled);
+  put32(out,uint32_t(compressed.size())); writeBytes(out,compressed.data(),compressed.size(),cancelled); return temporal;
   }
 Entry encode(const Source& source,Bink::Video& video,const fs::path& out,const std::atomic_bool* cancelled) {
   Entry entry; entry.source=source; entry.file=source.name+".gvideo"; entry.info=infoOf(video);
@@ -159,22 +188,23 @@ Entry encode(const Source& source,Bink::Video& video,const fs::path& out,const s
     catch(const std::exception& e) {
       throw std::runtime_error("video data: "+source.name+" frame "+std::to_string(f)+" (zero-based): "+e.what());
       }
+    checkCancelled(cancelled);
     const auto& frame=*decoded; const uint64_t start=uint64_t(output.tellp());
     std::ostringstream encodedFrame(std::ios::binary|std::ios::out);
     uint32_t flags=0;
     for(uint8_t p=0;p<4;++p) {
       const auto& pi=entry.info.planes[p]; const auto* data=frame.plane(p).data(); const size_t size=size_t(pi.stride)*pi.rows;
-      if(encodePlane(encodedFrame,data,size,pi.stride,f%KeyframeInterval ? &previousPlanes[p] : nullptr)) flags|=1u<<p;
+      if(encodePlane(encodedFrame,data,size,pi.stride,f%KeyframeInterval ? &previousPlanes[p] : nullptr,cancelled)) flags|=1u<<p;
       previousPlanes[p].assign(data,data+size);
       }
     for(size_t t=0;t<entry.info.tracks.size();++t) {
       const auto& samples=frame.audio(uint8_t(t)).samples; put32(encodedFrame,uint32_t(samples.size()));
       std::vector<uint8_t> encoded(samples.size()*2);
-      for(size_t i=0;i<samples.size();++i) { const uint16_t v=uint16_t(pcm(samples[i])); encoded[2*i]=uint8_t(v); encoded[2*i+1]=uint8_t(v>>8); }
-      writeBytes(encodedFrame,encoded.data(),encoded.size()); entry.info.tracks[t].samples+=samples.size();
+      for(size_t i=0;i<samples.size();++i) { if(i%CancellationChunk==0) checkCancelled(cancelled); const uint16_t v=uint16_t(pcm(samples[i])); encoded[2*i]=uint8_t(v); encoded[2*i+1]=uint8_t(v>>8); }
+      writeBytes(encodedFrame,encoded.data(),encoded.size(),cancelled); entry.info.tracks[t].samples+=samples.size();
       }
-    const auto encoded=encodedFrame.str(); payloadHash.update(encoded.data(),encoded.size());
-    positions[f]={start,encoded.size(),flags,frameHash(flags,encoded)}; writeBytes(output,encoded.data(),encoded.size());
+    const auto encoded=encodedFrame.str(); updateHash(payloadHash,encoded,cancelled);
+    positions[f]={start,encoded.size(),flags,frameHash(flags,encoded,cancelled)}; writeBytes(output,encoded.data(),encoded.size(),cancelled);
     }
   entry.size=uint64_t(output.tellp()); const auto hash=payloadHash.finish();
   writeInfo(output,entry.info,positions,entry.size,hash); output.close(); entry.sha256=fileHash(file,cancelled); return entry;
@@ -326,7 +356,7 @@ void build(const fs::path& gothic,const fs::path& out,const BaseImport::Progress
   std::vector<Job> jobs(selected.list.size());
   // Bink constructors write global VLC and cosine tables. Complete all constructors before decoding
   // on worker threads.
-  for(size_t i=0;i<jobs.size();++i) { checkCancelled(cancelled); auto& job=jobs[i]; job.bytes=bytes(*selected.nodes[i],cancelled); require(Sha256::hash({reinterpret_cast<const char*>(job.bytes.data()),job.bytes.size()})==selected.list[i].sha256,"BIK changed while importing"); job.input=std::make_unique<Input>(job.bytes); job.video=std::make_unique<Bink::Video>(job.input.get(),selected.list[i].name); }
+  for(size_t i=0;i<jobs.size();++i) { checkCancelled(cancelled); auto& job=jobs[i]; job.bytes=bytes(*selected.nodes[i],cancelled); require(dataHash({reinterpret_cast<const char*>(job.bytes.data()),job.bytes.size()},cancelled)==selected.list[i].sha256,"BIK changed while importing"); job.input=std::make_unique<Input>(job.bytes,cancelled); job.video=std::make_unique<Bink::Video>(job.input.get(),selected.list[i].name); }
   const size_t threads=std::max<size_t>(1,std::min(workerLimit,jobs.size())); std::vector<Entry> entries(jobs.size()); std::atomic<size_t> cursor=0; std::exception_ptr error; std::mutex sync;
   const auto run=[&] {
     try { for(;;) { const size_t i=cursor.fetch_add(1); if(i>=jobs.size()) break; entries[i]=encode(selected.list[i],*jobs[i].video,out,cancelled); } }

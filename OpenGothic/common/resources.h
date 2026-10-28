@@ -20,6 +20,7 @@
 #include <tuple>
 #include <string_view>
 #include <map>
+#include <thread>
 
 #include "graphics/material.h"
 #include "sound/soundfx.h"
@@ -163,6 +164,7 @@ class Resources final {
     static Dx8::PatternList          loadDxMusic(std::string_view name);
     static DmSegment*                loadMusicSegment(char const* name);
     static std::unique_ptr<VideoData::Reader> loadVideo(std::string_view name);
+    static void                      startVideoBase();
     static void                      videoFrameRead(std::string_view name);
     static const ProtoMesh*          decalMesh(const asset::VisualDecal& decal);
 
@@ -253,7 +255,8 @@ class Resources final {
     BaseStore::Selection automaticBase;
     struct VideoBase;
     std::shared_ptr<VideoBase> videoBase;
-    void startVideoBase();
+    std::mutex videoStartSync;
+    std::thread videoWorker;
     BaseImport::Progress baseProgress;
     static std::filesystem::path baseDir();
     void indexBaseContent();

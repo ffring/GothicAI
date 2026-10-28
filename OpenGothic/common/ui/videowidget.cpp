@@ -262,9 +262,7 @@ VideoWidget::~VideoWidget() {
   }
 
 void VideoWidget::pushVideo(std::string_view filename) {
-  const int scaleVideos = Gothic::settingsGetI("GAME", "scaleVideos");
-  if(scaleVideos<0)
-    return;
+  Resources::startVideoBase();
   std::lock_guard<std::mutex> guard(syncVideo);
   pendingVideo.emplace(filename);
   hasPendingVideo.store(true);
@@ -298,7 +296,7 @@ void VideoWidget::tick() {
 
   try {
     auto read=Resources::loadVideo(filename);
-    if(!read) {
+    if(!read || Gothic::settingsGetI("GAME", "scaleVideos")<0) {
       stopVideo();
       return;
       }
