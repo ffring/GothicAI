@@ -1,4 +1,4 @@
-"""Independent realtime melee leases driven by the remote P30 JSONL policy (no model dependencies)."""
+"""Independent realtime melee leases driven by engine P30 or the backup JSONL service."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from .protocol import (
     BodyControlEvents,
     BodyLease,
     BodyObservation,
+    BodyPolicy,
     GameMessage,
     Hello,
     Loading,
@@ -215,6 +216,11 @@ class FightSummary:
     watch_removed: bool
     end_trigger: str
     release_late_seconds: float | None = None
+    policy: str = "service"
+    policy_fallbacks: tuple[tuple[str, int], ...] = ()
+    engine_steps: int = 0
+    engine_p50_us: float | None = None
+    engine_p99_us: float | None = None
 
 
 @dataclass(frozen=True)
@@ -231,17 +237,21 @@ class BodyPilot:
     def __init__(
         self,
         link: GameLink,
-        url: str,
+        url: str | None = None,
         *,
         companion: Callable[[str], bool] = lambda npc: False,
         unavailable: Callable[[str], bool] = lambda npc: False,
         talking: Callable[[str], bool] = lambda npc: False,
         clock: Callable[[], float] = time.monotonic,
         max_fights: int = 4,
+        body_policy: str = "engine",
     ) -> None:
         if type(max_fights) is not int or not 1 <= max_fights <= 4:
             raise ValueError("neural body max must be between 1 and 4")
         self.link, self.url = link, url
+        self.body_policy = body_policy
+        self.policy: str | None = None
+        self._select_policy(link.hello)
         self.companion, self.unavailable, self.clock = companion, unavailable, clock
         self.talking = talking
         self.max_fights = max_fights
@@ -267,6 +277,20 @@ class BodyPilot:
         self._running = self._closing = self._resetting = False
         link.listeners.append(self.on_message)
         link.raw_body_listeners.append(self.on_body_packet)
+
+    def _select_policy(self, hello: Hello | None) -> None:
+        if self.body_policy == "service":
+            self.policy = "service" if self.url else None
+        elif hello is not None and hello.body_net is not None and hello.body_net.loaded:
+            self.policy = "engine"
+        else:
+            self.policy = "service" if self.url else None
+            if hello is not None:
+                log.warning(
+                    "neural-body engine unavailable error=%s policy=%s",
+                    hello.body_net.error if hello.body_net else "body_net missing from hello",
+                    self.policy or "native",
+                )
 
     @property
     def last_summary(self) -> FightSummary | None:
@@ -350,6 +374,8 @@ class BodyPilot:
                 elif npc not in self._roster_attempted:
                     self._start(npc)
         elif isinstance(message, (Loading, Hello)):
+            if isinstance(message, Hello):
+                self._select_policy(message)
             self._releasing.clear()
             self._acquire_cleanup.clear()
             self.people.clear()
@@ -362,9 +388,12 @@ class BodyPilot:
         elif isinstance(message, Attached):
             if fight := self.fights.get(message.npc.upper()):
                 fight.stop("attached")
-        elif isinstance(message, BodyControlEvents):
+        elif isinstance(message, (BodyControlEvents, BodyPolicy)):
             for fight in list(self.fights.values()):
                 fight.on_message(message)
+            if isinstance(message, BodyPolicy):
+                self._wake.set()
+                return
             for npc, pending in list(self._releasing.items()):
                 if any(
                     (event.entity_id, event.session_epoch, event.world_epoch, event.control_generation)
@@ -398,6 +427,7 @@ class BodyPilot:
         npc = npc.upper()
         if (
             self.handles(npc) or self._closing or self._resetting
+            or self.policy is None
             or self.active_count >= self.max_fights
             or len(self.fights.keys() | self._releasing.keys() | self._acquire_cleanup.keys()) >= 4
             or npc in self._claimed_fights
@@ -769,6 +799,7 @@ class BodyFight:
 
     def __init__(self, pilot: BodyPilot, npc: str) -> None:
         self.pilot, self.link, self.clock = pilot, pilot.link, pilot.clock
+        self.policy = pilot.policy
         self.npc: str | None = npc
         self._retargeting = npc in pilot._retarget_pending
         self._claimed_fights = pilot._claimed_fights
@@ -845,6 +876,11 @@ class BodyFight:
         self._packet_to_action: list[float] = []
         self._decisions = 0
         self._fallbacks = 0
+        self._policy_fallbacks: Counter[str] = Counter()
+        self._engine_steps = 0
+        self._engine_p50_us: float | None = None
+        self._engine_p99_us: float | None = None
+        self._last_policy_summary: tuple[int, bool] = (-1, False)
         self._memory_only_step = False
         self._policy_needs_reset = False
         self._memory_only_lag_rows = 0
@@ -854,7 +890,7 @@ class BodyFight:
         self._max_batch_lag_game_ms = 0
 
     @property
-    def url(self) -> str:
+    def url(self) -> str | None:
         return self.pilot.url
 
     @property
@@ -883,6 +919,25 @@ class BodyFight:
             self._reason = reason
 
     def on_message(self, message: GameMessage) -> None:
+        if isinstance(message, BodyPolicy) and self.policy == "engine" and self.lease is not None:
+            if (
+                message.entity_id, message.session_epoch, message.world_epoch,
+                message.control_generation,
+            ) != self._identity(self.lease):
+                return
+            stamp = message.t_wall_ms, message.final
+            if stamp <= self._last_policy_summary:
+                return
+            self._last_policy_summary = stamp
+            self._decisions += message.decisions
+            self._policy_fallbacks.update(message.fallbacks)
+            self._fallbacks = sum(self._policy_fallbacks.values())
+            self._engine_steps += message.steps
+            if message.steps:
+                # Only interval percentiles are available. Retain their maxima
+                # so a slow interval cannot disappear behind later faster ones.
+                self._engine_p50_us = max(self._engine_p50_us or 0, message.p50_us)
+                self._engine_p99_us = max(self._engine_p99_us or 0, message.p99_us)
         if isinstance(message, BodyControlEvents) and self.lease is not None:
             for event in message.events:
                 if (
@@ -911,7 +966,9 @@ class BodyFight:
                     self._capture_invisibility(self.clock(), event.t_game_ms)
                     self._invisible_at = self._invisible_game_ms = None
                     self._native_release_reason = event.release_reason
+                    fallback = event.release_reason.startswith("policy_fallback:")
                     self._set_reason(
+                        event.release_reason if fallback else
                         "target_lost" if event.release_reason == "target_visibility_lost"
                         else "native_restored"
                     )
@@ -1278,9 +1335,10 @@ class BodyFight:
             dict(self._refusals),
         )
         self._initial_game_ms = observation.t_game_ms
-        if self._closing or self._reason:
+        if self._closing or self._reason or self.policy == "engine":
             return
         try:
+            assert self.url is not None
             self.client = PolicyClient(self.url)
             try:
                 await self.client.connect()
@@ -1414,6 +1472,7 @@ class BodyFight:
                         timeout=BRIDGE_TIMEOUT,
                         cancel_event=self._acquire_cancel,
                         retain_on_timeout=True,
+                        policy="engine" if self.policy == "engine" else None,
                     )
                 except (TimeoutError, OSError, ConnectionClosed):
                     # The bridge may own the body even though no receipt arrived.
@@ -1435,6 +1494,8 @@ class BodyFight:
                 await self._start_policy(observation, target, requested_at)
             return
         if raw["observation_seq"] <= self.lease.acquired_observation_seq:
+            return
+        if self.policy == "engine":
             return
         try:
             assert self.client is not None
@@ -1873,6 +1934,18 @@ class BodyFight:
                 with contextlib.suppress(*BRIDGE_ERRORS):
                     async with asyncio.timeout(BRIDGE_TIMEOUT):
                         watch_removed = await self.pilot._unwatch(self)
+        if (
+            reason not in WORLD_STOP_REASONS
+            and self._native_release_reason is not None
+            and self._native_release_reason.startswith("policy_fallback:")
+        ):
+            reason = self._native_release_reason
+            if not self._last_policy_summary[1]:
+                # A final interval reports the refusals that caused this release,
+                # even when its ownership event arrived first. Count the release
+                # itself only if that final report never reached the server.
+                self._policy_fallbacks[reason.removeprefix("policy_fallback:")] += 1
+                self._fallbacks = sum(self._policy_fallbacks.values())
         summary = FightSummary(
             npc=npc,
             lease=lease,
@@ -1927,6 +2000,11 @@ class BodyFight:
             watch_removed=watch_removed,
             end_trigger=end_trigger if reason == "finish_deadline" else reason,
             release_late_seconds=release_seconds if reason == "finish_deadline" else None,
+            policy=self.policy,
+            policy_fallbacks=tuple(sorted(self._policy_fallbacks.items())),
+            engine_steps=self._engine_steps,
+            engine_p50_us=self._engine_p50_us,
+            engine_p99_us=self._engine_p99_us,
         )
         log.info(
             "neural-body end npc=%s target_kind=%s target_name=%s reason=%s end_trigger=%s "
@@ -1944,7 +2022,8 @@ class BodyFight:
             "action_rejections=%s accept_wait_timeouts=%d transient_rejections_consecutive=%d "
             "policy_timeouts=%d policy_timeouts_consecutive=%d policy_timeout_wait_p95_ms=%s "
             "policy_response_silence_ms=%s ownership_poll_timeouts=%d "
-            "ownership_poll_max_gap_ms=%.1f unconfirmed=%s",
+            "ownership_poll_max_gap_ms=%.1f unconfirmed=%s policy=%s "
+            "policy_fallbacks=%s engine_steps=%d engine_p50_us=%s engine_p99_us=%s",
             npc,
             summary.target_kind,
             summary.target_name,
@@ -1986,6 +2065,11 @@ class BodyFight:
             summary.ownership_poll_timeouts,
             summary.ownership_poll_max_gap_ms,
             unconfirmed if reason == "finish_deadline" else None,
+            summary.policy,
+            dict(summary.policy_fallbacks),
+            summary.engine_steps,
+            summary.engine_p50_us,
+            summary.engine_p99_us,
         )
         log.info(
             "neural-body target diagnostics invisible_max_seconds=%s invisible_max_game_ms=%d "

@@ -161,7 +161,7 @@ void transientActionRefusals() {
   expect(step("").empty(),"an accepted action breaks the transient refusal streak");
   for(unsigned i=0;i<9;++i)
     expect(step("stale_observation").empty(),"a new refusal streak receives all nine retries");
-  expect(step("stale_observation")=="body_action_rejected","the tenth consecutive action refusal ends the fight");
+  expect(step("stale_observation")=="policy_fallback:body_action_rejected","the tenth consecutive action refusal ends the fight");
   }
 }
 

@@ -519,6 +519,7 @@ class GameLink:
         mode: BodyMode = "realtime", timeout_ms: int = 500, timeout: float = 5.0,
         await_boundary_ms: int = 0, cancel_event: asyncio.Event | None = None,
         retain_on_timeout: bool = False,
+        policy: Literal["engine"] | None = None,
     ) -> BodyLease:
         """Claim a watched actor using its real process/world/target IDs, without changing native state."""
         if mode != "realtime":
@@ -530,6 +531,7 @@ class GameLink:
             target_entity_id=observation.target.entity_id,
             await_boundary_ms=await_boundary_ms,
             acquire_request_id=(secrets.randbits(63) or 1) if await_boundary_ms else 0,
+            policy=policy,
         )
         if (
             observation.entity_id in self._body_acquisitions

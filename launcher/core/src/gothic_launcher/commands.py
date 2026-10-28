@@ -42,7 +42,7 @@ PLAY_CONTENT = Path.home() / ".local" / "share" / "gothic-ai" / "play-content"
 LOG_ROOT = default_log_root()
 KEEP_LOGS = 20
 UV_CANDIDATES = ("~/.local/bin/uv", "/opt/homebrew/bin/uv", "/usr/local/bin/uv", "~/.cargo/bin/uv")
-MANAGED_ENV = ("OPENAI_API_KEY", "INWORLD_API_KEY")
+MANAGED_ENV = ("OPENAI_API_KEY", "INWORLD_API_KEY", "OPENGOTHIC_BODY_NET")
 FOREIGN_ENV = ("VIRTUAL_ENV",)  # the launcher's own venv: `uv run` of a service would warn and ignore it
 SAVE_RE = re.compile(r"save_slot_(\d+)\.sav")
 
@@ -230,7 +230,7 @@ def services(config: Config, layout: Layout, ports: Ports, cwd: Path) -> list[Pr
     ]  # fmt: skip
     server_args += _opt("--model", s.llm.model) + _opt("--base-url", s.llm.base_url)
     server_args += _opt("--decider-url", s.llm.decider_url) + _opt("--quick-url", s.llm.quick_url)
-    server_args += _opt("--body-url", s.llm.body_url)  # the neural body pilot is on when the address is set
+    server_args += ["--body-policy", s.llm.body_policy] + _opt("--body-url", s.llm.body_url)
     server_args += [] if s.llm.quick else ["--no-quick"]  # on by default, next to the decider
     openai_key = {"OPENAI_API_KEY": keys.openai_api_key} if keys.openai_api_key else {}
 
@@ -288,6 +288,8 @@ def game(config: Config, layout: Layout, ports: Ports, save: str | None = None, 
     }
     if s.chat_scale is not None:
         env["GOTHIC_AI_CHAT_SCALE"] = f"{s.chat_scale:g}"
+    if config.settings.llm.body_net is not None:
+        env["OPENGOTHIC_BODY_NET"] = str(config.settings.llm.body_net)
     return Proc("game", argv, layout.game_home, env, restart=False, stamp=True)
 
 

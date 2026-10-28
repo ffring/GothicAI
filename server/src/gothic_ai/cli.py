@@ -741,11 +741,13 @@ def _start_showrunner(args: argparse.Namespace, showrunner: Showrunner) -> async
 
 
 def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -> BodyPilot | None:
-    if not args.neural_body or not args.body_url:
+    policy = getattr(args, "body_policy", "engine")
+    if not args.neural_body or (policy == "service" and not args.body_url):
         return None
     return BodyPilot(
         link,
         args.body_url,
+        body_policy=policy,
         max_fights=args.neural_body_max,
         companion=talk.orders.companion,
         unavailable=lambda npc: npc.upper() in talk.attached,
@@ -805,6 +807,9 @@ async def serve(args: argparse.Namespace) -> int:
     if soak_control and args.neural_body:
         log.error("scenario neural-soak control requires --no-neural-body")
         return 2
+    if args.scenario == "neural-soak" and not soak_control:
+        # Action-distribution thresholds need service RPC data, absent from body_policy summaries.
+        args.body_policy = "service"
     if args.scenario in {
         "neural",
         "neural-companion",
@@ -812,8 +817,11 @@ async def serve(args: argparse.Namespace) -> int:
         "neural-talk",
         "neural-load",
         "neural-soak",
-    } and not soak_control and (not args.body_url or not args.neural_body):
-        log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
+    } and not soak_control and (
+        not args.neural_body or (args.body_policy == "service" and not args.body_url)
+    ):
+        log.error("scenario %s requires --neural-body and, for service policy, GOTHIC_BODY_URL "
+                  "(or --body-url)", args.scenario)
         return 2
     if args.scenario in {"neural-soak", "feats"} and args.llm != "fake":
         log.error("scenario %s requires --llm fake", args.scenario)
@@ -844,7 +852,10 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
-    log.info("neural body: %s", args.body_url if args.neural_body and args.body_url else "off")
+    log.info(
+        "neural body: policy=%s service=%s",
+        args.body_policy if args.neural_body else "off", args.body_url,
+    )
     log.info("lines in a fight: %s", quick_at or "the conversational model")
     log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
     graph = (
@@ -3201,15 +3212,21 @@ def main() -> None:
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
     )
     p.add_argument(
+        "--body-policy",
+        choices=("engine", "service"),
+        default=os.environ.get("GOTHIC_BODY_POLICY", "engine"),
+        help="combat policy location (GOTHIC_BODY_POLICY; default: engine)",
+    )
+    p.add_argument(
         "--body-url",
         default=os.environ.get("GOTHIC_BODY_URL"),
-        help="body policy service at tcp://host:47835 (GOTHIC_BODY_URL; without it the pilot is off)",
+        help="backup body policy service at tcp://host:47835 (GOTHIC_BODY_URL)",
     )
     p.add_argument(
         "--neural-body",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="let the body policy fight the hero or companions with eligible npcs (requires --body-url)",
+        help="let the body policy fight the hero or companions with eligible npcs (default: on)",
     )
     p.add_argument(
         "--neural-body-max",

@@ -1,6 +1,6 @@
 # Боевой API и арбитр тела NPC
 
-Этап 4 [плана GRU](npc-body-control-plan.md). Общий CPU `BodyController` используется headless runner и обычным AI bridge. Примитивы выбирает внешний provider либо, с v54 по явному `policy:"engine"`, P30 в движке. Настоящие NPC, физика, анимационные окна и расчёт урона исполняют их.
+Этап 4 [плана GRU](npc-body-control-plan.md). Общий CPU `BodyController` используется headless runner и обычным AI bridge. С v54 сервер по умолчанию запрашивает `policy:"engine"`: примитивы выбирает P30 в движке; внешний provider остаётся запасным режимом. Настоящие NPC, физика, анимационные окна и расчёт урона исполняют их.
 
 Этап прошёл полный серверный прогон `stage4-v5`: [результаты и границы проверки](../reports/npc-body/2026-10-13-body-api/validation-notes.md), [37 сценариев](../reports/npc-body/2026-10-13-body-api/body-api.md), [машинный отчёт](../reports/npc-body/2026-10-13-body-api/body-api.json).
 
@@ -66,10 +66,25 @@ memory-only строки, повтор `observation_too_old` и сброс по�
 `steps` (число измеренных шагов) и `p50_us` / `p99_us`
 за интервал; при отсутствии шагов процентиля равны 0. Сразу при конце по отказу
 приходит сводка `final:true`: runtime fallback имеет `reason:"policy_fallback:<reason>"`,
-ошибка политики — `policy_error`, окончательный отказ применения — `body_action_rejected`.
+ошибка политики — `policy_fallback:policy_error`, окончательный отказ применения —
+`policy_fallback:body_action_rejected`.
 Обычная сводка содержит `final:false`, `reason:""`.
 [Полная схема](protocol.md#политика-боя-в-движке-v54).
-Серверный пилот и лаунчер пока не запрашивают этот режим.
+Серверный `BodyPilot` по умолчанию использует `--body-policy engine`
+(`GOTHIC_BODY_POLICY`). Он создаётся без `--body-url`, но начинает бой только при
+`hello.body_net.loaded:true`. Отсутствие поля равнозначно незагруженной сети:
+заданный `--body-url` / `GOTHIC_BODY_URL` включает запасной сервис, без адреса
+остаётся native AI. Причина из hello логируется один раз на подключение.
+Явный `--body-policy service` требует адрес; `--no-neural-body` отключает оба пути.
+В engine сервер поддерживает watch, lease, heartbeat, goal и release, но не создаёт
+`PolicyClient`, не запускает сторож сервиса и не отправляет `body_action`.
+`body_policy` попадает только в бой с совпадающими `entity_id` и
+`control_generation`; счётчики интервалов суммируются в `FightSummary`.
+Поскольку отдельные времена шагов не передаются, `engine_p50_us` / `engine_p99_us`
+сохраняют максимумы интервальных процентилей, а не процентиль за весь бой.
+Лог конца сохраняет `neural-body end … decisions=…` и добавляет `policy=engine|service`.
+Лаунчер передаёт `llm.body_policy` серверу, а необязательный путь `llm.body_net`
+игре как `OPENGOTHIC_BODY_NET`.
 
 ### Ожидание безопасной границы (v41)
 
