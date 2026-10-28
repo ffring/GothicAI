@@ -934,15 +934,15 @@ async def test_policy_route_uses_current_hello_once_per_connection(
 
 
 @pytest.mark.parametrize(
-    ("end", "restore_first"),
-    [("npc_down", False), *[
-        (f"policy_fallback:{reason}", restore_first)
+    ("end", "restore_first", "final_summary"),
+    [("npc_down", False, False), ("policy_fallback:policy_error", False, False), *[
+        (f"policy_fallback:{reason}", restore_first, True)
         for reason in ("policy_error", "body_action_rejected")
         for restore_first in (False, True)
     ]],
 )
 async def test_engine_lease_heartbeats_and_interval_summaries_without_service_or_actions(
-    end, restore_first, caplog,
+    end, restore_first, final_summary, caplog,
 ):
     caplog.set_level("INFO", logger="gothic_ai.bodypilot")
     async with running(body_net={"loaded": True}, has_url=False) as rig:
@@ -968,16 +968,22 @@ async def test_engine_lease_heartbeats_and_interval_summaries_without_service_or
         publish(control_generation=lease.control_generation - 1)
         publish()
         publish()  # A repeated interval must not count twice.
-        publish(t_wall_ms=2000, decisions=8, steps=10, p50_us=40, p99_us=200)
+        transient_refusals = {"command_busy": 1, "stale_observation": 1}
+        publish(
+            t_wall_ms=2000, decisions=8, steps=10, p50_us=40, p99_us=200,
+            fallbacks=transient_refusals,
+        )
+        assert rig.fight._fallbacks == 0
         refusals = {"masked": 10} if end.endswith("body_action_rejected") else {"policy_error": 1}
         if end.startswith("policy_fallback:"):
             if restore_first:
                 rig.bridge.restore_native(release_reason=end)
                 rig.link._dispatch(events(rig.bridge.control_events.popleft()))
-            publish(
-                t_wall_ms=2100, decisions=3, steps=4, final=True,
-                fallbacks=refusals, reason=end,
-            )
+            if final_summary:
+                publish(
+                    t_wall_ms=2100, decisions=3, steps=4, final=True,
+                    fallbacks=refusals, reason=end,
+                )
             if not restore_first:
                 rig.bridge.restore_native(release_reason=end)
         else:
@@ -987,11 +993,12 @@ async def test_engine_lease_heartbeats_and_interval_summaries_without_service_or
         await eventually(lambda: rig.pilot.last_summary is not None)
         summary = rig.pilot.last_summary
         assert summary.policy == "engine" and summary.reason == end
-        assert summary.decisions == (17 if end.startswith("policy_fallback:") else 14)
-        assert summary.engine_steps == (21 if end.startswith("policy_fallback:") else 17)
-        assert summary.engine_p50_us == 50 and summary.engine_p99_us == 300
-        assert summary.fallbacks == (sum(refusals.values()) if end.startswith("policy_fallback:") else 0)
-        assert summary.policy_fallbacks == (tuple(refusals.items()) if summary.fallbacks else ())
+        assert summary.decisions == (17 if final_summary else 14)
+        assert summary.engine_steps == (21 if final_summary else 17)
+        assert summary.engine_max_interval_p50_us == 50 and summary.engine_p99_us == 300
+        assert summary.fallbacks == int(end.startswith("policy_fallback:"))
+        expected_refusals = transient_refusals | (refusals if summary.fallbacks else {})
+        assert summary.policy_fallbacks == tuple(sorted(expected_refusals.items()))
         assert summary.release_confirmed and summary.release_seconds < 2 and summary.watch_removed
         assert not rig.policy.requests and not rig.bridge.commands("body_action")
         assert any(

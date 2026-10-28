@@ -403,6 +403,7 @@ LOG_DIR="${LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gothic-e2e.XXXXXX")}"
 SCENARIO="${SCENARIO:-m0}"
 BODY_POLICY="${GOTHIC_BODY_POLICY:-engine}"
 BODY_ARGS=(--neural-body --body-policy "$BODY_POLICY")
+if [[ "$SCENARIO" == memprobe ]]; then BODY_ARGS=(--no-neural-body); fi
 if [[ "${GOTHIC_SOAK_CONTROL:-0}" == 1 && "$SCENARIO" != neural-soak ]]; then
   echo 'GOTHIC_SOAK_CONTROL requires SCENARIO=neural-soak' >&2
   exit 2

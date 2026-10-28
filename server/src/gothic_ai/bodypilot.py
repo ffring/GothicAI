@@ -219,7 +219,7 @@ class FightSummary:
     policy: str = "service"
     policy_fallbacks: tuple[tuple[str, int], ...] = ()
     engine_steps: int = 0
-    engine_p50_us: float | None = None
+    engine_max_interval_p50_us: float | None = None
     engine_p99_us: float | None = None
 
 
@@ -878,7 +878,7 @@ class BodyFight:
         self._fallbacks = 0
         self._policy_fallbacks: Counter[str] = Counter()
         self._engine_steps = 0
-        self._engine_p50_us: float | None = None
+        self._engine_max_interval_p50_us: float | None = None
         self._engine_p99_us: float | None = None
         self._last_policy_summary: tuple[int, bool] = (-1, False)
         self._memory_only_step = False
@@ -931,12 +931,17 @@ class BodyFight:
             self._last_policy_summary = stamp
             self._decisions += message.decisions
             self._policy_fallbacks.update(message.fallbacks)
-            self._fallbacks = sum(self._policy_fallbacks.values())
+            self._fallbacks = sum(
+                count for reason, count in self._policy_fallbacks.items()
+                if reason not in TRANSIENT_ACTION_REJECTIONS
+            )
+            if message.final and message.reason.startswith("policy_fallback:"):
+                self._fallbacks = max(1, self._fallbacks)
             self._engine_steps += message.steps
             if message.steps:
                 # Only interval percentiles are available. Retain their maxima
                 # so a slow interval cannot disappear behind later faster ones.
-                self._engine_p50_us = max(self._engine_p50_us or 0, message.p50_us)
+                self._engine_max_interval_p50_us = max(self._engine_max_interval_p50_us or 0, message.p50_us)
                 self._engine_p99_us = max(self._engine_p99_us or 0, message.p99_us)
         if isinstance(message, BodyControlEvents) and self.lease is not None:
             for event in message.events:
@@ -1945,7 +1950,8 @@ class BodyFight:
                 # even when its ownership event arrived first. Count the release
                 # itself only if that final report never reached the server.
                 self._policy_fallbacks[reason.removeprefix("policy_fallback:")] += 1
-                self._fallbacks = sum(self._policy_fallbacks.values())
+                self._fallbacks += 1
+            self._fallbacks = max(1, self._fallbacks)
         summary = FightSummary(
             npc=npc,
             lease=lease,
@@ -2003,7 +2009,7 @@ class BodyFight:
             policy=self.policy,
             policy_fallbacks=tuple(sorted(self._policy_fallbacks.items())),
             engine_steps=self._engine_steps,
-            engine_p50_us=self._engine_p50_us,
+            engine_max_interval_p50_us=self._engine_max_interval_p50_us,
             engine_p99_us=self._engine_p99_us,
         )
         log.info(
@@ -2023,7 +2029,7 @@ class BodyFight:
             "policy_timeouts=%d policy_timeouts_consecutive=%d policy_timeout_wait_p95_ms=%s "
             "policy_response_silence_ms=%s ownership_poll_timeouts=%d "
             "ownership_poll_max_gap_ms=%.1f unconfirmed=%s policy=%s "
-            "policy_fallbacks=%s engine_steps=%d engine_p50_us=%s engine_p99_us=%s",
+            "policy_fallbacks=%s engine_steps=%d engine_max_interval_p50_us=%s engine_p99_us=%s",
             npc,
             summary.target_kind,
             summary.target_name,
@@ -2068,7 +2074,7 @@ class BodyFight:
             summary.policy,
             dict(summary.policy_fallbacks),
             summary.engine_steps,
-            summary.engine_p50_us,
+            summary.engine_max_interval_p50_us,
             summary.engine_p99_us,
         )
         log.info(

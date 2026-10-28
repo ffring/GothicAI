@@ -80,8 +80,12 @@ memory-only строки, повтор `observation_too_old` и сброс по�
 `PolicyClient`, не запускает сторож сервиса и не отправляет `body_action`.
 `body_policy` попадает только в бой с совпадающими `entity_id` и
 `control_generation`; счётчики интервалов суммируются в `FightSummary`.
-Поскольку отдельные времена шагов не передаются, `engine_p50_us` / `engine_p99_us`
+Поскольку отдельные времена шагов не передаются, `engine_max_interval_p50_us` / `engine_p99_us`
 сохраняют максимумы интервальных процентилей, а не процентиль за весь бой.
+`policy_fallbacks` сохраняет все причины из сводок; `fallbacks` не включает
+повторяемые отказы действий (`command_busy`, `stale_observation` и остальные
+`TRANSIENT_ACTION_REJECTIONS`). Завершение по `policy_fallback:*` всегда учитывается
+как минимум как один отказ политики, даже без финальной сводки.
 Лог конца сохраняет `neural-body end … decisions=…` и добавляет `policy=engine|service`.
 Лаунчер передаёт `llm.body_policy` серверу, а необязательный путь `llm.body_net`
 игре как `OPENGOTHIC_BODY_NET`.
