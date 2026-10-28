@@ -192,6 +192,7 @@ Marvin::Marvin() {
     {"toggle melee_blade_shadow", C_ToggleMeleeBladeShadow},
     {"toggle melee_physics_hits", C_ToggleMeleePhysicsHits},
     {"toggle melee_reactions",    C_ToggleMeleeReactions},
+    {"toggle melee_posture",      C_ToggleMeleePosture},
     };
   }
 
@@ -639,6 +640,12 @@ bool Marvin::exec(std::string_view v) {
       const bool enabled = !Gothic::physicsFlags().meleeReactions;
       Gothic::settingsSetI("GAME","melee_reactions",enabled ? 1 : 0);
       print(enabled ? "Melee body reactions: ON" : "Melee body reactions: OFF");
+      return true;
+      }
+    case C_ToggleMeleePosture: {
+      const bool enabled = !Gothic::physicsFlags().meleePosture;
+      Gothic::settingsSetI("GAME","melee_posture",enabled ? 1 : 0);
+      print(enabled ? "Melee posture: ON" : "Melee posture: OFF");
       return true;
       }
     }
