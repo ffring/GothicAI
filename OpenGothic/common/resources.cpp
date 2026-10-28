@@ -7,7 +7,6 @@
 #include <Tempest/MemReader>
 #include <Tempest/Pixmap>
 #include <Tempest/Device>
-#include <Tempest/Dir>
 #include <Tempest/Application>
 #include <Tempest/Sound>
 #include <Tempest/SoundEffect>
@@ -15,7 +14,6 @@
 #include <Tempest/Log>
 #include <Tempest/Color>
 
-#include <zenkit/Archive.hh>
 #include "asset/material.h"
 #include "asset/worldtypes.h"
 #include <miniz.h>
@@ -51,7 +49,6 @@
 #include "graphics/material.h"
 #include "dmusic/directmusic.h"
 #include "utils/fileext.h"
-#include "utils/fileutil.h"
 #include "utils/gthfont.h"
 
 #include "gothic.h"
@@ -80,31 +77,7 @@ struct Resources::VideoBase {
   };
 
 namespace {
-thread_local std::string* censusOpenSource = nullptr;
 thread_local bool preparingVideo = false;
-
-struct CensusOpenCapture {
-  explicit CensusOpenCapture(std::string* source) : previous(censusOpenSource) { censusOpenSource = source; }
-  ~CensusOpenCapture() { censusOpenSource = previous; }
-  std::string* previous;
-  };
-
-bool censusNodePath(const zenkit::VfsNode& parent, const zenkit::VfsNode* node, std::string& path) {
-  if(&parent==node)
-    return true;
-  if(parent.type()!=zenkit::VfsNodeType::DIRECTORY)
-    return false;
-  for(const auto& child:parent.children()) {
-    const auto size = path.size();
-    if(!path.empty())
-      path += '/';
-    path += child.name();
-    if(censusNodePath(child,node,path))
-      return true;
-    path.resize(size);
-    }
-  return false;
-  }
 
 std::string censusSourcePath(const std::filesystem::path& source) {
   auto relative = source;
@@ -154,12 +127,12 @@ Resources::Resources(Tempest::Device &device, BaseImport::Progress progress)
   cube = device.ibo(index, sizeof(index)/sizeof(index[0]));
 
   const std::vector<std::u16string> musicPaths = {
-    Gothic::nestedPath({u"_work",u"Data",u"Music",u"newworld"},  Dir::FT_Dir),
-    Gothic::nestedPath({u"_work",u"Data",u"Music",u"AddonWorld"},Dir::FT_Dir),
-    Gothic::nestedPath({u"_work",u"Data",u"Music",u"dungeon"},  Dir::FT_Dir),
-    Gothic::nestedPath({u"_work",u"Data",u"Music",u"menu_men"}, Dir::FT_Dir),
-    Gothic::nestedPath({u"_work",u"Data",u"Music",u"orchestra"},Dir::FT_Dir),
-    Gothic::nestedPath({u"_work",u"Data",u"Music"},Dir::FT_Dir)
+    u"_work/Data/Music/newworld/",
+    u"_work/Data/Music/AddonWorld/",
+    u"_work/Data/Music/dungeon/",
+    u"_work/Data/Music/menu_men/",
+    u"_work/Data/Music/orchestra/",
+    u"_work/Data/Music/"
     };
   Dx8::DirectMusic::Native dxSource;
   dxSource.segment = [this,musicPaths](const char16_t* name) {
@@ -172,8 +145,6 @@ Resources::Resources(Tempest::Device &device, BaseImport::Progress progress)
     return MusicData::decodeDx8Dls(readDxMusic(musicPaths,name,"dls"));
     };
   dxMusic.reset(new Dx8::DirectMusic(std::move(dxSource)));
-  for(const auto& path:musicPaths)
-    dxMusic->addPath(path);
 
   fBuff .reserve(8*1024*1024);
   indexHdTextures();
@@ -244,85 +215,34 @@ void Resources::zenkitLog(zenkit::LogLevel lvl, const char* cat, const char* mes
     }
   }
 
-void Resources::mountWork(const std::filesystem::path& path) {
-  inst->gothicAssets.mkdir("/_work");
-  inst->gothicAssets.mount_host(path, "/_work", zenkit::VfsOverwriteBehavior::NONE);
-  }
-
-void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFilter) {
-  auto archives = BaseImport::runtimeArchives(std::filesystem::path(CommandLine::inst().rootPath()));
-  const bool installationAvailable=std::any_of(archives.begin(),archives.end(),
-                                               [](const auto& archive) { return !archive.mod && archive.name.ends_with(".VDF"); });
-
-  // Remove all mod files, that are not listed in modvdfs
-  if(modFilter) {
-    // NOTE: apparently in CoM there is no mods list declaration. In such case - assume all modes
-    archives.erase(std::remove_if(archives.begin(), archives.end(),
-                  [&modvdfs](const BaseImport::RuntimeArchive& a){
-                    return a.mod && modvdfs.end() == std::find_if(modvdfs.begin(), modvdfs.end(),
-                          [&a](const std::u16string& modname) {
-                            const std::u16string full_path = a.path.u16string();
-                            const std::u16string_view& file_name = modname;
-                            return (0 == full_path.compare(full_path.length() - file_name.length(),
-                                                           file_name.length(), file_name));
-                            });
-                    }), archives.end());
-    }
-
-  // runtimeArchives preserves the engine's timestamp and directory-order precedence.
-  std::vector<std::pair<std::string,uintmax_t>> mounted;
-  for(auto& i:archives) {
-    try {
-#ifdef __IOS__
-      // causes OOM on iPhone7
-      if(i.path.u16string().find(u"Speech")!=std::string::npos)
-        continue;
-#endif
-      inst->gothicAssets.mount_disk(i.path, zenkit::VfsOverwriteBehavior::OLDER);
-      mounted.emplace_back(i.name,std::filesystem::file_size(i.path));
-      }
-    catch(const zenkit::VfsBrokenDiskError& err) {
-      Log::e("unable to load archive: \"", TextCodec::toUtf8(i.path.u16string()), "\", reason: ", err.what());
-      }
-    catch(const std::exception& err) {
-      Log::e("unable to load archive: \"", TextCodec::toUtf8(i.path.u16string()), "\", reason: ", err.what());
-      }
-    }
-
-  std::sort(mounted.begin(),mounted.end());
+void Resources::loadBase() {
+  if(!inst->automaticBase.path.empty()) return;
   try {
-    inst->automaticBase=BaseStore::resolve(std::filesystem::path(CommandLine::inst().rootPath()),mounted,
+    const auto gothic=std::filesystem::path(CommandLine::inst().rootPath());
+    BaseImport::Files archives;
+    for(const auto& archive:BaseImport::runtimeArchives(gothic))
+      if(!archive.mod) archives.emplace_back(archive.name,archive.size);
+    inst->automaticBase=BaseStore::resolve(gothic,archives,
                                          [](std::string_view message) {
       Log::i(message);
       if(inst->baseProgress) inst->baseProgress(message);
       });
     inst->indexBaseContent();
-    auto validationArchives=mounted;
     BaseImport::Files identityLoose;
-    if(!installationAvailable) {
-      validationArchives.clear();
-      const auto identity=BaseImport::readIdentity(inst->automaticBase.path);
-      rapidjson::Document metadata;
-      metadata.Parse(identity.json.data(),identity.json.size());
-      for(const auto& archive:metadata["archives"].GetArray())
-        validationArchives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
-      std::sort(validationArchives.begin(),validationArchives.end());
-      for(const auto& file:metadata["loose_files"].GetArray())
-        identityLoose.emplace_back(file["path"].GetString(),file["size"].GetUint64());
-      std::sort(identityLoose.begin(),identityLoose.end());
-      }
+    const auto identity=BaseImport::readIdentity(inst->automaticBase.path);
+    rapidjson::Document metadata;
+    metadata.Parse(identity.json.data(),identity.json.size());
+    inst->baseArchives.clear();
+    for(const auto& archive:metadata["archives"].GetArray())
+      inst->baseArchives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
+    std::sort(inst->baseArchives.begin(),inst->baseArchives.end());
+    for(const auto& file:metadata["loose_files"].GetArray())
+      identityLoose.emplace_back(file["path"].GetString(),file["size"].GetUint64());
+    std::sort(identityLoose.begin(),identityLoose.end());
+    const auto& validationArchives=inst->baseArchives;
     const auto validateLoose=[&](const BaseImport::Files& files, std::string_view family) {
       for(const auto& file:files) {
-        bool matches=false;
-        if(installationAvailable) {
-          std::error_code error;
-          const auto actual=std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/file.first,error);
-          matches=!error && actual==file.second;
-          }
-        else {
-          matches=std::binary_search(identityLoose.begin(),identityLoose.end(),file);
-          }
-        if(!matches)
+        if(!std::binary_search(identityLoose.begin(),identityLoose.end(),file))
           throw std::runtime_error("loose file differs from "+std::string(family)+" base index: "+file.first);
         }
       };
@@ -335,26 +255,24 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
     inst->baseFonts.validate(validationArchives);
     validateLoose(inst->baseFonts.looseFiles,"fonts");
     if(inst->basePrograms.archives!=validationArchives)
-      throw std::runtime_error("mounted archives differ from program base index: "+inst->basePrograms.dir.string());
+      throw std::runtime_error("selected base archives differ from program base index: "+inst->basePrograms.dir.string());
     validateLoose(inst->basePrograms.looseFiles,"program");
     Log::i("base: ",inst->basePrograms.programs.size()," programs from \"",inst->basePrograms.dir.string(),"\"");
     if(inst->baseOutputUnits.archives!=validationArchives)
-      throw std::runtime_error("mounted archives differ from output units base index: "+inst->baseOutputUnits.dir.string());
+      throw std::runtime_error("selected base archives differ from output units base index: "+inst->baseOutputUnits.dir.string());
     validateLoose(inst->baseOutputUnits.looseFiles,"output units");
     Log::i("base: ",inst->baseOutputUnits.records.size()," output units records from \"",inst->baseOutputUnits.dir.string(),"\"");
     if(inst->baseAudio.archives!=validationArchives)
-      throw std::runtime_error("mounted archives differ from audio base index: "+inst->baseAudio.dir.string());
+      throw std::runtime_error("selected base archives differ from audio base index: "+inst->baseAudio.dir.string());
     validateLoose(inst->baseAudio.looseFiles,"audio");
     Log::i("base: ",inst->baseAudio.sounds.size()," sounds from \"",inst->baseAudio.dir.string(),"\"");
     if(inst->baseMusic.archives!=validationArchives)
-      throw std::runtime_error("mounted archives differ from music base index: "+inst->baseMusic.dir.string());
+      throw std::runtime_error("selected base archives differ from music base index: "+inst->baseMusic.dir.string());
     validateLoose(inst->baseMusic.looseFiles,"music");
     Log::i("base: ",inst->baseMusic.records.size()," music records from \"",inst->baseMusic.dir.string(),"\"");
     inst->baseProgress={};
     }
   catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
-
-  inst->mountedArchives = std::move(mounted);
   }
 
 Resources::~Resources() {
@@ -440,11 +358,6 @@ void Resources::initCensus() {
   if(path==nullptr || path[0]=='\0')
     return;
   census = std::make_unique<ContentCensus>(path);
-  gothicAssets.set_open_observer([this](std::string_view name, std::string_view source) {
-    census->opened(name,source);
-    if(censusOpenSource!=nullptr)
-      *censusOpenSource = source;
-    });
   }
 
 void Resources::censusFile(std::u16string_view path) {
@@ -459,33 +372,9 @@ void Resources::censusProfile(std::string_view game, std::string_view outputUnit
     inst->census->profile(game,outputUnits,language);
   }
 
-void Resources::censusSelected(std::string_view consumer, std::string_view request, int language,
-                              std::string_view branch, const CensusSource& source, zenkit::Read& read) noexcept {
-  if(inst==nullptr || inst->census==nullptr)
-    return;
-  try {
-    std::string path;
-    if(source.node==nullptr || !censusNodePath(inst->gothicAssets.root(),source.node,path))
-      path.clear();
-    inst->census->selected(consumer,request,language,branch,"vfs",path,censusSourcePath(source.source),read);
-    }
-  catch(...) { Log::e("census: unable to identify parsed VFS source"); }
-  }
-
-void Resources::censusSelected(std::string_view consumer, std::string_view request, int language,
-                              std::string_view branch, std::u16string_view path, zenkit::Read& read) noexcept {
-  if(inst==nullptr || inst->census==nullptr)
-    return;
-  try {
-    const auto relative = censusSourcePath(std::filesystem::path(path));
-    inst->census->selected(consumer,request,language,branch,"host",relative,relative,read);
-    }
-  catch(...) { Log::e("census: unable to identify parsed host source"); }
-  }
-
 void Resources::loadWorld(WorldData::Data& world, asset::WorldMesh& worldMesh, std::string_view name) {
   const auto dir = worldBaseDir(name);
-  const auto result = tryWorldData(world,worldMesh,name,dir,worldOverrideDir(name),inst->mountedArchives);
+  const auto result = tryWorldData(world,worldMesh,name,dir,worldOverrideDir(name),inst->baseArchives);
   if(result.replaced) {
     if(inst->census)
       inst->census->replaced(name,(worldContentDir("base",name)/"world.json").generic_string());
@@ -535,9 +424,83 @@ Tempest::Device& Resources::device() {
   return *inst->dev;
   }
 
-bool Resources::hasFile(std::string_view name) {
-  std::lock_guard<std::recursive_mutex> g(inst->sync);
-  return inst->gothicAssets.find(name) != nullptr;
+bool Resources::hasWorld(std::string_view name) {
+  const auto dir=worldContentDir({},name);
+  return inst->baseWorlds.contains(dir.filename().string());
+  }
+
+int Resources::baseLanguage() {
+  for(int language=-1;language<8;++language) {
+    const bool program=std::any_of(inst->basePrograms.selections.begin(),inst->basePrograms.selections.end(),
+                                  [&](const auto& row) {
+      return row.language==language && row.request=="GOTHIC.DAT" && row.source &&
+             inst->basePrograms.sources.at(*row.source).skipped.empty();
+      });
+    const bool outputUnits=std::any_of(inst->baseOutputUnits.selections.begin(),inst->baseOutputUnits.selections.end(),
+                                      [&](const auto& row) {
+      return row.language==language && row.source &&
+             inst->baseOutputUnits.sources.at(*row.source).skipped.empty();
+      });
+    if(program && outputUnits) return language;
+    }
+  return -1;
+  }
+
+namespace {
+const char* scriptDirectory(int language) {
+  static constexpr const char* directories[]={"Scripts_EN","Scripts_DE","Scripts_PL","Scripts_RU",
+                                               "Scripts_FR","Scripts_ES","Scripts_IT","Scripts_CZ"};
+  return language>=0 && language<8 ? directories[language] : "Scripts";
+  }
+}
+
+zenkit::DaedalusScript Resources::loadBaseProgram(std::string_view request, int language) {
+  try {
+    std::string_view branch;
+    if(inst->basePrograms.findVfs(request,&branch)!=nullptr)
+      return loadBaseProgram(request,language,branch);
+    const std::string name(request.substr(0,255));
+    std::string path="_work/Data/Scripts/_compiled/"+name;
+    const ProgramData::Source* source=inst->basePrograms.findHost(path);
+    branch="host_ordinary";
+    if(source==nullptr && language>=0) {
+      path="_work/Data/"+std::string(scriptDirectory(language))+"/_compiled/"+name;
+      source=inst->basePrograms.findHost(path);
+      branch="host_localized_full";
+      }
+    if(source==nullptr && language>=0) {
+      const auto separator=request.find_last_of("/\\");
+      const auto basename=separator==std::string_view::npos ? request : request.substr(separator+1);
+      path="_work/Data/"+std::string(scriptDirectory(language))+"/_compiled/"+std::string(basename.substr(0,255));
+      source=inst->basePrograms.findHost(path);
+      branch="host_localized_basename";
+      }
+    if(source==nullptr)
+      throw std::runtime_error("no source in program base index");
+    return loadBaseProgram(request,language,branch,std::filesystem::path(source->path).u16string());
+    }
+  catch(const BaseStore::Error&) { throw; }
+  catch(const std::exception& error) { throw BaseStore::Error("program "+std::string(request)+": "+error.what()); }
+  }
+
+bool Resources::loadBaseOutputUnits(std::string_view request, int language,
+                                    std::vector<std::shared_ptr<asset::CutsceneBlock>>& blocks) {
+  try {
+    std::string_view branch;
+    if(inst->baseOutputUnits.findVfs(request,&branch)!=nullptr)
+      return loadBaseOutputUnits(request,language,branch,blocks);
+    const std::string name(request.substr(0,255));
+    const OutputUnits::Source* source=inst->baseOutputUnits.findHost("_work/Data/Scripts/content/CUTSCENE/"+name);
+    branch="host_ordinary";
+    if(source==nullptr && language>=0) {
+      source=inst->baseOutputUnits.findHost("_work/Data/"+std::string(scriptDirectory(language))+"/"+name);
+      branch="host_localized";
+      }
+    if(source==nullptr) return false;
+    return loadBaseOutputUnits(request,language,branch,blocks,std::filesystem::path(source->path).u16string());
+    }
+  catch(const BaseStore::Error&) { throw; }
+  catch(const std::exception& error) { throw BaseStore::Error("output units "+std::string(request)+": "+error.what()); }
   }
 
 zenkit::DaedalusScript Resources::loadBaseProgram(std::string_view request, int language,
@@ -552,8 +515,6 @@ zenkit::DaedalusScript Resources::loadBaseProgram(std::string_view request, int 
         throw std::runtime_error("selected VFS source missing from program base index");
       }
     else {
-      if(!FileUtil::exists(std::u16string(hostPath)))
-        throw std::runtime_error("selected host program source not found");
       source = index.findHost(censusSourcePath(std::filesystem::path(hostPath)));
       if(source==nullptr)
         throw std::runtime_error("selected host source missing from program base index");
@@ -616,66 +577,6 @@ bool Resources::loadBaseOutputUnits(std::string_view request, int language, std:
     if(inst->census) inst->census->missing(request,error.what());
     throw BaseStore::Error("output units "+std::string(request)+": "+error.what());
     }
-  }
-
-bool Resources::getFileData(std::string_view name, std::vector<uint8_t> &dat) {
-  dat.clear();
-
-  const auto* entry = Resources::vdfsIndex().find(name);
-  if(entry==nullptr)
-    return false;
-
-  // TODO: This should return a buffer!
-  auto reader = entry->open_read();
-
-  reader->seek(0, zenkit::Whence::END);
-  dat.resize(reader->tell());
-  reader->seek(0, zenkit::Whence::BEG);
-  reader->read(dat.data(), dat.size());
-
-  return true;
-  }
-
-std::vector<uint8_t> Resources::getFileData(std::string_view name) {
-  std::vector<uint8_t> data;
-  getFileData(name,data);
-  return data;
-  }
-
-std::unique_ptr<zenkit::Read> Resources::getFileBuffer(std::string_view name, CensusSource* source) {
-  const auto* entry = Resources::vdfsIndex().find(name);
-  if (entry == nullptr)
-    throw std::runtime_error("failed to open resource: " + std::string{name});
-  if(source!=nullptr && inst->census!=nullptr) {
-    source->node = entry;
-    source->source.clear();
-    CensusOpenCapture capture(&source->source);
-    return entry->open_read();
-    }
-  return entry->open_read();
-  }
-
-std::unique_ptr<zenkit::ReadArchive> Resources::openReader(std::string_view name, std::unique_ptr<zenkit::Read>& read, CensusSource* source) {
-  const auto* entry = Resources::vdfsIndex().find(name);
-  if(entry == nullptr)
-    throw std::runtime_error("failed to open resource: " + std::string{name});
-  std::unique_ptr<zenkit::Read> buf;
-  if(source!=nullptr && inst->census!=nullptr) {
-    source->node = entry;
-    source->source.clear();
-    CensusOpenCapture capture(&source->source);
-    buf = entry->open_read();
-    }
-  else {
-    buf = entry->open_read();
-    }
-  if(buf == nullptr)
-    throw std::runtime_error("failed to open resource: " + std::string{name});
-  auto zen = zenkit::ReadArchive::from(buf.get());
-  if(zen == nullptr)
-    throw std::runtime_error("failed to open resource: " + std::string{name});
-  read = std::move(buf);
-  return zen;
   }
 
 const char* Resources::renderer() {
@@ -818,10 +719,6 @@ const Tempest::StorageImage& Resources::fallbackImage() {
   return inst->fbImg;
   }
 
-const zenkit::Vfs& Resources::vdfsIndex() {
-  return inst->gothicAssets;
-  }
-
 const Tempest::IndexBuffer<uint16_t>& Resources::cubeIbo() {
   return inst->cube;
   }
@@ -890,6 +787,18 @@ void Resources::indexBaseContent() {
   baseOutputUnits = OutputUnits::readIndex(root/"outputunits");
   baseAudio = AudioData::readIndex(root/"audio");
   baseMusic = MusicData::readIndex(root/"music");
+  baseWorlds.clear();
+  std::ifstream manifestFile(root/"base-files.json",std::ios::binary);
+  const std::string text{std::istreambuf_iterator<char>(manifestFile),std::istreambuf_iterator<char>()};
+  rapidjson::Document manifest;
+  manifest.Parse(text.data(),text.size());
+  if(manifest.HasParseError() || !manifest.IsObject() || !manifest.HasMember("files") || !manifest["files"].IsArray())
+    throw std::runtime_error("invalid base file manifest");
+  for(const auto& entry:manifest["files"].GetArray()) {
+    const std::filesystem::path file(entry["path"].GetString());
+    if(file.parent_path().parent_path()=="worlds" && file.filename()=="world.json")
+      baseWorlds.emplace(file.parent_path().filename().string());
+    }
   }
 
 void Resources::BaseIndex::load(const std::filesystem::path& root, const char* kind) {
@@ -968,7 +877,7 @@ void Resources::BaseIndex::validate(const std::vector<std::pair<std::string,uint
   if(enabled)
     Log::i("base: ",files.size()," entries from \"",dir.string(),"\"");
   else
-    throw std::runtime_error("mounted archives differ from base index: "+dir.string());
+    throw std::runtime_error("selected base archives differ from base index: "+dir.string());
   }
 
 std::filesystem::path Resources::worldOverrideDir(std::string_view world) {
@@ -1683,18 +1592,10 @@ DmResult Resources::readGkMusic(std::string_view name, const char* kind, std::ve
 std::vector<uint8_t> Resources::readDxMusic(const std::vector<std::u16string>& paths, const char16_t* name,
                                           const char* kind) {
   for(const auto& path:paths) {
-    const auto file = FileUtil::nestedPath(path,{name},Dir::FT_File);
-    if(!FileUtil::exists(file))
-      continue;
-    const auto relative = std::filesystem::path(file).lexically_relative(std::filesystem::path(CommandLine::inst().rootPath()))
-                                                     .lexically_normal().generic_string();
-    const auto* source = baseMusic.findDx8(relative);
-    if(source==nullptr) {
-      const auto reason = "music data: selected host file is not indexed: "+relative;
-      if(census) census->missing(Tempest::TextCodec::toUtf8(name),reason);
-      Log::e("base: ",reason);
-      throw std::runtime_error(reason);
-      }
+    auto file=std::filesystem::path(path)/name;
+    if(file.is_absolute()) file=file.lexically_relative(std::filesystem::path(CommandLine::inst().rootPath()));
+    const auto* source=baseMusic.findDx8(file.lexically_normal().generic_string());
+    if(source==nullptr) continue;
     if(source->dx8.failure)
       throw std::runtime_error(*source->dx8.failure);
     return readMusicRecord("dx8",Tempest::TextCodec::toUtf8(name),kind,*source);

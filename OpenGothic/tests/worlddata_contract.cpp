@@ -1,5 +1,6 @@
 #include "asset/fromzenkit.h"
 #include <zenkit/World.hh>
+#include <zenkit/Vfs.hh>
 #include "commandline.h"
 #include "gothic.h"
 #include "resources.h"
@@ -32,6 +33,17 @@
 namespace fs = std::filesystem;
 
 struct WorldDataContract {
+  static zenkit::Vfs& sourceVfs() {
+    static zenkit::Vfs vfs;
+    static const bool mounted=[] {
+      fs::path work;
+      BaseImport::mountRuntime(vfs,fs::path(CommandLine::inst().rootPath()),work);
+      return true;
+      }();
+    (void)mounted;
+    return vfs;
+    }
+
   using Rows = std::vector<std::pair<std::string,std::string>>;
   static void require(bool ok, const std::string& message) {
     if(!ok) throw std::runtime_error(message);
@@ -189,8 +201,8 @@ struct WorldDataContract {
         selected=resources.basePrograms.findVfs(request,&selectedBranch);
         require(selectedBranch==branch,request+": native VFS branch differs from the index");
         const auto lookup=branch=="vfs_find_basename" ? fs::path(request).filename().string() : request;
-        const auto* node=Resources::vdfsIndex().resolve(imported["path"].GetString());
-        require(node!=nullptr && node==Resources::vdfsIndex().find(lookup),
+        const auto* node=sourceVfs().resolve(imported["path"].GetString());
+        require(node!=nullptr && node==sourceVfs().find(lookup),
                 request+": native provenance must retain the full selected VFS path");
         }
       else {
@@ -268,7 +280,7 @@ struct WorldDataContract {
         std::string_view selectedBranch;
         selected=resources.baseOutputUnits.findVfs(request,&selectedBranch);
         require(selectedBranch==branch,request+": native OU VFS branch differs from the index");
-        const auto& vfs=Resources::vdfsIndex();
+        const auto& vfs=sourceVfs();
         const auto* node=vfs.resolve(path.generic_string());
         const auto lookup=branch=="vfs_find_basename" ? fs::path(request).filename().string() : request;
         require(node!=nullptr && node==vfs.find(lookup),request+": native OU provenance must retain the selected VFS path");
@@ -407,7 +419,7 @@ struct WorldDataContract {
         asset::WorldMesh loadedMesh;
         const auto manifest=readWorldChunkManifest(base/"worlds"/name);
         if(!useBase) {
-          auto reader=Resources::vdfsIndex().find(file)->open_read();
+          auto reader=sourceVfs().find(file)->open_read();
           zenkit::World archive; archive.load(reader.get(),zenkit::GameVersion::GOTHIC_2);
           original=WorldData::fromWorld(archive,manifest.source);
           loadedMesh=asset::fromZenKit(archive.world_mesh);
@@ -429,7 +441,7 @@ struct WorldDataContract {
           auto restored=WorldData::read(base/"worlds"/name);
           const auto diff=WorldData::compare(original,restored);
           require(diff.empty(),file+": "+diff);
-          auto reader=Resources::vdfsIndex().find(file)->open_read(); zenkit::World zen;
+          auto reader=sourceVfs().find(file)->open_read(); zenkit::World zen;
           zen.load(reader.get(),zenkit::GameVersion::GOTHIC_2);
           const auto meshDiff=compareWorldMeshes(canonicalWorldMesh(asset::fromZenKit(zen.world_mesh)),canonicalWorldMesh(loadedMesh));
           require(meshDiff.empty(),file+": mesh "+meshDiff);
@@ -480,7 +492,7 @@ struct WorldDataContract {
     size_t zenCount=0;
     for(const auto& entry:zenIndex["files"].GetObject()) {
       const auto name=std::string(entry.name.GetString());
-      auto source=Resources::vdfsIndex().find(name)->open_read();
+      auto source=sourceVfs().find(name)->open_read();
       source->seek(0,zenkit::Whence::END);
       std::vector<std::byte> bytes(source->tell()); source->seek(0,zenkit::Whence::BEG);
       require(source->read(bytes.data(),bytes.size())==bytes.size(),"incomplete archive ZEN");

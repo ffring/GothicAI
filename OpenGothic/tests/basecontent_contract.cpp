@@ -23,6 +23,7 @@
 #include "utils/gthfont.h"
 #include "utils/fileutil.h"
 
+#include <zenkit/Vfs.hh>
 #include <zenkit/DaedalusVm.hh>
 #include <zenkit/CutsceneLibrary.hh>
 #include <zenkit/Font.hh>
@@ -68,6 +69,39 @@
 namespace fs = std::filesystem;
 
 struct BaseContentContract {
+  struct SourceObservation {
+    const zenkit::VfsNode* node = nullptr;
+    std::string source;
+    };
+
+  static std::string& observedSource() {
+    static std::string source;
+    return source;
+    }
+
+  static zenkit::Vfs& sourceVfs() {
+    static zenkit::Vfs vfs;
+    static const bool mounted=[] {
+      fs::path work;
+      BaseImport::mountRuntime(vfs,fs::path(CommandLine::inst().rootPath()),work);
+      vfs.set_open_observer([](std::string_view name,std::string_view source) {
+        observedSource()=source;
+        if(Resources::inst && Resources::inst->census)
+          Resources::inst->census->opened(name,source);
+        });
+      return true;
+      }();
+    (void)mounted;
+    return vfs;
+    }
+
+  static std::unique_ptr<zenkit::Read> readSource(std::string_view name,SourceObservation* observation=nullptr) {
+    const auto* node=sourceVfs().find(name);
+    require(node!=nullptr,"independent source missing: "+std::string(name));
+    auto reader=node->open_read();
+    if(observation) *observation={node,observedSource()};
+    return reader;
+    }
   static void require(bool condition, const std::string& message) {
     if(!condition)
       throw std::runtime_error(message);
@@ -560,7 +594,6 @@ struct BaseContentContract {
     }
 
   static size_t models(const fs::path& base) {
-    Resources::mountWork(CommandLine::inst().nestedPath({u"_work"},Tempest::Dir::FT_Dir));
     const auto index=json(base/"models/models.json");
     require(index.HasMember("format") && index["format"].IsString() &&
             std::string_view(index["format"].GetString())=="gothic-models" && index["version"]==1,
@@ -568,13 +601,13 @@ struct BaseContentContract {
     require(index.HasMember("files") && index["files"].IsObject(),"model index must contain file records");
     const auto& records=index["files"];
     std::set<std::string> names;
-    modelNames(Resources::vdfsIndex().root(),names);
+    modelNames(sourceVfs().root(),names);
     equal(names.size(),size_t(records.MemberCount()),"model index must include every mounted model resource");
     std::map<std::string,size_t> counts;
     for(const auto& name:names) {
       require(records.HasMember(name.c_str()),name+": source model missing from base index");
       require(records[name.c_str()].IsString(),name+": model record path must be a string");
-      const auto* entry=Resources::vdfsIndex().find(name);
+      const auto* entry=sourceVfs().find(name);
       require(entry!=nullptr,name+": original model resource missing");
       auto reader=entry->open_read();
       const auto extension=fs::path(name).extension().string();
@@ -684,7 +717,7 @@ struct BaseContentContract {
     require(index.HasMember("fonts") && index["fonts"].IsObject(),"font index must contain font records");
     const auto& records=index["fonts"];
     std::set<std::string> names;
-    fontNames(Resources::vdfsIndex().root(),names);
+    fontNames(sourceVfs().root(),names);
     require(!names.empty(),"source font corpus must not be empty");
     equal(names.size(),size_t(records.MemberCount()),"font index must include every mounted FNT basename");
     equal(names.size(),resources.baseFonts.files.size(),"Resources font index count");
@@ -692,7 +725,7 @@ struct BaseContentContract {
       require(records.HasMember(name.c_str()) && records[name.c_str()].IsString(),name+": source font missing from base index");
       require(std::string_view(records[name.c_str()].GetString())==name+".json",name+": font record filename");
       require(resources.baseFonts.files.at(name)==name+".json",name+": Resources font record filename");
-      const auto* entry=Resources::vdfsIndex().find(name);
+      const auto* entry=sourceVfs().find(name);
       require(entry!=nullptr,name+": original font missing");
       auto reader=entry->open_read();
       zenkit::Font source;
@@ -927,10 +960,10 @@ struct BaseContentContract {
         }
       else {
         require(source.origin=="archive" && !source.archive.empty(),field+": archive provenance");
-        const auto* node=Resources::vdfsIndex().resolve(source.path);
+        const auto* node=sourceVfs().resolve(source.path);
         require(node!=nullptr,field+": full source VFS path missing");
-        Resources::CensusSource opened;
-        input=Resources::getFileBuffer(fs::path(source.path).filename().string(),&opened);
+        SourceObservation opened;
+        input=readSource(fs::path(source.path).filename().string(),&opened);
         auto archive=opened.source;
         for(auto& c:archive) if(c>='a' && c<='z') c=char(c-'a'+'A');
         require(opened.node==node && archive==source.archive,field+": actual mounted node/archive differs from provenance");
@@ -1279,9 +1312,9 @@ struct BaseContentContract {
       Resources::censusFile(path.u16string());
       }
     else {
-      Resources::CensusSource opened;
-      input=Resources::getFileBuffer(fs::path(source.path).filename().string(),&opened);
-      require(opened.node!=nullptr && opened.node==Resources::vdfsIndex().resolve(source.path),
+      SourceObservation opened;
+      input=readSource(fs::path(source.path).filename().string(),&opened);
+      require(opened.node!=nullptr && opened.node==sourceVfs().resolve(source.path),
               std::string(request)+": definition oracle selected a different source node");
       }
     require(input!=nullptr,std::string(request)+": definition source cannot be opened");
@@ -1551,11 +1584,11 @@ struct BaseContentContract {
         }
       else {
         require(source.origin=="archive" && !source.archive.empty(),field+": archive provenance");
-        Resources::CensusSource opened;
-        input=Resources::getFileBuffer(fs::path(source.path).filename().string(),&opened);
+        SourceObservation opened;
+        input=readSource(fs::path(source.path).filename().string(),&opened);
         auto archive=opened.source;
         for(auto& c:archive) if(c>='a' && c<='z') c=char(c-'a'+'A');
-        require(opened.node!=nullptr && opened.node==Resources::vdfsIndex().resolve(source.path) && archive==source.archive,
+        require(opened.node!=nullptr && opened.node==sourceVfs().resolve(source.path) && archive==source.archive,
                 field+": selected mounted node/archive differs");
         }
       require(input!=nullptr,field+": original source cannot be opened");
@@ -2063,7 +2096,7 @@ struct BaseContentContract {
     setenv("OPENGOTHIC_BASE",fixture.c_str(),1);
     MusicData::Source selected;
     {
-    Resources resources; Resources::loadVdfs({},true);
+    Resources resources; Resources::loadBase();
     require(Resources::isHeadless(),"private music reader checks must remain CPU-only");
     const auto found=std::find_if(resources.baseMusic.sources.begin(),resources.baseMusic.sources.end(),[&](const auto& source) {
       return source.origin=="host" && source.kind=="segment" && !source.gk.failure && !source.dx8.failure &&
@@ -2091,8 +2124,8 @@ struct BaseContentContract {
     resources.baseMusic=nativeIndex; resources.baseMusic.dx8.erase(selected.path);
     bool unindexed=false;
     try { (void)resources.readDxMusic(dirs,name.c_str(),"segment"); }
-    catch(const std::runtime_error& error) { unindexed=std::string(error.what()).find("selected host file is not indexed")!=std::string::npos; }
-    require(unindexed,"selected original Dx8 file without a native entry must not fall back");
+    catch(const std::runtime_error& error) { unindexed=std::string(error.what())=="file not found"; }
+    require(unindexed,"missing Dx8 index entry must fail without source fallback");
     resources.baseMusic=nativeIndex;
     const auto id=resources.baseMusic.gk.at(upperMusic(request));
     resources.baseMusic.sources[id].gk={"","",std::string("FILE_CORRUPT")};
@@ -2406,7 +2439,7 @@ struct BaseContentContract {
     fs::create_symlink(base/"audio/audio.json",fixtureBase/"audio/audio.json");
     setenv("OPENGOTHIC_BASE",fixtureBase.c_str(),1);
     Resources resources;
-    Resources::loadVdfs({},true);
+    Resources::loadBase();
     Gothic gothic;
     require(Resources::isHeadless(),"audio integration must remain CPU-only");
     const auto pcm=[](uint16_t channels,const std::vector<int16_t>& samples) {
@@ -2626,7 +2659,7 @@ struct BaseContentContract {
 
   static void legacyModelBounds() {
     for(const auto* name:{"ARMOR_BDT_H.MDL","FIREPLACE_HIGH2.MDM"}) {
-      auto file=Resources::getFileBuffer(name);
+      auto file=readSource(name);
       file->seek(0,zenkit::Whence::END);
       std::vector<std::byte> source(file->tell());
       file->seek(0,zenkit::Whence::BEG);
@@ -2722,7 +2755,7 @@ struct BaseContentContract {
     }
 
   static void modelTagBoundary() {
-    auto input=Resources::getFileBuffer("BLATTCRAWLER.MSB");
+    auto input=readSource("BLATTCRAWLER.MSB");
     size_t end=0;
     while(!input->eof()) {
       const auto type=input->read_ushort();
@@ -2834,10 +2867,10 @@ struct BaseContentContract {
     {
     Resources resources;
     require(!resources.baseTextures.enabled && !resources.baseMeshes.enabled && !resources.baseModels.enabled && !resources.baseFonts.enabled,
-            "base must wait for mounted archives");
-    Resources::loadVdfs({},true);
+            "base must wait for selection");
+    Resources::loadBase();
     require(resources.baseTextures.enabled && resources.baseMeshes.enabled && resources.baseModels.enabled && resources.baseFonts.enabled,
-            "matching archives must enable texture, mesh, model and font indices");
+            "selected base identity must enable texture, mesh, model and font indices");
     require(!resources.baseTextures.files.empty() && !resources.baseMeshes.files.empty() && !resources.baseModels.files.empty() && !resources.baseFonts.files.empty(),
             "texture, mesh, model and font indices must contain files");
     modelCount=models(base);
@@ -2845,10 +2878,10 @@ struct BaseContentContract {
     programCount=programs(base,censusPath);
     modelFixtures(temporary);
     for(const auto& [key,file]:resources.baseTextures.files) {
-      auto* entry=Resources::vdfsIndex().find(key+"-C.TEX");
+      auto* entry=sourceVfs().find(key+"-C.TEX");
       const bool compiled=entry!=nullptr;
       if(!compiled)
-        entry=Resources::vdfsIndex().find(key+".TGA");
+        entry=sourceVfs().find(key+".TGA");
       require(entry!=nullptr,key+": source texture missing");
       for(const bool forceMips:{false,true}) {
         auto input=entry->open_read();
@@ -2863,7 +2896,7 @@ struct BaseContentContract {
       }
     std::printf("Textures: %zu equal (%zu DDS, %zu PNG, %zu TGA), both GPU mip flags\n",textureCount,dds,png,tga);
     for(const auto& [key,file]:resources.baseMeshes.files) {
-      auto input=Resources::getFileBuffer(key+".MRM");
+      auto input=readSource(key+".MRM");
       zenkit::MultiResolutionMesh archiveMesh;
       archiveMesh.load(input.get());
       const auto original=asset::fromZenKit(archiveMesh);
@@ -2888,7 +2921,7 @@ struct BaseContentContract {
     // Keep parser regression reads separate from the runtime-open census.
     {
     Resources resources;
-    Resources::loadVdfs({},true);
+    Resources::loadBase();
     definitionRecords(base,censusPath);
     outputUnits(base,censusPath);
     legacyModelBounds();
@@ -2917,7 +2950,7 @@ struct BaseContentContract {
     bool rejected=false;
     try {
       Resources resources;
-      Resources::loadVdfs({},true);
+      Resources::loadBase();
       }
     catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
     require(rejected,"invalid explicit base must fail with recovery instructions");
@@ -2932,7 +2965,7 @@ struct BaseContentContract {
       std::string missingIndexError;
       try {
         Resources resources;
-        Resources::loadVdfs({},true);
+        Resources::loadBase();
         }
       catch(const BaseStore::Error& error) { missingIndexError=error.what(); }
       const auto prefix=kind=="programs" ? "program data: " : kind=="outputunits" ? "output units: " : kind=="audio" ? "audio data: " : kind=="music" ? "music data: " : "base index missing: ";
@@ -2959,8 +2992,7 @@ struct BaseContentContract {
     setenv("OPENGOTHIC_BASE",broken.c_str(),1);
     {
     Resources resources;
-    Resources::loadVdfs({},true);
-    Resources::mountWork(CommandLine::inst().nestedPath({u"_work"},Tempest::Dir::FT_Dir));
+    Resources::loadBase();
     const auto host=selected->step.starts_with("host_") ?
       (fs::path(CommandLine::inst().rootPath())/source.path).u16string() : std::u16string{};
     const auto fails=[&](const std::string& description, const std::string& reason=std::string{}) {
@@ -3007,8 +3039,7 @@ struct BaseContentContract {
     setenv("OPENGOTHIC_BASE",broken.c_str(),1);
     {
     Resources resources;
-    Resources::loadVdfs({},true);
-    Resources::mountWork(CommandLine::inst().nestedPath({u"_work"},Tempest::Dir::FT_Dir));
+    Resources::loadBase();
     const auto host=selected->step.starts_with("host_") ?
       (fs::path(CommandLine::inst().rootPath())/source.path).u16string() : std::u16string{};
     const auto sentinel=std::make_shared<asset::CutsceneBlock>();
@@ -3041,7 +3072,7 @@ struct BaseContentContract {
     setenv("OPENGOTHIC_BASE",base.c_str(),1);
     {
     Resources resources;
-    Resources::loadVdfs({},true);
+    Resources::loadBase();
     require(Resources::loadVisualMesh("BASE_CONTRACT_MISSING.MRM").positions.empty(),"missing mesh must stay empty");
     require(Resources::loadVobBundle("BASE_CONTRACT_MISSING.ZEN")->empty(),"missing bundle must stay empty");
     }
@@ -3059,7 +3090,7 @@ struct BaseContentContract {
     setenv("OPENGOTHIC_CONTENT",content.c_str(),1);
     {
     Resources resources;
-    Resources::loadVdfs({},true);
+    Resources::loadBase();
     require(resources.baseMeshes.enabled,"priority check requires enabled base");
     bool replaced=false;
     const auto loaded=Resources::loadVisualMesh(meshKey+".MRM",&replaced);

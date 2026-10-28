@@ -186,6 +186,7 @@ Gothic::Gothic() {
   defaults->set("KEYS", "keyShowMap",     "3200");
   }
 
+  Resources::loadBase();
   detectGothicVersion();
 
   std::u16string_view mod = CommandLine::inst().modPath();
@@ -193,8 +194,6 @@ Gothic::Gothic() {
     modFile.reset(new IniFile(mod));
     }
 
-  std::vector<std::u16string> modvdfs;
-  bool                        modFilter = true;
   if(modFile!=nullptr) {
     wrldDef = modFile->getS("SETTINGS","WORLD");
     size_t split = wrldDef.rfind('\\');
@@ -203,23 +202,7 @@ Gothic::Gothic() {
     plDef      = modFile->getS("SETTINGS","PLAYER");
     gameDatDef = modFile->getS("FILES","GAME");
     ouDef      = modFile->getS("FILES","OUTPUTUNITS");
-
-    std::u16string vdf = TextCodec::toUtf16(modFile->getS("FILES","VDF"));
-    modFilter = modFile->has("FILES","VDF");
-    for(size_t start = 0, split = 0; split != std::string::npos; start = split+1) {
-      split = vdf.find(' ', start);
-      std::u16string mod = vdf.substr(start, split-start);
-      if(!mod.empty())
-        modvdfs.emplace_back(std::move(mod));
-      }
     }
-  /*
-   '/work' seem to have lowest priority
-   load it last with zenkit::VfsOverwriteBehavior::NONE
-   any other order will interact with time-stamp based override, resulting in inconsistent behaviour
-  */
-  Resources::loadVdfs(modvdfs, modFilter);
-  Resources::mountWork(Gothic::nestedPath({u"_work"}, Dir::FT_Dir));
 
   if(wrldDef.empty()) {
     if(version().game==2)
@@ -763,39 +746,7 @@ std::unique_ptr<zenkit::DaedalusVm> Gothic::createPhoenixVm(std::string_view dat
   }
 
 zenkit::DaedalusScript Gothic::loadScript(std::string_view datFile, const ScriptLang lang) {
-  const auto request = datFile;
-  if(Resources::hasFile(datFile)) {
-    return Resources::loadBaseProgram(request,int(lang),"vfs_find_request");
-    }
-
-  const size_t segment = datFile.find_last_of("\\/");
-  if(segment!=std::string::npos && Resources::hasFile(datFile.substr(segment+1))) {
-    return Resources::loadBaseProgram(request,int(lang),"vfs_find_basename");
-    }
-
-  char16_t str16[256] = {};
-  for(size_t i=0; i<datFile.size() && i<255; ++i)
-    str16[i] = char16_t(datFile[i]);
-
-  auto gscript = CommandLine::inst().scriptPath();
-  auto path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
-  const char* branch = "host_ordinary";
-  if(!FileUtil::exists(path) && int(lang)>=0) {
-    gscript = CommandLine::inst().scriptPath(lang);
-    path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
-    branch = "host_localized_full";
-    }
-  if(!FileUtil::exists(path) && int(lang)>=0) {
-    datFile = datFile.substr(segment+1);
-    for(size_t i=0; i<datFile.size() && i<255; ++i)
-      str16[i] = char16_t(datFile[i]);
-    str16[std::min(datFile.size(),size_t(255))] = u'\0';
-    gscript = CommandLine::inst().scriptPath(lang);
-    path    = caseInsensitiveSegment(gscript,str16,Dir::FT_File);
-    branch = "host_localized_basename";
-    }
-
-  return Resources::loadBaseProgram(request,int(lang),branch,path);
+  return Resources::loadBaseProgram(datFile,int(lang));
   }
 
 void Gothic::setupCommonScriptClasses(zenkit::DaedalusScript& sc) {
@@ -847,6 +798,8 @@ bool Gothic::settingsHasSection(std::string_view sec) {
 int Gothic::settingsGetI(std::string_view sec, std::string_view name) {
   if(name.empty())
     return 0;
+  if(sec=="GAME" && name=="language")
+    return Resources::baseLanguage();
   if(instance->iniFile->has(sec,name))
     return instance->iniFile->getI(sec,name);
   if(instance->baseIniFile->has(sec,name))
@@ -907,42 +860,9 @@ void Gothic::flushSettings() {
   }
 
 void Gothic::detectGothicVersion() {
-  int score[3]={};
-
-  auto gpath = CommandLine::inst().rootPath();
-  if(gpath.find(u"Gothic/")!=std::string::npos || gpath.find(u"gothic/")!=std::string::npos)
-    score[1]++;
-  if(FileUtil::exists(nestedPath({u"_work",u"Data",u"Scripts",u"content",u"CUTSCENE",u"OU.BIN"},Dir::FT_File)))
-    score[1]++;
-
-  if(FileUtil::exists(nestedPath({u"_work",u"Data",u"Scripts",u"content",u"CUTSCENE",u"OU.DAT"},Dir::FT_File)))
-    score[2]++;
-  if(baseIniFile->has("KEYSDEFAULT1"))
-    score[2]++;
-  if(baseIniFile->has("GAME","PATCHVERSION"))
-    score[2]++;
-  if(baseIniFile->has("GAME","useGothic1Controls"))
-    score[2]++;
-
-  if(score[1]>score[2])
-    vinfo.game = 1; else
-    vinfo.game = 2;
-
-  if(vinfo.game==2) {
-    vinfo.patch = baseIniFile->getI("GAME","PATCHVERSION");
-    }
-
-  if(CommandLine::inst().doForceG1()) {
-    vinfo.game = 1;
-    }
-  else if(CommandLine::inst().doForceG2()) {
-    vinfo.game  = 2;
-    vinfo.patch = 0;
-    }
-  else if(CommandLine::inst().doForceG2NR()) {
-    vinfo.game  = 2;
-    vinfo.patch = 5;
-    }
+  // The selected base supports Gothic II: Night of the Raven only.
+  vinfo.game  = 2;
+  vinfo.patch = 5;
   }
 
 void Gothic::refreshPhysicsFlags() {
