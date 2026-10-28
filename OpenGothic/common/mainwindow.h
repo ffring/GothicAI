@@ -80,7 +80,7 @@ class MainWindow : public Tempest::Window {
     void loadGame (std::string_view slot);
     void saveGame (std::string_view slot, std::string_view name);
 
-    void onVideo(std::string_view fname);
+    void onVideo(std::string_view fname, bool explicitRequest);
     void onStartLoading();
     void onWorldLoaded();
     void onSessionExit();

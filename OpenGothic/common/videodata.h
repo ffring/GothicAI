@@ -2,6 +2,7 @@
 
 #include "baseimport.h"
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -54,11 +55,12 @@ class Reader {
   };
 std::string formatSha256();
 std::vector<Source> sources(const std::filesystem::path& gothic);
-Identity identify(const std::filesystem::path& gothic);
+Identity identify(const std::filesystem::path& gothic, const std::atomic_bool* cancelled=nullptr);
 std::vector<Entry> readIndex(const std::filesystem::path& dir);
 // Cache/store hits verify the index and file sizes; publication also verifies every file SHA-256.
-bool matches(const std::filesystem::path& dir, const Identity& identity, bool verifyFiles=false);
+bool matches(const std::filesystem::path& dir, const Identity& identity, bool verifyFiles=false,
+             const std::atomic_bool* cancelled=nullptr);
 void build(const std::filesystem::path& gothic, const std::filesystem::path& out,
-           const BaseImport::Progress& progress = {});
+           const BaseImport::Progress& progress = {}, const std::atomic_bool* cancelled=nullptr, size_t workers=12);
 int convert(const std::filesystem::path& gothic, const std::filesystem::path& out, bool verifyOnly=false);
 }

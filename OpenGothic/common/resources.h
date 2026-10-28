@@ -20,6 +20,7 @@
 #include <tuple>
 #include <string_view>
 #include <map>
+#include <thread>
 
 #include "graphics/material.h"
 #include "sound/soundfx.h"
@@ -37,6 +38,7 @@ namespace asset { struct WorldMesh; }
 
 namespace zenkit { class ReadArchive; }
 namespace WorldData { struct Data; struct ZenFile; }
+namespace VideoData { class Reader; }
 
 namespace Dx8 {
 class DirectMusic;
@@ -161,6 +163,9 @@ class Resources final {
 
     static Dx8::PatternList          loadDxMusic(std::string_view name);
     static DmSegment*                loadMusicSegment(char const* name);
+    static std::unique_ptr<VideoData::Reader> loadVideo(std::string_view name);
+    static void                      startVideoBase();
+    static void                      videoFrameRead(std::string_view name);
     static const ProtoMesh*          decalMesh(const asset::VisualDecal& decal);
 
     static const VobTree*            loadVobBundle(std::string_view name);
@@ -248,6 +253,10 @@ class Resources final {
     MusicData::Index baseMusic;
     std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
     BaseStore::Selection automaticBase;
+    struct VideoBase;
+    std::shared_ptr<VideoBase> videoBase;
+    std::mutex videoStartSync;
+    std::thread videoWorker;
     BaseImport::Progress baseProgress;
     static std::filesystem::path baseDir();
     void indexBaseContent();

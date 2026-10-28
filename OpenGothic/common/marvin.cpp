@@ -70,6 +70,7 @@ Marvin::Marvin() {
   // http://forenarchiv.worldofplayers.de/thread.php?id=85859&post=45890#45890
   cmd = std::vector<Cmd>{
     {"census",                     C_Census},
+    {"playvideo %s",               C_PlayVideo},
     // gdb-like commands
     {"p %v",                       C_PrintVar},
     // similar to "Marvin Helper" https://steamcommunity.com/sharedfiles/filedetails/?id=2847617433
@@ -308,6 +309,9 @@ bool Marvin::exec(std::string_view v) {
   switch(ret.cmd.type) {
     case C_Census:
       return Resources::writeCensus();
+    case C_PlayVideo:
+      Gothic::inst().onVideo(ret.argv[0],true);
+      return true;
     case C_None:
       return true;
     case C_Incomplete:

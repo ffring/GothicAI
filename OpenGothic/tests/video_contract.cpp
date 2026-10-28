@@ -624,13 +624,13 @@ int main() {
     std::cout << std::fixed << std::setprecision(3);
     const auto* game=std::getenv("GOTHIC_DIR");
     require(game && *game,"GOTHIC_DIR must point to the real Gothic II installation");
-    const auto* home=std::getenv("HOME");
-    require(home && *home,"HOME is not set");
     if(const auto* reference=std::getenv("OPENGOTHIC_VIDEO_FFMPEG"); reference && *reference) {
       preflightReference(game,reference);
       return 0;
       }
-    Temporary temporary(fs::path(home)/"gothic-ai/p17");
+    const auto* home=std::getenv("HOME");
+    require(home && *home,"HOME must point to the user's directory");
+    Temporary temporary(fs::path(home)/"gothic-ai");
     const auto cache=temporary.path/"cache", store=temporary.path/"store";
     Environment cacheEnvironment("OPENGOTHIC_BASE_CACHE",cache), storeEnvironment("OPENGOTHIC_BASE_STORE",store);
     const auto identity=VideoData::identify(game);

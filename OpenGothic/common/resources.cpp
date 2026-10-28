@@ -2,6 +2,7 @@
 #include "basestore.h"
 #include "commandline.h"
 #include "musicnative.h"
+#include "videodata.h"
 
 #include <Tempest/MemReader>
 #include <Tempest/Pixmap>
@@ -28,6 +29,8 @@
 #include <iterator>
 #include <limits>
 #include <stdexcept>
+#include <thread>
+#include <cstdio>
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -68,8 +71,17 @@ using namespace Tempest;
 
 Resources* Resources::inst=nullptr;
 
+struct Resources::VideoBase {
+  std::shared_ptr<std::atomic_bool> cancelled=std::make_shared<std::atomic_bool>(false);
+  std::mutex sync;
+  BaseStore::Selection selection;
+  std::map<std::string,std::filesystem::path> files;
+  bool ready=false;
+  };
+
 namespace {
 thread_local std::string* censusOpenSource = nullptr;
+thread_local bool preparingVideo = false;
 
 struct CensusOpenCapture {
   explicit CensusOpenCapture(std::string* source) : previous(censusOpenSource) { censusOpenSource = source; }
@@ -214,6 +226,7 @@ Resources::Resources(Tempest::Device &device, BaseImport::Progress progress)
 
 void Resources::zenkitLog(zenkit::LogLevel lvl, const char* cat, const char* message) {
   BaseImport::onZenkitLog(lvl,cat,message);
+  if(preparingVideo) return;
   switch (lvl) {
     case zenkit::LogLevel::ERROR:
       Tempest::Log::e("[zenkit] ", message);
@@ -334,10 +347,81 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
   }
 
 Resources::~Resources() {
+  if(videoBase) videoBase->cancelled->store(true);
+  if(videoWorker.joinable()) videoWorker.join();
+  if(videoBase && videoBase->selection.publication.valid()) videoBase->selection.publication.wait();
   if(dmLoader!=nullptr)
     DmLoader_release(dmLoader);
   writeCensus();
   inst=nullptr;
+  }
+
+void Resources::startVideoBase() {
+  if(inst->dev==nullptr) return;
+  std::lock_guard<std::mutex> guard(inst->videoStartSync);
+  if(inst->videoBase) return;
+  inst->videoBase=std::make_shared<VideoBase>();
+  const auto state=inst->videoBase;
+  const auto gothic=std::filesystem::path(CommandLine::inst().rootPath());
+  inst->videoWorker=std::thread([state,gothic] {
+    preparingVideo=true;
+    try {
+      const size_t workers=std::max<size_t>(1,std::min<size_t>(4,std::thread::hardware_concurrency()/2));
+      auto selection=BaseStore::resolveVideos(gothic,[](std::string_view message) {
+        // Import diagnostics never use the application's log callback.
+        std::fprintf(stderr,"%.*s\n",int(message.size()),message.data());
+        },state->cancelled,workers);
+      std::map<std::string,std::filesystem::path> files;
+      for(const auto& entry:VideoData::readIndex(selection.path)) files.emplace(entry.source.name,selection.path/entry.file);
+      std::lock_guard<std::mutex> guard(state->sync);
+      state->selection=std::move(selection);
+      state->files=std::move(files);
+      state->ready=true;
+      }
+    catch(const std::exception& error) {
+      if(!state->cancelled->load()) std::fprintf(stderr,"video base: preparation failed: %s\n",error.what());
+      std::lock_guard<std::mutex> guard(state->sync);
+      state->ready=true;
+      }
+    });
+  }
+
+std::unique_ptr<VideoData::Reader> Resources::loadVideo(std::string_view name) {
+  startVideoBase();
+  std::string key(name);
+  for(auto& c:key) c=char(std::toupper(static_cast<unsigned char>(c)));
+  std::filesystem::path path;
+  bool ready=false;
+  if(inst->videoBase) {
+    std::lock_guard<std::mutex> guard(inst->videoBase->sync);
+    ready=inst->videoBase->ready;
+    auto found=inst->videoBase->files.find(key);
+    if(found==inst->videoBase->files.end()) found=inst->videoBase->files.find(key+".BIK");
+    if(found!=inst->videoBase->files.end()) path=found->second;
+    }
+  if(path.empty()) {
+    if(std::filesystem::path(key).extension().empty()) key+=".BIK";
+    // Requested by GOTHIC.DAT, with no source in the supported installation.
+    static constexpr std::string_view absentFromInstallation[]={"ADDON_TITLE.BIK"};
+    const bool absent=std::find(std::begin(absentFromInstallation),std::end(absentFromInstallation),key)!=std::end(absentFromInstallation);
+    const char* reason=absent ? "absent from installation" :
+                       ready ? "missing from video base" : "video base is still preparing";
+    Log::i("video skipped: \"",name,"\": ",reason);
+    if(inst->census) inst->census->missing(key,reason);
+    return {};
+    }
+  return std::make_unique<VideoData::Reader>(path);
+  }
+
+void Resources::videoFrameRead(std::string_view name) {
+  if(!inst->census || !inst->videoBase) return;
+  std::string key(name);
+  for(auto& c:key) c=char(std::toupper(static_cast<unsigned char>(c)));
+  std::lock_guard<std::mutex> guard(inst->videoBase->sync);
+  auto found=inst->videoBase->files.find(key);
+  if(found==inst->videoBase->files.end()) found=inst->videoBase->files.find(key+".BIK");
+  if(found!=inst->videoBase->files.end())
+    inst->census->replaced(found->first,"base/videos/"+found->second.filename().string());
   }
 
 void Resources::initCensus() {
