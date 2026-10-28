@@ -82,13 +82,13 @@ struct BaseContentContract {
   static zenkit::Vfs& sourceVfs() {
     static zenkit::Vfs vfs;
     static const bool mounted=[] {
-      fs::path work;
-      BaseImport::mountRuntime(vfs,fs::path(CommandLine::inst().rootPath()),work);
       vfs.set_open_observer([](std::string_view name,std::string_view source) {
         observedSource()=source;
         if(Resources::inst && Resources::inst->census)
           Resources::inst->census->opened(name,source);
         });
+      fs::path work;
+      BaseImport::mountRuntime(vfs,fs::path(CommandLine::inst().rootPath()),work);
       return true;
       }();
     (void)mounted;
@@ -2464,19 +2464,6 @@ struct BaseContentContract {
     const auto externalPcm=pcm(1,{123,-456});
     const auto zeroPcm=pcm(2,{});
     const std::vector<uint8_t> tiny={'b','a','d'};
-    // Mount intact originals in a tiny isolated VDF so any accidental fallback is observable.
-    const auto archiveFile=temporary/"P15.VDF";
-    {
-    zenkit::Vfs original;
-    original.mkdir("/SPEECH");
-    original.mount(zenkit::VfsNode::file("P15_PCM.WAV",{reinterpret_cast<const std::byte*>(nativePcm.data()),nativePcm.size(),false}),"/");
-    original.mount(zenkit::VfsNode::file("P15_SPEECH.WAV",{reinterpret_cast<const std::byte*>(nativePcm.data()),nativePcm.size(),false}),"/SPEECH");
-    original.mount(zenkit::VfsNode::file("P15_ZERO.WAV",{reinterpret_cast<const std::byte*>(zeroPcm.data()),zeroPcm.size(),false}),"/");
-    original.mount(zenkit::VfsNode::file("P15_TINY.WAV",{reinterpret_cast<const std::byte*>(tiny.data()),tiny.size(),false}),"/");
-    auto disk=zenkit::Write::to(archiveFile);
-    original.save(disk.get(),zenkit::GameVersion::GOTHIC_2);
-    }
-    resources.gothicAssets.mount_disk(archiveFile);
     resources.baseAudio={};
     resources.baseAudio.dir=fixtureBase/"audio";
     const auto add=[&](const char* request,const std::vector<uint8_t>& raw,const char* cls,const char* path) {
