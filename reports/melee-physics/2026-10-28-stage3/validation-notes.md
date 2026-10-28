@@ -51,9 +51,9 @@ Hits ON в обоих режимах; по **64 дуэли**, сиды **100000�
 
 | Видео | Падение → начало подъёма → управление | Forced-старт |
 |---|---|---|
-| [Герой, двуручное](/Users/kaifat/.local/share/gothic-ai/saves/melee/2026-10-28-stage3/logic-ready-ff8371-2h/posture-hero-2h.mp4), 31,4 с | 00:01.100 → 00:03.833 → 00:07.867; 00:13.433 → 00:15.600 → 00:19.633 | нет, оба |
-| [Герой, одноручное](/Users/kaifat/.local/share/gothic-ai/saves/melee/2026-10-28-stage3/logic-ready-ff8371-1h/posture-hero-1h.mp4), 31,4 с | 00:17.033 → 00:19.033 → 00:23.067 | нет |
-| [Два NPC, одноручное](/Users/kaifat/.local/share/gothic-ai/saves/melee/2026-10-28-stage3/logic-ready-ff8371-npc/posture-npc-1h.mp4), 21,6 с | 00:13.833 → 00:16.567 → 00:20.600 | нет |
+| [Герой, двуручное](~/.local/share/gothic-ai/saves/melee/2026-10-28-stage3/logic-ready-ff8371-2h/posture-hero-2h.mp4), 31,4 с | 00:01.100 → 00:03.833 → 00:07.867; 00:13.433 → 00:15.600 → 00:19.633 | нет, оба |
+| [Герой, одноручное](~/.local/share/gothic-ai/saves/melee/2026-10-28-stage3/logic-ready-ff8371-1h/posture-hero-1h.mp4), 31,4 с | 00:17.033 → 00:19.033 → 00:23.067 | нет |
+| [Два NPC, одноручное](~/.local/share/gothic-ai/saves/melee/2026-10-28-stage3/logic-ready-ff8371-npc/posture-npc-1h.mp4), 21,6 с | 00:13.833 → 00:16.567 → 00:20.600 | нет |
 
 Видео запускались последовательно через `scripts/bench.sh melee-posture-2h <out>` (аналогично `1h`, `npc`), с `BENCH_HOST=local NO_BUILD=1 WORLD=NEWWORLD.ZEN MELEE_BLADE_SHADOW=1 MELEE_PHYSICS_HITS=1 MELEE_POSTURE=1 GOTHIC_AI=0 OPENGOTHIC_BODY_TRACE=1`; перед каждым — `until ! pgrep -x Gothic2Notr >/dev/null; do sleep 5; done`.
 

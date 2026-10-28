@@ -14,6 +14,7 @@
 #include "world/portalrooms.h"
 
 #include <zenkit/Stream.hh>
+#include <zenkit/Vfs.hh>
 
 #include <array>
 #include <bit>
@@ -349,9 +350,12 @@ int main() {
     const char* args[]={"gothic-worldbase-contract","-g",gothic};
     CommandLine commandLine(3,args);
     Resources resources;
-    Resources::loadVdfs({},true);
-    const auto* entry=Resources::vdfsIndex().find("NEWWORLD.ZEN");
-    require(entry!=nullptr,"NEWWORLD.ZEN is missing from the engine VFS");
+    Resources::loadBase();
+    zenkit::Vfs sourceVfs;
+    fs::path work;
+    BaseImport::mountRuntime(sourceVfs,gothic,work);
+    const auto* entry=sourceVfs.find("NEWWORLD.ZEN");
+    require(entry!=nullptr,"NEWWORLD.ZEN is missing from the import reference VFS");
     auto input=entry->open_read();
     input->seek(0,zenkit::Whence::END);
     std::vector<std::byte> bytes(input->tell()); input->seek(0,zenkit::Whence::BEG);

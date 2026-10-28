@@ -12451,6 +12451,26 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("push "+symName(w,npc)+" impulse="+ragdollVector(impulse));
     event("ragdoll_push","\"actor\":"+jsonStr(TestBench::who(npc))+",\"impulse_ns\":"+ragdollVector(impulse));
     }
+  else if(c=="world") {
+    if(a.size()<2 || a.size()>3 || !Resources::hasWorld(a[1])) {
+      arenaAbort("world expects an indexed ZEN and an optional waypoint");
+      return;
+      }
+    say("world change requested: "+a[1]);
+    w.triggerChangeWorld(a[1],a.size()==3 ? std::string_view(a[2]) : std::string_view{});
+    // Yield until the next native tick schedules loading; tick() then waits for its completion.
+    bench.waitUntil = bench.time+1;
+    }
+  else if(c=="world-check") {
+    if(a.size()!=2 || !std::equal(w.name().begin(),w.name().end(),a[1].begin(),a[1].end(),[](char x,char y) {
+        return std::toupper(static_cast<unsigned char>(x))==std::toupper(static_cast<unsigned char>(y));
+        })) {
+      arenaAbort("world-check did not reach the requested world");
+      return;
+      }
+    say("world check passed: "+a[1]);
+    event("world_check","\"world\":"+jsonStr(w.name())+",\"pass\":true");
+    }
   else if(c=="wait") {
     bench.waitUntil = bench.time + uint64_t(num(a,1,1000));
     }
