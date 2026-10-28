@@ -315,6 +315,19 @@ async def test_picture_timeout_keeps_drawing_and_records_the_late_picture(tmp_pa
         assert len([m for m in fake.received if m["type"] == "feat_toast"]) == 1
 
 
+async def test_broken_picture_still_sends_the_category_toast(tmp_path):
+    class BrokenArtist(Artist):
+        async def draw(self, feat_id: str, emblem: str) -> Picture | None:
+            raise RuntimeError("broken")
+
+    async with world(proposal(), artist=BrokenArtist(tmp_path)) as (fake, chronicle, _, _, _):
+        chronicle.record(crime())
+        await _until(lambda: any(m["type"] == "feat_toast" for m in fake.received))
+        [toast] = [m for m in fake.received if m["type"] == "feat_toast"]
+        assert toast["icon"] == str(feats_module.CATEGORY_ICONS / "theft/icon.png")
+        assert chronicle.facts("feat_image") == []
+
+
 async def test_failed_picture_uses_the_category_without_an_image_fact(tmp_path):
     artist = FakeArtist(tmp_path, picture=False)
     artist.release.set()

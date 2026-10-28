@@ -140,6 +140,10 @@ async def test_draw_times_out_and_kills_the_call(tmp_path):
     assert calls(tmp_path) == 2
 
 
+async def test_draw_with_a_missing_codex_binary_gives_up(tmp_path):
+    assert await Artist(tmp_path / "feats", codex=str(tmp_path / "no-codex")).draw("gone", "a rope") is None
+
+
 async def test_draw_without_codex_keeps_the_category_emblem(tmp_path, monkeypatch):
     monkeypatch.delenv("GOTHIC_AI_CODEX", raising=False)
     monkeypatch.setattr(feat_art.shutil, "which", lambda name: None)

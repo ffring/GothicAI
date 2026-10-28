@@ -388,6 +388,8 @@ class Feats:
                 picture = await asyncio.wait_for(asyncio.shield(drawing), self.image_wait_s)
             except TimeoutError:
                 pass
+            except Exception:  # a broken picture must not cost the toast: the category emblem stands in
+                log.exception("feats: drawing %s failed", feat["id"])
         if generation != self._generation:
             return
         icon = picture.icon if picture is not None else CATEGORY_ICONS / feat["category"] / "icon.png"

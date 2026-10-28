@@ -100,7 +100,7 @@ def normalise(src: Image.Image) -> tuple[Image.Image, dict]:
     stats = {
         "ink": round(float(mask.mean()), 3),
         "accent": round(float((acc > 0.5).mean()), 4),
-        "fill": round(max(y1 - y0, x1 - x0) / max(h, w), 3),
+        "fill": round(float(max(y1 - y0, x1 - x0) / max(h, w)), 3),
     }
     return Image.fromarray(pic.clip(0, 255).astype(np.uint8)), stats
 
@@ -167,7 +167,11 @@ class Artist:
         async with self._lock:
             for attempt in range(1, self.attempts + 1):
                 with tempfile.TemporaryDirectory(prefix="feat-art-") as tmp:
-                    raw = await self._generate(Path(tmp), emblem)
+                    try:
+                        raw = await self._generate(Path(tmp), emblem)
+                    except OSError as error:  # git or codex cannot be started
+                        log.warning("feat art: %s attempt %d: %s", feat_id, attempt, error)
+                        continue
                     if raw is None:
                         log.warning("feat art: %s attempt %d: no picture", feat_id, attempt)
                         continue
