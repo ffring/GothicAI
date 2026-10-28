@@ -115,7 +115,8 @@
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
 #        rumor and has it in mind when the hero speaks to her (story graph, stage 4)
 #   death_load: human deaths before/after older-save load, player credit, and no repeated saved deaths; LLM=fake, no SAVE.
-#   feats: save before a hero kill, chronicler feat with evidence, category toast icon and journal, then load rollback; LLM=fake, no SAVE.
+#   feats: save before a hero kill, chronicler feat with evidence, fake-generated picture, toast and journal;
+#       load rolls back feat/image facts while retaining picture files; LLM=fake, no SAVE, no codex call.
 #   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
 #       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
 #       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)

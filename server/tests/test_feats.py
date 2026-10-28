@@ -9,6 +9,7 @@ import pytest
 
 from gothic_ai import feats as feats_module
 from gothic_ai.chronicle import Chronicle
+from gothic_ai.feat_art import STYLE_VERSION, Artist, Picture
 from gothic_ai.feats import Feats, Proposal, canon, hero_view, notable
 from gothic_ai.journal import Journal
 from gothic_ai.llm import LLMError, ToolCall
@@ -47,8 +48,35 @@ def feat(**changes):
     }
 
 
+class FakeArtist(Artist):
+    def __init__(self, root: Path, *, picture: bool = True):
+        super().__init__(root)
+        self.picture = picture
+        self.started, self.release, self.finished = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        self.cancelled = False
+        self.calls = []
+
+    async def draw(self, feat_id: str, emblem: str) -> Picture | None:
+        self.calls.append((feat_id, emblem))
+        self.started.set()
+        try:
+            await self.release.wait()
+            if not self.picture:
+                return None
+            out = self.root / feat_id
+            out.mkdir()
+            icon = out / "icon.png"
+            icon.write_bytes(b"icon")
+            return Picture(out, out / "engraving.jpg", icon, "0123456789abcdef", STYLE_VERSION)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        finally:
+            self.finished.set()
+
+
 @asynccontextmanager
-async def world(*answers, gather_s=0, history=(), backend=None):
+async def world(*answers, gather_s=0, history=(), backend=None, artist=None, image_wait_s=150):
     fake = FakeGame(branch="A")
     fake.day = 10
     store = MemoryStore(":memory:")
@@ -61,7 +89,10 @@ async def world(*answers, gather_s=0, history=(), backend=None):
     journal = []
     async with connected(fake) as link:
         chronicle = Chronicle(link, store)
-        chronicler = Feats(link, chronicle, llm, journal=Journal(journal.append), gather_s=gather_s)
+        chronicler = Feats(
+            link, chronicle, llm, journal=Journal(journal.append), gather_s=gather_s,
+            artist=artist, image_wait_s=image_wait_s,
+        )
         try:
             yield fake, chronicle, chronicler, llm, journal
         finally:
@@ -241,6 +272,101 @@ async def test_complete_path_retries_records_toast_and_journal_then_rolls_back()
         link._dispatch(Session(type="session", branch="B", parent="A", parent_seq=seq, reason="load"))
         assert chronicler.feats == [] and chronicle.facts("feat") == []
         assert len(chronicle.entries()) == 1
+
+
+async def test_picture_arrives_before_toast_without_blocking_the_chronicler(tmp_path):
+    artist = FakeArtist(tmp_path)
+    async with world(proposal(), artist=artist) as (fake, chronicle, chronicler, _, journal):
+        chronicle.record(crime())
+        await _until(artist.started.is_set)
+        await settled(chronicler)
+        assert not artist.finished.is_set()
+        assert not any(m["type"] == "feat_toast" for m in fake.received)
+        [award] = chronicler.feats
+        assert artist.calls == [(award["id"], award["emblem"])]
+        artist.release.set()
+        await _until(lambda: any(m["type"] == "feat_toast" for m in fake.received))
+        [toast] = [m for m in fake.received if m["type"] == "feat_toast"]
+        assert toast["icon"] == str(tmp_path / award["id"] / "icon.png")
+        assert chronicle.facts("feat_image") == [{
+            "fact": "feat_image", "id": award["id"], "hash": "0123456789abcdef", "style": STYLE_VERSION,
+        }]
+        [entry] = [entry for entry in journal if entry["kind"] == "feat_image"]
+        assert entry["id"] == award["id"] and entry["dir"] == str(tmp_path / award["id"])
+
+
+async def test_picture_timeout_keeps_drawing_and_records_the_late_picture(tmp_path):
+    artist = FakeArtist(tmp_path)
+    async with world(proposal(), artist=artist, image_wait_s=0) as (
+        fake, chronicle, chronicler, _, journal,
+    ):
+        chronicle.record(crime())
+        await _until(artist.started.is_set)
+        await _until(lambda: any(m["type"] == "feat_toast" for m in fake.received))
+        [award] = chronicler.feats
+        [toast] = [m for m in fake.received if m["type"] == "feat_toast"]
+        assert toast["icon"] == str(feats_module.CATEGORY_ICONS / "theft/icon.png")
+        assert chronicle.facts("feat_image") == [] and not artist.cancelled
+        artist.release.set()
+        await _until(lambda: bool(chronicle.facts("feat_image")))
+        [image] = chronicle.facts("feat_image")
+        assert image["id"] == award["id"] and image["hash"] and image["style"] == STYLE_VERSION
+        assert any(entry["kind"] == "feat_image" and entry["id"] == award["id"] for entry in journal)
+        assert len([m for m in fake.received if m["type"] == "feat_toast"]) == 1
+
+
+async def test_broken_picture_still_sends_the_category_toast(tmp_path):
+    class BrokenArtist(Artist):
+        async def draw(self, feat_id: str, emblem: str) -> Picture | None:
+            raise RuntimeError("broken")
+
+    async with world(proposal(), artist=BrokenArtist(tmp_path)) as (fake, chronicle, _, _, _):
+        chronicle.record(crime())
+        await _until(lambda: any(m["type"] == "feat_toast" for m in fake.received))
+        [toast] = [m for m in fake.received if m["type"] == "feat_toast"]
+        assert toast["icon"] == str(feats_module.CATEGORY_ICONS / "theft/icon.png")
+        assert chronicle.facts("feat_image") == []
+
+
+async def test_failed_picture_uses_the_category_without_an_image_fact(tmp_path):
+    artist = FakeArtist(tmp_path, picture=False)
+    artist.release.set()
+    async with world(proposal(), artist=artist) as (fake, chronicle, _, _, journal):
+        chronicle.record(crime())
+        await _until(lambda: any(m["type"] == "feat_toast" for m in fake.received))
+        [toast] = [m for m in fake.received if m["type"] == "feat_toast"]
+        assert toast["icon"] == str(feats_module.CATEGORY_ICONS / "theft/icon.png")
+        assert chronicle.facts("feat_image") == []
+        assert not any(entry["kind"] == "feat_image" for entry in journal)
+
+
+@pytest.mark.parametrize("message", [
+    Loading(type="loading"), Session(type="session", branch="B", reason="load"),
+])
+async def test_loading_keeps_the_drawing_without_a_toast_or_image_fact(tmp_path, message):
+    artist = FakeArtist(tmp_path)
+    async with world(proposal(), artist=artist) as (fake, chronicle, chronicler, _, journal):
+        chronicle.record(crime())
+        await _until(artist.started.is_set)
+        [award] = chronicler.feats
+        chronicle.memory.ensure_branch("B", "A", 0)
+        chronicle.link._dispatch(message)
+        assert not artist.cancelled and not artist.finished.is_set()
+        artist.release.set()
+        await asyncio.gather(*chronicler._drawings, *chronicler._toasts)
+        assert artist.finished.is_set() and not artist.cancelled
+        assert (tmp_path / award["id"] / "icon.png").is_file()
+        assert not any(m["type"] == "feat_toast" for m in fake.received)
+        assert chronicle.facts("feat_image") == []
+        assert not any(entry["kind"] == "feat_image" for entry in journal)
+
+
+async def test_close_cancels_and_joins_the_drawing(tmp_path):
+    artist = FakeArtist(tmp_path)
+    async with world(proposal(), artist=artist) as (_, chronicle, _, _, _):
+        chronicle.record(crime())
+        await _until(artist.started.is_set)
+    assert artist.cancelled and artist.finished.is_set()
 
 
 async def test_hidden_truth_never_reaches_the_chronicler():
