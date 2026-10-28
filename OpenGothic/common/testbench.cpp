@@ -15270,7 +15270,7 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       const bool ready=bench.waitRagdollState=="knockdown" ? npc->isMeleeKnockedDown() :
                        bench.waitRagdollState=="sleep" ? body!=nullptr && body->isSleeping() :
                        bench.waitRagdollState=="recovery" ? npc->isRagdollBlending() :
-                       body==nullptr && !npc->isDown() && !npc->isRagdollBlending() &&
+                       body==nullptr && !npc->isDown() && !npc->isMeleeKnockedDown() && !npc->isRagdollBlending() &&
                        (!guardedReturn || (npc->isStanding() && !quest.armed));
       if(!ready && bench.time<bench.waitRagdollEnd)
         return;

@@ -946,6 +946,7 @@ class Npc final {
     bool                          tickMeleePosture(uint64_t dt);
     MeleeImpact::Posture           meleePosture;
     bool                          meleeKnockdown = false;
+    bool                          meleeGetupForced = false;
     uint64_t                      meleeFallTick = 0, meleeRiseTick = 0;
     uint32_t                      meleeReturnCount = 0;
     Tempest::Vec3                 meleeSavePosition;

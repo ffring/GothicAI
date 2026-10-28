@@ -503,6 +503,7 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
 void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
   meleePosture.reset();
   meleeKnockdown = false;
+  meleeGetupForced = false;
   meleeFallTick = meleeRiseTick = 0;
   releaseRagdoll(false);
   ragdollDormant.reset();
@@ -907,6 +908,7 @@ void Npc::resetNavigationEpisode() {
   ragdollLegacyDown = ragdollRecovering = ragdollHasLastPosition = false;
   meleePosture.reset();
   meleeKnockdown = false;
+  meleeGetupForced = false;
   meleeFallTick = meleeRiseTick = 0;
   ragdollLastVelocity = {};
   ragdollQuestReturn = {};
@@ -4600,6 +4602,7 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
       setAnim(Anim::Idle);
       meleeFallTick = owner.tickCount();
       meleeRiseTick = 0;
+      meleeGetupForced = false;
       meleeReturnCount = ragdollQuestReturns;
       ragdoll->addImpulse(impulse,&attacker);
       fghAlgo.onTakeHit();
@@ -4636,22 +4639,27 @@ bool Npc::tickMeleePosture(uint64_t dt) {
   visual.processLayers(owner);
   const bool enabled = Gothic::physicsFlags().meleePosture;
   if(ragdoll && (now-meleeFallTick>=1200 || !enabled)) {
-    // A posture fall is brief, unlike KO: begin the authored get-up at 1.2 s
-    // even if the native body has not gone to sleep.
-    recoverRagdoll(true);
+    // Use the same settled-body gate as KO, with a deadline for starting
+    // the authored get-up rather than a deadline for finishing it.
+    if(!recoverRagdoll() && (now-meleeFallTick>=3000 || !enabled))
+      meleeGetupForced = recoverRagdoll(true) && enabled;
     }
   if(!ragdoll) {
     // The wounded loop may reject Idle on its very first frame. Retry only
     // until the existing get-up transition accepts it, then let it finish.
-    if(meleeRiseTick==0 && setAnim(Anim::Idle))
+    if(meleeRiseTick==0 && setAnim(Anim::Idle)) {
       meleeRiseTick = now;
+      writeMeleePosture("{\"event\":\"getup_start\",\"tick_ms\":"+std::to_string(now)+
+                       ",\"target\":"+meleeShadowWho(this)+",\"fall_ms\":"+std::to_string(meleeFallTick)+
+                       ",\"getup_ms\":"+std::to_string(now)+",\"wait_ms\":"+std::to_string(now-meleeFallTick)+
+                       ",\"forced\":"+(meleeGetupForced ? "true" : "false")+"}");
+      }
     // Wounded-to-stand has no successor. Ordinary NPC ticking resumes Idle
     // after that transition ends; this isolated live fall must do the same.
     if(meleeRiseTick!=0 && !visual.pose().hasAnim())
       setAnim(Anim::Idle);
-    if(visual.pose().isStanding() || !enabled || now-meleeFallTick+dt>=4000) {
-      const bool forced = !visual.pose().isStanding();
-      if(forced) {
+    if(visual.pose().isStanding() || !enabled) {
+      if(!enabled && !visual.pose().isStanding()) {
         visual.pose().stopAllAnim();
         setAnim(Anim::Idle);
         }
@@ -4661,7 +4669,8 @@ bool Npc::tickMeleePosture(uint64_t dt) {
       writeMeleePosture("{\"event\":\"recover\",\"tick_ms\":"+std::to_string(now)+
                        ",\"target\":"+meleeShadowWho(this)+",\"fall_ms\":"+std::to_string(meleeFallTick)+
                        ",\"getup_ms\":"+std::to_string(meleeRiseTick)+",\"rise_ms\":"+std::to_string(now)+
-                       ",\"forced\":"+(forced ? "true" : "false")+",\"returned\":"+(ragdollQuestReturns!=meleeReturnCount ? "true" : "false")+"}");
+                       ",\"getup_duration_ms\":"+std::to_string(now-meleeRiseTick)+
+                       ",\"returned\":"+(ragdollQuestReturns!=meleeReturnCount ? "true" : "false")+"}");
       if(!enabled)
         meleePosture.reset();
       return false;

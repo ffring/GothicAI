@@ -1,5 +1,5 @@
 # Stage 3 logic: two native one-handed humans beside the same real wall.
-# Save the bandit during a physical knockdown, without making him unconscious.
+# Save the paladin during a physical knockdown, without making him unconscious.
 seed 73013
 cheat god
 set time 12 0
@@ -31,8 +31,8 @@ release all
 rec posture-npc-1h
 fight PAL_255_RITTER BDT_1013_BANDIT_L
 fight BDT_1013_BANDIT_L PAL_255_RITTER
-waitragdoll BDT_1013_BANDIT_L knockdown 60000
-ragdoll session-save BDT_1013_BANDIT_L stage3-down
-waitragdoll BDT_1013_BANDIT_L getup 6000
+waitragdoll PAL_255_RITTER knockdown 60000
+ragdoll session-save PAL_255_RITTER stage3-down
+waitragdoll PAL_255_RITTER getup 9000
 wait 1000
 stop

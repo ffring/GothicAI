@@ -49,10 +49,20 @@ def summarize(output: Path, *, shadow: bool = False) -> dict:
                   steady_mix=begin.get("steady_mix", False), brawl=begin.get("brawl", False),
                   attack_starts=end.get("attack_starts", 0), knockdowns=0, posture_hits=0)
     posture = output/"run/melee-posture.jsonl"
+    rows = []
     if posture.is_file():
         rows = [json.loads(line) for line in posture.read_text().splitlines()]
         result["knockdowns"] = sum(row["event"] == "knockdown" for row in rows)
         result["posture_hits"] = sum(row["event"] == "hit" for row in rows)
+    starts = [row for row in rows if row["event"] == "getup_start" and "wait_ms" in row]
+    durations = [row["getup_duration_ms"] for row in rows if row["event"] == "recover" and "getup_duration_ms" in row]
+    forced = sum(row["forced"] for row in starts)
+    result.update(getup_starts=len(starts), getup_completed=len(durations), forced_getup_starts=forced,
+                  forced_getup_fraction=forced/result["knockdowns"] if result["knockdowns"] else None,
+                  forced_getup_start_fraction=forced/len(starts) if starts else None)
+    for name, values in (("getup_wait_ms", [row["wait_ms"] for row in starts]), ("getup_duration_ms", durations)):
+        result.update({name+"_median": statistics.median(values) if values else None,
+                       name+"_min": min(values) if values else None, name+"_max": max(values) if values else None})
     with (output/"melee-physics.csv.steps.csv").open() as stream:
         steps = list(csv.DictReader(stream))
     result["fixed_steps"] = len(steps)

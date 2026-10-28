@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import resource
+import statistics
 import subprocess
 import sys
 import time
@@ -91,12 +92,23 @@ def add_posture_metrics(episodes: list[dict], path: Path, *, enabled: bool) -> d
     outcomes = Counter(episode["reason"] for episode in episodes)
     knockdowns = sum(episode["knockdowns"] for episode in episodes)
     defeats = sum(episode["knockdown_defeats_within_3s"] for episode in episodes)
-    return {"duels": len(episodes), "wins": outcomes["opponent_down"], "losses": outcomes["primary_down"],
-            "timeouts": outcomes["time_limit"],
-            "mean_duration_s": sum(e.get("game_ms", e.get("elapsed_game_ms", 0)) for e in episodes)/1000/len(episodes),
-            "knockdowns": knockdowns, "knockdowns_per_duel": knockdowns/len(episodes),
-            "knockdown_defeats_within_3s": defeats,
-            "knockdown_defeat_fraction": defeats/knockdowns if knockdowns else 0}
+    rows = [row for group in groups.values() for row in group]
+    starts = [row for row in rows if row["event"] == "getup_start" and "wait_ms" in row]
+    durations = [row["getup_duration_ms"] for row in rows if row["event"] == "recover" and "getup_duration_ms" in row]
+    forced = sum(row["forced"] for row in starts)
+    result = {"duels": len(episodes), "wins": outcomes["opponent_down"], "losses": outcomes["primary_down"],
+              "timeouts": outcomes["time_limit"],
+              "mean_duration_s": sum(e.get("game_ms", e.get("elapsed_game_ms", 0)) for e in episodes)/1000/len(episodes),
+              "knockdowns": knockdowns, "knockdowns_per_duel": knockdowns/len(episodes),
+              "knockdown_defeats_within_3s": defeats,
+              "knockdown_defeat_fraction": defeats/knockdowns if knockdowns else 0,
+              "getup_starts": len(starts), "getup_completed": len(durations), "forced_getup_starts": forced,
+              "forced_getup_fraction": forced/knockdowns if knockdowns else None,
+              "forced_getup_start_fraction": forced/len(starts) if starts else None}
+    for name, values in (("getup_wait_ms", [row["wait_ms"] for row in starts]), ("getup_duration_ms", durations)):
+        result.update({name+"_median": statistics.median(values) if values else None,
+                       name+"_min": min(values) if values else None, name+"_max": max(values) if values else None})
+    return result
 
 
 def shadow_coverage(path: Path, episodes: list[dict]) -> dict:
@@ -326,6 +338,11 @@ def main() -> int:
             print(f"   posture {provider}: {summary['wins']}/{summary['losses']}/{summary['timeouts']} W/L/T, "
                   f"{summary['mean_duration_s']:.3f} s, {summary['knockdowns_per_duel']:.3f} KD/duel, "
                   f"{summary['knockdown_defeats_within_3s']}/{summary['knockdowns']} defeats within 3 s", flush=True)
+            print(f"   get-up {provider}: {summary['getup_starts']} starts, {summary['getup_completed']} completed, "
+                  f"wait median {summary['getup_wait_ms_median']} ms [{summary['getup_wait_ms_min']}, {summary['getup_wait_ms_max']}], "
+                  f"transition median {summary['getup_duration_ms_median']} ms "
+                  f"[{summary['getup_duration_ms_min']}, {summary['getup_duration_ms_max']}], "
+                  f"forced {summary['forced_getup_starts']}/{summary['knockdowns']} knockdowns", flush=True)
     coverage_failed = False
     for result in results:
         for name, row in result.get("shadow_coverage", {}).items():

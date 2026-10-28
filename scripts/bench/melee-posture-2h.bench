@@ -88,5 +88,5 @@ wait 700
 tap right
 wait 700
 release all
-wait 5000
+wait 9000
 stop
