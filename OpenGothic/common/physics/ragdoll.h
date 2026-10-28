@@ -68,8 +68,11 @@ class Ragdoll final {
     // not a velocity. strength is the visual/motor response in (0, 1].
     // A living pelvis hit reacts through the nearest spine; a limp hit always
     // addresses the supplied physical bone. No native world calls happen here.
+    // stiffness >= 1 scales the living motors' spring frequency (torque with its
+    // square): a blade's reaction rides a fast authored stumble, an arrow's does not.
     bool queueHit(size_t bone, const Tempest::Vec3& pointCm,
-                  const Tempest::Vec3& impulseNs, float strength, Npc* culprit = nullptr);
+                  const Tempest::Vec3& impulseNs, float strength, Npc* culprit = nullptr,
+                  float stiffness = 1.f);
     void setNpc(Npc* npc);
     void setNoiseCulprit(Npc* culprit);
     float reactionWeight() const;

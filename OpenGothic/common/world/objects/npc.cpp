@@ -2396,7 +2396,8 @@ void Npc::prepareLivingBody() {
     }
   if(frozen)
     arrowImpacts.clear();
-  if(livingNeedsRebuild || (!benchRig && living && !living->isKinematic() && !Gothic::physicsFlags().arrowPhysics)) {
+  if(livingNeedsRebuild || (!benchRig && living && !living->isKinematic() &&
+                            !Gothic::physicsFlags().arrowPhysics && !Gothic::physicsFlags().meleeReactions)) {
     living.reset();
     livingNeedsRebuild = false;
     }
@@ -2493,10 +2494,12 @@ void Npc::queueArrowPhysics(const Bullet& bullet) {
 void Npc::dispatchArrowPhysics(Ragdoll& body) {
   for(const auto& hit:arrowImpacts) {
     const auto culprit = hit.culprit.lock();
-    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr)) {
-      ++arrowPhysics.applied;
+    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr,
+                     hit.stiffness)) {
+      auto& probe = hit.melee ? meleeReaction : arrowPhysics;
+      ++probe.applied;
       if(&body==ragdoll.get())
-        ++arrowPhysics.corpseImpulses;
+        ++probe.corpseImpulses;
       }
     }
   arrowImpacts.clear();
@@ -4729,7 +4732,64 @@ void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool st
   hit.strength = std::clamp(0.35f + 2.5f*float(std::max(damage,0))/float(hpMax), 0.35f, 1.f);
   if(stumble)
     hit.strength *= 0.6f; // the stumble throws the body already
+  if(b==nullptr && queueMeleeReaction(other,hit.dir,at,contact))
+    hit.strength *= 0.5f; // the struck chain gives way physically, the fake bend only follows
   flinch(hit);
+  }
+
+bool Npc::queueMeleeReaction(const Npc& other, const Vec3& dir, const Vec3& at, const MeleeBladeContact* contact) {
+  // the blow pushes the struck chain on the living rig like an arrow does, its motors bring it back
+  if(!Gothic::physicsFlags().meleeReactions || !living || !isHuman())
+    return false;
+  Vec3 d = dir;
+  if(!std::isfinite(d.x) || !std::isfinite(d.y) || !std::isfinite(d.z) || d.length()<1e-3f)
+    return false;
+  d = Vec3::normalize(d);
+  size_t bone = contact!=nullptr ? contact->bone : size_t(-1);
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,at);
+    }
+  if(bone>=visual.pose().boneCount())
+    return false;
+  // the weapon with the arm behind it, kg; the contact's speed, m/s; a glancing edge hands over less
+  float mass = 1.5f;
+  switch(other.weaponState()) {
+    case WeaponState::W1H: mass = 2.5f; break;
+    case WeaponState::W2H: mass = 4.f;  break;
+    default: break;
+    }
+  float speed = 6.f, edge = 1.f;
+  if(contact!=nullptr) {
+    speed = std::clamp(contact->speedCmS*0.01f,0.f,15.f);
+    edge  = .5f+.5f*std::sin(std::clamp(contact->surfaceAngleDeg,0.f,90.f)*float(M_PI)/180.f);
+    }
+  const float momentum = std::clamp(mass*speed*edge,0.f,40.f);
+  if(momentum<1.f)
+    return false;
+  // the blade cuts on and the stance takes the rest: the chain gets a part of the momentum.
+  // The stumble already throws the body, so the motors keep most of their hold: a weak
+  // chain loses the authored swing of the arms and hangs like a rope
+  constexpr float transfer = 0.15f;
+  const float strength = 0.55f*std::clamp(momentum/40.f,0.25f,1.f);
+  const Vec3  impulse  = d*(momentum*transfer);
+  // twice the arrow's spring keeps up with the stumble's fast swing of the arms
+  constexpr float stiffness = 2.f;
+  arrowImpacts.push_back({bone,at,impulse,strength,other.handlePtr(),true,stiffness});
+  meleeReaction.bone      = bone;
+  meleeReaction.point     = at;
+  meleeReaction.impulseNs = impulse;
+  meleeReaction.strength  = strength;
+  ++meleeReaction.hits;
+  if(TestBench::isActive()) {
+    const auto who = TestBench::who(this);
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"melee_reaction %.*s: bone %d momentum %.1f impulse %.1f strength %.2f",
+                  int(who.size()),who.data(),int(bone),double(momentum),double(momentum*transfer),double(strength));
+    TestBench::note(buf);
+    }
+  return true;
   }
 
 void Npc::takeFallDamage(const Vec3& fallSpeed) {

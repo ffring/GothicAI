@@ -2176,6 +2176,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
   std::fprintf(bench.csv,",hp_player,hp_subject");
   std::fprintf(bench.csv,",ai_on,ai_want,ai_sigma,ai_errx,ai_erry,ai_lead,ai_pv,ai_ps");
+  std::fprintf(bench.csv,",mr_w,mr_dev,mr_hits");
   if(ragdollTrace)
     std::fprintf(bench.csv,",ph_ms,ph_bodies,ph_rays,rd_mode,rd_weight,rd_sleep");
   if(bench.questTrace)
@@ -7397,6 +7398,22 @@ void writeRow(Npc& pl) {
   const auto& ai = ArcherAi::subjectProbe;
   std::fprintf(bench.csv,",%d,%d,%.3f,%.3f,%.3f,%.0f,%.2f,%.2f",int(ai.valid && ai.active),int(ai.want),ai.sigma,ai.err.x,ai.err.y,
                ai.lead,ai.pv,ai.ps);
+  {
+    // the watched npc's motor reaction to a blow: its weight, how far the shown body leaves the animation (cm)
+    const Npc&     s      = subjectOf(pl);
+    const Ragdoll* living = s.livingBody();
+    float          weight = 0, dev = 0;
+    if(living!=nullptr && living->reactionWeight()>0.f) {
+      weight = living->reactionWeight();
+      for(const auto b:living->reactionBones()) {
+        Vec3 shown, anim;
+        s.renderedBone(b).project(shown);
+        s.animationBone(b).project(anim);
+        dev = std::max(dev,(shown-anim).length());
+        }
+      }
+    std::fprintf(bench.csv,",%.3f,%.2f,%u",weight,dev,unsigned(s.meleeReactionProbe().applied));
+  }
   if(ragdollTrace)
     writeRagdoll(pl);
   if(bench.questTrace && bench.questNpc!=nullptr)
