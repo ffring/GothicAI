@@ -316,6 +316,8 @@ std::shared_ptr<Cloth::Instance> Cloth::add(const std::vector<Tempest::Vec3>& so
   return ret;
   }
 void Cloth::setEnabled(bool value) {
+  // World::tick applies the setting every tick: only a real toggle refreshes every view.
+  if(impl->enabled==value) return;
   impl->enabled=value;
   impl->each([](Instance::Impl& body) { body.dirty=true; });
   // The static world-cloth fallback switches in this same call stack. Update
