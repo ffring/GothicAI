@@ -706,7 +706,11 @@ def _story_graph(args: argparse.Namespace, game_dir: Path | None) -> storygraph.
     """The scripts' story graph (storygraph's JSON): a given file, or made from the game's scripts."""
     path = Path(args.story_graph) if args.story_graph else None
     if path is None and game_dir is not None:
-        path = storygraph.ensure(game_dir, DEFAULT_MEMORY_DB.parent / "story.json")
+        try:
+            path = storygraph.ensure(game_dir, DEFAULT_MEMORY_DB.parent / "story.json")
+        except RuntimeError as error:
+            log.warning("story graph unavailable: %s", error)
+            return None
     if path is None or not path.exists():
         log.warning(
             "no story graph, so no director and no npc knowledge "
