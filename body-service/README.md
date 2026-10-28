@@ -24,6 +24,28 @@ Training accepts the validated periodic-only dataset view. Native exact decision
 are causal label evidence, never extra recurrent inputs. Scripted expert records require
 registered provenance and real physical outcomes. Test/OOD never select checkpoints.
 
+## Bodynet export and NumPy reference
+
+The Python tools export the P30 GRU-256 actor and compare a NumPy implementation with
+Torch `PolicyRuntime` decisions. They are not used by the game yet. From the repository:
+
+```sh
+python scripts/body_net.py export best.pt p30.bodynet
+python scripts/body_net.py golden best.pt episode-a/observations.jsonl episode-b/observations.jsonl p30-golden.jsonl.gz
+python scripts/body_net.py check p30.bodynet p30-golden.jsonl.gz
+```
+
+Keep each episode's reset metadata beside `observations.jsonl`, as for
+`body_policy_net_check.py runtime`. Export and golden generation need Torch; checking
+uses only NumPy and the standard library via `scripts/body_net_numpy.py`.
+The `.bodynet` v1 file starts with one JSON header line followed by little-endian
+float32 tensors: encoder, GRUCell, head and the 184 ordered normalization means and
+standard deviations. It excludes the critic. The header records the checkpoint
+SHA-256, 184 input names, 12 actions, tensor shapes, dtypes, byte offsets and payload size.
+Each golden step preserves the recorded observation, normalized inputs, masked logits,
+chosen action, fallback/reset reason and the 256-value hidden state after the step.
+The checker verifies numerical parity within `1e-5` and exact actions and reset behavior.
+
 ## TCP service and deployment
 
 On dev-ubuntu, `gothic-body serve-net --checkpoint PATH --host "$BODY_HOST" --port 47835
