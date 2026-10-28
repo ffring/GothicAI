@@ -1600,6 +1600,7 @@ std::vector<uint8_t> Resources::readDxMusic(const std::vector<std::u16string>& p
       throw std::runtime_error(*source->dx8.failure);
     return readMusicRecord("dx8",Tempest::TextCodec::toUtf8(name),kind,*source);
     }
+  if(census) census->missing(Tempest::TextCodec::toUtf8(name),"music data: missing from base index");
   throw std::runtime_error("file not found");
   }
 

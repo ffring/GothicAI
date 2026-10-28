@@ -2089,10 +2089,10 @@ struct BaseContentContract {
 
   static void musicRuntime(const fs::path& base,const fs::path& temporary,const fs::path& censusPath) {
     const auto fixture=temporary/"music-runtime-base";
-    fs::create_directories(fixture/"music");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","outputunits","audio","sources"})
+    fs::create_directories(fixture);
+    for(const auto* part:{"base.json","base-files.json","worlds","textures","meshes","zen","models","fonts","programs","outputunits","audio","sources"})
       fs::create_symlink(base/part,fixture/part);
-    fs::copy_file(base/"music/music.json",fixture/"music/music.json");
+    fs::copy(base/"music",fixture/"music",fs::copy_options::recursive);
     setenv("OPENGOTHIC_BASE",fixture.c_str(),1);
     MusicData::Source selected;
     {
@@ -2109,11 +2109,6 @@ struct BaseContentContract {
     const std::vector<std::u16string> dirs{(gothic/fs::path(selected.path).parent_path()).u16string()+u"/"};
     require(Resources::loadMusicSegment(request.c_str())==nullptr,"headless public GK music must remain empty");
     (void)Resources::loadDxMusic(request); // Its legacy empty PatternList has no safe size() query.
-    for(const auto* outcome:{&selected.gk,&selected.dx8}) {
-      const auto file=fixture/"music"/(outcome->record+".json"); auto bin=file; bin.replace_extension(".bin");
-      const auto source=base/"music"/(outcome->record+".json"); auto sourceBin=source; sourceBin.replace_extension(".bin");
-      fs::create_directories(file.parent_path()); fs::copy_file(source,file); fs::copy_file(sourceBin,bin);
-      }
     std::vector<uint8_t> bin;
     require(resources.readGkMusic(request,"segment",bin)==DmResult_SUCCESS,"private GK reader must verify native record");
     vector(bin,musicRecord(resources.baseMusic,selected.gk),"private GK record bytes");
@@ -2431,12 +2426,12 @@ struct BaseContentContract {
     }
 
   static void audioRuntime(const fs::path& base, const fs::path& temporary, const fs::path& censusPath) {
-    // A valid base index with no audio payloads must mount before lazy integrity checks run.
+    // Start with a valid base before adding the synthetic audio integrity fixtures.
     const auto fixtureBase=temporary/"audio-runtime-base";
     fs::create_directories(fixtureBase/"audio");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","outputunits","music","sources"})
+    for(const auto* part:{"base.json","base-files.json","worlds","textures","meshes","zen","models","fonts","programs","outputunits","music","sources"})
       fs::create_symlink(base/part,fixtureBase/part);
-    fs::create_symlink(base/"audio/audio.json",fixtureBase/"audio/audio.json");
+    fs::copy(base/"audio",fixtureBase/"audio",fs::copy_options::recursive);
     setenv("OPENGOTHIC_BASE",fixtureBase.c_str(),1);
     Resources resources;
     Resources::loadBase();
@@ -2946,8 +2941,10 @@ struct BaseContentContract {
       const auto incomplete=temporary/("missing-"+kind+"-index");
       fs::create_directories(incomplete/kind);
       fs::copy_file(base/"base.json",incomplete/"base.json");
-      for(const auto* part:{"textures","meshes","zen","models","fonts","programs","outputunits","audio","music","sources"})
-        if(part!=kind) fs::create_directory_symlink(base/part,incomplete/part);
+      for(const auto* part:{"base-files.json","worlds","textures","meshes","zen","models","fonts","programs","outputunits","audio","music","sources"})
+        if(part!=kind) fs::create_symlink(base/part,incomplete/part);
+      for(const auto& file:fs::directory_iterator(base/kind))
+        if(file.path().filename()!=kind+".json") fs::create_symlink(file.path(),incomplete/kind/file.path().filename());
       setenv("OPENGOTHIC_BASE",incomplete.c_str(),1);
       std::string missingIndexError;
       try {
@@ -2955,15 +2952,14 @@ struct BaseContentContract {
         Resources::loadBase();
         }
       catch(const BaseStore::Error& error) { missingIndexError=error.what(); }
-      const auto prefix=kind=="programs" ? "program data: " : kind=="outputunits" ? "output units: " : kind=="audio" ? "audio data: " : kind=="music" ? "music data: " : "base index missing: ";
-      require(missingIndexError.find(prefix+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
+      require(missingIndexError.find("missing or unreadable base file: "+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
               missingIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
               "base without "+kind+"/"+kind+".json must fail with recovery instructions");
       }
     {
     const auto broken=temporary/"broken-program-record";
     fs::create_directories(broken/"programs");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","outputunits","audio","music","sources"})
+    for(const auto* part:{"base.json","base-files.json","worlds","textures","meshes","zen","models","fonts","outputunits","audio","music","sources"})
       fs::create_symlink(base/part,broken/part);
     for(const auto& file:fs::directory_iterator(base/"programs"))
       fs::create_symlink(file.path(),broken/"programs"/file.path().filename());
@@ -2975,11 +2971,11 @@ struct BaseContentContract {
     const auto& source=index.sources.at(*selected->source);
     const auto file=index.path(source);
     auto bin=file; bin.replace_extension(".bin");
-    fs::remove(bin);
     setenv("OPENGOTHIC_BASE",broken.c_str(),1);
     {
     Resources resources;
     Resources::loadBase();
+    fs::remove(bin);
     const auto host=selected->step.starts_with("host_") ?
       (fs::path(CommandLine::inst().rootPath())/source.path).u16string() : std::u16string{};
     const auto fails=[&](const std::string& description, const std::string& reason=std::string{}) {
@@ -3011,7 +3007,7 @@ struct BaseContentContract {
     {
     const auto broken=temporary/"broken-outputunits-record";
     fs::create_directories(broken/"outputunits");
-    for(const auto* part:{"base.json","textures","meshes","zen","models","fonts","programs","audio","music","sources"})
+    for(const auto* part:{"base.json","base-files.json","worlds","textures","meshes","zen","models","fonts","programs","audio","music","sources"})
       fs::create_symlink(base/part,broken/part);
     for(const auto& file:fs::directory_iterator(base/"outputunits"))
       fs::create_symlink(file.path(),broken/"outputunits"/file.path().filename());
@@ -3022,11 +3018,11 @@ struct BaseContentContract {
     require(selected!=index.selections.end(),"native OU integrity check needs a default selection");
     const auto& source=index.sources.at(*selected->source);
     const auto file=index.path(source);
-    fs::remove(file);
     setenv("OPENGOTHIC_BASE",broken.c_str(),1);
     {
     Resources resources;
     Resources::loadBase();
+    fs::remove(file);
     const auto host=selected->step.starts_with("host_") ?
       (fs::path(CommandLine::inst().rootPath())/source.path).u16string() : std::u16string{};
     const auto sentinel=std::make_shared<asset::CutsceneBlock>();
