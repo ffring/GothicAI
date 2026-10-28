@@ -125,6 +125,7 @@ PR, который добавляет фичу или выключатель, д
 | Расплата за ложь: сториллеты и ванильные диалоги | `--no-director` | `amends.py`, `consequences.py` | e2e `amends`, `amends_deal`, `vlie` | [story-graph.md](story-graph.md) |
 | Персонажи режиссёра | `--no-director` | `cast.py`, `casting.py` | e2e `own`, `cast`, `person`, `character` | [director.md](director.md) |
 | Квесты режиссёра как объект, автор и цепочки | `--no-director` | `questbook.py`, `authoring.py`, `chains.py` | e2e `authored`, `stages`, `own_repair`, `chain`, `requires` | [director.md](director.md) |
+| Достижения героя: летописец по фактам ветки, валидатор доказательств и знания героя, бюджет, факт `feat`, тихий тост с эмблемой категории, журнал; откат с веткой | `--no-feats` | `feats.py`, `chronicle.py`; `ai_bridge/chatoverlay.cpp` | `test_feats.py`; e2e `feats` (новая игра, `LLM=fake`); кадры тоста — [отчёт](../reports/achievements/2026-10-28-feat-toast/README.md) | [achievements.md](achievements.md#как-работает-сейчас), [protocol.md](protocol.md#тост-достижения-v53) |
 | Триггеры режиссёра | нет | `triggers.py`; мост | e2e `trigger` | [director.md](director.md) |
 | Ход квестов скриптов | `--no-questlog` | `questlog.py` | e2e `questlog` | [director.md](director.md) |
 | Поводы режиссёра | `--no-occasions`; без книги мест их нет | `occasions.py` | e2e `occasions` | [director.md](director.md) |
