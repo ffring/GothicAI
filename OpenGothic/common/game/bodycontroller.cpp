@@ -187,6 +187,7 @@ bool movementPrimitive(FightAlgo::Action primitive) {
   }
 void requestRelease(Lease& l,std::string_view reason) {
   if(l.release) return;
+  policyReport(l,true,reason);
   l.release=true; l.releaseReason=reason;
   if(l.active.started && movementPrimitive(l.active.primitive)) l.movementStopPending=true;
   cancel(l,reason);
@@ -634,7 +635,6 @@ void BodyController::onObservation(Npc& actor,std::string_view encoded) {
     return receipt["accepted"].GetBool() ? std::string() : std::string(receipt["reason"].GetString());
     });
   if(reason.empty()) { policyReport(*l); return; }
-  policyReport(*l,true,reason);
   requestRelease(*l,reason);
   }
 

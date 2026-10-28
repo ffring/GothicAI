@@ -11,6 +11,10 @@
 
 namespace {
 using Json=rapidjson::Document;
+constexpr const char* actionNames[BodyNet::actionCount]={
+  "continue", "approach", "turn_to_target", "strafe_left", "strafe_right", "jump_back",
+  "attack_front", "attack_left", "attack_right", "block", "wait_200", "wait_300"
+  };
 size_t assertions=0,decisions=0;
 void expect(bool value,const char* message) {
   ++assertions;
@@ -21,6 +25,15 @@ Json parse(const std::string& text) {
   value.Parse(text.data(),text.size());
   if(value.HasParseError()) throw std::runtime_error("invalid fixture JSON");
   return value;
+  }
+void expectActions(const rapidjson::Value& actual,const std::array<uint64_t,BodyNet::actionCount>& expected) {
+  expect(actual.IsObject() && actual.MemberCount()==BodyNet::actionCount,"action counters contain every network action");
+  size_t i=0;
+  for(const auto& counter:actual.GetObject()) {
+    expect(std::string_view(counter.name.GetString())==actionNames[i],"action counters preserve network action names and order");
+    expect(counter.value.GetUint64()==expected[i],"action counters match direct decisions and accepted commands");
+    ++i;
+    }
   }
 Json firstObservation() {
   gzFile input=gzopen(GOTHIC_BODY_ENGINE_GOLDEN,"rb");
@@ -76,6 +89,8 @@ void parityAndFallback() {
   direct.beginEpisode(identity[0],identity[1],0);
   uint64_t directSequence=0;
   size_t expectedDecisions=0,otherDecisions=0;
+  std::array<uint64_t,BodyNet::actionCount> expectedActions{};
+  uint64_t expectedResets=0;
   for(uint64_t tick=1;tick<=240;++tick) {
     row["observation_seq"].SetUint64(tick);
     row["t_game_ms"].SetUint64(tick*50);
@@ -92,10 +107,14 @@ void parityAndFallback() {
     request.AddMember("command_enabled",eligible,a);
     request.AddMember("memory_only",!eligible,a);
     const auto processed=direct.process(request);
+    if(processed.hiddenReset) ++expectedResets;
     auto expected=processed;
     if(processed.status!="fallback" && eligible) expected=direct.arbitrate(row,directSequence);
     expect(expected.status!="fallback","direct runtime accepts the ordered fixture sequence");
-    if(eligible && expected.status=="decision") ++expectedDecisions;
+    if(eligible && expected.status=="decision") {
+      ++expectedDecisions;
+      ++expectedActions[size_t(*expected.actionId)];
+      }
     unsigned applied=0;
     const auto release=policy.process(row,now,[&](int action,const rapidjson::Value& observed) {
       ++applied; ++decisions;
@@ -125,9 +144,16 @@ void parityAndFallback() {
   expect(expectedDecisions==decisions && otherDecisions==decisions && decisions>100,"all direct decisions are applied exactly once on both leases");
   auto metrics=parse(policy.report(true));
   expect(metrics["decisions"].GetUint64()==decisions && metrics["steps"].GetUint64()==240,"policy metrics count applied decisions and steps");
+  expectActions(metrics["selected_actions"],expectedActions);
+  expectActions(metrics["accepted_actions"],expectedActions);
+  expect(expectedResets==1 && metrics["hidden_reset"].GetUint64()==expectedResets,"hidden resets match direct runtime including the initial actor row");
   expect(metrics["p50_us"].GetDouble()>0 && metrics["p99_us"].GetDouble()>=metrics["p50_us"].GetDouble(),"policy step percentiles are measured");
   std::cout << "body_policy " << metrics["decisions"].GetUint64() << " decisions p50_us=" << metrics["p50_us"].GetDouble()
             << " p99_us=" << metrics["p99_us"].GetDouble() << '\n';
+  metrics=parse(policy.report(true));
+  expectActions(metrics["selected_actions"],{});
+  expectActions(metrics["accepted_actions"],{});
+  expect(metrics["hidden_reset"].GetUint64()==0,"hidden reset counter is drained with each report");
   row["observation_seq"].SetUint64(241);
   row["t_game_ms"].SetUint64(12050);
   row["sample_period_ms"].SetUint64(100);
@@ -135,6 +161,15 @@ void parityAndFallback() {
   expect(release=="policy_fallback:unsupported_sampling_rate","policy fallback requests the ordinary native handoff with its exact reason");
   metrics=parse(policy.report(true));
   expect(metrics["final"].GetBool() && metrics["fallbacks"]["unsupported_sampling_rate"].GetUint64()==1,"fallback telemetry immediately reports its refusal reason");
+  expectActions(metrics["selected_actions"],{});
+  expectActions(metrics["accepted_actions"],{});
+  expect(metrics["hidden_reset"].GetUint64()==0,"a fallback without a runtime reset does not count as one");
+  row["observation_seq"].SetUint64(242);
+  row["t_game_ms"].SetUint64(12100);
+  row["sample_period_ms"].SetUint64(50);
+  expect(policy.process(row,12100,[](int,const rapidjson::Value&) { return std::string{}; })=="policy_fallback:unexpected_gap","a missing processed row triggers the runtime reset fallback");
+  metrics=parse(policy.report(true));
+  expect(metrics["hidden_reset"].GetUint64()==1,"a runtime fallback reset is included in interval telemetry");
   }
 
 void transientActionRefusals() {
@@ -144,13 +179,16 @@ void transientActionRefusals() {
   const auto identity=BodyNet::actorIdentity(row);
   BodyEnginePolicy policy(identity[0],identity[1],identity[2],identity[3],0,0);
   uint64_t sequence=0;
+  std::array<uint64_t,BodyNet::actionCount> selected{},accepted{};
   const auto step=[&](const char* refusal) {
     row["observation_seq"].SetUint64(++sequence);
     row["t_game_ms"].SetUint64(sequence*50);
     row["sim_step"].SetUint64(sequence);
     unsigned applied=0;
-    const auto reason=policy.process(row,sequence*50,[&](int,const rapidjson::Value&) {
+    const auto reason=policy.process(row,sequence*50,[&](int action,const rapidjson::Value&) {
       ++applied;
+      ++selected[size_t(action)];
+      if(!*refusal) ++accepted[size_t(action)];
       return std::string(refusal);
       });
     expect(applied==1,"each retry uses a fresh policy decision");
@@ -162,6 +200,10 @@ void transientActionRefusals() {
   for(unsigned i=0;i<9;++i)
     expect(step("stale_observation").empty(),"a new refusal streak receives all nine retries");
   expect(step("stale_observation")=="policy_fallback:body_action_rejected","the tenth consecutive action refusal ends the fight");
+  const auto metrics=parse(policy.report(true));
+  expectActions(metrics["selected_actions"],selected);
+  expectActions(metrics["accepted_actions"],accepted);
+  expect(metrics["decisions"].GetUint64()==1,"refused selections never increment accepted decisions");
   }
 }
 

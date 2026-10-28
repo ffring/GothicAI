@@ -50,6 +50,10 @@ EVENTS_INTERVAL = 0.150
 FINISH_TIMEOUT = 2.0
 RELEASE_ORPHAN_GRACE = 3.0
 MAX_JSON_BYTES = 256 * 1024
+BODY_ACTIONS = (
+    "continue", "approach", "turn_to_target", "strafe_left", "strafe_right", "jump_back",
+    "attack_front", "attack_left", "attack_right", "block", "wait_200", "wait_300",
+)
 TRANSIENT_REJECTION_LIMIT = 10
 MAX_OBSERVATION_AGE_GAME_MS = 100
 TARGET_ABSENCE_TIMEOUT_MS = 1000
@@ -221,6 +225,8 @@ class FightSummary:
     engine_steps: int = 0
     engine_max_interval_p50_us: float | None = None
     engine_p99_us: float | None = None
+    selected_actions: tuple[tuple[str, int], ...] = ()
+    accepted_actions: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -875,6 +881,8 @@ class BodyFight:
         self._response_to_action: list[float] = []
         self._packet_to_action: list[float] = []
         self._decisions = 0
+        self._selected_actions: Counter[str] = Counter()
+        self._accepted_actions: Counter[str] = Counter()
         self._fallbacks = 0
         self._policy_fallbacks: Counter[str] = Counter()
         self._engine_steps = 0
@@ -930,6 +938,9 @@ class BodyFight:
                 return
             self._last_policy_summary = stamp
             self._decisions += message.decisions
+            self._selected_actions.update(message.selected_actions)
+            self._accepted_actions.update(message.accepted_actions)
+            self._policy_memory_resets += message.hidden_reset
             self._policy_fallbacks.update(message.fallbacks)
             self._fallbacks = sum(
                 count for reason, count in self._policy_fallbacks.items()
@@ -1539,6 +1550,9 @@ class BodyFight:
             self._policy_watchdog_task.cancel()
             self._policy_watchdog_task = None
             self._packet_to_response.append((responded_at - received_at) * 1000)
+            action = result.get("action_id")
+            if result.get("status") == "decision" and type(action) is int and 0 <= action < len(BODY_ACTIONS):
+                self._selected_actions[BODY_ACTIONS[action]] += 1
             if result.get("status") == "fallback":
                 self._fallbacks += 1
                 if result.get("reason") == "observation_too_old":
@@ -1602,6 +1616,7 @@ class BodyFight:
                 )
                 self._transient_rejections_consecutive = 0
                 self._decisions += 1
+                self._accepted_actions[BODY_ACTIONS[action]] += 1
                 if action != 0:
                     try:
                         await self._wait_action_accepted(receipt.command_id, sent_at=accept_sent_at)
@@ -2011,6 +2026,10 @@ class BodyFight:
             engine_steps=self._engine_steps,
             engine_max_interval_p50_us=self._engine_max_interval_p50_us,
             engine_p99_us=self._engine_p99_us,
+            selected_actions=tuple((name, self._selected_actions[name]) for name in BODY_ACTIONS
+                                   if self._selected_actions[name]),
+            accepted_actions=tuple((name, self._accepted_actions[name]) for name in BODY_ACTIONS
+                                   if self._accepted_actions[name]),
         )
         log.info(
             "neural-body end npc=%s target_kind=%s target_name=%s reason=%s end_trigger=%s "
@@ -2142,6 +2161,8 @@ class BodyFight:
         self._response_to_action.clear()
         self._packet_to_action.clear()
         self._decisions = self._fallbacks = 0
+        self._selected_actions.clear()
+        self._accepted_actions.clear()
         self._memory_only_step = self._policy_needs_reset = False
         self._memory_only_lag_rows = self._observation_too_old = self._policy_memory_resets = 0
         self._max_batch_rows = self._max_batch_lag_game_ms = 0

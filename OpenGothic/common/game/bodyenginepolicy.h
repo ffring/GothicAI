@@ -29,6 +29,8 @@ class BodyEnginePolicy final {
     bool needsReset=false;
     BodyNet::Identity identity;
     uint64_t decisions=0;
+    std::array<uint64_t,BodyNet::actionCount> selectedActions{},acceptedActions{};
+    uint64_t hiddenResets=0;
     std::map<std::string,uint64_t> fallbacks;
     std::vector<double> stepTimes;
     Clock::time_point reportAt=Clock::now();
