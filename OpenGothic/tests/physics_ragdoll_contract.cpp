@@ -23,6 +23,7 @@
 #include <zenkit/ModelHierarchy.hh>
 #include <zenkit/ModelScript.hh>
 #include <zenkit/Stream.hh>
+#include <zenkit/Vfs.hh>
 
 #include <algorithm>
 #include <cmath>

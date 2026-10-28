@@ -2466,7 +2466,8 @@ void Npc::prepareLivingBody() {
     }
   if(frozen)
     arrowImpacts.clear();
-  if(livingNeedsRebuild || (!benchRig && living && !living->isKinematic() && !Gothic::physicsFlags().arrowPhysics)) {
+  if(livingNeedsRebuild || (!benchRig && living && !living->isKinematic() &&
+                            !Gothic::physicsFlags().arrowPhysics && !Gothic::physicsFlags().meleeReactions)) {
     living.reset();
     livingNeedsRebuild = false;
     }
@@ -2563,10 +2564,12 @@ void Npc::queueArrowPhysics(const Bullet& bullet) {
 void Npc::dispatchArrowPhysics(Ragdoll& body) {
   for(const auto& hit:arrowImpacts) {
     const auto culprit = hit.culprit.lock();
-    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr)) {
-      ++arrowPhysics.applied;
+    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr,
+                     hit.stiffness)) {
+      auto& probe = hit.melee ? meleeReaction : arrowPhysics;
+      ++probe.applied;
       if(&body==ragdoll.get())
-        ++arrowPhysics.corpseImpulses;
+        ++probe.corpseImpulses;
       }
     }
   arrowImpacts.clear();
@@ -4576,12 +4579,10 @@ void Npc::commitDamage() {
     shadow->damage = std::max(0,hpBefore-shadowTarget->attribute(ATR_HITPOINTS));
   }
 
-void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked, float before) {
-  if(!Gothic::physicsFlags().meleePosture || !isHuman() || !attacker.isHuman())
-    return;
+Vec3 Npc::meleeImpulse(const Npc& attacker, const MeleeBladeContact* contact) const {
   const auto mode = attacker.weaponState();
   if(mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)
-    return;
+    return {};
   const auto weapon = mode==WeaponState::Fist ? MeleeImpact::Weapon::Fist :
                       mode==WeaponState::W2H ? MeleeImpact::Weapon::TwoHand : MeleeImpact::Weapon::OneHand;
   Vec3 velocity;
@@ -4601,7 +4602,16 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
     if(direction.length()>0.f)
       velocity = Vec3::normalize(direction)*typical;
     }
-  const auto impulse = MeleeImpact::impulse(weapon,velocity,angleDeg);
+  return MeleeImpact::impulse(weapon,velocity,angleDeg);
+  }
+
+void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked, float before) {
+  if(!Gothic::physicsFlags().meleePosture || !isHuman() || !attacker.isHuman())
+    return;
+  const auto mode = attacker.weaponState();
+  if(mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)
+    return;
+  const auto impulse = meleeImpulse(attacker,contact);
   bool knocked = false;
   if(canAccumulateMeleePosture(Gothic::physicsFlags().meleePosture,blocked,meleeKnockdown,isDown()) &&
      meleePosture.hit(impulse.length(),physicsMass(),owner.tickCount())) {
@@ -4626,7 +4636,13 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
       meleeGetupForced = false;
       meleeSlowSince = 0;
       meleeReturnCount = ragdollQuestReturns;
-      ragdoll->addImpulse(impulse,&attacker);
+      // thrown along the blade's sweep and away from the one who struck: a chop from
+      // above has little sweep left over the ground, the step behind it still pushes
+      Vec3 away = position()-attacker.position();
+      away.y = 0;
+      if(away.length()>1e-3f)
+        away = Vec3::normalize(away)*(impulse.length()*.5f);
+      ragdoll->knockOff(Vec3(impulse.x,0,impulse.z)+away,impulse.length(),&attacker);
       fghAlgo.onTakeHit();
       clearSpeed();
       writeMeleePosture("{\"event\":\"knockdown_health\",\"tick_ms\":"+std::to_string(meleeFallTick)+
@@ -4952,7 +4968,51 @@ void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool st
   hit.strength = std::clamp(0.35f + 2.5f*float(std::max(damage,0))/float(hpMax), 0.35f, 1.f);
   if(stumble)
     hit.strength *= 0.6f; // the stumble throws the body already
+  if(b==nullptr && queueMeleeReaction(other,at,contact))
+    hit.strength *= 0.5f; // the struck chain gives way physically, the fake bend only follows
   flinch(hit);
+  }
+
+bool Npc::queueMeleeReaction(const Npc& other, const Vec3& at, const MeleeBladeContact* contact) {
+  // the blow pushes the struck chain on the living rig like an arrow does, its motors bring it back
+  if(!Gothic::physicsFlags().meleeReactions || !living || !isHuman())
+    return false;
+  size_t bone = contact!=nullptr ? contact->bone : size_t(-1);
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,at);
+    }
+  if(bone>=visual.pose().boneCount())
+    return false;
+  // the same blow as the posture takes: weapon with the arm behind it, along the blade's motion
+  const Vec3  blow     = meleeImpulse(other,contact);
+  const float momentum = std::min(blow.length(),40.f);
+  if(!std::isfinite(momentum) || momentum<1.f)
+    return false;
+  const Vec3 d = Vec3::normalize(blow);
+  // the blade cuts on and the stance takes the rest: the chain gets a part of the momentum.
+  // The stumble already throws the body, so the motors keep most of their hold: a weak
+  // chain loses the authored swing of the arms and hangs like a rope
+  constexpr float transfer = 0.15f;
+  const float strength = 0.55f*std::clamp(momentum/40.f,0.25f,1.f);
+  const Vec3  impulse  = d*(momentum*transfer);
+  // twice the arrow's spring keeps up with the stumble's fast swing of the arms
+  constexpr float stiffness = 2.f;
+  arrowImpacts.push_back({bone,at,impulse,strength,other.handlePtr(),true,stiffness});
+  meleeReaction.bone      = bone;
+  meleeReaction.point     = at;
+  meleeReaction.impulseNs = impulse;
+  meleeReaction.strength  = strength;
+  ++meleeReaction.hits;
+  if(TestBench::isActive()) {
+    const auto who = TestBench::who(this);
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"melee_reaction %.*s: bone %d momentum %.1f impulse %.1f strength %.2f",
+                  int(who.size()),who.data(),int(bone),double(momentum),double(momentum*transfer),double(strength));
+    TestBench::note(buf);
+    }
+  return true;
   }
 
 void Npc::takeFallDamage(const Vec3& fallSpeed) {

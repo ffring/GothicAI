@@ -2176,6 +2176,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
   std::fprintf(bench.csv,",hp_player,hp_subject");
   std::fprintf(bench.csv,",ai_on,ai_want,ai_sigma,ai_errx,ai_erry,ai_lead,ai_pv,ai_ps");
+  std::fprintf(bench.csv,",mr_w,mr_dev,mr_hits");
   if(ragdollTrace)
     std::fprintf(bench.csv,",ph_ms,ph_bodies,ph_rays,rd_mode,rd_weight,rd_sleep");
   if(bench.questTrace)
@@ -7398,6 +7399,22 @@ void writeRow(Npc& pl) {
   const auto& ai = ArcherAi::subjectProbe;
   std::fprintf(bench.csv,",%d,%d,%.3f,%.3f,%.3f,%.0f,%.2f,%.2f",int(ai.valid && ai.active),int(ai.want),ai.sigma,ai.err.x,ai.err.y,
                ai.lead,ai.pv,ai.ps);
+  {
+    // the watched npc's motor reaction to a blow: its weight, how far the shown body leaves the animation (cm)
+    const Npc&     s      = subjectOf(pl);
+    const Ragdoll* living = s.livingBody();
+    float          weight = 0, dev = 0;
+    if(living!=nullptr && living->reactionWeight()>0.f) {
+      weight = living->reactionWeight();
+      for(const auto b:living->reactionBones()) {
+        Vec3 shown, anim;
+        s.renderedBone(b).project(shown);
+        s.animationBone(b).project(anim);
+        dev = std::max(dev,(shown-anim).length());
+        }
+      }
+    std::fprintf(bench.csv,",%.3f,%.2f,%u",weight,dev,unsigned(s.meleeReactionProbe().applied));
+  }
   if(ragdollTrace)
     writeRagdoll(pl);
   if(bench.questTrace && bench.questNpc!=nullptr)
@@ -11802,21 +11819,23 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const auto& mode=a[3];const auto& pelvis=a[4];
     if(enabled==nullptr || std::string_view(enabled)!="fixture" ||
        (count!=0 && count!=1 && count!=2 && count!=4 && count!=6 && count!=10) ||
-       (mode!="base" && mode!="full" && mode!="chain" && mode!="blade") ||
+       (mode!="base" && mode!="full" && mode!="chain" && mode!="blade" && mode!="game") ||
        (pelvis!="kinematic" && pelvis!="dynamic") || (substeps!=1 && substeps!=2) ||
        (count==0 && mode!="base")) {
-      arenaAbort("melee setup requires fixture flag, count 0/1/2/4/6/10, mode base/full/chain/blade, pelvis kinematic/dynamic, substeps 1/2");return;
+      arenaAbort("melee setup requires fixture flag, count 0/1/2/4/6/10, mode base/full/chain/blade/game, pelvis kinematic/dynamic, substeps 1/2");return;
       }
     if(!chooseRagdollArena(w,pl)) {arenaAbort("melee fixture needs an empty supported arena");return;}
     exec("clear 2500",w,pl,ctrl);
-    Gothic::settingsSetI("GAME","living_bodies",0);
+    // "game" keeps the ordinary living bodies the fighters have in play
+    if(mode!="game")
+      Gothic::settingsSetI("GAME","living_bodies",0);
     w.physic()->configureMeleeBench(substeps);
     bench.meleeMode=mode;bench.meleePelvis=pelvis;
     const auto symbol=w.script().findSymbolIndex("BDT_1013_BANDIT_L");
     const auto sword=w.script().findSymbolIndex("ItMw_1h_Common_01");
     if(symbol==size_t(-1) || sword==size_t(-1)) {arenaAbort("melee fixture symbols missing");return;}
     const auto bodyMode=mode=="full" ? Npc::MeleeBenchMode::Full : mode=="chain" ? Npc::MeleeBenchMode::Chain :
-                        mode=="blade" ? Npc::MeleeBenchMode::Blade : Npc::MeleeBenchMode::Base;
+                        mode=="blade" ? Npc::MeleeBenchMode::Blade : mode=="game" ? Npc::MeleeBenchMode::Off : Npc::MeleeBenchMode::Base;
     for(int i=0;i<count;++i) {
       auto* npc=w.addNpc(symbol,bench.ragdollArenaPlaces[size_t(i)+5]);
       if(!npc) {arenaAbort("melee NPC insertion failed");return;}
@@ -11853,8 +11872,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.meleeSteady=true;
     }
   else if(c=="melee-physics" && a.size()==2 && a[1]=="brawl") {
-    if(!bench.meleeFixture || bench.meleeMode!="base" || bench.crew.size()!=6) {
-      arenaAbort("melee brawl requires the six-actor base fixture");return;
+    if(!bench.meleeFixture || (bench.meleeMode!="base" && bench.meleeMode!="game") || bench.crew.size()!=6) {
+      arenaAbort("melee brawl requires the six-actor base or game fixture");return;
       }
     const auto attack=w.script().findSymbolIndex("ZS_ATTACK");
     const auto tactic=w.script().findSymbol("FAI_HUMAN_MASTER");
