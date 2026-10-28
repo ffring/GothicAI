@@ -21,6 +21,67 @@ or other Mac-only game paths require local execution (`auto` falls back, `ryzen`
 For performance comparisons (before/after or FPS), run both takes on the same machine:
 pin `BENCH_HOST=ryzen` or `BENCH_HOST=local`. `host.txt` and the report header identify the host.
 
+## Frame profile
+
+### Как работает сейчас
+
+Build with `cmake -S OpenGothic -B OpenGothic/build -G Ninja
+-DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENGOTHIC_ENABLE_FRAME_PROFILE=ON`, then
+`cmake --build OpenGothic/build --target Gothic2Notr`. Set
+`OPENGOTHIC_FRAME_PROFILE=/absolute/path/frames.csv` when starting the game.
+For a short existing scenario use `BENCH_HOST=ryzen
+OPENGOTHIC_FRAME_PROFILE=<absolute output>/frames.csv scripts/bench.sh cloth-on <absolute output>`;
+the Ryzen engine must also have been configured with the option ON (the runner normally builds it OFF).
+The recorder buffers up to 20,000 render attempts and writes once at shutdown. Clear the environment
+variable to disable recording; build with the option OFF (default) to remove all clocks and Metal handlers.
+
+Every attempt has a row, including fence-busy returns and captures. Existing columns retain their names.
+The complete column set is:
+
+| Columns | Units / meaning |
+|---|---|
+| `attempt`, `cmd_id` | Zero-based attempt number; reusable command slot, not a unique frame id |
+| `dt` | Simulation step, milliseconds |
+| `segment`, `frame` | Bench recording name and frame number within that recording; empty/zero outside recordings |
+| `begin_ns`, `observer_ns`, `end_ns` | Absolute `steady_clock` timestamps, nanoseconds; observer is zero when not sampled |
+| `outcome` | 0 unfinished, 1 submitted, 2 fence busy, 3 capture, 4 error |
+| `flags` | Bitmask: 1 submit completed (CPU), 2 present completed (CPU), 4 capture requested, 8 capture read completed, 16 fence busy, 32 error |
+| `overflow` | Number of attempts beyond the buffer limit, repeated in every row |
+| `<zone>_ns`, `<zone>_calls`, `<zone>_first_ns`, `<zone>_last_ns` | Elapsed sum in nanoseconds, call count, first start and last end as absolute `steady_clock` nanoseconds; all zero if unused |
+| `palette_calls`, `identical_calls`, `patch_calls`, `patch_blocks` | Counts |
+| `palette_bytes`, `identical_bytes`, `patch_bytes`, `grow_bytes`, `upload_execution_bytes` | Bytes |
+| `gpu_ns`, `gpu_done`, `gpu_buffers` | Sum of Metal command buffer `GPUEndTime-GPUStartTime` in nanoseconds; 1 only when all submitted buffers have valid timing; submitted buffer count |
+
+The complete `<zone>` list (each produces all four columns above):
+`tick`, `finish_step`, `camera`, `observations`, `bench`, `fence_poll`, `recycle`, `ui`,
+`encode`, `submit`, `present`, `limiter`, `world_logic`, `prepare`, `physics`, `sync`, `world_misc`,
+`parallel_animation`, `native_export`, `forced_sync_animation`, `actor_animation_elapsed_sum`,
+`pose_elapsed_sum`, `palette_elapsed_sum`, `storage_join`, `storage_commit`, `storage_pack`,
+`storage_dispatch`, `storage_grow`, `storage_upload_execution_elapsed`, `bodynet`, `cloth`, `water`,
+`destruction`, `ai_bridge`, `sound`, `encode_shadows`, `encode_main`, `encode_water`, `encode_post`, `encode_ui`.
+
+`bodynet` sums the full local P30 policy step over active NPCs; service policies do not enter it.
+`cloth` covers main-thread preparation and the 30 Hz solver/finish; `water` sums main-thread buoyancy
+preparation/finish and the synchronous Jolt step listener, which may run on a worker.
+`destruction` covers deferred fracture, movable/fragment synchronization and cleanup; fragment dynamics
+remain inside `physics`. `ai_bridge` measures the inbound queue and message parsing/dispatch on main;
+`sound` measures the main-thread listener/effects update, including its mutex wait, not the audio mixer.
+The five `encode_*` zones measure sequential CPU command recording, not GPU execution.
+Zones can nest; worker elapsed sums (including storage uploads) must not be added to enclosing wall time.
+Actor/pose/palette zones only cover the actors selected by the bench.
+
+Metal captures the exact attempt record at command submission and updates atomic counters from that
+buffer's completed handler, including presentation, uploads/readback and acceleration-structure builds
+submitted during the attempt. Slot reuse cannot redirect a late completion to a later attempt.
+There are no added waits. Missing/failed/incomplete timing gives `gpu_done=0,gpu_ns=0`;
+`gpu_buffers` still counts captured Metal submissions. Vulkan and other backends currently write three zeros.
+Pending completions at CSV flush are left incomplete. This is diagnostic timing, not a performance stand.
+
+### План и журнал
+
+- 2026-10-28: Metal completion timing and buffer counts; P30, cloth, water, fracture, inbound bridge,
+  sound and major render encoding zones. Validation: Mac/Linux builds and the existing Ryzen cloth bench.
+
 `own-mesh-barrel` frames the complete authored `NW_HARBOUR_BARREL_01` cargo barrel
 in Khorinis harbour at noon, writes `own-mesh-barrel.png`, then measures thirty
 seconds of normal app cadence without video. Use a fresh `WORLD=NEWWORLD.ZEN`, `MOVABLE_VOBS=0`,
