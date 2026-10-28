@@ -4589,6 +4589,8 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
   bool knocked = false;
   if(canAccumulateMeleePosture(Gothic::physicsFlags().meleePosture,blocked,meleeKnockdown,isDown()) &&
      meleePosture.hit(impulse.length(),physicsMass(),owner.tickCount())) {
+    setInteraction(nullptr,true);
+    attachToPoint(nullptr);
     updateRagdollQuestAnchor();
     const auto hazards = ragdollQuestReturn.armed ? ragdollQuestReturn.hazards : uint8_t(0);
     ragdollQuestReturn.armed = !isPlayer() && Gothic::physicsFlags().questGuard && ragdollQuestReturn.hasAnchor;
