@@ -5,6 +5,7 @@
     gothic-launcher up --no-game        only the services, on their usual ports, until Ctrl-C
     gothic-launcher login               sign in to ChatGPT (once)
     gothic-launcher config show | set KEY [VALUE] | unset KEY | import-env [FILE]
+    gothic-launcher check [DIR]         check the ready base or installation, without provider requests
     gothic-launcher control             the launcher window's link to the core (see control.py)
     gothic-launcher play                Ryzen desktop session (also used by the terminal fallback)
 
@@ -340,6 +341,8 @@ def main() -> None:
 
     sub.add_parser("login", help="sign in to ChatGPT")
     sub.add_parser("control", help="serve the launcher window: JSON lines on stdin and stdout")
+    p = sub.add_parser("check", help="check the ready game base or installation without provider requests")
+    p.add_argument("dir", nargs="?", type=Path, help="game settings directory (default: game.dir)")
 
     p = sub.add_parser("config", help="show or change the settings")
     actions = p.add_subparsers(dest="action", required=True)
@@ -370,6 +373,12 @@ def main() -> None:
                 code = control.main()
             case "config":
                 code = config_cmd(args)
+            case "check":
+                from .checks import game_folder
+
+                items = game_folder(args.dir if args.dir is not None else _config().settings.game.dir)
+                print(json.dumps([item.plain() for item in items], ensure_ascii=False))
+                code = 0 if all(item.ok for item in items) else 1
             case _:
                 code = 2
     except (SettingsError, LaunchError, AlreadyRunning) as err:

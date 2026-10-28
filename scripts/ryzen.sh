@@ -485,6 +485,34 @@ require_prepared() {
   fi
 }
 
+game_settings() {
+  local fingerprints
+  fingerprints="$(python3 - "$HOME/gothic-ai/game-base.json" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+try:
+    parts = json.loads(Path(sys.argv[1]).read_text())
+    base, videos = parts['base'], parts['videos']
+    if not isinstance(base, str) or not re.fullmatch('[0-9a-f]{64}', base):
+        raise ValueError('invalid base fingerprint')
+    if not isinstance(videos, str) or (videos and not re.fullmatch('[0-9a-f]{64}', videos)):
+        raise ValueError('invalid video fingerprint')
+    print(base, videos)
+except (OSError, ValueError, KeyError, TypeError) as error:
+    raise SystemExit(f'Run scripts/ryzen.sh setup first: {error}')
+PY
+)" || return 1
+  read -r OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT <<<"$fingerprints"
+  export OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT
+  export GOTHIC_DIR="$HOME/gothic-ai/game-settings"
+  [[ -f "$GOTHIC_DIR/system/Gothic.ini" && -f "$GOTHIC_DIR/system/SystemPack.ini" ]] || {
+    echo 'Run scripts/ryzen.sh setup first: game settings are missing' >&2; return 1;
+  }
+}
+
 build_engine() {
   local state="$1" digest="$2" started=$SECONDS
   if engine_ready "$state" "$digest"; then
@@ -537,8 +565,7 @@ PY
     export GOTHIC_AI_URL
   fi
   toolchain
-  export GOTHIC_DIR="$HOME/gothic-ai/game"
-  [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
+  game_settings
   command -v ffmpeg >/dev/null || { echo 'Missing tool: ffmpeg' >&2; return 1; }
   desktop
   require_prepared bench "$state" "$run" "$scenario"
@@ -562,7 +589,7 @@ remote_run() {
   local action="$1" state="$2" run="$3"
   shift 3
   toolchain
-  export GOTHIC_DIR="$HOME/gothic-ai/game"
+  game_settings
   export GOTHIC_AI_DATA="$state/data"
   local started=$SECONDS rc digest
   [[ "${RYZEN_JOBS:-12}" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; return 2; }
@@ -587,7 +614,6 @@ remote_run() {
   export ASR_PORT="${ASR_PORT-$((47829 + 100 * display_slot))}"
   export TTS_PORT="${TTS_PORT-$((47840 + 100 * display_slot))}"
   export TEMPEST_WINDOW_SIZE="${TEMPEST_WINDOW_SIZE-640x360}"
-  [[ -d "$GOTHIC_DIR/Data" ]] || { echo 'Run scripts/ryzen.sh setup first' >&2; return 1; }
   started=$SECONDS
   desktop
   e2e_window_position "$display_slot"
@@ -709,19 +735,166 @@ PY
   ENV_ARGS+=("OPENGOTHIC_CONTENT=$STATE/inputs/$RUN/content")
 }
 
+verify_base_part() {
+  python3 - "$@" <<'PY'
+import hashlib
+import json
+from pathlib import Path, PurePosixPath
+import re
+import sys
+
+kind, directory, fingerprint, mode = sys.argv[1:]
+root = Path(directory).resolve()
+
+def checked(entry, name, full):
+    relative = PurePosixPath(name)
+    if (not name or relative.is_absolute() or '..' in relative.parts or str(relative) != name
+            or type(entry.get('size')) is not int or entry['size'] < 0
+            or not re.fullmatch('[0-9a-f]{64}', entry.get('sha256', ''))):
+        raise ValueError(f'invalid file binding: {name}')
+    path = root / name
+    if path.is_symlink() or not path.resolve().is_relative_to(root):
+        raise ValueError(f'base file leaves its directory: {name}')
+    if path.stat().st_size != entry['size']:
+        raise ValueError(f'base file size differs: {name}')
+    if full:
+        with path.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        if digest != entry['sha256']:
+            raise ValueError(f'base file SHA-256 differs: {name}')
+    return path
+
+try:
+    if kind == 'base':
+        metadata = json.loads((root / 'base.json').read_bytes())
+        if (metadata.get('format') != 'gothic-base' or metadata.get('version') != 2
+                or metadata.get('fingerprint') != fingerprint):
+            raise ValueError('invalid base.json or fingerprint')
+        binding = metadata['manifest']
+        if binding['path'] != 'base-files.json':
+            raise ValueError('invalid base manifest binding')
+        manifest = json.loads(checked(binding, 'base-files.json', True).read_bytes())
+        if manifest.get('format') != 'gothic-base-files' or manifest.get('version') != 1:
+            raise ValueError('invalid base file manifest')
+        entries = [(entry, entry['path']) for entry in manifest['files']]
+    else:
+        raw = (root / 'videos.json').read_bytes()
+        marker, ending = b',"index_sha256":"', b'"}\n'
+        prefix_size = len(raw) - len(marker) - 64 - len(ending)
+        if (prefix_size < 0 or raw[prefix_size:prefix_size + len(marker)] != marker
+                or not raw.endswith(ending)
+                or hashlib.sha256(raw[:prefix_size]).hexdigest().encode()
+                != raw[prefix_size + len(marker):-len(ending)]):
+            raise ValueError('video index SHA-256 differs')
+        metadata = json.loads(raw)
+        if (metadata.get('version') != 1 or metadata.get('fingerprint') != fingerprint
+                or hashlib.sha256(metadata['identity'].encode()).hexdigest() != fingerprint):
+            raise ValueError('invalid video index or fingerprint')
+        entries = [(entry, entry['file']) for entry in metadata['videos']]
+    names = set()
+    for entry, name in entries:
+        if name in names:
+            raise ValueError(f'repeated base file: {name}')
+        names.add(name)
+        checked(entry, name, mode == 'full' or Path(name).suffix == '.json')
+except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+    raise SystemExit(f'Invalid {kind} part {directory}: {error}')
+PY
+}
+
 if [[ "$ACTION" == setup ]]; then
-  remote bash -s <<'REMOTE'
-set -euo pipefail
-mkdir -p "$HOME/gothic-ai/game"
-REMOTE
   # Run the same preflight without needing a checkout or configuring a build.
   { declare -f toolchain; echo 'set -euo pipefail; toolchain; echo "Ryzen: toolchain OK"'; } | remote bash -s
   GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
-  [[ -d "$GOTHIC_DIR/Data" ]] || { echo "No game Data directory: $GOTHIC_DIR" >&2; exit 1; }
   started=$SECONDS
-  # rsync writes temporary files and renames them; no machine lock is needed.
-  rsync -a --exclude=.DS_Store "$GOTHIC_DIR/" "$RYZEN_HOST:gothic-ai/game/"
-  echo "Ryzen: game data ready, sync $((SECONDS - started))s"
+  # Read only the ready pointer and the two INI files, never identify the installation.
+  parts="$(python3 - "$GOTHIC_DIR" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+
+game = Path(sys.argv[1]).expanduser().resolve()
+pointer = Path.home() / '.cache/gothic-ai/base/current' / (hashlib.sha256(str(game).encode()).hexdigest() + '.json')
+try:
+    current = json.loads(pointer.read_bytes())
+    if current.get('version') != 1 or current.get('gothic') != str(game):
+        raise ValueError('invalid or foreign game pointer')
+    for kind in ('base', 'videos'):
+        part = current.get(kind)
+        if kind == 'videos' and part is None:
+            print('\n')
+            continue
+        if (not isinstance(part, dict) or not re.fullmatch('[0-9a-f]{64}', part.get('fingerprint', ''))
+                or not isinstance(part.get('path'), str) or not Path(part['path']).is_absolute()
+                or '\n' in part['path']):
+            raise ValueError(f'invalid {kind} pointer')
+        print(part['fingerprint'])
+        print(part['path'])
+except (OSError, ValueError, TypeError, AttributeError) as error:
+    raise SystemExit(f'needs_decision: cannot read ready Mac base pointer {pointer}: {error}')
+PY
+)"
+  base_fingerprint="$(sed -n '1p' <<<"$parts")"
+  base_path="$(sed -n '2p' <<<"$parts")"
+  videos_fingerprint="$(sed -n '3p' <<<"$parts")"
+  videos_path="$(sed -n '4p' <<<"$parts")"
+  [[ -n "$videos_fingerprint" ]] || echo 'Ryzen: videos will be skipped (Mac pointer has no video part)' >&2
+  for kind in base videos; do
+    if [[ "$kind" == base ]]; then fingerprint="$base_fingerprint"; part="$base_path"; else fingerprint="$videos_fingerprint"; part="$videos_path"; fi
+    [[ -n "$fingerprint" ]] || continue
+    # The shared store is only inspected. The game copies a selected stored part to its cache.
+    if { declare -f verify_base_part; cat <<'REMOTE'
+set -euo pipefail
+kind="$1" fingerprint="$2"
+relative="$fingerprint"
+[[ "$kind" == base ]] || relative="videos/$fingerprint"
+for root in "$HOME/.cache/gothic-ai/base" /mnt/shared/gothic-ai/base; do
+  if [[ -d "$root/$relative" ]] && verify_base_part "$kind" "$root/$relative" "$fingerprint" quick; then
+    echo "Ryzen: $kind ready at $root/$relative"
+    exit 0
+  fi
+done
+exit 3
+REMOTE
+    } | remote bash -s -- "$kind" "$fingerprint"; then
+      continue
+    else
+      rc=$?
+      [[ "$rc" == 3 ]] || exit "$rc"
+    fi
+    [[ -d "$part" ]] || { echo "needs_decision: missing Mac $kind part $part; shared store is read-only" >&2; exit 1; }
+    verify_base_part "$kind" "$part" "$fingerprint" quick
+    relative="$fingerprint"
+    [[ "$kind" == base ]] || relative="videos/$fingerprint"
+    temporary="$(remote bash -c 'mkdir -p "$HOME/.cache/gothic-ai/base/$1"; mktemp -d "$HOME/.cache/gothic-ai/base/$1/.setup-XXXXXXXX"' -- "$(dirname "$relative")")"
+    rsync -a --checksum "$part/" "$RYZEN_HOST:$temporary/"
+    { declare -f verify_base_part; cat <<'REMOTE'
+set -euo pipefail
+kind="$1" fingerprint="$2" temporary="$3" relative="$4"
+verify_base_part "$kind" "$temporary" "$fingerprint" full
+cache="$HOME/.cache/gothic-ai/base"
+[[ "$kind" == base ]] || cache+='/videos'
+exec 9>"$cache/.lock"
+flock 9
+destination="$HOME/.cache/gothic-ai/base/$relative"
+if [[ -e "$destination" ]] && verify_base_part "$kind" "$destination" "$fingerprint" full; then
+  rm -rf -- "$temporary"
+else
+  exec 8>"$cache/$fingerprint.use"
+  flock -n 8 || { echo "Cannot replace a cached $kind part in use: $destination" >&2; exit 1; }
+  rm -rf -- "$destination"
+  mv -- "$temporary" "$destination"
+fi
+echo "Ryzen: $kind copied and verified at $destination"
+REMOTE
+    } | remote bash -s -- "$kind" "$fingerprint" "$temporary" "$relative"
+  done
+  remote mkdir -p gothic-ai/game-settings/system
+  rsync -a --checksum "$GOTHIC_DIR/system/Gothic.ini" "$GOTHIC_DIR/system/SystemPack.ini" "$RYZEN_HOST:gothic-ai/game-settings/system/"
+  remote python3 -c 'import json, os, pathlib, sys; path = pathlib.Path.home() / "gothic-ai/game-base.json"; temporary = path.with_suffix(f".json.tmp-{os.getpid()}"); temporary.write_text(json.dumps(dict(zip(("base", "videos"), sys.argv[1:]))) + "\n"); os.replace(temporary, path)' "$base_fingerprint" "$videos_fingerprint"
+  echo "Ryzen: game settings and ready fingerprints synchronized in $((SECONDS - started))s"
   exit
 fi
 

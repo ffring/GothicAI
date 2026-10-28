@@ -36,6 +36,7 @@
 #      OPENGOTHIC_CENSUS  session resource JSON (use an absolute path inside out dir for Ryzen)
 #      OPENGOTHIC_FRACTURE  pre-cut meshes (default: ~/.local/share/gothic-ai/fracture, when made; empty: none)
 #      OPENGOTHIC_CONTENT  material/mesh overrides (Ryzen: sync this directory; empty: none; unset: engine default)
+#      OPENGOTHIC_BASE_CACHE, OPENGOTHIC_BASE_STORE  base cache/store on the selected host
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEFAULT_GOTHIC_DIR="/Volumes/DevSSD/Dev/games/Gothic II"
@@ -81,7 +82,8 @@ out, textures = map(path, sys.argv[1:])
 for name, value in sorted(os.environ.items()):
     if not name.startswith(("OPENGOTHIC_", "GOTHIC_", "TEMPEST_")):
         continue
-    if name in ("GOTHIC_DIR", "GOTHIC_AI_URL", "OPENGOTHIC_FRACTURE", "OPENGOTHIC_CONTENT"):
+    if name in ("GOTHIC_DIR", "GOTHIC_AI_URL", "OPENGOTHIC_FRACTURE", "OPENGOTHIC_CONTENT",
+                "OPENGOTHIC_BASE_CACHE", "OPENGOTHIC_BASE_STORE"):
         continue
     if not value.startswith(("/", "~/")):
         continue

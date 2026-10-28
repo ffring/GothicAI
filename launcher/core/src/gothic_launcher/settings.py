@@ -52,7 +52,8 @@ class _Section(BaseModel):
 
 class GameSettings(_Section):
     dir: Path | None = Field(
-        None, title="Папка игры", description="Gothic II с аддоном «Ночь Ворона» и русской локализацией"
+        None, title="Папка игры",
+        description="Каталог настроек с готовой базой; для первого импорта — установленная Gothic II",
     )
     dev_mode: bool = Field(
         False, title="Режим разработчика", description="Консоль Marvin (F2) и отладочные команды ИИ"

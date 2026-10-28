@@ -794,7 +794,15 @@ void fingerprintSelection(const fs::path& root, const fs::path& part, const Vide
   catch(const std::exception& error) { reason=error.what(); }
   require(reason.find(identity.fingerprint)!=std::string::npos && identifies==0,
           "missing video fingerprint must fail clearly without importing: "+reason);
-  std::cout << "video fingerprint selection: cache/store, pointer, missing/corrupt refusal without source identification\n";
+  {
+    Environment disabledVideos("OPENGOTHIC_VIDEOS_FINGERPRINT","");
+    reason.clear();
+    try { (void)BaseStore::resolveVideos(game,observe); }
+    catch(const std::exception& error) { reason=error.what(); }
+    require(reason.find("video selection disabled")!=std::string::npos && identifies==0,
+            "explicit empty video fingerprint must disable selection without installation access: "+reason);
+    }
+  std::cout << "video fingerprint selection: cache/store, pointer, missing/corrupt refusal and explicit-empty skip without source identification\n";
   }
 
 void identityInputs(const fs::path& gothic, const fs::path& root, const VideoData::Identity& identity) {
@@ -834,13 +842,16 @@ int main() {
     std::cout << std::fixed << std::setprecision(3);
     const auto* game=std::getenv("GOTHIC_DIR");
     require(game && *game,"GOTHIC_DIR must point to the real Gothic II installation");
+    unsetenv("OPENGOTHIC_BASE_FINGERPRINT");
+    unsetenv("OPENGOTHIC_VIDEOS_FINGERPRINT");
     if(const auto* reference=std::getenv("OPENGOTHIC_VIDEO_FFMPEG"); reference && *reference) {
       preflightReference(game,reference);
       return 0;
       }
     const auto* home=std::getenv("HOME");
     require(home && *home,"HOME must point to the user's directory");
-    Temporary temporary(fs::path(home)/"gothic-ai");
+    const auto* configuredCache=std::getenv("OPENGOTHIC_BASE_CACHE");
+    Temporary temporary(configuredCache && *configuredCache ? fs::absolute(configuredCache).parent_path() : fs::path(home)/"gothic-ai");
     const auto cache=temporary.path/"cache", store=temporary.path/"store";
     Environment cacheEnvironment("OPENGOTHIC_BASE_CACHE",cache), storeEnvironment("OPENGOTHIC_BASE_STORE",store);
     const auto identity=VideoData::identify(game);

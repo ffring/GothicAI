@@ -22,6 +22,7 @@ from gothic_launcher.commands import (
 )
 from gothic_launcher.settings import Config
 from gothic_launcher.state import SessionFile
+from tests.test_checks import _ready_base
 
 PORTS = Ports(server=50001, asr=50002, tts=50003)
 LAYOUT = Layout(
@@ -260,6 +261,9 @@ def test_find_layout_lists_everything_missing(config, tmp_path, monkeypatch):
     assert layout.play_content is None and content_env(layout) == {}
     monkeypatch.setattr(commands.sys, "platform", "linux")
     assert default_game_bin(repo) == binary  # Linux never chooses a stray macOS bundle
+    settings, _, _ = _ready_base(tmp_path, monkeypatch)
+    config.set("game.dir", str(settings))
+    assert find_layout(config).game_dir == settings
 
 
 @pytest.mark.parametrize("platform", ["linux", "darwin"])

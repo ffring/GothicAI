@@ -1,5 +1,6 @@
 import hashlib
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -124,6 +125,13 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
     clock = SimpleNamespace(now=100.0)
     monkeypatch.setattr(persona_module.time, "monotonic", lambda: clock.now)
     load, attempts, exports = persona_module.game_lines, [], []
+    thread_class, workers = threading.Thread, []
+    exporting, resume = threading.Event(), threading.Event()
+
+    def worker(**kwargs):
+        thread = thread_class(**kwargs)
+        workers.append(thread)
+        return thread
 
     def counted(path):
         attempts.append(clock.now)
@@ -133,6 +141,8 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
 
     def export(*args, **kwargs):
         exports.append(args)
+        exporting.set()
+        assert resume.wait(2.0), "get/brief waited for the background OU export"
         return SimpleNamespace(stdout=json.dumps({
             "format": "gothic-ou-messages", "version": 1,
             "source": {"path": "original-ou", "sha256": "b" * 64},
@@ -141,6 +151,7 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
         }).encode(), stderr=b"")
 
     monkeypatch.setattr(persona_module, "game_lines", counted)
+    monkeypatch.setattr(persona_module.threading, "Thread", worker)
     monkeypatch.setattr(ou.subprocess, "run", export)
     personas = PersonaProvider(game, {})
     personas.warm()
@@ -151,6 +162,8 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
     assert personas.get(BABERA, "Babera") is first
     clock.now = 130.0
     assert text not in personas.brief(BABERA, "Babera")
+    workers[-1].join(2.0)
+    assert not workers[-1].is_alive()
     assert attempts == [100.0, 130.0] and exports == []
     assert len(caplog.records) == 1
     assert "no ready base" in caplog.text and "run the game once with the installation" in caplog.text
@@ -175,6 +188,15 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
     assert personas.get(BABERA, "Babera") is first
     assert attempts == [100.0, 130.0]
     clock.now = 160.0
+    try:
+        assert personas.get(BABERA, "Babera") is first
+        assert exporting.wait(1.0)
+        assert text not in personas.brief(BABERA, "Babera")
+        assert personas.get(BABERA, "Babera") is first
+    finally:
+        resume.set()
+        workers[-1].join(2.0)
+    assert not workers[-1].is_alive()
     recovered = personas.get(BABERA, "Babera")
     assert text in recovered.instructions and recovered.voice == FEMALE_VOICE
     assert text in personas.brief(BABERA, "Babera")

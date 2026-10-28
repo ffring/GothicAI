@@ -181,6 +181,17 @@ std::runtime_error missingBase(const fs::path& gothic, const std::string& reason
     "; run once with the installation or set OPENGOTHIC_BASE"+(reason.empty() ? "" : ": "+reason));
   }
 
+VideoData::Identity readVideoIdentity(const fs::path& directory) {
+  std::ifstream input(directory/"videos.json",std::ios::binary);
+  const std::string bytes{std::istreambuf_iterator<char>(input),{}};
+  rapidjson::Document json;
+  json.Parse(bytes.c_str());
+  if(json.HasParseError() || !json.IsObject() || !json.HasMember("fingerprint") ||
+     !json["fingerprint"].IsString() || !json.HasMember("identity") || !json["identity"].IsString())
+    throw std::runtime_error("invalid video base identity: "+(directory/"videos.json").string());
+  return {json["fingerprint"].GetString(),json["identity"].GetString()};
+  }
+
 bool videoMatches(const fs::path& directory, const VideoData::Identity& identity,
                   const std::atomic_bool* cancelled, std::string& reason) {
   rapidjson::Document source;
@@ -347,10 +358,15 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
         const auto identity=BaseImport::readIdentity(source);
         if(identity.fingerprint!=fingerprint) throw std::runtime_error("base fingerprint differs");
         if(!BaseImport::matches(source,identity,false,&rejection)) throw std::runtime_error(rejection);
-        if(source!=destination) copy(source,destination,identity);
+        if(source!=destination) {
+          Lock replacement(cache/(identity.fingerprint+".use"),Lock::TryExclusive);
+          if(!replacement.acquired()) throw std::runtime_error("cannot replace a base cache part in use");
+          copy(source,destination,identity);
+          }
         Current(cache,gothic).save("base",destination,identity,"");
         Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared),{}};
-        prune(cache,destination);
+        try { prune(cache,destination); }
+        catch(const std::exception& error) { log(std::string("base cache cleanup: ")+error.what()); }
         log(std::string("base: ")+(source==destination ? "cache " : "store ")+destination.string());
         return selected;
         }
@@ -480,13 +496,15 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
 BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const BaseImport::Progress& log,
                                              std::shared_ptr<std::atomic_bool> cancelled, size_t workers) {
   const auto start=std::chrono::steady_clock::now();
+  const auto* fingerprint=std::getenv("OPENGOTHIC_VIDEOS_FINGERPRINT");
+  if(fingerprint && !*fingerprint)
+    throw std::runtime_error("video selection disabled: OPENGOTHIC_VIDEOS_FINGERPRINT is empty");
   const auto root=cacheRoot();
   fs::create_directories(root);
   const auto cache=root/"videos";
   fs::create_directories(cache);
   Lock cacheLock(cache/".lock",Lock::Exclusive,cancelled.get());
-  const auto* fingerprint=std::getenv("OPENGOTHIC_VIDEOS_FINGERPRINT");
-  if(fingerprint && *fingerprint) {
+  if(fingerprint) {
     if(!fingerprintName(fingerprint)) throw std::runtime_error("invalid OPENGOTHIC_VIDEOS_FINGERPRINT");
     removeInterrupted(cache,{},cancelled.get());
     const auto destination=cache/fingerprint;
@@ -497,7 +515,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
       checkVideoCancelled(cancelled.get());
       if(source.empty() || !fs::exists(source)) continue;
       try {
-        const auto identity=VideoData::readIdentity(source);
+        const auto identity=readVideoIdentity(source);
         if(identity.fingerprint!=fingerprint) throw std::runtime_error("video fingerprint differs");
         if(!videoMatches(source,identity,cancelled.get(),rejection)) throw std::runtime_error(rejection);
         if(source!=destination) {
@@ -507,7 +525,9 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
           }
         Current(root,gothic,cancelled.get()).save("videos",destination,identity,"");
         Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared,cancelled.get()),{}};
-        prune(cache,destination,cancelled.get());
+        try { prune(cache,destination,cancelled.get()); }
+        catch(const std::exception& error) { log(std::string("video base cache cleanup: ")+error.what()); }
+        checkVideoCancelled(cancelled.get());
         log(std::string("video base: ")+(source==destination ? "cache " : "store ")+destination.string());
         return selected;
         }

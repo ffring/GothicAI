@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import base
 from .settings import CONFIG_DIR, Config
 
 GAME_HOME = Path.home() / ".local" / "share" / "gothic-ai" / "game"
@@ -141,8 +142,13 @@ def find_layout(config: Config) -> Layout:
     if game_dir is None:
         problems.append("game folder is not set: gothic-launcher config set game.dir '/path/to/Gothic II'")
         game_dir = Path()
-    elif not _has_child(game_dir, "data"):
-        problems.append(f"{game_dir} has no Data folder: is it Gothic II?")
+    else:
+        try:
+            with base.resolve(game_dir):
+                pass
+        except RuntimeError as error:
+            if not _has_child(game_dir, "data"):
+                problems.append(f"select an installed Gothic II folder once: {error}")
     if problems:
         raise LaunchError("\n".join(problems))
     hd = HD_TEXTURES if HD_TEXTURES.is_dir() else None

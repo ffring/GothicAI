@@ -43,7 +43,11 @@ class KilledGameRetryTests(unittest.TestCase):
         binaries = root / 'bin'
         (source / 'scripts').mkdir(parents=True)
         (source / 'server').mkdir()
-        (root / 'home/gothic-ai/game/Data').mkdir(parents=True)
+        settings = root / 'home/gothic-ai/game-settings/system'
+        settings.mkdir(parents=True)
+        for name in ('Gothic.ini', 'SystemPack.ini'):
+            (settings / name).touch()
+        (settings.parent.parent / 'game-base.json').write_text(json.dumps({'base': 'c' * 64, 'videos': ''}))
         binaries.mkdir()
         shutil.copyfile(SCRIPT.with_name('e2e.sh'), source / 'scripts/e2e.sh')
         # Keep the production shell monitor, but replace its services and game.
@@ -93,7 +97,7 @@ while True:
         for executable in binaries.iterdir():
             executable.chmod(0o755)
         harness = '\n'.join([
-            'set -euo pipefail', function('e2e_window_position'), function('remote_run'),
+            'set -euo pipefail', function('e2e_window_position'), function('game_settings'), function('remote_run'),
             'ROOT="$TEST_ROOT/source"',
             'toolchain() { :; }',
             'desktop() { RYZEN_SCREEN_SIZE=1920x1080; }',
@@ -756,7 +760,11 @@ class CacheTests(unittest.TestCase):
         (self.source / 'scripts').mkdir(parents=True)
         (self.source / 'server').mkdir()
         (self.source / 'OpenGothic/ai_bridge/storygraph').mkdir(parents=True)
-        (self.home / 'gothic-ai/game/Data').mkdir(parents=True)
+        settings = self.home / 'gothic-ai/game-settings/system'
+        settings.mkdir(parents=True)
+        for name in ('Gothic.ini', 'SystemPack.ini'):
+            (settings / name).touch()
+        (settings.parent.parent / 'game-base.json').write_text(json.dumps({'base': 'c' * 64, 'videos': ''}))
         (self.state / 'inputs/run').mkdir(parents=True)
         (self.source / 'scripts/e2e.sh').write_text('"$GAME_BIN" --test\n')
         self.env = dict(os.environ, HOME=str(self.home), TEST_ROOT=str(self.root),
@@ -840,6 +848,23 @@ remote_run e2e "$TEST_ROOT/worktree" run
         self.assertFalse((self.root / 'cmake-calls.jsonl').exists())
         self.assertEqual((self.source / 'OpenGothic/ai_bridge/storygraph/build/storygraph').resolve(),
                          self.cache / 'storygraph' / self.story_digest / 'storygraph')
+
+    def test_game_settings_loads_fingerprints_without_installation(self):
+        result = self.shell(r'''
+game_settings
+python3 - <<'PY'
+import json
+import os
+print(json.dumps({key: os.environ[key] for key in
+    ('GOTHIC_DIR', 'OPENGOTHIC_BASE_FINGERPRINT', 'OPENGOTHIC_VIDEOS_FINGERPRINT')}))
+PY
+''')
+        self.assertEqual(json.loads(result.stdout), {
+            'GOTHIC_DIR': str(self.home / 'gothic-ai/game-settings'),
+            'OPENGOTHIC_BASE_FINGERPRINT': 'c' * 64,
+            'OPENGOTHIC_VIDEOS_FINGERPRINT': '',
+        })
+        self.assertFalse((self.home / 'gothic-ai/game').exists())
 
     def test_e2e_ports_size_and_position_follow_the_assigned_slot(self):
         self.entry(self.engine_digest)
@@ -1386,7 +1411,7 @@ printf '%s\n' "${ENV_ARGS[@]-}"
         self.assertIn('Missing OPENGOTHIC_CONTENT directory:', result.stderr)
         self.assertFalse((self.root / 'rsync.jsonl').exists())
 
-    def test_bench_routes_supplied_content_to_ryzen(self):
+    def test_bench_routes_content_and_remote_base_paths_to_ryzen(self):
         scripts = self.root / 'scripts'
         scripts.mkdir()
         shutil.copyfile(BENCH_SCRIPT, scripts / 'bench.sh')
@@ -1408,7 +1433,9 @@ out = Path(sys.argv[3])
         content.mkdir()
         for index, value in enumerate((None, '', str(content))):
             with self.subTest(content=value):
-                env = dict(self.env, BENCH_HOST='ryzen')
+                env = dict(self.env, BENCH_HOST='ryzen',
+                           OPENGOTHIC_BASE_CACHE='/home/ryzen/gothic-ai/p18d/cache',
+                           OPENGOTHIC_BASE_STORE='/home/ryzen/gothic-ai/p18d/store')
                 env.pop('KEEP', None)
                 if value is not None:
                     env['OPENGOTHIC_CONTENT'] = value

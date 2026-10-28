@@ -66,8 +66,14 @@ void equal(const fs::path& a, const fs::path& b) {
   }
 
 struct Temporary {
-  fs::path path=fs::weakly_canonical(fs::temp_directory_path())/("gothic-base-store-"+std::to_string(getpid()));
-  Temporary() { require(fs::create_directory(path),"temporary directory exists"); }
+  fs::path path;
+  Temporary() {
+    const auto* cache=std::getenv("OPENGOTHIC_BASE_CACHE");
+    const auto parent=cache && *cache ? fs::absolute(cache).parent_path() : fs::temp_directory_path();
+    fs::create_directories(parent);
+    path=fs::weakly_canonical(parent)/("gothic-base-store-"+std::to_string(getpid()));
+    require(fs::create_directory(path),"temporary directory exists");
+    }
   ~Temporary() { std::error_code error; fs::remove_all(path,error); }
   };
 
@@ -872,6 +878,8 @@ int main() {
     const char* referenceEnv=std::getenv("OPENGOTHIC_BASE");
     require(game && *game && referenceEnv && *referenceEnv,"GOTHIC_DIR and OPENGOTHIC_BASE (build-base.sh output) required");
     const fs::path reference=referenceEnv;
+    unsetenv("OPENGOTHIC_BASE_FINGERPRINT");
+    unsetenv("OPENGOTHIC_VIDEOS_FINGERPRINT");
     const auto identity=BaseImport::identify(game);
     require(BaseImport::matches(reference,identity),"build-base.sh reference has a different base.json");
     require(BaseImport::sha256("abc")=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
