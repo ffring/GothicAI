@@ -1,0 +1,6 @@
+# A fresh process loads session-stage3-down.sav from melee-posture-npc.
+# SAVE=<absolute archive path>; no WORLD override.
+ragdoll session-initial BDT_1013_BANDIT_L stage3-loaded
+release all
+waitragdoll BDT_1013_BANDIT_L getup 6000
+ragdoll session-snapshot BDT_1013_BANDIT_L stage3-standing
