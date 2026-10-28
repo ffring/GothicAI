@@ -49,6 +49,17 @@ FightAlgo::ResolverState ready() {
   state.hasAttack=state.hasAttackLeft=state.hasAttackRight=state.hasBlock=state.canRotate=true;
   return state;
   }
+// Fixture targets may omit observed fields; add the field rather than writing a missing member.
+void set(Json& row,const char* side,const char* key,bool value) {
+  auto& section=row[side];
+  if(section.HasMember(key)) section[key].SetBool(value);
+  else section.AddMember(rapidjson::Value(key,row.GetAllocator()),rapidjson::Value(value),row.GetAllocator());
+  }
+void set(Json& row,const char* side,const char* key,int64_t value) {
+  auto& section=row[side];
+  if(section.HasMember(key)) section[key].SetInt64(value);
+  else section.AddMember(rapidjson::Value(key,row.GetAllocator()),rapidjson::Value(value),row.GetAllocator());
+  }
 void setMask(Json& row,bool eligible) {
   row["can_decide"].SetBool(eligible);
   row["native_decision_eligible"].SetBool(eligible);
@@ -82,7 +93,7 @@ void parityAndFallback() {
     row["sim_step"].SetUint64(tick*3);
     row["self"]["hp_fraction"].SetDouble(0.3+0.001*double(tick));
     // A target swing every two seconds keeps the fight engaged: the stall limit is checked separately.
-    row["target"]["attack_anim"].SetBool(tick%40==0);
+    set(row,"target","attack_anim",tick%40==0);
     setMask(row,tick%7!=0);
     const auto now=tick*50+(tick%13==0 ? 150 : 0);
     const bool eligible=row["can_decide"].GetBool() && now-tick*50<=100;
@@ -112,7 +123,8 @@ void parityAndFallback() {
       expect(FightAlgo::resolve(command.action,gate.resolver).allowed,"engine decision resolves through the native primitive gate");
       return std::string{};
       });
-    expect(release.empty(),"ordinary, locked and stale-memory rows retain the engine lease");
+    if(!release.empty()) throw std::runtime_error("ordinary, locked and stale-memory rows retain the engine lease: "+release);
+    ++assertions;
     expect(applied==(eligible && expected.status=="decision" ? 1u : 0u),"only eligible periodic decisions execute");
     // The other lease shares the weights, with its own identical recurrent history.
     expect(other.process(row,now,[&](int action,const rapidjson::Value&) {
@@ -142,10 +154,9 @@ void parityAndFallback() {
 void stalledPolicyChoosesActivePrimitives() {
   auto row=firstObservation();
   row["self"]["weapon_state"].SetUint64(2);
-  row["self"]["attack_anim"].SetBool(false);
-  row["target"]["attack_anim"].SetBool(false);
-  row["self"]["hp"].SetInt64(300);
-  row["target"]["hp"].SetInt64(300);
+  set(row,"target","attack_anim",false);
+  set(row,"self","hp",int64_t(300));
+  set(row,"target","hp",int64_t(300));
   const auto identity=BodyNet::actorIdentity(row);
   const BodyNet directNet(GOTHIC_BODY_ENGINE_NET);
   BodyPolicyRuntime direct(directNet,100,100,true);
@@ -161,9 +172,9 @@ void stalledPolicyChoosesActivePrimitives() {
     row["sim_step"].SetUint64(tick);
     // Engaged at the first row, a hero hit at 10 s, then stalled again until the hero swings at 16 s.
     // The NPC's own swings without damage never end a stall.
-    if(tick==200) row["target"]["hp"].SetInt64(290);
-    row["self"]["attack_anim"].SetBool(tick%3==0);
-    row["target"]["attack_anim"].SetBool(tick==320);
+    if(tick==200) set(row,"target","hp",int64_t(290));
+    set(row,"self","attack_anim",tick%3==0);
+    set(row,"target","attack_anim",tick==320);
     if(tick==200 || tick==320) tried=0;
     setMask(row,true);
     if(tick>=100 && tick<140) {
