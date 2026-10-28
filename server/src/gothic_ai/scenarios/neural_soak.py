@@ -664,6 +664,10 @@ async def neural_soak_scenario(
                 await link.debug("npc_goto", npc=COMPANION, waypoint=REFUGE)
                 await heal()
                 await link.debug("player_equip", item="ITMW_1H_BAU_MACE")
+                await check_companion()
+                # Restoring an armed hero can threaten the nearby talker while
+                # the post-load graph is replayed. Keep the checkpoint peaceful.
+                saved = await _save_or_fail(link, 7)
                 try:
                     await _soak_player_weapon(link, "melee", timeout=15)
                 except GameError:
@@ -672,8 +676,6 @@ async def neural_soak_scenario(
                     raise
                 if control:
                     await link.body_watch(["PLAYER"], rate_hz=20)
-                await check_companion()
-                saved = await _save_or_fail(link, 7)
                 await calls([["call", "WLD_INSERTNPC", ["sym", npc], ["str", PLACES[1]]]
                              for npc in BANDITS[:count]])
                 await calls([
