@@ -814,6 +814,7 @@ async def serve(args: argparse.Namespace) -> int:
         "neural-talk",
         "neural-load",
         "neural-soak",
+        "neural-still",
     } and not soak_control and (
         not args.neural_body or (args.body_policy == "service" and not args.body_url)
     ):
@@ -1555,6 +1556,13 @@ async def serve(args: argparse.Namespace) -> int:
                 assert state.guide is not None
                 results = await scenarios.bandit_bounty(
                     link, state.dialogue, state.talk, state.deals, state.bounty, state.guide
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "neural-still":
+                results = await scenarios.neural_still_scenario(
+                    link, bodypilot, Path(args.memory_db).parent
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -3070,6 +3078,7 @@ def main() -> None:
             "neural-companion",
             "neural-group",
             "neural-talk",
+            "neural-still",
             "bandit_parley",
             "bandit_hold",
             "bandit_bounty",

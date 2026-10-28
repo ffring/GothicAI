@@ -62,6 +62,17 @@ FightAlgo::ResolverState ready() {
   state.hasAttack=state.hasAttackLeft=state.hasAttackRight=state.hasBlock=state.canRotate=true;
   return state;
   }
+// Fixture targets may omit observed fields; add the field rather than writing a missing member.
+void set(Json& row,const char* side,const char* key,bool value) {
+  auto& section=row[side];
+  if(section.HasMember(key)) section[key].SetBool(value);
+  else section.AddMember(rapidjson::Value(key,row.GetAllocator()),rapidjson::Value(value),row.GetAllocator());
+  }
+void set(Json& row,const char* side,const char* key,int64_t value) {
+  auto& section=row[side];
+  if(section.HasMember(key)) section[key].SetInt64(value);
+  else section.AddMember(rapidjson::Value(key,row.GetAllocator()),rapidjson::Value(value),row.GetAllocator());
+  }
 void setMask(Json& row,bool eligible) {
   row["can_decide"].SetBool(eligible);
   row["native_decision_eligible"].SetBool(eligible);
@@ -96,6 +107,8 @@ void parityAndFallback() {
     row["t_game_ms"].SetUint64(tick*50);
     row["sim_step"].SetUint64(tick*3);
     row["self"]["hp_fraction"].SetDouble(0.3+0.001*double(tick));
+    // A target swing every two seconds keeps the fight engaged: the stall limit is checked separately.
+    set(row,"target","attack_anim",tick%40==0);
     setMask(row,tick%7!=0);
     const auto now=tick*50+(tick%13==0 ? 150 : 0);
     const bool eligible=row["can_decide"].GetBool() && now-tick*50<=100;
@@ -129,7 +142,8 @@ void parityAndFallback() {
       expect(FightAlgo::resolve(command.action,gate.resolver).allowed,"engine decision resolves through the native primitive gate");
       return std::string{};
       });
-    expect(release.empty(),"ordinary, locked and stale-memory rows retain the engine lease");
+    if(!release.empty()) throw std::runtime_error("ordinary, locked and stale-memory rows retain the engine lease: "+release);
+    ++assertions;
     expect(applied==(eligible && expected.status=="decision" ? 1u : 0u),"only eligible periodic decisions execute");
     // The other lease shares the weights, with its own identical recurrent history.
     expect(other.process(row,now,[&](int action,const rapidjson::Value&) {
@@ -172,6 +186,75 @@ void parityAndFallback() {
   expect(metrics["hidden_reset"].GetUint64()==1,"a runtime fallback reset is included in interval telemetry");
   }
 
+void stalledPolicyChoosesActivePrimitives() {
+  auto row=firstObservation();
+  row["self"]["weapon_state"].SetUint64(2);
+  set(row,"target","attack_anim",false);
+  set(row,"self","hp",int64_t(300));
+  set(row,"target","hp",int64_t(300));
+  const auto identity=BodyNet::actorIdentity(row);
+  const BodyNet directNet(GOTHIC_BODY_ENGINE_NET);
+  BodyPolicyRuntime direct(directNet,100,100,true);
+  direct.beginEpisode(identity[0],identity[1],0);
+  BodyEnginePolicy policy(identity[0],identity[1],identity[2],identity[3],0,0);
+  const auto passive=[](int action) { return action==3 || action==4 || action==5 || action>=9; };
+  size_t free=0,limited=0,redirected=0,rotated=0;
+  uint32_t tried=0;
+  for(uint64_t tick=1;tick<=400;++tick) {
+    const uint64_t game=tick*50;
+    row["observation_seq"].SetUint64(tick);
+    row["t_game_ms"].SetUint64(game);
+    row["sim_step"].SetUint64(tick);
+    // Engaged at the first row, a hero hit at 10 s, then stalled again until the hero swings at 16 s.
+    // The NPC's own swings without damage never end a stall.
+    if(tick==200) set(row,"target","hp",int64_t(290));
+    set(row,"self","attack_anim",tick%3==0);
+    set(row,"target","attack_anim",tick==320);
+    if(tick==200 || tick==320) tried=0;
+    setMask(row,true);
+    if(tick>=100 && tick<140) {
+      // Only passive primitives are available: the policy's choice stands even when stalled.
+      for(rapidjson::SizeType i:{1u,2u,6u,7u,8u}) {
+        row["action_mask"][i].SetBool(false);
+        row["availability_mask"][i].SetBool(false);
+        }
+      }
+    Json request(rapidjson::kObjectType);
+    auto& a=request.GetAllocator();
+    request.AddMember("observation",rapidjson::Value(row,a),a);
+    request.AddMember("stream_seq",tick,a);
+    request.AddMember("now_game_ms",game,a);
+    request.AddMember("command_enabled",true,a);
+    request.AddMember("memory_only",false,a);
+    expect(direct.process(request).status!="fallback","direct runtime accepts the stall sequence");
+    const auto expected=direct.arbitrate(row,tick);
+    const bool stalled=(tick>=81 && tick<200) || (tick>=280 && tick<320) || tick>=400;
+    const bool onlyPassive=tick>=100 && tick<140;
+    expect(policy.process(row,game,[&](int action,const rapidjson::Value&) {
+      expect(expected.actionId.has_value(),"a direct decision exists for every applied engine action");
+      if(!stalled || onlyPassive) {
+        expect(action==*expected.actionId,"an engaged fight, or one without active primitives, keeps the policy's choice");
+        ++free;
+        } else {
+        expect(!passive(action),"a stalled fight chooses approach, turn or an attack");
+        ++limited;
+        if(action!=*expected.actionId) ++redirected;
+        if(action>=6 && action<=8) {
+          // Every attack the mask allows is tried once before any of them repeats.
+          if(tried==((1u<<6)|(1u<<7)|(1u<<8))) tried=0;
+          expect((tried & (1u<<action))==0,"a stalled fight tries another attack before repeating one");
+          if(tried!=0) ++rotated;
+          tried|=1u<<action;
+          }
+        }
+      return std::string{};
+      }).empty(),"the stall limit retains the lease");
+    }
+  expect(free>0 && limited>0 && redirected>0 && rotated>0,"the sequence covers free, limited, redirected and rotated decisions");
+  std::cout << "stall free=" << free << " limited=" << limited << " redirected=" << redirected
+            << " rotated=" << rotated << '\n';
+  }
+
 void transientActionRefusals() {
   auto row=firstObservation();
   row["self"]["weapon_state"].SetUint64(2);
@@ -212,6 +295,7 @@ int main() {
     setenv("OPENGOTHIC_BODY_NET",GOTHIC_BODY_ENGINE_NET,1);
     BodyEnginePolicy::initialize();
     parityAndFallback();
+    stalledPolicyChoosesActivePrimitives();
     transientActionRefusals();
     std::cout << "{\"type\":\"body_engine_test\",\"passed\":true,\"assertions\":" << assertions
               << ",\"decisions\":" << decisions << "}\n";
