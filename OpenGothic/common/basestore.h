@@ -23,6 +23,9 @@ struct Selection {
   // Optional completion wait for callers that need the store copy, not shutdown.
   std::future<void> publication;
   };
+// Off: a cache hit never starts the background copy to the store. The headless body runner
+// forks its loaded world, which needs a single thread, and does not live long enough to own it.
+void setPublication(bool enabled);
 // A nonempty OPENGOTHIC_BASE selects and validates an explicit base.
 // Empty has the same meaning as unset: automatic resolution.
 Selection resolve(const std::filesystem::path& gothic, const BaseImport::Files& mounted,
