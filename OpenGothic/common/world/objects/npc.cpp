@@ -638,7 +638,8 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
     }
   // A live posture fall has no saved body. Wounded loops resume the ordinary
   // get-up transition without entering the script's unconscious state.
-  if(!isDown() && (visual.pose().isInAnim("S_WOUNDED") || visual.pose().isInAnim("S_WOUNDEDB"))) {
+  if(Gothic::physicsFlags().meleePosture && !isDown() &&
+     (visual.pose().isInAnim("S_WOUNDED") || visual.pose().isInAnim("S_WOUNDEDB"))) {
     setAnim(Anim::Idle);
     }
   // Existing save entries distinguish a live airborne throw from KO recovery.
