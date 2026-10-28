@@ -14,6 +14,13 @@ melee-shadow setup 1h
 wait 600
 melee-shadow target 2
 wait 600
+# Keep the old shadow fixture's two noncombat wolves outside the duel.
+pin WOLF 5000 90 0
+wait 34
+pin off
+pin WOLF 5000 -90 0
+wait 34
+pin off
 rec posture-hero-1h
 press action
 tap forward

@@ -4639,14 +4639,16 @@ bool Npc::tickMeleePosture(uint64_t dt) {
   if(ragdoll && (now-meleeFallTick>=1200 || !enabled)) {
     // A posture fall is brief, unlike KO: begin the authored get-up at 1.2 s
     // even if the native body has not gone to sleep.
-    if(recoverRagdoll(true)) {
-      meleeRiseTick = now;
-      setAnim(Anim::Idle);
-      }
+    recoverRagdoll(true);
     }
   if(!ragdoll) {
+    // The wounded loop may reject Idle on its very first frame. Retry only
+    // until the existing get-up transition accepts it, then let it finish.
+    if(meleeRiseTick==0 && setAnim(Anim::Idle))
+      meleeRiseTick = now;
     if(visual.pose().isStanding() || !enabled || now-meleeFallTick+dt>=4000) {
-      if(!visual.pose().isStanding()) {
+      const bool forced = !visual.pose().isStanding();
+      if(forced) {
         visual.pose().stopAllAnim();
         setAnim(Anim::Idle);
         }
@@ -4656,7 +4658,7 @@ bool Npc::tickMeleePosture(uint64_t dt) {
       writeMeleePosture("{\"event\":\"recover\",\"tick_ms\":"+std::to_string(now)+
                        ",\"target\":"+meleeShadowWho(this)+",\"fall_ms\":"+std::to_string(meleeFallTick)+
                        ",\"getup_ms\":"+std::to_string(meleeRiseTick)+",\"rise_ms\":"+std::to_string(now)+
-                       ",\"returned\":"+(ragdollQuestReturns!=meleeReturnCount ? "true" : "false")+"}");
+                       ",\"forced\":"+(forced ? "true" : "false")+",\"returned\":"+(ragdollQuestReturns!=meleeReturnCount ? "true" : "false")+"}");
       if(!enabled)
         meleePosture.reset();
       return false;
