@@ -291,7 +291,9 @@ async def test_encounter_worker_starts_without_a_behavioral_planner(monkeypatch)
         ("neural-soak", "1", False, "tcp://policy:47835", "fake", True, "service"),
         ("neural-soak", "1", True, "tcp://policy:47835", "fake", False, "service"),
         ("neural-soak", "0", False, None, "fake", False, "service"),
-        ("neural-soak", "0", True, None, "fake", False, "engine"),
+        ("neural-soak", "0", True, None, "fake", True, "engine"),
+        ("neural-soak", "0", True, None, "fake", False, "service"),
+        ("neural-soak", "0", True, "tcp://policy:47835", "fake", True, "service"),
         ("neural-soak", "0", True, "tcp://policy:47835", "fake", True, "engine"),
         ("neural-soak", "1", False, None, "chatgpt", False, "service"),
         ("neural-load", "1", False, None, "fake", False, "service"),
@@ -313,8 +315,7 @@ async def test_soak_control_requires_explicit_pilot_disable_and_only_skips_body_
         with pytest.raises(RuntimeError, match="passed launch validation"):
             await cli.serve(args)
         backend.assert_called_once_with(args)
-        if scenario == "neural-soak" and control == "0":
-            assert args.body_policy == "service"
+        assert args.body_policy == policy
     else:
         assert await cli.serve(args) == 2
         backend.assert_not_called()

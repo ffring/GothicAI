@@ -69,6 +69,17 @@ memory-only строки, повтор `observation_too_old` и сброс по�
 ошибка политики — `policy_fallback:policy_error`, окончательный отказ применения —
 `policy_fallback:body_action_rejected`.
 Обычная сводка содержит `final:false`, `reason:""`.
+При запросе release последний интервал отправляется с `final:true` и причиной
+release в `reason`, чтобы не терять счётчики короткого боя.
+Необязательные интервальные словари `selected_actions` и `accepted_actions`
+содержат счётчики выбранных сетью и принятых движком действий. Ключи в порядке
+`actions` файла `.bodynet`: `continue`, `approach`, `turn_to_target`, `strafe_left`,
+`strafe_right`, `jump_back`, `attack_front`, `attack_left`, `attack_right`, `block`,
+`wait_200`, `wait_300`. Выбор считается до применения, поэтому включает отказы;
+сумма принятых равна `decisions`. Необязательное целое `hidden_reset` считает
+сбросы памяти, включая создание памяти нового lease и `observation_too_old`.
+После сводки интервальные счётчики обнуляются. Отсутствующие поля означают
+`{}`, `{}` и `0`; старые серверы игнорируют дополнение, версия остаётся v54.
 [Полная схема](protocol.md#политика-боя-в-движке-v54).
 Серверный `BodyPilot` по умолчанию использует `--body-policy engine`
 (`GOTHIC_BODY_POLICY`). Он создаётся без `--body-url`, но начинает бой только при
@@ -79,14 +90,17 @@ memory-only строки, повтор `observation_too_old` и сброс по�
 В engine сервер поддерживает watch, lease, heartbeat, goal и release, но не создаёт
 `PolicyClient`, не запускает сторож сервиса и не отправляет `body_action`.
 `body_policy` попадает только в бой с совпадающими `entity_id` и
-`control_generation`; счётчики интервалов суммируются в `FightSummary`.
+`control_generation`; счётчики интервалов, включая выбранные/принятые действия
+и сбросы памяти (`policy_memory_resets`), суммируются в `FightSummary`.
 Поскольку отдельные времена шагов не передаются, `engine_max_interval_p50_us` / `engine_p99_us`
 сохраняют максимумы интервальных процентилей, а не процентиль за весь бой.
 `policy_fallbacks` сохраняет все причины из сводок; `fallbacks` не включает
 повторяемые отказы действий (`command_busy`, `stale_observation` и остальные
 `TRANSIENT_ACTION_REJECTIONS`). Завершение по `policy_fallback:*` всегда учитывается
 как минимум как один отказ политики, даже без финальной сводки.
-Лог конца сохраняет `neural-body end … decisions=…` и добавляет `policy=engine|service`.
+В service те же счётчики действий собираются по ответам политики и `body_action`.
+Лог конца сохраняет формат `neural-body end … decisions=… policy=engine|service`
+без новых полей для действий.
 Лаунчер передаёт `llm.body_policy` серверу, а необязательный путь `llm.body_net`
 игре как `OPENGOTHIC_BODY_NET`.
 

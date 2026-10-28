@@ -241,7 +241,6 @@ void skinnedVariant(bool ownAlbedo) {
 
 void replacements(Tempest::Device& device, const Fixture& fixture) {
   Resources resources(device);
-  Resources::mountWork(fixture.root/"_work");
   const auto* solid = Resources::loadMaterialAlbedo("NW_CITY_ROPE_01.TGA");
   const auto* alpha = Resources::loadMaterialAlbedo("NW_CITY_WOOD_01.TGA");
   require(solid!=nullptr && solid->format()==Tempest::TextureFormat::DXT1,
@@ -306,7 +305,6 @@ void census(const Fixture& fixture) {
 void emptyTable(Tempest::Device& device, const Fixture& fixture) {
   textFile(fixture.root/"materials/materials.json","{}");
   Resources resources(device);
-  Resources::mountWork(fixture.root/"_work");
   require(!Resources::materialMapsEnabled(),"empty materials.json must disable material maps");
   for(const auto* name:{"NW_CITY_ROPE_01.TGA","NW_CITY_WOOD_01.TGA",
                        "NW_HARBOUR_WOODCRATE_01.TGA","NW_HARBOUR_WOODCRATE_02.TGA",

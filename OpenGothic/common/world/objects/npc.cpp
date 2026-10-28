@@ -14,6 +14,7 @@
 #include "game/herodeed.h"
 #include "game/deedwitness.h"
 #include "game/bodyobservations.h"
+#include "game/bodyarena.h"
 #include "game/bodycontroller.h"
 #include "game/bodytrajectory.h"
 #include "game/npckeys.h"
@@ -102,6 +103,36 @@ void writeMeleeShadow(const std::string& row) {
     out << row << '\n';
     out.flush();
     bytes += row.size()+1;
+    }
+  }
+
+void writeMeleePosture(const std::string& row) {
+  static std::mutex mutex;
+  std::lock_guard<std::mutex> guard(mutex);
+  static std::ofstream out;
+  static uintmax_t bytes = 0;
+  constexpr uintmax_t limit = 8*1024*1024;
+  const char* path = "melee-posture.jsonl";
+  const auto entry = "{\"arena_seed\":" + (BodyArena::enabled() ? std::to_string(BodyArena::seed()) : "null") + ',' + row.substr(1);
+  if(!out.is_open()) {
+    std::error_code error;
+    bytes = std::filesystem::file_size(path,error);
+    if(error)
+      bytes = 0;
+    out.open(path,std::ios::app);
+    }
+  if(bytes+entry.size()+1>limit) {
+    out.close();
+    std::error_code error;
+    std::filesystem::remove("melee-posture.previous.jsonl",error);
+    std::filesystem::rename(path,"melee-posture.previous.jsonl",error);
+    out.open(path,std::ios::trunc);
+    bytes = 0;
+    }
+  if(out) {
+    out << entry << '\n';
+    out.flush();
+    bytes += entry.size()+1;
     }
   }
 
@@ -416,7 +447,10 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/data");
   fout.write(*hnpc);
   fout.write(body,head,vHead,vTeeth,bdColor,vColor,bdFatness);
-  fout.write(x,y,z,angle,sz);
+  if(meleeKnockdown)
+    fout.write(meleeSavePosition.x,meleeSavePosition.y,meleeSavePosition.z,angle,sz);
+  else
+    fout.write(x,y,z,angle,sz);
   fout.write(wlkMode,trGuild,talentsSk,talentsVl,refuseTalkMilis);
   fout.write(permAttitude,tmpAttitude);
   fout.write(perceptionTime,perceptionNextTime);
@@ -447,7 +481,7 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   fout.write(invTorch);
   fout.write(isUsingTorch());
 
-  Vec3 phyPos = physic.position();
+  Vec3 phyPos = meleeKnockdown ? meleeSavePosition : physic.position();
   fout.write(phyPos);
 
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/visual");
@@ -460,13 +494,21 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   // Optional independent entry: the old NPC/visual byte layouts remain readable.
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll");
   RagdollSave::Snapshot state;
-  state.legacyDown = ragdollLegacyDown || ragdollRecovering;
-  state.body = ragdoll ? std::optional<Ragdoll::State>(ragdoll->state()) : ragdollDormant;
+  state.legacyDown = !meleeKnockdown && (ragdollLegacyDown || ragdollRecovering);
+  if(!meleeKnockdown)
+    state.body = ragdoll ? std::optional<Ragdoll::State>(ragdoll->state()) : ragdollDormant;
   RagdollSave::save(fout,state);
-  fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-recovery");
-  visual.pose().saveRagdollRecovery(fout);
+  if(!meleeKnockdown) {
+    fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-recovery");
+    visual.pose().saveRagdollRecovery(fout);
+    }
   fout.setEntry("worlds/",fout.worldName(),directory,id,"/ragdoll-quest-return");
-  RagdollSave::saveQuestReturn(fout,ragdollQuestReturn);
+  auto savedReturn = ragdollQuestReturn;
+  if(meleeKnockdown) {
+    savedReturn.armed = false;
+    savedReturn.hazards = 0;
+    }
+  RagdollSave::saveQuestReturn(fout,savedReturn);
   if(visual.stuckArrowCount()>0) {
     fout.setEntry("worlds/",fout.worldName(),directory,id,"/stuck-arrows");
     visual.saveStuckArrows(fout);
@@ -474,6 +516,11 @@ void Npc::save(Serialize &fout, size_t id, std::string_view directory) {
   }
 
 void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
+  meleePosture.reset();
+  meleeKnockdown = false;
+  meleeGetupForced = false;
+  meleeFallTick = meleeRiseTick = 0;
+  meleeSlowSince = 0;
   releaseRagdoll(false);
   ragdollDormant.reset();
   ragdollRecovering = false;
@@ -588,6 +635,12 @@ void Npc::load(Serialize &fin, size_t id, std::string_view directory) {
       } else {
       Log::e("ragdoll: invalid saved body, keeping the animated pose");
       }
+    }
+  // A live posture fall has no saved body. Wounded loops resume the ordinary
+  // get-up transition without entering the script's unconscious state.
+  if(Gothic::physicsFlags().meleePosture && !isDown() &&
+     (visual.pose().isInAnim("S_WOUNDED") || visual.pose().isInAnim("S_WOUNDEDB"))) {
+    setAnim(Anim::Idle);
     }
   // Existing save entries distinguish a live airborne throw from KO recovery.
   const auto movement = mvAlgo.state();
@@ -870,6 +923,11 @@ void Npc::resetNavigationEpisode() {
   releaseRagdoll(false);
   ragdollDormant.reset();
   ragdollLegacyDown = ragdollRecovering = ragdollHasLastPosition = false;
+  meleePosture.reset();
+  meleeKnockdown = false;
+  meleeGetupForced = false;
+  meleeFallTick = meleeRiseTick = 0;
+  meleeSlowSince = 0;
   ragdollLastVelocity = {};
   ragdollQuestReturn = {};
   ragdollQuestSpellThrow = false;
@@ -960,6 +1018,9 @@ bool Npc::checkHealth(bool onChange, bool allowUnconscious) {
   }
 
 void Npc::onNoHealth(bool death, HitSound sndMask) {
+  meleeKnockdown = false;
+  meleeSlowSince = 0;
+  meleePosture.reset();
   living.reset();
   ragdollQuestSpellThrow = false;
   if(!isDown()) {
@@ -1145,14 +1206,14 @@ void Npc::releaseRagdoll(bool blend) {
     physic.setEnable(!isDead());
   }
 
-bool Npc::recoverRagdoll() {
+bool Npc::recoverRagdoll(bool force) {
   if(!ragdoll)
     return true;
   if(isDead())
     return false;
   checkRagdollQuestHazard();
-  const bool returnToAnchor = needsRagdollQuestReturn();
-  if(!returnToAnchor && !ragdoll->isSleeping() && (owner.tickCount()-ragdollStartTick<500 || !ragdoll->settled()))
+  bool returnToAnchor = needsRagdollQuestReturn();
+  if(!force && !returnToAnchor && !ragdoll->isSleeping() && (owner.tickCount()-ragdollStartTick<500 || !ragdoll->settled()))
     return false;
 
   const bool onBack = ragdoll->onBack();
@@ -1161,6 +1222,13 @@ bool Npc::recoverRagdoll() {
   const auto floor = owner.physic()->landRay(at+Vec3(0,80,0),380.f);
   if(floor.hasCol && floor.n.y>0.25f)
     at.y = floor.v.y;
+  // A timed live get-up must not release the body into a ravine before the
+  // usual ten-metre hazard has had time to arm the quest return.
+  if(meleeKnockdown && !floor.hasCol && ragdollQuestReturn.armed &&
+     ragdollQuestReturn.hasAnchor && Gothic::physicsFlags().questGuard && !isPlayer()) {
+    ragdollQuestReturn.hazards |= RagdollSave::QuestReturn::fell;
+    returnToAnchor = true;
+    }
 
   if(returnToAnchor) {
     ragdollQuestFrom = position();
@@ -1184,7 +1252,7 @@ bool Npc::recoverRagdoll() {
   visual.setObjMatrix(ragdollObjectMatrix,false);
   visual.pose().stopAllAnim();
   const char* wounded = onBack ? "S_WOUNDEDB" : "S_WOUNDED";
-  if(visual.startAnimAndGet(*this,wounded,calcAniComb(),BS_UNCONSCIOUS)==nullptr) {
+  if(visual.startAnimAndGet(*this,wounded,calcAniComb(),meleeKnockdown ? BS_LIE : BS_UNCONSCIOUS)==nullptr) {
     // Creatures without wounded poses retain the standard idle fallback.
     visual.startAnimAndGet("S_RUN",owner.tickCount(),true);
     }
@@ -1205,7 +1273,7 @@ void Npc::updateRagdollQuestAnchor() {
   if(isPlayer() || !isHuman() || isDown() || ragdoll || interactive()!=nullptr ||
      ragdollQuestReturn.armed ||
      !Gothic::physicsFlags().questGuard ||
-     !Gothic::physicsFlags().ragdoll || mvAlgo.state()!=MoveAlgo::Run)
+     (!Gothic::physicsFlags().ragdoll && !Gothic::physicsFlags().meleePosture) || mvAlgo.state()!=MoveAlgo::Run)
     return;
   const auto now = owner.tickCount();
   if(ragdollQuestReturn.hasAnchor && now>=ragdollQuestSampleTick && now-ragdollQuestSampleTick<250)
@@ -1301,6 +1369,8 @@ void Npc::prepareRagdoll() {
       }
     }
   updateRagdollQuestAnchor();
+  if(meleeKnockdown)
+    return;
   const bool enabled = Gothic::physicsFlags().ragdoll;
   if(!enabled) {
     if(isDown())
@@ -1675,7 +1745,7 @@ Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Po
 void Npc::syncMeleeShadowSwing() {
   const auto mode = weaponState();
   const bool enabled = Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits;
-  if(meleeShadowSuspended || !isHuman() || isDown() ||
+  if(meleeShadowSuspended || !isHuman() || isDown() || meleeKnockdown ||
      (mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)) {
     finishMeleeShadowSwing(true,meleeShadowSuspended);
     return;
@@ -2118,8 +2188,8 @@ void Npc::consumeMeleeContacts() {
       continue;
       }
     const auto& targetPose = target->visual.pose();
-    const bool dodge = targetPose.isJumpBack(owner.tickCount()) && target->fghAlgo.isInJumpBackAngle(*target,*this);
-    const bool block = target->fghAlgo.isInFocusAngle(*target,*this) && targetPose.isDefence(owner.tickCount());
+    const bool dodge = !target->meleeKnockdown && targetPose.isJumpBack(owner.tickCount()) && target->fghAlgo.isInJumpBackAngle(*target,*this);
+    const bool block = !target->meleeKnockdown && target->fghAlgo.isInFocusAngle(*target,*this) && targetPose.isDefence(owner.tickCount());
     entry.result = block ? "blocked" : (dodge ? "evaded" : "hit");
     if(!block && !dodge) {
       // The sampled MAN peak is fixed per animation/window, not learned from outcomes.
@@ -2396,7 +2466,8 @@ void Npc::prepareLivingBody() {
     }
   if(frozen)
     arrowImpacts.clear();
-  if(livingNeedsRebuild || (!benchRig && living && !living->isKinematic() && !Gothic::physicsFlags().arrowPhysics)) {
+  if(livingNeedsRebuild || (!benchRig && living && !living->isKinematic() &&
+                            !Gothic::physicsFlags().arrowPhysics && !Gothic::physicsFlags().meleeReactions)) {
     living.reset();
     livingNeedsRebuild = false;
     }
@@ -2493,10 +2564,12 @@ void Npc::queueArrowPhysics(const Bullet& bullet) {
 void Npc::dispatchArrowPhysics(Ragdoll& body) {
   for(const auto& hit:arrowImpacts) {
     const auto culprit = hit.culprit.lock();
-    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr)) {
-      ++arrowPhysics.applied;
+    if(body.queueHit(hit.bone,hit.point,hit.impulseNs,hit.strength,culprit ? reinterpret_cast<Npc*>(culprit->user_ptr) : nullptr,
+                     hit.stiffness)) {
+      auto& probe = hit.melee ? meleeReaction : arrowPhysics;
+      ++probe.applied;
       if(&body==ragdoll.get())
-        ++arrowPhysics.corpseImpulses;
+        ++probe.corpseImpulses;
       }
     }
   arrowImpacts.clear();
@@ -4428,6 +4501,8 @@ bool Npc::setGoToLadder() {
   }
 
 void Npc::commitDamage() {
+  if(meleeKnockdown)
+    return;
   const auto mode=weaponState();
   if(owner.physic()->destructionEnabled() &&
      (mode==WeaponState::Fist || mode==WeaponState::W1H || mode==WeaponState::W2H)) {
@@ -4504,6 +4579,165 @@ void Npc::commitDamage() {
     shadow->damage = std::max(0,hpBefore-shadowTarget->attribute(ATR_HITPOINTS));
   }
 
+Vec3 Npc::meleeImpulse(const Npc& attacker, const MeleeBladeContact* contact) const {
+  const auto mode = attacker.weaponState();
+  if(mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)
+    return {};
+  const auto weapon = mode==WeaponState::Fist ? MeleeImpact::Weapon::Fist :
+                      mode==WeaponState::W2H ? MeleeImpact::Weapon::TwoHand : MeleeImpact::Weapon::OneHand;
+  Vec3 velocity;
+  float angleDeg = 90.f;
+  if(contact!=nullptr) {
+    velocity = contact->velocityCmS;
+    angleDeg = contact->surfaceAngleDeg;
+    }
+  else {
+    // The legacy path has no geometric contact: use the same animation's typical
+    // contact speed as damage scaling, directed from attacker to victim.
+    const auto* shadow = attacker.meleeShadow.get();
+    const float typical = shadow && shadow->window ? shadow->window->peakCmS*.7f :
+                          mode==WeaponState::Fist ? 500.f : mode==WeaponState::W2H ? 1000.f : 800.f;
+    auto direction = position()-attacker.position();
+    direction.y = 0;
+    if(direction.length()>0.f)
+      velocity = Vec3::normalize(direction)*typical;
+    }
+  return MeleeImpact::impulse(weapon,velocity,angleDeg);
+  }
+
+void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked, float before) {
+  if(!Gothic::physicsFlags().meleePosture || !isHuman() || !attacker.isHuman())
+    return;
+  const auto mode = attacker.weaponState();
+  if(mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)
+    return;
+  const auto impulse = meleeImpulse(attacker,contact);
+  bool knocked = false;
+  if(canAccumulateMeleePosture(Gothic::physicsFlags().meleePosture,blocked,meleeKnockdown,isDown()) &&
+     meleePosture.hit(impulse.length(),physicsMass(),owner.tickCount())) {
+    setInteraction(nullptr,true);
+    attachToPoint(nullptr);
+    updateRagdollQuestAnchor();
+    const auto hazards = ragdollQuestReturn.armed ? ragdollQuestReturn.hazards : uint8_t(0);
+    ragdollQuestReturn.armed = !isPlayer() && Gothic::physicsFlags().questGuard && ragdollQuestReturn.hasAnchor;
+    ragdollQuestReturn.hazards = ragdollQuestReturn.armed ? hazards : 0;
+    meleeSavePosition = position();
+    living.reset();
+    finishMeleeShadowSwing(true);
+    const auto hpBeforeFall = attribute(ATR_HITPOINTS);
+    if(createRagdoll()) {
+      meleeKnockdown = true;
+      // Keep an ordinary live animation underneath the native body, so a save
+      // omitting this transient fall loads standing rather than replaying a hit.
+      visual.pose().stopAllAnim();
+      setAnim(Anim::Idle);
+      meleeFallTick = owner.tickCount();
+      meleeRiseTick = 0;
+      meleeGetupForced = false;
+      meleeSlowSince = 0;
+      meleeReturnCount = ragdollQuestReturns;
+      // thrown along the blade's sweep and away from the one who struck: a chop from
+      // above has little sweep left over the ground, the step behind it still pushes
+      Vec3 away = position()-attacker.position();
+      away.y = 0;
+      if(away.length()>1e-3f)
+        away = Vec3::normalize(away)*(impulse.length()*.5f);
+      ragdoll->knockOff(Vec3(impulse.x,0,impulse.z)+away,impulse.length(),&attacker);
+      fghAlgo.onTakeHit();
+      clearSpeed();
+      writeMeleePosture("{\"event\":\"knockdown_health\",\"tick_ms\":"+std::to_string(meleeFallTick)+
+                       ",\"target\":"+meleeShadowWho(this)+",\"hp_before\":"+std::to_string(hpBeforeFall)+
+                       ",\"hp_after\":"+std::to_string(attribute(ATR_HITPOINTS))+
+                       ",\"unconscious\":"+(isUnconscious() ? "true" : "false")+"}");
+      knocked = true;
+      }
+    }
+  const auto who = meleeShadowWho(this);
+  writeMeleePosture("{\"event\":\"hit\",\"tick_ms\":"+std::to_string(owner.tickCount())+
+                   ",\"attacker\":"+meleeShadowWho(&attacker)+",\"target\":"+who+
+                   ",\"impulse_ns\":"+std::to_string(impulse.length())+
+                   ",\"zone\":"+TestBench::bodyJson(contact ? HitZones::name(HitZones::Zone(contact->zone)) : std::string_view("body"))+
+                   ",\"before\":"+std::to_string(before)+",\"after\":"+std::to_string(meleePosture.value)+
+                   ",\"blocked\":"+(blocked ? "true" : "false")+",\"knockdown\":"+(knocked ? "true" : "false")+"}");
+  if(knocked)
+    writeMeleePosture("{\"event\":\"knockdown\",\"tick_ms\":"+std::to_string(meleeFallTick)+
+                     ",\"fall_ms\":"+std::to_string(meleeFallTick)+",\"target\":"+who+"}");
+  }
+
+bool Npc::tickMeleePosture(uint64_t dt) {
+  if(!meleeKnockdown) {
+    if(Gothic::physicsFlags().meleePosture)
+      meleePosture.tick(owner.tickCount(),dt);
+    else
+      meleePosture.reset();
+    return false;
+    }
+  const auto now = owner.tickCount();
+  lastEventTime = now;
+  visual.processLayers(owner);
+  const bool enabled = Gothic::physicsFlags().meleePosture;
+  if(ragdoll && (now-meleeFallTick>=1200 || !enabled)) {
+    // Use the same settled-body gate as KO, with a deadline for starting
+    // the authored get-up rather than a deadline for finishing it.
+    if(!recoverRagdoll()) {
+      bool rested = false;
+      if(enabled) {
+        // The live fall can recover before native sleep: require every part
+        // below 20 cm/s and 0.5 rad/s continuously for 300 ms.
+        const auto state = ragdoll->state();
+        const bool slow = std::all_of(state.parts.begin(),state.parts.end(),[](const auto& part) {
+          return part.linearVelocityMeters.quadLength()<=.04f && part.angularVelocity.quadLength()<=.25f;
+          });
+        if(!slow)
+          meleeSlowSince = 0;
+        else if(meleeSlowSince==0)
+          meleeSlowSince = now;
+        rested = meleeSlowSince!=0 && now-meleeSlowSince>=300;
+        }
+      if(rested || now-meleeFallTick>=3000 || !enabled)
+        meleeGetupForced = recoverRagdoll(true) && enabled && !rested;
+      }
+    }
+  if(!ragdoll) {
+    // The wounded loop may reject Idle on its very first frame. Retry only
+    // until the existing get-up transition accepts it, then let it finish.
+    if(meleeRiseTick==0 && setAnim(Anim::Idle)) {
+      meleeRiseTick = now;
+      writeMeleePosture("{\"event\":\"getup_start\",\"tick_ms\":"+std::to_string(now)+
+                       ",\"target\":"+meleeShadowWho(this)+",\"fall_ms\":"+std::to_string(meleeFallTick)+
+                       ",\"getup_ms\":"+std::to_string(now)+",\"wait_ms\":"+std::to_string(now-meleeFallTick)+
+                       ",\"forced\":"+(meleeGetupForced ? "true" : "false")+"}");
+      }
+    // Wounded-to-stand has no successor. Ordinary NPC ticking resumes Idle
+    // after that transition ends; this isolated live fall must do the same.
+    if(meleeRiseTick!=0 && !visual.pose().hasAnim())
+      setAnim(Anim::Idle);
+    // Locomotion can replace the get-up with a non-standing loop (fall/swim).
+    // Give the authored transition its full time, but never leave controls locked.
+    const bool getupTimedOut = meleeRiseTick!=0 && now-meleeRiseTick>=6000 && !visual.pose().isStanding();
+    if(visual.pose().isStanding() || !enabled || getupTimedOut) {
+      if(!visual.pose().isStanding()) {
+        visual.pose().stopAllAnim();
+        setAnim(Anim::Idle);
+        }
+      meleeKnockdown = false;
+      ragdollRecovering = false;
+      meleePosture.recover(now);
+      writeMeleePosture("{\"event\":"+TestBench::bodyJson(enabled ? "recover" : "cancel")+",\"tick_ms\":"+std::to_string(now)+
+                       ",\"target\":"+meleeShadowWho(this)+",\"fall_ms\":"+std::to_string(meleeFallTick)+
+                       ",\"getup_ms\":"+std::to_string(meleeRiseTick)+",\"rise_ms\":"+std::to_string(now)+
+                       (enabled && meleeRiseTick!=0 ? ",\"getup_duration_ms\":"+std::to_string(now-meleeRiseTick) : "")+
+                       (!enabled ? ",\"reason\":\"feature_disabled\"" : getupTimedOut ? ",\"reason\":\"getup_timeout\"" : "")+
+                       ",\"returned\":"+(ragdollQuestReturns!=meleeReturnCount ? "true" : "false")+"}");
+      if(!enabled)
+        meleePosture.reset();
+      return false;
+      }
+    mvAlgo.tick(dt,MoveAlgo::WaitMove);
+    }
+  return true;
+  }
+
 void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence, float meleeScale, const MeleeBladeContact* contact) {
   if(isDown())
     return;
@@ -4512,8 +4746,8 @@ void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence, float mele
 
   assert(b==nullptr || !b->isSpell());
   const auto& pose    = visual.pose();
-  const bool  isJumpb = !ignoreDefence && pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
-  const bool  isBlock = !ignoreDefence && (!other.isMonster() || other.inventory().activeWeapon()!=nullptr) &&
+  const bool  isJumpb = !meleeKnockdown && !ignoreDefence && pose.isJumpBack(owner.tickCount()) && fghAlgo.isInJumpBackAngle(*this,other);
+  const bool  isBlock = !meleeKnockdown && !ignoreDefence && (!other.isMonster() || other.inventory().activeWeapon()!=nullptr) &&
                          fghAlgo.isInFocusAngle(*this,other) &&
                          pose.isDefence(owner.tickCount());
   if((isBlock || isJumpb) && b==nullptr)
@@ -4532,6 +4766,8 @@ void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence, float mele
   if(!(isBlock || isJumpb) || b!=nullptr) {
     takeDamage(other,b,COLL_DOEVERYTHING,0,false,meleeScale,contact);
     } else {
+    if(isBlock)
+      applyMeleePosture(other,contact,true,meleePosture.value);
     if(invent.activeWeapon()!=nullptr)
       visual.emitBlockEffect(*this,other);
     }
@@ -4554,6 +4790,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t s
 
 void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell, float meleeScale, const MeleeBladeContact* contact) {
   const int32_t traceHpBefore = attribute(ATR_HITPOINTS);
+  const float postureBefore = meleePosture.value;
   float a  = angleDir(other.x-x,other.z-z);
   float da = a-angle;
   if(std::cos(da*M_PI/180.0)<0)
@@ -4637,7 +4874,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     return;
     }
 
-  if(hitResult.hasHit && !benchStill) {
+  if(hitResult.hasHit && !benchStill && !meleeKnockdown) {
     auto state   = bodyStateMasked();
     bool stumble = false;
     if(interactive()==nullptr && ((state&BS_FLAG_INTERRUPTABLE)!=BS_NONE || state==BS_RUN || state==BS_NONE)) {
@@ -4687,6 +4924,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         }
       }
     }
+  if(hitResult.hasHit && !isSpell && b==nullptr)
+    applyMeleePosture(other,contact,false,postureBefore);
   traceDamage();
   }
 
@@ -4729,7 +4968,51 @@ void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool st
   hit.strength = std::clamp(0.35f + 2.5f*float(std::max(damage,0))/float(hpMax), 0.35f, 1.f);
   if(stumble)
     hit.strength *= 0.6f; // the stumble throws the body already
+  if(b==nullptr && queueMeleeReaction(other,at,contact))
+    hit.strength *= 0.5f; // the struck chain gives way physically, the fake bend only follows
   flinch(hit);
+  }
+
+bool Npc::queueMeleeReaction(const Npc& other, const Vec3& at, const MeleeBladeContact* contact) {
+  // the blow pushes the struck chain on the living rig like an arrow does, its motors bring it back
+  if(!Gothic::physicsFlags().meleeReactions || !living || !isHuman())
+    return false;
+  size_t bone = contact!=nullptr ? contact->bone : size_t(-1);
+  if(bone>=visual.pose().boneCount()) {
+    const auto& transform = visual.transform();
+    const float scale = Vec3(transform.at(0,0),transform.at(0,1),transform.at(0,2)).length();
+    bone = visual.hitZoneShape().closestBone(visual.pose().transform(),visual.pose().boneCount(),scale,at);
+    }
+  if(bone>=visual.pose().boneCount())
+    return false;
+  // the same blow as the posture takes: weapon with the arm behind it, along the blade's motion
+  const Vec3  blow     = meleeImpulse(other,contact);
+  const float momentum = std::min(blow.length(),40.f);
+  if(!std::isfinite(momentum) || momentum<1.f)
+    return false;
+  const Vec3 d = Vec3::normalize(blow);
+  // the blade cuts on and the stance takes the rest: the chain gets a part of the momentum.
+  // The stumble already throws the body, so the motors keep most of their hold: a weak
+  // chain loses the authored swing of the arms and hangs like a rope
+  constexpr float transfer = 0.15f;
+  const float strength = 0.55f*std::clamp(momentum/40.f,0.25f,1.f);
+  const Vec3  impulse  = d*(momentum*transfer);
+  // twice the arrow's spring keeps up with the stumble's fast swing of the arms
+  constexpr float stiffness = 2.f;
+  arrowImpacts.push_back({bone,at,impulse,strength,other.handlePtr(),true,stiffness});
+  meleeReaction.bone      = bone;
+  meleeReaction.point     = at;
+  meleeReaction.impulseNs = impulse;
+  meleeReaction.strength  = strength;
+  ++meleeReaction.hits;
+  if(TestBench::isActive()) {
+    const auto who = TestBench::who(this);
+    char buf[200];
+    std::snprintf(buf,sizeof(buf),"melee_reaction %.*s: bone %d momentum %.1f impulse %.1f strength %.2f",
+                  int(who.size()),who.data(),int(bone),double(momentum),double(momentum*transfer),double(strength));
+    TestBench::note(buf);
+    }
+  return true;
   }
 
 void Npc::takeFallDamage(const Vec3& fallSpeed) {
@@ -4958,6 +5241,8 @@ void Npc::tick(uint64_t dt) {
   // with fresh shadow geometry, never a sweep from its former holding point.
   meleeShadowSuspended = false;
   headInput.reset();
+  if(tickMeleePosture(dt))
+    return;
   if(nonlethalTarget!=size_t(-1) && owner.tickCount()>nonlethalUntil) {
     auto* other = owner.findNpcByInstance(nonlethalTarget);
     if(other==nullptr || (!isAttack() && !isDown() && !other->isAttack() && !other->isDown()))
@@ -6776,6 +7061,8 @@ bool Npc::canFinish(Npc& oth) {
   }
 
 bool Npc::doAttack(Anim anim, BodyState bs) {
+  if(meleeKnockdown)
+    return false;
   const bool trace = TestBench::bodyTracing() && currentTarget!=nullptr;
   const auto before = trace ? combatPoseIdentity() : std::string();
   const auto result = [&](bool accepted) {
@@ -6809,6 +7096,8 @@ void Npc::fistShoot() {
   }
 
 bool Npc::blockFist() {
+  if(meleeKnockdown)
+    return false;
   auto weaponSt=weaponState();
   if(weaponSt!=WeaponState::Fist)
     return false;
@@ -7169,7 +7458,7 @@ void Npc::endManualAim(bool idle) {
     in.raised = false;
     arch.tick(in,Archery::stats(*this,currentRangedWeapon()));
     const auto ws = weaponState();
-    if(idle && !isDown() && (ws==WeaponState::Bow || ws==WeaponState::CBow))
+    if(idle && !isDown() && !meleeKnockdown && (ws==WeaponState::Bow || ws==WeaponState::CBow))
       setAnim(Anim::Idle);
     }
   setManualAim(false);

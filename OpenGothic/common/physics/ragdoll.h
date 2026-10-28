@@ -68,8 +68,11 @@ class Ragdoll final {
     // not a velocity. strength is the visual/motor response in (0, 1].
     // A living pelvis hit reacts through the nearest spine; a limp hit always
     // addresses the supplied physical bone. No native world calls happen here.
+    // stiffness >= 1 scales the living motors' spring frequency (torque with its
+    // square): a blade's reaction rides a fast authored stumble, an arrow's does not.
     bool queueHit(size_t bone, const Tempest::Vec3& pointCm,
-                  const Tempest::Vec3& impulseNs, float strength, Npc* culprit = nullptr);
+                  const Tempest::Vec3& impulseNs, float strength, Npc* culprit = nullptr,
+                  float stiffness = 1.f);
     void setNpc(Npc* npc);
     void setNoiseCulprit(Npc* culprit);
     float reactionWeight() const;
@@ -112,6 +115,9 @@ class Ragdoll final {
     void setAllowSleeping(bool allow);
     // Total impulse, distributed by mass over the parts (newton seconds).
     void addImpulse(const Tempest::Vec3& impulse, Npc* culprit = nullptr);
+    // A living body knocked off its feet: the trunk is thrown along the blow while the
+    // feet stay, so it topples over them; the legs hold a moment longer than in death.
+    void knockOff(const Tempest::Vec3& direction, float impulseNs, Npc* culprit = nullptr);
     State state() const;
     // Rejects incompatible, nonfinite or malformed states without changing bodies.
     bool restore(const State& state);

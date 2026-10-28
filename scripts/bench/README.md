@@ -86,6 +86,15 @@ over a 30-second normal-cadence window without recording video.
 `reload SAVED_DIR LOADED_DIR` and `perf ON_DIR OFF_DIR` check the native parts,
 immersion, sleep, 30-second stability and the 2 ms physics p95 budget.
 
+`p18b-base` checks a selected base through the native world transition path:
+`NEWWORLD` → `ADDONWORLD` → `OLDWORLD` → `DRAGONISLAND` → `NEWWORLD`, then native
+`playvideo LOGO2`. Run with `WORLD=NEWWORLD.ZEN`, `MUSIC=1`, the task base/cache/store,
+and an absolute census/output path. `world <ZEN> [waypoint]` requests the existing
+`World::triggerChangeWorld` transition and waits for native loading;
+`world-check <ZEN>` fails unless that world is current. Both commands use only indexed worlds.
+Successful benchmark music selection logs `Dx8 music: <SGT>` after the mixer accepts it.
+A normal startup logs `Main menu ready: <id>` after menu initialization; no keyboard driver is needed.
+
 A run takes the game start (~10 s from a save) plus the scenario time. On Mac the game window is minimized,
 does not take the focus and plays no sound, so it can run while someone works on the same machine.
 The time step is fixed (30 fps), so a run does not depend on the frame rate and repeats (up to the

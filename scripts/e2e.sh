@@ -71,10 +71,9 @@
 #   neural-load: load an initial save while three bandits hold P30 leases; all fights end with loading,
 #       release their leases and watch, then one bandit fights under P30 again
 #   neural-soak: bandit waves in the ordinary new-game world with a swordsman companion; LLM=fake,
-#       GOTHIC_BODY_URL, GOTHIC_SOAK_SECONDS=1800 by default; TIMEOUT=2400 for the full run.
-#       Keeps service policy: WAIT_200 and accepted-action fractions need per-action RPC data absent
-#       from engine body_policy summaries. Other neural scenarios default to engine, or use
-#       GOTHIC_BODY_POLICY=service with GOTHIC_BODY_URL and service p95 <=20 ms.
+#       engine P30 by default without a body URL; GOTHIC_SOAK_SECONDS=1800, TIMEOUT=2400 for the full run.
+#       WAIT_200 and accepted-action fractions use interval body_policy counters; engine p99 <=20 ms.
+#       GOTHIC_BODY_POLICY=service with GOTHIC_BODY_URL uses service data and p95/p99 <=20 ms.
 #       GOTHIC_SOAK_CONTROL=1 uses native combat with --no-neural-body and needs no body URL.
 #       Samples in neural_soak.jsonl; records 25 s of the first wave when normal-clock bench is available
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
@@ -424,10 +423,6 @@ if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = ne
   if [[ "$SCENARIO" == neural-soak && "${GOTHIC_SOAK_CONTROL:-0}" == 1 ]]; then
     BODY_ARGS=(--no-neural-body)
   else
-    if [[ "$SCENARIO" == neural-soak ]]; then
-      BODY_POLICY=service
-      BODY_ARGS=(--neural-body --body-policy service)
-    fi
     if [[ "$BODY_POLICY" == service ]]; then
       [ -n "${GOTHIC_BODY_URL:-}" ] || { echo "scenario $SCENARIO with service policy requires GOTHIC_BODY_URL=tcp://host:port" >&2; exit 2; }
     fi
@@ -632,7 +627,7 @@ def put(section, key, value):
     ini.set(section, key, value)
 
 put("ENGINE", "zMaxFps", str(int(sys.argv[2])))
-for name in ("CHARACTER_VIRTUAL", "NPC_CHARACTER_VIRTUAL", "MONSTER_CHARACTER_VIRTUAL", "MELEE_BLADE_SHADOW", "MELEE_PHYSICS_HITS"):
+for name in ("CHARACTER_VIRTUAL", "NPC_CHARACTER_VIRTUAL", "MONSTER_CHARACTER_VIRTUAL", "MELEE_BLADE_SHADOW", "MELEE_PHYSICS_HITS", "MELEE_POSTURE", "MELEE_REACTIONS"):
     value = os.environ.get(name, "")
     if value:
         if value not in ("0", "1"):

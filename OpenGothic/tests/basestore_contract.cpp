@@ -349,13 +349,12 @@ void offlineResources(const fs::path& source, const fs::path& reference, const f
               "offline Resources fixture did not write its pointer");
       const auto path=game.string();
       const char* arguments[]={"gothic-base-store-contract","-g",path.c_str()};
-      CommandLine commandLine(3,arguments);
-      // CommandLine's installation prerequisite remains P18b; this contract starts at loadVdfs.
       for(const auto& directory:installationDirectories) fs::remove(directory);
+      CommandLine commandLine(3,arguments);
       unsetenv("OPENGOTHIC_BASE");
       {
         Resources resources;
-        Resources::loadVdfs({},true);
+        Resources::loadBase();
         require(Resources::worldBaseDir("NEWWORLD.ZEN")==reference/"worlds/NEWWORLD",
                 "offline Resources did not reach the native base after all family checks");
       }
@@ -365,8 +364,8 @@ void offlineResources(const fs::path& source, const fs::path& reference, const f
     }
   int status=0;
   require(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0,
-          "Resources::loadVdfs must complete without Data or _work using the pointer identity");
-  std::cout << "offline Resources: loadVdfs completed every native family check using base.json identity\n";
+          "Resources::loadBase must complete without Data or _work using the pointer identity");
+  std::cout << "offline Resources: loadBase completed every native family check using base.json identity\n";
   }
 
 std::string le32(uint32_t v) {
@@ -996,7 +995,7 @@ int main() {
       try {
         {
         Resources resources;
-        Resources::loadVdfs({},true);
+        Resources::loadBase();
         require(Resources::worldBaseDir("NEWWORLD.ZEN")==base/"worlds/NEWWORLD","engine did not select automatic base");
         // Bound only the destruction: selection hashes the installation and takes longer.
         alarm(5);
@@ -1127,7 +1126,7 @@ int main() {
     fs::path latest;
     {
     Resources resources;
-    Resources::loadVdfs({},true);
+    Resources::loadBase();
     fs::last_write_time(base,fs::file_time_type::clock::now()-std::chrono::hours(1));
     const auto worldFile=Resources::worldBaseDir("NEWWORLD.ZEN")/"vobs.json";
     const auto expected=BaseImport::sha256(read(worldFile));

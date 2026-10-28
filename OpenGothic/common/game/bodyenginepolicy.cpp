@@ -12,6 +12,10 @@
 
 namespace {
 using Json = rapidjson::Document;
+constexpr const char* actionNames[BodyNet::actionCount]={
+  "continue", "approach", "turn_to_target", "strafe_left", "strafe_right", "jump_back",
+  "attack_front", "attack_left", "attack_right", "block", "wait_200", "wait_300"
+  };
 struct Network final {
   std::unique_ptr<BodyNet> net;
   std::string error;
@@ -122,6 +126,7 @@ std::string BodyEnginePolicy::process(const rapidjson::Value& row,uint64_t nowGa
     request.AddMember("memory_only",!eligible,a);
     const auto started=Clock::now();
     const auto processed=runtime.process(request);
+    if(processed.hiddenReset) ++hiddenResets;
     auto result=processed;
     if(processed.status!="fallback" && eligible)
       result=runtime.arbitrate(row,streamSequence);
@@ -155,6 +160,7 @@ std::string BodyEnginePolicy::process(const rapidjson::Value& row,uint64_t nowGa
       ++fallbacks["policy_error"];
       return "policy_fallback:policy_error";
       }
+    ++selectedActions[size_t(*result.actionId)];
     const auto refusal=apply(*result.actionId,row);
     if(!refusal.empty()) {
       ++fallbacks[refusal];
@@ -166,6 +172,7 @@ std::string BodyEnginePolicy::process(const rapidjson::Value& row,uint64_t nowGa
       stallAttacks|=1u<<*result.actionId;
     acceptedSimStep=row["sim_step"].GetUint64();
     ++decisions;
+    ++acceptedActions[size_t(*result.actionId)];
     return {};
   } catch(const std::exception&) {
     ++fallbacks["policy_error"];
@@ -180,6 +187,14 @@ std::string BodyEnginePolicy::report(bool force) {
   auto& a=result.GetAllocator();
   result.AddMember("type","body_policy",a);
   result.AddMember("decisions",decisions,a);
+  rapidjson::Value selected(rapidjson::kObjectType),accepted(rapidjson::kObjectType);
+  for(size_t i=0;i<BodyNet::actionCount;++i) {
+    selected.AddMember(rapidjson::Value(actionNames[i],a),rapidjson::Value(selectedActions[i]),a);
+    accepted.AddMember(rapidjson::Value(actionNames[i],a),rapidjson::Value(acceptedActions[i]),a);
+    }
+  result.AddMember("selected_actions",selected,a);
+  result.AddMember("accepted_actions",accepted,a);
+  result.AddMember("hidden_reset",hiddenResets,a);
   rapidjson::Value reasons(rapidjson::kObjectType);
   for(const auto& reason:fallbacks)
     reasons.AddMember(rapidjson::Value(reason.first.c_str(),a),rapidjson::Value(reason.second),a);
@@ -192,6 +207,7 @@ std::string BodyEnginePolicy::report(bool force) {
   result.AddMember("p99_us",percentile(0.99),a);
   result.AddMember("steps",uint64_t(stepTimes.size()),a);
   result.AddMember("final",force,a);
-  decisions=0; fallbacks.clear(); stepTimes.clear(); reportAt=now;
+  decisions=0; selectedActions.fill(0); acceptedActions.fill(0); hiddenResets=0;
+  fallbacks.clear(); stepTimes.clear(); reportAt=now;
   return encode(result);
   }

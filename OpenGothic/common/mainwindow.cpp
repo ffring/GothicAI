@@ -92,6 +92,7 @@ MainWindow::MainWindow(Device& device)
     }
   else {
     rootMenu.processMusicTheme();
+    Log::i("Main menu ready: ",Gothic::inst().menuMain());
     }
 
   funcKey[2] = Shortcut(*this,Event::M_NoModifier,Event::K_F2);
@@ -1033,7 +1034,7 @@ void MainWindow::tickCamera(uint64_t dt) {
       }
     else if(pl!=nullptr && !camera.isFree()) {
       auto spin = camera.spin();
-      if(pl->interactive()==nullptr && !pl->isDown())
+      if(pl->interactive()==nullptr && !pl->isDown() && !pl->isMeleeKnockedDown())
         spin.y = pl->rotation();
       if(pl->isDive() && !camera.isMarvin())
         spin.x = -pl->rotationY();
@@ -1072,6 +1073,8 @@ Camera::Mode MainWindow::solveCameraMode() const {
   if(auto pl = Gothic::inst().player()) {
     if(pl->isDead())
       return Camera::Death;
+    if(pl->isMeleeKnockedDown())
+      return Camera::Normal;
     if(pl->isDive())
       return Camera::Dive;
     if(pl->isSwim())
@@ -1216,6 +1219,9 @@ void MainWindow::onStartLoading() {
 
 void MainWindow::onWorldLoaded() {
   dMouse = Point();
+  if(TestBench::isActive())
+    if(auto* world = Gothic::inst().world())
+      Log::i("[bench] world ready: ",world->name());
 
   if(Gothic::inst().isBenchmarkMode()) {
     if(auto world = Gothic::inst().world()) {
