@@ -72,6 +72,9 @@ class BodyPolicy(_GameMessage):
     p99_us: float
     final: bool
     reason: str
+    selected_actions: dict[str, int] = Field(default_factory=dict)
+    accepted_actions: dict[str, int] = Field(default_factory=dict)
+    hidden_reset: int = 0
 
 
 class SvmLine(_GameMessage):

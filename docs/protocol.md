@@ -128,7 +128,7 @@ Native-защитник явно возвращается арбитром с `r
 | `snapshot` | `t`, `world{name,day,hour,minute}`, `npc{…}`, `player{…}?`, `nearby_waypoints[]` | для NPC под управлением — раз в 500 мс, после каждого действия и по запросу; с v7 по запросу и для свободного NPC, разово |
 | `body_observations` | версия схемы, generation, ограниченный пакет числовых наблюдений и счётчики пропусков | только после `body_watch`; 10 или 20 Гц на NPC, после world/player/animation updates. Обычный мост отправляет готовый пакет на следующем `onTick` |
 | `body_control_events` | process/world epoch, `events[]`, `dropped_total` | ограниченный поток lifecycle/ownership из общего encoder; отправляется при активной подписке. Начало/завершение связаны с command и execution IDs |
-| `body_policy` | identity lease, счётчики решений и отказов, p50/p99 шага в мкс | (v54) раз в секунду на NPC с `policy:"engine"` и сразу при конце боя по отказу политики; [контракт](#политика-боя-в-движке-v54) |
+| `body_policy` | identity lease, счётчики решений и отказов, действий и сбросов памяти, p50/p99 шага в мкс | (v54) раз в секунду на NPC с `policy:"engine"` и сразу при запросе release; [контракт](#политика-боя-в-движке-v54) |
 | `action_result` | `id`, `npc`, `status`, `detail?`, `distance?` | действие завершилось |
 | `perception` | `npc`, `perc`, `other`, `distance`, `victim?` | восприятие NPC под управлением, не чаще 1 раза в секунду на пару (`perc`, `other`) |
 | `pong` | `req` | ответ на `ping` |
@@ -230,9 +230,23 @@ ownership-событие `reason:"native_restored"`, `release_reason:"policy_fal
 Оно отправляется раз в секунду wall-времени для каждого lease с `policy:"engine"`.
 `decisions` (применённые решения), `fallbacks` (словарь причина → число), `steps`
 (число измеренных шагов) и p50/p99 относятся к прошедшему интервалу.
+Необязательные поля `selected_actions` и `accepted_actions` — словари имя действия →
+число за тот же интервал. Имена и порядок совпадают с `actions` в `.bodynet`:
+`continue`, `approach`, `turn_to_target`, `strafe_left`, `strafe_right`, `jump_back`,
+`attack_front`, `attack_left`, `attack_right`, `block`, `wait_200`, `wait_300`.
+`selected_actions` считает решения сети до попытки применения, включая отклонённые;
+`accepted_actions` — только успешно принятые движком, их сумма равна `decisions`.
+Необязательное целое `hidden_reset` считает сбросы памяти runtime за интервал,
+в том числе создание памяти нового lease и сброс при `observation_too_old`.
+Все счётчики обнуляются после отправки. Без этих полей сервер получает `{}`, `{}` и `0`;
+старые серверы игнорируют неизвестные поля. Это совместимое дополнение v54, номер
+протокола не меняется. `BodyFight` суммирует поля в `FightSummary`; формат строки
+`neural-body end …` сохраняется.
 Отказы включают отказ политики и применения выбранного действия.
 Время шага измеряется в микросекундах; при отсутствии шагов оба процентиля равны 0.
-При завершении боя по отказу сообщение отправляется сразу с `final:true`:
+При запросе release последний интервал отправляется сразу с `final:true` и
+причиной release в `reason`, включая обычное завершение и watchdog.
+При завершении боя по отказу:
 runtime fallback даёт `reason:"policy_fallback:<reason>"`, ошибка политики —
 `policy_error`, окончательный отказ применения — `body_action_rejected`.
 Отказы применения `stale_observation`, `expired`, `expired_wall`, `command_busy`,
