@@ -307,6 +307,7 @@ def _smoke_settings(config: Config) -> None:
     llm = config.settings.llm
     llm.backend, llm.model, llm.base_url = "fake", None, None
     llm.decider_url, llm.quick_url, llm.body_url, llm.quick = None, None, None, False
+    llm.body_policy, llm.body_net = "service", None
     config.settings.voice.enabled = False
     config.settings.tts.enabled = False
 

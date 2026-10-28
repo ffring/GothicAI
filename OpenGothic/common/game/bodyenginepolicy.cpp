@@ -123,13 +123,13 @@ std::string BodyEnginePolicy::process(const rapidjson::Value& row,uint64_t nowGa
     if(!result.actionId || *result.actionId<0 || *result.actionId>=12 ||
        !row["action_mask"][rapidjson::SizeType(*result.actionId)].GetBool()) {
       ++fallbacks["policy_error"];
-      return "policy_error";
+      return "policy_fallback:policy_error";
       }
     const auto refusal=apply(*result.actionId,row);
     if(!refusal.empty()) {
       ++fallbacks[refusal];
       if(transientAction(refusal) && ++transientRejections<10) return {};
-      return "body_action_rejected";
+      return "policy_fallback:body_action_rejected";
       }
     transientRejections=0;
     acceptedSimStep=row["sim_step"].GetUint64();
@@ -137,7 +137,7 @@ std::string BodyEnginePolicy::process(const rapidjson::Value& row,uint64_t nowGa
     return {};
   } catch(const std::exception&) {
     ++fallbacks["policy_error"];
-    return "policy_error";
+    return "policy_fallback:policy_error";
     }
   }
 

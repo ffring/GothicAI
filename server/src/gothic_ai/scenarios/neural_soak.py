@@ -200,6 +200,7 @@ def _scheduled_load_due(
 async def neural_soak_scenario(
     link: GameLink, dialogue: DialogueManager, pilot: BodyPilot | None, *, log_dir: Path,
 ) -> dict[str, str]:
+    # Keep service policy: per-action WAIT_200 and acceptance thresholds cannot use body_policy summaries.
     control = os.environ.get("GOTHIC_SOAK_CONTROL") == "1"
     if control and pilot is not None:
         raise GameError("neural-soak control requires --no-neural-body")

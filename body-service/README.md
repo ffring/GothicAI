@@ -3,7 +3,18 @@
 Numerical GRU-256 and an eight-observation MLP baseline for native NPC combat primitives.
 The package provides dataset projection, BC training, evaluation and a bounded JSONL runtime.
 
-All model imports, forwards and training run on **dev-ubuntu**. Use the repository's
+Live combat defaults to P30 inside the game engine (`--body-policy engine`, v54).
+The engine loads `~/.local/share/gothic-ai/body/nets/p30.bodynet`, or the path in
+`OPENGOTHIC_BODY_NET`; no TCP service is needed. The server keeps the lease alive
+and reads interval `body_policy` summaries. If the engine reports an unavailable
+network in `hello.body_net`, a configured body URL selects this fallback service;
+without a URL, combat stays with native AI. Use
+`--body-policy service --body-url tcp://host:47835` (or `GOTHIC_BODY_POLICY=service`
+and `GOTHIC_BODY_URL`) to select it explicitly; `--no-neural-body` disables both paths.
+
+The fallback service runs on **dev-ubuntu**; training and heavy checks run on Ryzen
+or dev-ubuntu, while the small exported network also runs inside the game on Mac.
+Use the repository's
 [stage 7 workflow](../docs/npc-body-bc.md) and [remote launcher](../scripts/body-bc-remote.sh).
 It creates a separate uv environment and freezes package/helper/config bytes per run.
 Raw game data and checkpoints stay on the server.
