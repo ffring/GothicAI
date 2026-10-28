@@ -53,6 +53,15 @@ bool timeEquals(const rapidjson::Value& value, std::optional<uint64_t> actual) {
   return actual ? value.IsUint64() && value.GetUint64()==*actual : value.IsNull();
   }
 
+bool maskEquals(const rapidjson::Value& value, const BodyNet::Mask& actual) {
+  require(value.IsArray() && value.Size()==actual.size(), "invalid golden action mask");
+  for(size_t i=0; i<actual.size(); ++i) {
+    const auto& bit = value[rapidjson::SizeType(i)];
+    if(!bit.IsBool() || bit.GetBool()!=actual[i]) return false;
+    }
+  return true;
+  }
+
 struct Golden final {
   gzFile stream = nullptr;
   explicit Golden(const char* path):stream(gzopen(path,"rb")) {
@@ -120,11 +129,21 @@ int contract(const char* weights, const char* goldenPath, bool benchmark) {
   const BodyNet network(weights);
   BodyPolicyRuntime runtime(network);
   Golden golden(goldenPath);
-  size_t lineNumber = 0, steps = 0, episodes = 0, inferences = 0, decisions = 0, mismatches = 0;
+  size_t lineNumber = 0, steps = 0, episodes = 0, inferences = 0, decisions = 0, arbitrations = 0, mismatches = 0;
   double maxFeatures = 0, maxLogits = 0, maxHidden = 0;
   bool inEpisode = false;
   std::vector<double> timings;
   std::string line;
+  const auto report = [&](const std::vector<std::string>& errors, const BodyPolicyRuntime::Result& result) {
+    if(errors.empty()) return;
+    ++mismatches;
+    if(mismatches<=10) {
+      std::cerr<<"golden line "<<lineNumber<<": mismatch in";
+      for(const auto& error:errors)
+        std::cerr<<' '<<error;
+      std::cerr<<" (actual status="<<result.status<<", reason="<<result.reason<<")\n";
+      }
+    };
   while(golden.line(line)) {
     ++lineNumber;
     rapidjson::Document record;
@@ -146,6 +165,26 @@ int contract(const char* weights, const char* goldenPath, bool benchmark) {
       inEpisode = begin;
       continue;
       }
+    if(textEquals(kind,"arbitrate")) {
+      require(inEpisode, "golden arbitration inside an episode required");
+      const auto& observation = field(record,"observation");
+      const auto result = runtime.arbitrate(observation,integer(record,"stream_seq"),integer(record,"max_anchor_age_game_ms"));
+      std::vector<std::string> errors;
+      const auto compare = [&](bool same, const char* name) { if(!same) errors.emplace_back(name); };
+      compare(textEquals(field(record,"status"),result.status),"status");
+      compare(textEquals(field(record,"reason"),result.reason),"reason");
+      compare(actionEquals(field(record,"action_id"),result.actionId),"action_id");
+      compare(flag(record,"hidden_reset")==result.hiddenReset,"hidden_reset");
+      compare(flag(record,"model_processed")==result.modelProcessed,"model_processed");
+      if(record.HasMember("effective_action_mask"))
+        compare(maskEquals(field(record,"effective_action_mask"),result.effectiveActionMask),"effective_action_mask");
+      if(record.HasMember("raw_action_mask"))
+        compare(maskEquals(field(record,"raw_action_mask"),result.rawActionMask),"raw_action_mask");
+      compare(vectorEquals(field(record,"hidden_state"),runtime.hiddenState(observation),1.e-4,maxHidden),"hidden_state");
+      ++arbitrations;
+      report(errors,result);
+      continue;
+      }
     require(textEquals(kind,"step") && inEpisode, "golden step inside an episode required");
     const auto& observation = field(record,"observation");
     const bool eligible = flag(observation,"can_decide") && flag(observation,"action_mask_valid");
@@ -158,8 +197,9 @@ int contract(const char* weights, const char* goldenPath, bool benchmark) {
     rapidjson::Value now;
     now.CopyFrom(field(record,"now_game_ms"),allocator);
     request.AddMember("now_game_ms",now,allocator);
-    request.AddMember("command_enabled",eligible,allocator);
-    request.AddMember("memory_only",!eligible,allocator);
+    const auto options = record.FindMember("process_options");
+    request.AddMember("command_enabled",options==record.MemberEnd() ? eligible : flag(options->value,"command_enabled"),allocator);
+    request.AddMember("memory_only",options==record.MemberEnd() ? !eligible : flag(options->value,"memory_only"),allocator);
     const auto started = std::chrono::steady_clock::now();
     const auto processed = runtime.process(request);
     auto result = processed;
@@ -198,19 +238,11 @@ int contract(const char* weights, const char* goldenPath, bool benchmark) {
     compare(vectorEquals(field(record,"hidden_state"),runtime.hiddenState(observation),1.e-4,maxHidden),"hidden_state");
     decisions += result.status=="decision";
     ++steps;
-    if(!errors.empty()) {
-      ++mismatches;
-      if(mismatches<=10) {
-        std::cerr<<"golden line "<<lineNumber<<": mismatch in";
-        for(const auto& error:errors)
-          std::cerr<<' '<<error;
-        std::cerr<<" (actual status="<<result.status<<", reason="<<result.reason<<")\n";
-        }
-      }
+    report(errors,result);
     }
   require(!inEpisode && steps>0, "golden stream must contain complete episodes and at least one step");
   std::cout<<std::setprecision(10)<<"{\"steps\":"<<steps<<",\"episodes\":"<<episodes
-           <<",\"inferences\":"<<inferences<<",\"decisions\":"<<decisions<<",\"mismatches\":"<<mismatches
+           <<",\"inferences\":"<<inferences<<",\"decisions\":"<<decisions<<",\"arbitrations\":"<<arbitrations<<",\"mismatches\":"<<mismatches
            <<",\"max_features_error\":"<<maxFeatures<<",\"max_logits_error\":"<<maxLogits
            <<",\"max_hidden_error\":"<<maxHidden<<"}\n";
   if(benchmark) {

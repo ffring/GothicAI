@@ -81,6 +81,30 @@ bool equalNumber(const Value& value, double expected) {
   return value.IsNumber() ? value.GetDouble()==expected : value.IsBool() && double(value.GetBool())==expected;
   }
 
+bool sameObservation(const Value& left, const Value& right) {
+  // Python's dict/list equality also compares boolean and numeric values.
+  // Mask validation happens after this anchor check and still requires booleans.
+  if(left.IsBool() && right.IsNumber())
+    return double(left.GetBool())==right.GetDouble();
+  if(left.IsNumber() && right.IsBool())
+    return left.GetDouble()==double(right.GetBool());
+  if(left.IsArray() && right.IsArray()) {
+    if(left.Size()!=right.Size()) return false;
+    for(rapidjson::SizeType i=0; i<left.Size(); ++i)
+      if(!sameObservation(left[i],right[i])) return false;
+    return true;
+    }
+  if(left.IsObject() && right.IsObject()) {
+    if(left.MemberCount()!=right.MemberCount()) return false;
+    for(const auto& member:left.GetObject()) {
+      const auto found = right.FindMember(member.name);
+      if(found==right.MemberEnd() || !sameObservation(member.value,found->value)) return false;
+      }
+    return true;
+    }
+  return left==right;
+  }
+
 uint64_t integer(const Value& value, const std::string& name, uint64_t minimum = 0) {
   require(value.IsUint64() && value.GetUint64()>=minimum, "invalid integer "+name);
   return value.GetUint64();
@@ -521,7 +545,7 @@ BodyPolicyRuntime::Result BodyPolicyRuntime::arbitrate(const Value& row, uint64_
     }
   const auto& nativeSequence = get(row,"observation_seq");
   if(!nativeSequence.IsUint64() || nativeSequence.GetUint64()!=state.response.observationSeq || now.GetUint64()!=state.gameMs ||
-     !yes(get(row,"periodic")) || row!=state.observation) {
+     !yes(get(row,"periodic")) || !sameObservation(row,state.observation)) {
     result.reason = "periodic_anchor_mismatch";
     return result;
     }

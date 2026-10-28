@@ -8,6 +8,7 @@ beside each observations.jsonl. No game or running policy service is needed.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import gzip
 import hashlib
 import json
@@ -123,6 +124,39 @@ def step_record(runtime, request: dict, response: dict) -> dict:
                              np.asarray(hidden, dtype=np.float32).reshape(256)).tolist()}
 
 
+def step_response(runtime, driver, request: dict) -> dict:
+    """Replay the fixture's explicit non-memory-only locked observation."""
+    if "process_options" not in request:
+        return driver.handle(request)
+    row = request["observation"]
+    identity = tuple(row[key] for key in ("session_epoch", "world_epoch", "entity_id", "control_generation"))
+    previous = driver.streams.get(row["entity_id"])
+    sequence = previous[1] + 1 if previous is not None and previous[0] == identity else 1
+    processed = runtime.process({"observation": row, "stream_seq": sequence,
+                                 "now_game_ms": request["now_game_ms"], **request["process_options"]})
+    if runtime.active.get(row["entity_id"]) == identity:
+        driver.streams[row["entity_id"]] = (identity, sequence)
+    if processed["status"] == "fallback":
+        result = processed
+    elif row.get("can_decide") is True and row.get("action_mask_valid") is True:
+        result = runtime.arbitrate(row, stream_seq=sequence)
+    else:
+        result = {"status": "locked", "action_id": None, "reason": processed["reason"]}
+    return {"process": processed, **{key: result[key] for key in ("status", "action_id", "reason")}}
+
+
+def arbitration_record(runtime, observation: dict, stream_seq: int, max_anchor_age_game_ms: int = 67) -> dict:
+    """Golden arbitration output and memory, including rejected anchor queries."""
+    identity = tuple(observation[key] for key in ("session_epoch", "world_epoch", "entity_id", "control_generation"))
+    state = runtime.states.get(identity)
+    hidden = state.hidden if state is not None else None
+    return {"kind": "arbitrate", "observation": observation, "stream_seq": stream_seq,
+            "max_anchor_age_game_ms": max_anchor_age_game_ms,
+            **runtime.arbitrate(observation, stream_seq=stream_seq, max_anchor_age_game_ms=max_anchor_age_game_ms),
+            "hidden_state": (np.zeros(256, dtype=np.float32) if hidden is None else
+                             np.asarray(hidden, dtype=np.float32).reshape(256)).tolist()}
+
+
 def golden(checkpoint: Path, observations: list[Path], output: Path) -> dict:
     output = Path(output)
     sources = {Path(checkpoint).resolve(), Path(checkpoint).with_suffix(Path(checkpoint).suffix + ".json").resolve()}
@@ -165,7 +199,8 @@ def check(bodynet: Path, expected: Path) -> dict:
 
     runtime = NumpyRuntime(BodyNet(bodynet))
     driver = RuntimeReference(runtime)
-    summary = {"episodes": 0, "steps": 0, "mismatches": 0, "max_logits_error": 0.0, "max_hidden_error": 0.0}
+    summary = {"episodes": 0, "steps": 0, "arbitrations": 0, "mismatches": 0,
+               "max_logits_error": 0.0, "max_hidden_error": 0.0}
     first_mismatch = None
     in_episode = False
     with gzip.open(expected, "rt", encoding="utf-8") as stream:
@@ -183,17 +218,30 @@ def check(bodynet: Path, expected: Path) -> dict:
                 in_episode = kind == "reset"
                 summary["episodes"] += kind == "reset"
                 continue
-            if kind != "step" or not in_episode:
-                raise ValueError(f"golden line {number}: step inside an episode required")
-            request = {"id": number, "cmd": "step", "observation": record["observation"],
-                       "now_game_ms": record["now_game_ms"]}
-            actual = step_record(runtime, request, driver.handle(request))
+            if kind not in ("step", "arbitrate") or not in_episode:
+                raise ValueError(f"golden line {number}: step/arbitrate inside an episode required")
+            if kind == "arbitrate":
+                actual = arbitration_record(runtime, record["observation"], record["stream_seq"],
+                                            record["max_anchor_age_game_ms"])
+                exact_keys = ("status", "action_id", "reason", "hidden_reset", "model_processed",
+                              "effective_action_mask", "raw_action_mask")
+                vectors = (("hidden_state", 256),)
+                summary["arbitrations"] += 1
+            else:
+                request = {"id": number, "cmd": "step", "observation": record["observation"],
+                           "now_game_ms": record["now_game_ms"]}
+                if "process_options" in record:
+                    request["process_options"] = record["process_options"]
+                actual = step_record(runtime, request, step_response(runtime, driver, request))
+                exact_keys = ("stream_seq", "status", "action_id", "reason", "hidden_reset", "reset_reason",
+                              "model_processed", "selected_action_id", "sequence_dt_game_ms")
+                vectors = (("features", 184), ("logits", 12), ("hidden_state", 256))
+                summary["steps"] += 1
             errors = []
-            for key in ("stream_seq", "status", "action_id", "reason", "hidden_reset", "reset_reason", "model_processed",
-                        "selected_action_id", "sequence_dt_game_ms"):
-                if record[key] != actual[key]:
+            for key in exact_keys:
+                if (key in record) != (key in actual) or record.get(key) != actual.get(key):
                     errors.append(key)
-            for key, size in (("features", 184), ("logits", 12), ("hidden_state", 256)):
+            for key, size in vectors:
                 left, right = record[key], actual[key]
                 if left is None or right is None:
                     if left is not right:
@@ -211,7 +259,6 @@ def check(bodynet: Path, expected: Path) -> dict:
                 if key in ("logits", "hidden_state"):
                     metric = "max_logits_error" if key == "logits" else "max_hidden_error"
                     summary[metric] = max(summary[metric], error)
-            summary["steps"] += 1
             if errors:
                 summary["mismatches"] += 1
                 first_mismatch = first_mismatch or f"golden line {number}: mismatch in {', '.join(errors)}"
@@ -259,12 +306,19 @@ def fixture(output: Path) -> dict:
     weights.write_bytes(json.dumps(header, separators=(",", ":"), allow_nan=False).encode() + b"\n" + payload)
     runtime = NumpyRuntime(BodyNet(weights))
     driver = RuntimeReference(runtime)
-    summary = {"episodes": 4, "steps": 0, "decisions": 0, "memory_only": 0,
-               "empty_raw_masks": 0, "hidden_resets": 0, "fallbacks": {}}
+    summary = {"episodes": 4, "steps": 0, "arbitrations": 0, "decisions": 0, "memory_only": 0,
+               "empty_raw_masks": 0, "hidden_resets": 0, "fallbacks": {}, "outcomes": {}}
 
     with gzip.open(output / "golden.jsonl.gz", "wt", encoding="utf-8") as stream:
         def write(record):
             stream.write(json.dumps(record, separators=(",", ":"), allow_nan=False) + "\n")
+            if record["kind"] in ("step", "arbitrate"):
+                outcome = record["status"] + "/" + record["reason"]
+                summary["outcomes"][outcome] = summary["outcomes"].get(outcome, 0) + 1
+
+        def arbitrate(observation, sequence):
+            write(arbitration_record(runtime, observation, sequence))
+            summary["arbitrations"] += 1
 
         for episode in range(summary["episodes"]):
             epochs = {"session_epoch": 7 + episode, "world_epoch": 9 + episode}
@@ -317,7 +371,9 @@ def fixture(output: Path) -> dict:
                     # Rejections before state.sequence advances create a true stream gap
                     # on the following row when replayed by the standard golden driver.
                     if entity == 11:
-                        if tick == 20:
+                        if tick == 2:
+                            row["can_decide"] = False
+                        elif tick == 20:
                             row["phase"] = "pre_native_primitive"
                         elif tick == 40:
                             row["sample_period_ms"] = 25
@@ -329,10 +385,16 @@ def fixture(output: Path) -> dict:
                             row["self"]["skill"] = "invalid"
                         elif tick == 110:
                             row["world_epoch"] -= 1
+                        elif tick == 120:
+                            row["action_mask"] = row["availability_mask"] = [True] + [False] * 11
                     request = {"id": summary["steps"] + 1, "cmd": "step", "observation": row,
                                "now_game_ms": now + (150 if entity == 22 and tick == 50 else 0)}
-                    response = driver.handle(request)
+                    if entity == 11 and tick == 2:
+                        request["process_options"] = {"memory_only": False, "command_enabled": False}
+                    response = step_response(runtime, driver, request)
                     record = step_record(runtime, request, response)
+                    if "process_options" in request:
+                        record["process_options"] = request["process_options"]
                     write(record)
                     summary["steps"] += 1
                     summary["decisions"] += response["status"] == "decision"
@@ -342,6 +404,21 @@ def fixture(output: Path) -> dict:
                     if response["status"] == "fallback":
                         reason = response["reason"]
                         summary["fallbacks"][reason] = summary["fallbacks"].get(reason, 0) + 1
+                    if entity == 11:
+                        sequence = record["stream_seq"]
+                        if tick == 0:
+                            arbitrate({**row, "entity_id": 999}, sequence)
+                        elif tick == 1:
+                            arbitrate({**row, "t_game_ms": now + 68}, sequence)
+                            arbitrate({**row, "observation_seq": row["observation_seq"] + 1}, sequence)
+                            invalid = deepcopy(row)
+                            # Python anchor equality accepts bool/int numeric equality;
+                            # arbitration still requires actual boolean mask entries.
+                            invalid["action_mask"] = [int(bit) for bit in row["action_mask"]]
+                            arbitrate(invalid, sequence)
+                            arbitrate(row, sequence)
+                        elif tick in (2, 4):
+                            arbitrate(row, sequence)
             driver.handle({"id": 0, "cmd": "end_episode", **epochs})
             write({"kind": "end_episode", **epochs, "checkpoint_sha256": runtime.checkpoint_sha256})
     return summary
