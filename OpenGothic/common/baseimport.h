@@ -79,9 +79,16 @@ std::vector<RuntimeArchive> mountRuntime(zenkit::Vfs& vfs, const std::filesystem
 // and the content of every loose _work input. `mounted` is the engine's list.
 Identity identify(const std::filesystem::path& gothic);
 Identity identify(const std::filesystem::path& gothic, Files mounted);
-// base.json: the identity bound to dir/sources/sources.json by size and SHA-256.
-// Written last; a base without a matching manifest never matches.
+// The same source membership/order as identify, with sizes and modification times only.
+std::string snapshot(const std::filesystem::path& gothic);
+std::string snapshot(const std::filesystem::path& gothic, Files mounted);
+// Read a current importer identity without accessing the source installation.
+Identity readIdentity(const std::filesystem::path& dir);
+// base.json binds the source census and base-files.json by size and SHA-256.
+// Written last; the native manifest lists every base file with size and SHA-256.
 void writeBaseMetadata(const std::filesystem::path& dir, const Identity& identity);
-bool matches(const std::filesystem::path& dir, const Identity& identity);
+// Startup hashes JSON indexes and checks every payload size. Publication also hashes payloads.
+bool matches(const std::filesystem::path& dir, const Identity& identity, bool payloadHashes=false,
+             std::string* reason=nullptr);
 void build(const std::filesystem::path& gothic, const std::filesystem::path& out, const Progress& progress = {});
 }

@@ -88,6 +88,164 @@ void writeVdf(const fs::path& file, const std::vector<std::pair<std::string,std:
   vfs.save(disk.get(),zenkit::GameVersion::GOTHIC_2,time);
   }
 
+// The cache manifest and source snapshot can be exercised without reimporting the corpus.
+void writeBaseFixture(const fs::path& directory, const BaseImport::Identity& identity) {
+  write(directory/"sources/sources.json","{\"format\":\"gothic-sources\",\"version\":1}\n");
+  write(directory/"fixture.json","{\"fixture\":true}\n");
+  write(directory/"payload.bin","fixture payload");
+  BaseImport::writeBaseMetadata(directory,identity);
+  }
+
+fs::path pointerFile(const fs::path& cache, const fs::path& game) {
+  return cache/"current"/(BaseImport::sha256(fs::weakly_canonical(game).generic_string())+".json");
+  }
+
+void checkPointer(const fs::path& cache, const fs::path& game, const fs::path& base) {
+  const auto bytes=read(pointerFile(cache,game));
+  rapidjson::Document pointer;
+  pointer.Parse(bytes.c_str());
+  require(!pointer.HasParseError() && pointer.IsObject() && pointer.HasMember("base") &&
+          pointer["base"].IsObject() && pointer["base"].HasMember("path") &&
+          pointer["base"]["path"].IsString() && pointer["base"]["path"].GetString()==base.string(),
+          "current base pointer must remain complete JSON with the selected path");
+  }
+
+void snapshotSelection(const fs::path& root) {
+  const auto game=root/"game", cache=root/"cache";
+  fs::create_directories(game);
+  writeVdf(game/"Data/FIXTURE.VDF",{{"FIXTURE.TXT","fixture source"}},1000000000);
+  write(game/"_work/Data/Scripts/_compiled/FIXTURE.DAT","loose fixture");
+  setenv("OPENGOTHIC_BASE_CACHE",cache.c_str(),1);
+  setenv("OPENGOTHIC_BASE_STORE","",1);
+  unsetenv("OPENGOTHIC_BASE");
+  auto mounted=BaseImport::Files{{"FIXTURE.VDF",fs::file_size(game/"Data/FIXTURE.VDF")}};
+  auto identity=BaseImport::identify(game,mounted);
+  auto base=cache/identity.fingerprint;
+  writeBaseFixture(base,identity);
+  size_t identifies=0;
+  const auto observe=[&](std::string_view message) {
+    if(message=="base: identifying installation") ++identifies;
+    };
+  require(BaseStore::resolve(game,mounted,observe).path==base && identifies>0,
+          "first selection must identify the installation before writing its pointer");
+  checkPointer(cache,game,base);
+  auto pointer=read(pointerFile(cache,game));
+  identifies=0;
+  require(BaseStore::resolve(game,mounted,observe).path==base && identifies==0,
+          "matching installation snapshot must skip full source identification");
+  setenv("OPENGOTHIC_BASE",base.c_str(),1);
+  require(BaseStore::resolve(game,mounted,observe).path==base && identifies==0,
+          "explicit base with a matching snapshot must skip full source identification");
+  unsetenv("OPENGOTHIC_BASE");
+  const auto archive=game/"Data/FIXTURE.VDF";
+  fs::last_write_time(archive,fs::last_write_time(archive)+std::chrono::seconds(1));
+  require(BaseStore::resolve(game,mounted,observe).path==base && identifies>0,
+          "VDF mtime change must take the full identification path");
+  require(read(pointerFile(cache,game))!=pointer,"mtime change must refresh the pointer snapshot");
+  pointer=read(pointerFile(cache,game));
+  { std::ofstream append(archive,std::ios::binary|std::ios::app); append.put('x'); }
+  mounted.front().second=fs::file_size(archive);
+  identity=BaseImport::identify(game,mounted);
+  base=cache/identity.fingerprint;
+  writeBaseFixture(base,identity);
+  identifies=0;
+  require(BaseStore::resolve(game,mounted,observe).path==base && identifies>0,
+          "VDF size change must take the full path and select the new fingerprint");
+  require(read(pointerFile(cache,game))!=pointer,"size change must write a new pointer");
+  checkPointer(cache,game,base);
+  fs::rename(game/"Data",game/"saved-Data");
+  identifies=0;
+  require(BaseStore::resolve(game,{},observe).path==base && identifies==0,
+          "installation-free selection must use the pointer without source identification");
+  fs::remove_all(base);
+  const auto missing=[&](const fs::path& directory) {
+    std::string reason;
+    try { (void)BaseStore::resolve(directory,{},observe); }
+    catch(const std::exception& error) { reason=error.what(); }
+    require(reason.find(directory.string())!=std::string::npos && reason.find("OPENGOTHIC_BASE")!=std::string::npos,
+            "missing ready base must explain the game directory and explicit-base remedy: "+reason);
+    };
+  missing(game);
+  const auto empty=root/"no-pointer";
+  fs::create_directory(empty);
+  missing(empty);
+  // Restoring the installation allows ordinary cache resolution after pruning the pointer target.
+  fs::rename(game/"saved-Data",game/"Data");
+  writeBaseFixture(base,identity);
+  require(BaseStore::resolve(game,mounted,observe).path==base,"restored installation must recover a deleted pointer target");
+  int gate[2]; require(pipe(gate)==0,"snapshot gate failed");
+  std::cout.flush(); std::cerr.flush();
+  pid_t children[2];
+  for(auto& child:children) {
+    child=fork(); require(child>=0,"snapshot fork failed");
+    if(child==0) {
+      close(gate[1]); char token=0;
+      if(::read(gate[0],&token,1)!=1) _exit(2);
+      close(gate[0]);
+      try { (void)BaseStore::resolve(game,mounted,observe); _exit(0); }
+      catch(...) { _exit(1); }
+      }
+    }
+  close(gate[0]); require(::write(gate[1],"xx",2)==2,"snapshot gate write failed"); close(gate[1]);
+  for(const auto child:children) {
+    int status=0;
+    require(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0,
+            "concurrent pointer writer failed");
+    }
+  checkPointer(cache,game,base);
+  std::cout << "snapshot selection: zero source identifies on repeat/explicit/offline; VDF mtime/size refresh; missing/pruned pointer; two atomic writers verified\n";
+  }
+
+
+void offlineResources(const fs::path& source, const fs::path& reference, const fs::path& root,
+                      const BaseImport::Files& mounted) {
+  std::cout.flush(); std::cerr.flush();
+  const auto child=fork(); require(child>=0,"offline Resources fork failed");
+  if(child==0) {
+    try {
+      const auto game=root/"game", cache=root/"cache";
+      fs::create_directories(game);
+      std::vector<fs::path> installationDirectories;
+      for(const auto& directory:fs::directory_iterator(source)) {
+        auto name=directory.path().filename().string();
+        for(auto& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
+        if(name!="DATA" && name!="_WORK") continue;
+        const auto targetDirectory=game/directory.path().filename();
+        fs::create_directories(targetDirectory);
+        installationDirectories.push_back(targetDirectory);
+        for(const auto& entry:fs::recursive_directory_iterator(directory.path())) {
+          const auto target=game/entry.path().lexically_relative(source);
+          if(entry.is_directory()) fs::create_directories(target);
+          else fs::create_symlink(fs::absolute(entry.path()),target);
+          }
+        }
+      setenv("OPENGOTHIC_BASE_CACHE",cache.c_str(),1);
+      setenv("OPENGOTHIC_BASE_STORE","",1);
+      setenv("OPENGOTHIC_BASE",reference.c_str(),1);
+      require(BaseStore::resolve(game,mounted,[](std::string_view) {}).path==reference,
+              "offline Resources fixture did not write its pointer");
+      const auto path=game.string();
+      const char* arguments[]={"gothic-base-store-contract","-g",path.c_str()};
+      CommandLine commandLine(3,arguments);
+      // CommandLine's installation prerequisite remains P18b; this contract starts at loadVdfs.
+      for(const auto& directory:installationDirectories) fs::remove_all(directory);
+      unsetenv("OPENGOTHIC_BASE");
+      {
+        Resources resources;
+        Resources::loadVdfs({},true);
+        require(Resources::worldBaseDir("NEWWORLD.ZEN")==reference/"worlds/NEWWORLD",
+                "offline Resources did not reach the native base after all family checks");
+      }
+      _exit(0);
+      }
+    catch(const std::exception& error) { std::cerr << "offline Resources: " << error.what() << std::endl; _exit(1); }
+    }
+  int status=0;
+  require(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0,
+          "Resources::loadVdfs must complete without Data or _work using the pointer identity");
+  std::cout << "offline Resources: loadVdfs completed every native family check using base.json identity\n";
+  }
+
 std::string le32(uint32_t v) {
   std::string s(4,'\0');
   for(size_t i=0;i<4;++i) s[i]=char((v>>(8*i))&0xFF);
@@ -545,23 +703,36 @@ int main() {
     // P10: the manifest of selected remaining inputs is reproducible from the installation.
     require(BaseImport::convertSources(game,reference/"sources",true)==0,"reference source manifest differs");
     Temporary temporary;
-    // base.json binds the manifest: missing, corrupt or replaced manifests do not match.
+    // Startup verifies the manifest and indices while payload SHA remains a publication/read check.
     {
     const auto copy=temporary.path/"manifest-binding";
-    fs::create_directories(copy/"sources");
-    fs::copy_file(reference/"base.json",copy/"base.json");
-    fs::copy_file(reference/"sources/sources.json",copy/"sources/sources.json");
-    require(BaseImport::matches(copy,identity),"copied base.json and manifest must match");
-    auto text=read(copy/"sources/sources.json");
-    fs::remove(copy/"sources/sources.json");
-    require(!BaseImport::matches(copy,identity),"base without its manifest matched");
-    text[text.size()/2]=char(text[text.size()/2]^1);
-    write(copy/"sources/sources.json",text);
-    require(!BaseImport::matches(copy,identity),"corrupt manifest matched");
-    write(copy/"sources/sources.json","{\"format\":\"gothic-sources\",\"version\":1}\n");
-    require(!BaseImport::matches(copy,identity),"replaced manifest matched");
+    writeBaseFixture(copy,identity);
+    std::string reason;
+    require(BaseImport::matches(copy,identity,false,&reason),"fixture manifest must match: "+reason);
+    const auto rejected=[&](const char* path) {
+      reason.clear();
+      require(!BaseImport::matches(copy,identity,false,&reason) && !reason.empty() && reason.find(path)!=std::string::npos,
+              "damaged base must report its failed path: "+reason);
+      };
+    const auto index=read(copy/"fixture.json");
+    write(copy/"fixture.json","{\"fixture\":fals}\n");
+    rejected("fixture.json");
+    write(copy/"fixture.json",index);
+    const auto payload=read(copy/"payload.bin");
+    fs::remove(copy/"payload.bin"); rejected("payload.bin");
+    write(copy/"payload.bin",payload+"x"); rejected("payload.bin");
+    write(copy/"payload.bin",payload);
+    const auto manifest=read(copy/"base-files.json");
+    write(copy/"base-files.json",manifest+" "); rejected("base-files.json");
+    write(copy/"base-files.json",manifest);
+    // Same-size payload damage is deferred at startup but checked for copies/publication.
+    auto damaged=payload; damaged.back()=char(damaged.back()^1); write(copy/"payload.bin",damaged);
+    require(BaseImport::matches(copy,identity,false,&reason),"startup unexpectedly hashed payload");
+    require(!BaseImport::matches(copy,identity,true,&reason) && reason.find("payload.bin")!=std::string::npos,
+            "full payload verification must report a same-size corruption");
     }
-    std::cout << "source manifest: verified; missing, corrupt and replaced manifests rejected\n";
+    std::cout << "base manifest: corrupt index, missing/resized payload and altered manifest rejected with reasons\n";
+    snapshotSelection(temporary.path/"snapshots");
     syntheticSources(temporary.path/"synthetic-game");
     const auto cache=temporary.path/"cache", store=temporary.path/"store";
     const auto base=cache/identity.fingerprint;
@@ -578,6 +749,7 @@ int main() {
       if(entry.is_regular_file() && name.ends_with(".VDF")) mounted.emplace_back(name,entry.file_size());
       }
     require(BaseImport::identify(game,mounted).json==identity.json,"archive identity differs");
+    offlineResources(game,reference,temporary.path/"offline-resources",mounted);
     const char* args[]={"gothic-base-store-contract","-g",game};
     CommandLine commandLine(3,args);
     zenkit::Logger::set(zenkit::LogLevel::ERROR,Resources::zenkitLog);
@@ -718,6 +890,9 @@ int main() {
     std::cout << "resource shutdown: completed while publication lock remained held\n";
     }
     select("cache");
+    fs::remove_all(base);
+    select("store");
+    checkPointer(cache,game,base);
     fs::remove_all(cache);
     select("store");
     equal(reference,base);
@@ -759,6 +934,7 @@ int main() {
       }
     require(imports==1 && hits==1,"two processes must produce exactly one import and one cache hit");
     equal(reference,base);
+    checkPointer(cache,game,base);
     std::cout << "concurrent processes: 2, imports: " << imports << ", cache hits: " << hits << '\n';
 
     const auto changedGame=temporary.path/"game";
@@ -864,7 +1040,8 @@ int main() {
       }
     select("cache");
     size_t directories=0;
-    for(const auto& entry:fs::directory_iterator(cache)) if(entry.is_directory()) ++directories;
+    for(const auto& entry:fs::directory_iterator(cache))
+      if(entry.is_directory() && entry.path().filename().string().size()==64) ++directories;
     require(directories==3,"cache must retain three fingerprints");
     setenv("OPENGOTHIC_BASE","",1);
     select("cache");
