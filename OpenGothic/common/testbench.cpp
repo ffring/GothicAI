@@ -11819,21 +11819,23 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const auto& mode=a[3];const auto& pelvis=a[4];
     if(enabled==nullptr || std::string_view(enabled)!="fixture" ||
        (count!=0 && count!=1 && count!=2 && count!=4 && count!=6 && count!=10) ||
-       (mode!="base" && mode!="full" && mode!="chain" && mode!="blade") ||
+       (mode!="base" && mode!="full" && mode!="chain" && mode!="blade" && mode!="game") ||
        (pelvis!="kinematic" && pelvis!="dynamic") || (substeps!=1 && substeps!=2) ||
        (count==0 && mode!="base")) {
-      arenaAbort("melee setup requires fixture flag, count 0/1/2/4/6/10, mode base/full/chain/blade, pelvis kinematic/dynamic, substeps 1/2");return;
+      arenaAbort("melee setup requires fixture flag, count 0/1/2/4/6/10, mode base/full/chain/blade/game, pelvis kinematic/dynamic, substeps 1/2");return;
       }
     if(!chooseRagdollArena(w,pl)) {arenaAbort("melee fixture needs an empty supported arena");return;}
     exec("clear 2500",w,pl,ctrl);
-    Gothic::settingsSetI("GAME","living_bodies",0);
+    // "game" keeps the ordinary living bodies the fighters have in play
+    if(mode!="game")
+      Gothic::settingsSetI("GAME","living_bodies",0);
     w.physic()->configureMeleeBench(substeps);
     bench.meleeMode=mode;bench.meleePelvis=pelvis;
     const auto symbol=w.script().findSymbolIndex("BDT_1013_BANDIT_L");
     const auto sword=w.script().findSymbolIndex("ItMw_1h_Common_01");
     if(symbol==size_t(-1) || sword==size_t(-1)) {arenaAbort("melee fixture symbols missing");return;}
     const auto bodyMode=mode=="full" ? Npc::MeleeBenchMode::Full : mode=="chain" ? Npc::MeleeBenchMode::Chain :
-                        mode=="blade" ? Npc::MeleeBenchMode::Blade : Npc::MeleeBenchMode::Base;
+                        mode=="blade" ? Npc::MeleeBenchMode::Blade : mode=="game" ? Npc::MeleeBenchMode::Off : Npc::MeleeBenchMode::Base;
     for(int i=0;i<count;++i) {
       auto* npc=w.addNpc(symbol,bench.ragdollArenaPlaces[size_t(i)+5]);
       if(!npc) {arenaAbort("melee NPC insertion failed");return;}
@@ -11870,8 +11872,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.meleeSteady=true;
     }
   else if(c=="melee-physics" && a.size()==2 && a[1]=="brawl") {
-    if(!bench.meleeFixture || bench.meleeMode!="base" || bench.crew.size()!=6) {
-      arenaAbort("melee brawl requires the six-actor base fixture");return;
+    if(!bench.meleeFixture || (bench.meleeMode!="base" && bench.meleeMode!="game") || bench.crew.size()!=6) {
+      arenaAbort("melee brawl requires the six-actor base or game fixture");return;
       }
     const auto attack=w.script().findSymbolIndex("ZS_ATTACK");
     const auto tactic=w.script().findSymbol("FAI_HUMAN_MASTER");

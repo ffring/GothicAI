@@ -84,7 +84,7 @@ def main() -> int:
     parser.add_argument("--case", action="append", help="one matrix row: count:mode:pelvis:substeps")
     parser.add_argument("--shadow-pair", action="store_true", help="stage 1: ten native animated fighters, shadow OFF then ON")
     parser.add_argument("--hits-pair", action="store_true", help="stage 2: ten animated fighters, physics hits OFF then ON; shadow stays ON")
-    parser.add_argument("--posture-pair", action="store_true", help="stage 3: six native fighters, posture OFF then ON; physics hits stay ON")
+    parser.add_argument("--posture-pair", action="store_true", help="stage 3: six native fighters, posture and body reactions OFF then ON; physics hits stay ON")
     args = parser.parse_args()
     if sum((args.hits_pair, args.shadow_pair, args.posture_pair)) > 1:
         parser.error("choose one of --hits-pair, --shadow-pair or --posture-pair")
@@ -102,7 +102,8 @@ def main() -> int:
         cases = [f"{count}:base:kinematic:{steps}" for count in (0, 1, 2, 4, 10) for steps in (1, 2)] + cases
         cases += [f"10:blade:kinematic:{steps}" for steps in (1, 2)]
     if paired:
-        cases = ["6:base:kinematic:2" if args.posture_pair else "10:base:kinematic:2"]*2
+        # the posture pair keeps the fighters' ordinary living bodies: the blows push them
+        cases = ["6:game:kinematic:2" if args.posture_pair else "10:base:kinematic:2"]*2
     template = (ROOT/"scripts/bench/melee-physics.bench").read_text()
     results = []
     for index, case in enumerate(cases):
@@ -125,7 +126,9 @@ def main() -> int:
             env["MELEE_BLADE_SHADOW"] = str(index) if args.shadow_pair else "1"
             env["MELEE_PHYSICS_HITS"] = str(index) if args.hits_pair else "0" if args.shadow_pair else "1"
         if args.posture_pair:
+            # stage 3 as a whole: knockdown logic and the body's reaction to blows
             env["MELEE_POSTURE"] = str(index)
+            env["MELEE_REACTIONS"] = str(index)
         print(f"Running {case}", flush=True)
         with (take/"launcher.log").open("w") as stream:
             subprocess.run([str(ROOT/"scripts/bench.sh"), str(scenario), str(take)],
