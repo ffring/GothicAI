@@ -10,6 +10,16 @@ import pytest
 from gothic_ai import cli
 
 
+def test_story_graph_is_optional_before_the_game_publishes_its_base(tmp_path, monkeypatch, caplog):
+    game = tmp_path / "game"
+    game.mkdir()
+    monkeypatch.delenv("OPENGOTHIC_BASE", raising=False)
+    monkeypatch.setenv("OPENGOTHIC_BASE_CACHE", str(tmp_path / "cache"))
+    assert cli._story_graph(SimpleNamespace(story_graph=None), game) is None
+    assert f"no ready base for {game}" in caplog.text
+    assert "run the game once with the installation or set OPENGOTHIC_BASE" in caplog.text
+
+
 @pytest.mark.parametrize("scenario", [None, "m0"])
 def test_scenario_start_marker_waits_for_world_and_precedes_scenario(monkeypatch, caplog, tmp_path, scenario):
     real_serve = cli.serve

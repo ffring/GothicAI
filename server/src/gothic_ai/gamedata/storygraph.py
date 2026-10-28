@@ -203,15 +203,23 @@ def _ensure(selected: base.Base, cache: Path, tool: Path | None) -> Path | None:
     tool = tool or Path(os.environ.get("STORYGRAPH_TOOL", TOOL))
     stamp = cache.with_suffix(".base.json")
     source = {"base_fingerprint": selected.fingerprint, "algorithm_version": ALGORITHM_VERSION}
+    try:
+        previous = json.loads(stamp.read_text())
+    except (OSError, ValueError):
+        previous = {}
     if not tool.exists():
+        if (
+            cache.is_file()
+            and isinstance(previous, dict)
+            and all(previous.get(key) == value for key, value in source.items())
+        ):
+            log.warning("story graph: converter unavailable, converter freshness unverified: %s", tool)
+            return cache
         log.warning("story graph: converter unavailable: %s", tool)
         return None
     source["converter_sha256"] = hashlib.sha256(tool.read_bytes()).hexdigest()
-    try:
-        if cache.is_file() and json.loads(stamp.read_text()) == source:
-            return cache
-    except (OSError, ValueError):
-        pass
+    if cache.is_file() and previous == source:
+        return cache
     cache.parent.mkdir(parents=True, exist_ok=True)
     tmp = cache.with_suffix(".tmp")
     try:

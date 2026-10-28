@@ -204,6 +204,32 @@ def test_ensure_failed_rebuild_preserves_existing_cache(tmp_path, monkeypatch, c
     assert "failed" in caplog.text
 
 
+def test_ensure_without_converter_reuses_only_cache_for_current_base(tmp_path, monkeypatch, caplog):
+    game = tmp_path / "game"
+    game.mkdir()
+    _ready_base(tmp_path, monkeypatch)
+    tool = tmp_path / "missing-converter"
+    cache = tmp_path / "story.json"
+    cache.write_text(json.dumps(GRAPH), encoding="utf-8")
+    stamp = cache.with_suffix(".base.json")
+    source = {
+        "base_fingerprint": "a" * 64,
+        "algorithm_version": storygraph.ALGORITHM_VERSION,
+        "converter_sha256": "b" * 64,
+    }
+    stamp.write_text(json.dumps(source))
+    assert storygraph.ensure(game, cache, tool) == cache
+    assert "converter unavailable, converter freshness unverified" in caplog.text
+    for changed in (
+        {**source, "base_fingerprint": "c" * 64},
+        {**source, "algorithm_version": storygraph.ALGORITHM_VERSION + 1},
+    ):
+        stamp.write_text(json.dumps(changed))
+        assert storygraph.ensure(game, cache, tool) is None
+    stamp.unlink()
+    assert storygraph.ensure(game, cache, tool) is None
+
+
 def test_quest_and_its_nodes(graph):
     quest = graph.quest("mis_lobart_rueben")
     assert quest.title == "Убрать поле репы"

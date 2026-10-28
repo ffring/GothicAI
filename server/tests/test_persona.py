@@ -1,5 +1,8 @@
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -110,6 +113,75 @@ def test_the_game_lines_are_read_once(game_dir, monkeypatch):
     personas.get(BABERA, "Бабера-другая")  # another name: another persona, the same lines
     personas.get(EDDA, "Эдда")  # another npc: the same reading of the game
     assert calls == [game_dir]
+
+
+def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeypatch, caplog):
+    game, selected, cache = tmp_path / "game", tmp_path / "base", tmp_path / "cache"
+    game.mkdir()
+    monkeypatch.setenv("OPENGOTHIC_BASE", "")
+    monkeypatch.setenv("OPENGOTHIC_BASE_CACHE", str(cache))
+    monkeypatch.setenv("STORYGRAPH_TOOL", __file__)
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr(persona_module.time, "monotonic", lambda: clock.now)
+    load, attempts, exports = persona_module.game_lines, [], []
+
+    def counted(path):
+        attempts.append(clock.now)
+        return load(path)
+
+    text = "A recovered original speech line for the character."
+
+    def export(*args, **kwargs):
+        exports.append(args)
+        return SimpleNamespace(stdout=json.dumps({
+            "format": "gothic-ou-messages", "version": 1,
+            "source": {"path": "original-ou", "sha256": "b" * 64},
+            "native_sha256": "c" * 64,
+            "messages": [["DIA_BABERA_TEST_16_00.WAV", text]],
+        }).encode(), stderr=b"")
+
+    monkeypatch.setattr(persona_module, "game_lines", counted)
+    monkeypatch.setattr(ou.subprocess, "run", export)
+    personas = PersonaProvider(game, {})
+    personas.warm()
+    first = personas.get(BABERA, "Babera")
+    assert personas._original(BABERA) == ((), None)
+    assert text not in first.instructions and text not in personas.brief(BABERA, "Babera")
+    clock.now = 129.9
+    assert personas.get(BABERA, "Babera") is first
+    clock.now = 130.0
+    assert text not in personas.brief(BABERA, "Babera")
+    assert attempts == [100.0, 130.0] and exports == []
+    assert len(caplog.records) == 1
+    assert "no ready base" in caplog.text and "run the game once with the installation" in caplog.text
+
+    selected.mkdir()
+    manifest = json.dumps({"format": "gothic-base-files", "version": 1, "files": []}).encode()
+    (selected / "base-files.json").write_bytes(manifest)
+    (selected / "base.json").write_text(json.dumps({
+        "format": "gothic-base", "version": 2, "fingerprint": "a" * 64,
+        "manifest": {
+            "path": "base-files.json", "size": len(manifest),
+            "sha256": hashlib.sha256(manifest).hexdigest(),
+        },
+    }))
+    pointer = cache / "current" / f"{hashlib.sha256(str(game.resolve()).encode()).hexdigest()}.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(json.dumps({
+        "version": 1, "gothic": str(game.resolve()),
+        "base": {"path": str(selected), "fingerprint": "a" * 64},
+    }))
+    clock.now = 159.9
+    assert personas.get(BABERA, "Babera") is first
+    assert attempts == [100.0, 130.0]
+    clock.now = 160.0
+    recovered = personas.get(BABERA, "Babera")
+    assert text in recovered.instructions and recovered.voice == FEMALE_VOICE
+    assert text in personas.brief(BABERA, "Babera")
+    clock.now = 200.0
+    assert personas.get(BABERA, "Babera") is recovered
+    assert attempts == [100.0, 130.0, 160.0] and len(exports) == 1
+    assert len(caplog.records) == 1
 
 
 def test_brief_labels_the_card_as_its_own(game_dir):

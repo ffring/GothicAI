@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
@@ -233,27 +234,42 @@ class PersonaProvider:
         self.people = people  # the director's characters on this branch (cast.py), by id
         self._lines: dict[str, str] | None = None  # the game's dialog lines, read once (gamedata/ou.py)
         self._lines_read = False
+        self._lines_retry_at = 0.0
+        self._lines_warned = False
         self._lines_lock = threading.Lock()
 
     def warm(self) -> None:
         """Read the game's lines ahead, in a thread of its own (cli.py): reading takes seconds, and the first
         npc's persona would stall the event loop for them."""
-        try:
-            self._game_lines()
-        except RuntimeError as error:
-            log.warning("original lines are not read ahead: %s", error)
+        self._game_lines()
 
     def _game_lines(self) -> dict[str, str] | None:
         with self._lines_lock:
-            if not self._lines_read and self.game_dir is not None:
-                self._lines = game_lines(self.game_dir)
-                self._lines_read = True
+            if (
+                not self._lines_read
+                and self.game_dir is not None
+                and time.monotonic() >= self._lines_retry_at
+            ):
+                try:
+                    self._lines = game_lines(self.game_dir)
+                except RuntimeError as error:
+                    self._lines_retry_at = time.monotonic() + 30.0
+                    if not self._lines_warned:
+                        log.warning("original lines unavailable: %s", error)
+                        self._lines_warned = True
+                else:
+                    self._lines_read = True
+                    self._original.cache_clear()
+                    self._get.cache_clear()
             return self._lines
 
     def get(self, npc: str, name: str) -> Persona:
         npc = npc.upper()
         person = self.people(npc)
-        return self._get(npc, name) if person is None else self._person(npc, name, person)
+        if person is not None:
+            return self._person(npc, name, person)
+        self._game_lines()
+        return self._get(npc, name)
 
     def brief(self, npc: str, name: str) -> str:
         """Who the npc is, for a prompt written for someone else (a scene of two, gossip.py). Its card speaks
@@ -268,6 +284,7 @@ class PersonaProvider:
                 ]
                 + ([person.past] if person.past else [])
             )
+        self._game_lines()
         samples, index = self._original(npc)
         whom = "неё самой" if index in FEMALE_INDEXES else "него самого"
         parts = [
