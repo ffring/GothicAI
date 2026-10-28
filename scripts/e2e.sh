@@ -51,6 +51,10 @@
 #       DECIDER_URL, or a fixed stand-in); with QUICK_URL the words are the quick model's line, at once
 #   neural: a one-handed bandit fights the hero under the P30 body pilot through the full lease cycle;
 #       requires a new game, >=10 decisions, no fallback, engine step p99 <=2000 us
+#   neural-still: BDT_1013 attacks the hero who stands still with a drawn sword (the surrender_live
+#       setup without a model), GOTHIC_NEURAL_STILL_RUNS=20 loads of one save; P30 must hit within 30 s
+#       (a run where native struck before the lease passes if P30 then held the body <10 s); actions,
+#       distance and masks per run in neural_still.jsonl; GOTHIC_NEURAL_STILL_NPC picks the npc
 #   neural-companion: the bandit attacks the hero's swordsman companion, >=10 decisions (service >=6), no fallback,
 #       a companion target in the fight summary, natural fight end and confirmed release
 #   neural-group: three one-handed bandits fight the hero and his swordsman companion under P30 at once;
@@ -409,13 +413,13 @@ if [[ "${GOTHIC_SOAK_CONTROL:-0}" == 1 && "$SCENARIO" != neural-soak ]]; then
 fi
 E2E_DEFAULT_TIMEOUT=240
 if [[ "$SCENARIO" == memprobe ]]; then E2E_DEFAULT_TIMEOUT=1200; fi
-if [[ "$SCENARIO" == surrender_live ]]; then E2E_DEFAULT_TIMEOUT=1200; fi
+if [[ "$SCENARIO" == surrender_live || "$SCENARIO" == neural-still ]]; then E2E_DEFAULT_TIMEOUT=1200; fi
 TIMEOUT="${TIMEOUT:-$E2E_DEFAULT_TIMEOUT}"
 if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 && "$SCENARIO" != tts ]]; then
   echo 'GOTHIC_TTS_RECORD requires SCENARIO=tts' >&2
   exit 2
 fi
-if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = neural-group || "$SCENARIO" = neural-talk || "$SCENARIO" = neural-load || "$SCENARIO" = neural-soak ]]; then
+if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = neural-group || "$SCENARIO" = neural-talk || "$SCENARIO" = neural-load || "$SCENARIO" = neural-soak || "$SCENARIO" = neural-still ]]; then
   if [[ "$SCENARIO" == neural-soak && "${GOTHIC_SOAK_CONTROL:-0}" == 1 ]]; then
     BODY_ARGS=(--no-neural-body)
   else

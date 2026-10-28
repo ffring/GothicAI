@@ -622,6 +622,9 @@ struct Bench {
   std::string recName;
   uint64_t    recFrame  = 0;
   uint64_t    recStart  = 0;
+  std::string perfSegment;
+  uint64_t    perfFrame = 0;
+  bool        perfArmed = false;
   std::unique_ptr<VideoPipe> video;
   uint32_t    videoW    = 0;
   uint32_t    videoH    = 0;
@@ -12471,6 +12474,24 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     say("world check passed: "+a[1]);
     event("world_check","\"world\":"+jsonStr(w.name())+",\"pass\":true");
     }
+  else if(c=="perf") {
+#if defined(OPENGOTHIC_ENABLE_FRAME_PROFILE) && OPENGOTHIC_ENABLE_FRAME_PROFILE && defined(OPENGOTHIC_ENABLE_APP_CADENCE)
+    if(a.size()==3 && a[1]=="sample" && a[2].size()<64 && AppCadence::normalClock()) {
+      if(!bench.perfArmed) {
+        if(!AppCadence::arm(false)) {arenaAbort("perf sample could not arm app cadence");return;}
+        bench.perfArmed=true;
+        }
+      bench.perfSegment=a[2];bench.perfFrame=0;
+      FrameProfile::setActors(bench.crew);
+      event("perf_segment","\"segment\":"+jsonStr(bench.perfSegment)+
+        ",\"camera_cm\":"+ragdollVector(bench.camPos)+",\"actors\":"+std::to_string(bench.crew.size()));
+      }
+    else if(a.size()==2 && a[1]=="stop")bench.perfSegment.clear();
+    else arenaAbort("perf expects sample <segment under 64 bytes> or stop, after cadence normal");
+#else
+    arenaAbort("perf requires OPENGOTHIC_ENABLE_FRAME_PROFILE=ON and OPENGOTHIC_ENABLE_APP_CADENCE=ON");
+#endif
+    }
   else if(c=="wait") {
     bench.waitUntil = bench.time + uint64_t(num(a,1,1000));
     }
@@ -16768,6 +16789,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   if(!bench.loaded)
     loadScenario();
 
+  if(!bench.perfSegment.empty())FrameProfile::sample(bench.perfSegment,bench.perfFrame);
+
   auto world  = Gothic::inst().world();
   auto player = Gothic::inst().player();
   KnownRoadsBench::tick(Gothic::inst().checkLoading()==Gothic::LoadState::Idle?world:nullptr);
@@ -17131,6 +17154,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   bench.hasPrev = true;
 
   updateCamera(*world,subjectOf(*player));
+
+  if(bench.perfArmed)FrameProfile::sample(bench.perfSegment,bench.perfFrame++);
 
   if(bench.ragdollCoverageActive) {
     auto sample=ragdollCoverageSample(*world);

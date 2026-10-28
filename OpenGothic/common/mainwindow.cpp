@@ -10,6 +10,9 @@
 #include <Tempest/Application>
 #include <Tempest/Log>
 
+#include <cstdlib>
+#include <cstring>
+
 #include "ui/crosshair.h"
 #include "ui/dialogmenu.h"
 #include "ui/menuroot.h"
@@ -34,7 +37,9 @@
 using namespace Tempest;
 
 MainWindow::MainWindow(Device& device)
-  : Window(TestBench::isActive() ? Minimized : Maximized),device(device),swapchain(device,hwnd()),
+  : Window(TestBench::isActive() ?
+      (std::getenv("OPENGOTHIC_BENCH_VISIBLE")!=nullptr && std::strcmp(std::getenv("OPENGOTHIC_BENCH_VISIBLE"),"1")==0 ? Normal : Minimized) : Maximized),
+    device(device),swapchain(device,hwnd()),
     atlas(device),rootMenu(keycodec),inventory(keycodec),
     dialogs(inventory),document(keycodec),
     console(*this),
@@ -315,6 +320,8 @@ void MainWindow::resizeEvent(SizeEvent&) {
   for(auto& i:fence)
     i.wait();
   swapchain.reset();
+  if(TestBench::isActive())
+    Log::i("[bench] drawable ",swapchain.w(),"x",swapchain.h());
   if(auto camera = Gothic::inst().camera())
     camera->setViewport(swapchain.w(),swapchain.h());
 
@@ -1219,6 +1226,8 @@ void MainWindow::onStartLoading() {
 
 void MainWindow::onWorldLoaded() {
   dMouse = Point();
+  if(TestBench::isActive())
+    Log::i("[bench] drawable ",swapchain.w(),"x",swapchain.h());
   if(TestBench::isActive())
     if(auto* world = Gothic::inst().world())
       Log::i("[bench] world ready: ",world->name());
