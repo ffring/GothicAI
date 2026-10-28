@@ -6,6 +6,7 @@
 #include "world/world.h"
 #include "graphics/mesh/pose.h"
 #include "testbench.h"
+#include "frameprofile.h"
 
 #if defined(__GNUC__)
 #pragma GCC diagnostic push
@@ -622,6 +623,7 @@ std::vector<std::string> BodyController::drainPolicyJson() {
 void BodyController::onObservation(Npc& actor,std::string_view encoded) {
   auto l=lease(actor);
   if(!l || !l->policy || l->release) return;
+  FrameProfile::Scope timing(FrameProfile::Zone::BodyNet);
   Json row; row.Parse(encoded.data(),encoded.size());
   const auto reason=l->policy->process(row,actor.world().tickCount(),[&](int action,const rapidjson::Value& observation) {
     Json request=object();

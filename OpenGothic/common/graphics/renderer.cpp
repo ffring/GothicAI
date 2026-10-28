@@ -10,6 +10,7 @@
 #include "ui/inventorymenu.h"
 #include "ui/videowidget.h"
 #include "camera.h"
+#include "frameprofile.h"
 #include "gothic.h"
 #include "utils/string_frm.h"
 
@@ -561,6 +562,7 @@ void Renderer::draw(Attachment& result, Encoder<CommandBuffer>& cmd, uint8_t fId
     } else {
     cmd.setFramebuffer({{result, Vec4(), Tempest::Preserve}});
     }
+  FrameProfile::Scope uiTiming(FrameProfile::Zone::EncodeUi);
   cmd.setDebugMarker("UI");
   uiLayer.draw(cmd);
 
@@ -614,6 +616,7 @@ void Renderer::dbgDraw(Tempest::Painter& p) {
   }
 
 void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, uint8_t fId, WorldView& wview, const Camera& camera) {
+  FrameProfile::Scope mainTiming(FrameProfile::Zone::EncodeMain);
   //FIXME: those also needed to be refactor away
   const auto world     = Gothic::inst().world();
   const auto gameTime  = world!=nullptr ? world->time() : gtime(8,0);
@@ -664,8 +667,11 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
 
   if(settings.pathTraceEnabled) {
     drawPathtrace(cmd, wview, fId);
+    mainTiming.finish();
+    FrameProfile::Scope postTiming(FrameProfile::Zone::EncodePost);
     cmd.setDebugMarker("Tonemapping");
     drawTonemapping(result, cmd, wview);
+    postTiming.finish();
     wview.postFrameupdate();
     return;
     }
@@ -678,6 +684,7 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
 
   wview.visibilityPass(cmd, 1);
   drawGBuffer(cmd, fId, wview);
+  mainTiming.finish();
 
   drawShadowMap(cmd, fId, wview);
   prepareEpipolar(cmd, wview);
@@ -689,8 +696,9 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
 
   drawSwRT(cmd, wview);
 
-  prepareIrradiance(cmd, wview);
+  { FrameProfile::Scope timing(FrameProfile::Zone::EncodeMain); prepareIrradiance(cmd, wview); }
   prepareExposure(cmd, wview);
+  FrameProfile::Scope lightingTiming(FrameProfile::Zone::EncodeMain);
   prepareSSAO(cmd, wview);
   prepareFog (cmd, wview);
   prepareGi  (cmd, wview);
@@ -704,7 +712,9 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
   drawLightTreeDbg(sceneLinear, cmd, wview);
 
   stashSceneAux(cmd);
+  lightingTiming.finish();
 
+  FrameProfile::Scope waterTiming(FrameProfile::Zone::EncodeWater);
   drawGWater(cmd, wview);
 
   cmd.setFramebuffer({{sceneLinear, Tempest::Preserve, Tempest::Preserve}}, {zbuffer, Tempest::Preserve, Tempest::Preserve});
@@ -712,6 +722,7 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
   drawSunMoon(cmd, wview);
   cmd.setDebugMarker("Translucent");
   wview.drawTranslucent(cmd, fId);
+  waterTiming.finish();
 
   //drawHashDbg(sceneLinear, cmd, wview);
   drawProbesDbg(cmd, wview);
@@ -727,6 +738,7 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
   cmd.setFramebuffer({{sceneLinear, Tempest::Preserve, Tempest::Preserve}});
   drawReflections(cmd, wview);
   drawGizmo(cmd, wview);
+  FrameProfile::Scope postTiming(FrameProfile::Zone::EncodePost);
   if(camera.isInWater()) {
     cmd.setDebugMarker("Underwater");
     drawUnderwater(cmd, wview);
@@ -742,6 +754,7 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
     cmd.setDebugMarker("Tonemapping");
     drawTonemapping(result, cmd, wview);
     }
+  postTiming.finish();
 
   //drawRayQueryDbg(cmd, wview);
   //drawHashDbg(result, cmd, wview);
@@ -993,6 +1006,7 @@ void Renderer::drawLightsHud(Tempest::Encoder<Tempest::CommandBuffer>& cmd, cons
 void Renderer::drawSwRT(Tempest::Encoder<Tempest::CommandBuffer>& cmd, const WorldView& wview) {
   if(!settings.swrtEnabled)
     return;
+  FrameProfile::Scope timing(FrameProfile::Zone::EncodeMain);
 
   const auto& scene     = wview.sceneGlobals();
   const auto& bvh       = wview.landscape().bvh();
@@ -1178,6 +1192,7 @@ void Renderer::buildHiZ(Tempest::Encoder<Tempest::CommandBuffer>& cmd) {
 void Renderer::drawVsm(Tempest::Encoder<Tempest::CommandBuffer>& cmd, WorldView& wview) {
   if(!settings.vsmEnabled)
     return;
+  FrameProfile::Scope timing(FrameProfile::Zone::EncodeShadows);
 
   static bool omniLights = true;
   const bool directLight  = !settings.rtsmEnabled;
@@ -1314,6 +1329,7 @@ void Renderer::drawVsm(Tempest::Encoder<Tempest::CommandBuffer>& cmd, WorldView&
 void Renderer::drawRtsm(Tempest::Encoder<Tempest::CommandBuffer>& cmd, WorldView& wview) {
   if(!settings.rtsmEnabled)
     return;
+  FrameProfile::Scope timing(FrameProfile::Zone::EncodeShadows);
 
   const int RTSM_BIN_SIZE   = 32;
   const int RTSM_SMALL_TILE = 32;
@@ -1459,6 +1475,8 @@ void Renderer::drawRtsmOmni(Tempest::Encoder<Tempest::CommandBuffer>& cmd, World
   static bool omniLights = true;
   if(!omniLights)
     return;
+
+  FrameProfile::Scope timing(FrameProfile::Zone::EncodeShadows);
 
   //const uint32_t RTSM_SMALL_TILE = 32;
   const uint32_t RTSM_LIGHT_TILE = 64;
@@ -1680,6 +1698,7 @@ void Renderer::drawRtsmOmni(Tempest::Encoder<Tempest::CommandBuffer>& cmd, World
 void Renderer::drawSwr(Tempest::Encoder<Tempest::CommandBuffer>& cmd, WorldView& wview) {
   if(!settings.swrEnabled)
     return;
+  FrameProfile::Scope timing(FrameProfile::Zone::EncodeMain);
 
   const auto& scene        = wview.sceneGlobals();
   const auto& clusters     = wview.clusters();
@@ -1766,6 +1785,7 @@ void Renderer::drawGWater(Encoder<CommandBuffer>& cmd, WorldView& view) {
   }
 
 void Renderer::drawReflections(Encoder<CommandBuffer>& cmd, const WorldView& wview) {
+  FrameProfile::Scope timing(FrameProfile::Zone::EncodeWater);
   auto& pso = settings.zEnvMappingEnabled ? shaders.waterReflectionSSR : shaders.waterReflection;
 
   cmd.setDebugMarker("Reflections");
@@ -1795,6 +1815,7 @@ void Renderer::drawUnderwater(Encoder<CommandBuffer>& cmd, const WorldView& wvie
   }
 
 void Renderer::drawShadowMap(Encoder<CommandBuffer>& cmd, uint8_t fId, WorldView& view) {
+  FrameProfile::Scope timing(FrameProfile::Zone::EncodeShadows);
   for(uint8_t i=0; i<Resources::ShadowLayers; ++i) {
     if(shadowMap[i].isEmpty())
       continue;
@@ -2510,6 +2531,7 @@ void Renderer::prepareGi(Encoder<CommandBuffer>& cmd, WorldView& wview) {
   }
 
 void Renderer::prepareExposure(Encoder<CommandBuffer>& cmd, WorldView& wview) {
+  FrameProfile::Scope timing(FrameProfile::Zone::EncodePost);
   auto& scene = wview.sceneGlobals();
 
   auto sunDir = wview.sky().sunLight().dir();

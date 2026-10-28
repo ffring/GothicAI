@@ -3,6 +3,7 @@
 #include "dynamicworld.h"
 #include "ragdoll.h"
 #include "cloth.h"
+#include "frameprofile.h"
 #include "world/objects/item.h"
 #include "world/objects/npc.h"
 #include "world/world.h"
@@ -3084,6 +3085,7 @@ bool CollisionWorld::buoyancyEnabled() const { return buoyancy; }
 
 void CollisionWorld::prepareBuoyancy(std::vector<PhysicsNoise>& splashes) {
   if(!buoyancy || !waterSurface) return;
+  FrameProfile::Scope timing(FrameProfile::Zone::Water);
   forEachBuoyancyBody([&](BuoyancyBody& target) {
     if(target.initialized && !impl->system.GetBodyInterface().IsActive(target.id)) return;
     // Never hold a native body lock while querying the world: rayCast obtains
@@ -3167,6 +3169,7 @@ void CollisionWorld::prepareBuoyancy(std::vector<PhysicsNoise>& splashes) {
   }
 
 void CollisionWorld::applyBuoyancyStep(float seconds) {
+  FrameProfile::Scope timing(FrameProfile::Zone::Water);
   // Jolt invokes step listeners while all body mutexes are held. Water rays
   // ran before Update; this callback only touches our cached wet rigid bodies
   // through the NoLock interface and never invokes game callbacks.
@@ -3195,6 +3198,7 @@ void CollisionWorld::applyBuoyancyStep(float seconds) {
 
 void CollisionWorld::finishBuoyancy(float seconds) {
   if(!buoyancy) return;
+  FrameProfile::Scope timing(FrameProfile::Zone::Water);
   forEachBuoyancyBody([&](BuoyancyBody& target) {
     if(!target.inWater) return;
     {

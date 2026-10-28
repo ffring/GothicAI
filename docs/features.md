@@ -146,6 +146,7 @@ PR, который добавляет фичу или выключатель, д
 
 | Фича | Как выключить | Модуль | Проверка | Документ |
 |---|---|---|---|---|
+| Диагностика кадра: CPU-зоны и GPU-время Metal в CSV по попыткам | По умолчанию выключена; `OPENGOTHIC_ENABLE_FRAME_PROFILE=OFF` при сборке или убрать `OPENGOTHIC_FRAME_PROFILE` | `common/frameprofile.*`, точки систем/рендера, `lib/Tempest/Engine/gapi/metal*` | Сборки Mac/Linux; бенч `cloth-on` на Ryzen | [Frame profile](../scripts/bench/README.md#frame-profile) |
 | Возврат свободных страниц арен glibc после успешной загрузки мира; сохранение не вызывает trim | `OPENGOTHIC_MALLOC_TRIM=0`; только Linux с glibc | `common/gothic.cpp`, `Gothic::finishLoading` | e2e `memprobe`, `load` и `wave` по 8 циклов на Ryzen | [диагноз и починка RSS](../reports/engine/2026-10-19-rss-growth/README.md) |
 
 ## Движок: физика Jolt
