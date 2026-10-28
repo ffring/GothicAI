@@ -15,7 +15,6 @@ from gothic_ai.persona import (
     PersonaProvider,
 )
 from gothic_ai.tts import TtsClient
-from tests.test_dialogue_text import _binsafe_line
 from tests.test_tts import fake_tts
 
 LOBART, HILDA, MALETH, VINO, ANDRE = (
@@ -50,14 +49,10 @@ def _lines(key: str, voice: str, n: int) -> list[tuple[str, str]]:
 
 @pytest.fixture
 def game_dir(tmp_path: Path, monkeypatch) -> Path:
-    """OU.BIN with Babera's lines (and one of the hero's in her dialog), Edda's, Matteo's and Hilda's."""
+    """Native OU messages with Babera's, Edda's, Matteo's and Hilda's lines, without installation files."""
     lines = _lines("BABERA", "16", 6) + [("DIA_BABERA_TALK0_15_01", "Что нового?")]
     lines += _lines("EDDA", "17", 6) + _lines("MATTEO", "09", 6) + _lines("HILDA", "17", 6)
-    cutscene = tmp_path / "game" / "_work" / "Data" / "Scripts" / "CONTENT" / "CUTSCENE"
-    cutscene.mkdir(parents=True)
-    data = b"ZenGin Archive\nEND\n" + b"".join(_binsafe_line(name, text) for name, text in lines)
-    (cutscene / "OU.BIN").write_bytes(data)
-    # This pseudo archive tests persona behavior; strict native import is exercised on real archives.
+    (tmp_path / "game").mkdir()
     messages = [(f"{name}.WAV".encode("ascii"), text.encode("cp1251")) for name, text in lines]
     monkeypatch.setattr(ou, "native_messages", lambda game: messages)
     return tmp_path / "game"

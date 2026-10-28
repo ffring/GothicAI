@@ -9,7 +9,7 @@ import pytest
 from gothic_ai.authoring import ITEMS
 from gothic_ai.gamedata import ou, storygraph
 from gothic_ai.gamedata.storygraph import is_known, load, render, variables
-from tests.test_dialogue_text import parse_ou_bin
+from tests.test_dialogue_text import _ready_base, parse_ou_bin
 
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "OpenGothic" / "ai_bridge" / "storygraph" / "build" / "storygraph"
@@ -144,7 +144,7 @@ def graph(tmp_path):
     return load(path)
 
 
-def test_ensure_rebuilds_native_sources_and_publishes_atomically(tmp_path, monkeypatch):
+def test_ensure_caches_by_base_fingerprint_and_publishes_atomically(tmp_path, monkeypatch):
     game = tmp_path / "game"
     game.mkdir()
     tool = tmp_path / "storygraph"
@@ -155,8 +155,9 @@ def test_ensure_rebuilds_native_sources_and_publishes_atomically(tmp_path, monke
     before = cache.read_bytes()
 
     def rebuild(cmd, **kwargs):
-        assert cmd == [str(tool), str(game), "--json", str(cache.with_suffix(".tmp"))]
-        assert kwargs == {"check": True, "capture_output": True, "timeout": 1800}
+        assert cmd == [str(tool), str(tmp_path / "base"), "--json", str(cache.with_suffix(".tmp"))]
+        assert kwargs["env"]["OPENGOTHIC_BASE"] == str(tmp_path / "base")
+        assert kwargs["check"] and kwargs["capture_output"] and kwargs["timeout"] == 1800
         assert cache.read_bytes() == before
         sources = {
             "program_native_sha256": "a" * 64,
@@ -170,12 +171,14 @@ def test_ensure_rebuilds_native_sources_and_publishes_atomically(tmp_path, monke
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(storygraph.subprocess, "run", rebuild)
-    for _ in range(2):
-        # A newer cache and unchanged converter mtime cannot hide changed native inputs or OU.
+    for fingerprint in ("a", "b"):
+        _ready_base(tmp_path, monkeypatch, fingerprint=fingerprint * 64)
+        # A newer graph cannot hide a changed selected base.
         newer = tool.stat().st_mtime + 60
         os.utime(cache, (newer, newer))
         assert storygraph.ensure(game, cache, tool) == cache
         before = cache.read_bytes()
+        assert storygraph.ensure(game, cache, tool) == cache
         assert load(cache).node("DIA_LOBART_WORKNOW").description == "Я ищу работу."
     assert len(calls) == 2
     assert json.loads(cache.read_text())["sources"]["ou_native_sha256"] == "d" * 64
@@ -184,6 +187,7 @@ def test_ensure_rebuilds_native_sources_and_publishes_atomically(tmp_path, monke
 def test_ensure_failed_rebuild_preserves_existing_cache(tmp_path, monkeypatch, caplog):
     game = tmp_path / "game"
     game.mkdir()
+    _ready_base(tmp_path, monkeypatch)
     tool = tmp_path / "storygraph"
     tool.touch()
     cache = tmp_path / "story.json"
@@ -195,9 +199,9 @@ def test_ensure_failed_rebuild_preserves_existing_cache(tmp_path, monkeypatch, c
         raise subprocess.CalledProcessError(1, cmd)
 
     monkeypatch.setattr(storygraph.subprocess, "run", fail)
-    assert storygraph.ensure(game, cache, tool) == cache
+    assert storygraph.ensure(game, cache, tool) is None
     assert cache.read_bytes() == before
-    assert "cache freshness is unverified" in caplog.text
+    assert "failed" in caplog.text
 
 
 def test_quest_and_its_nodes(graph):
@@ -294,7 +298,8 @@ def test_the_real_game(tmp_path):
 
 @pytest.mark.skipif(not (TOOL.exists() and DAT.exists()), reason="needs the storygraph tool and the game")
 def test_native_ou_matches_the_complete_legacy_server_view(monkeypatch):
-    source = ou.find_ou_file(GAME_DIR)
+    cutscene = GAME_DIR / "_work/Data/Scripts/CONTENT/CUTSCENE"
+    source = next((p for p in cutscene.iterdir() if p.name.upper() == "OU.BIN"), None)
     if source is None:
         pytest.skip("needs the Python-selected physical OU.BIN")
     monkeypatch.setenv("STORYGRAPH_TOOL", str(TOOL))
@@ -350,14 +355,28 @@ def test_native_ou_metadata_and_overrides_preserve_the_graph(tmp_path):
         "ou_source_sha256": hashlib.sha256(selected.read_bytes()).hexdigest(),
         "converter_sha256": hashlib.sha256(TOOL.read_bytes()).hexdigest(),
     }
-    indexed = graph_with("--ou", str(selected))
-    assert indexed.pop("sources") == sources
-    assert indexed == graph
+    rejected = subprocess.run(
+        [str(TOOL), str(DAT), "--ou", str(selected)], capture_output=True, timeout=1800
+    )
+    assert rejected.returncode != 0 and b"--ou requires a native" in rejected.stderr
     arbitrary = tmp_path / "own-ou.json"
     arbitrary.write_bytes(record.read_bytes())
     own = graph_with("--ou", str(arbitrary))
     assert own.pop("sources") == {**sources, "ou_source_sha256": None}
     assert own == graph
+    empty_game = tmp_path / "game-without-installation"
+    empty_game.mkdir()
+    out = tmp_path / "without-installation.json"
+    subprocess.run(
+        [str(TOOL), str(empty_game), "--json", str(out)], check=True, capture_output=True, timeout=1800
+    )
+    without_installation = json.loads(out.read_text())
+    assert without_installation.pop("sources") == sources
+    assert without_installation == graph
+    exported_without_installation = subprocess.run(
+        [str(TOOL), str(empty_game), "--ou-messages"], check=True, capture_output=True, timeout=1800
+    )
+    assert json.loads(exported_without_installation.stdout) == exported
     raw = tmp_path / "external-ou.bin"
     raw.write_bytes(selected.read_bytes())
     failed = subprocess.run(
