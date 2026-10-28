@@ -92,6 +92,7 @@ MainWindow::MainWindow(Device& device)
     }
   else {
     rootMenu.processMusicTheme();
+    Log::i("Main menu ready: ",Gothic::inst().menuMain());
     }
 
   funcKey[2] = Shortcut(*this,Event::M_NoModifier,Event::K_F2);
@@ -1216,6 +1217,9 @@ void MainWindow::onStartLoading() {
 
 void MainWindow::onWorldLoaded() {
   dMouse = Point();
+  if(TestBench::isActive())
+    if(auto* world = Gothic::inst().world())
+      Log::i("[bench] world ready: ",world->name());
 
   if(Gothic::inst().isBenchmarkMode()) {
     if(auto world = Gothic::inst().world()) {

@@ -1,5 +1,6 @@
 #include "gamemusic.h"
 #include "gothic.h"
+#include "testbench.h"
 
 #include <Tempest/Sound>
 #include <Tempest/Log>
@@ -133,6 +134,8 @@ struct GameMusic::OpenGothicMusicProvider : GameMusic::MusicProvider {
         auto effect = computeTransitionEffect(tags, currentTags, theme.transtype);
         Dx8::DMUS_EMBELLISHT_TYPES em = computeEmbellishment(effect);
         mix.setMusic(m, em);
+        if(TestBench::isActive())
+          Log::i("Dx8 music: ",theme.file);
         currentTags = tags;
         }
       mix.setMusicVolume(theme.vol);
