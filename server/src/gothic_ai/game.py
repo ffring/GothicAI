@@ -92,6 +92,11 @@ from .protocol import (
 
 log = logging.getLogger(__name__)
 
+# the game's answer to a story effect on an npc whose body P30 owns (aibridge.cpp, story_effect): it lets go
+# at the next safe boundary, the effect is sent again
+BODY_RELEASING = "body control is releasing"
+STORY_EFFECT_RETRY = 0.05
+
 # requests answered with `result`
 _Request = (
     AttachCmd
@@ -900,8 +905,20 @@ class GameLink:
 
             await play_gate_effects(self, npc.upper(), effects)
             return
-        cmd = StoryEffectCmd(req=self._next_id("s"), npc=npc.upper(), effects=effects, check=check or None)
-        await self._request(cmd, timeout)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            cmd = StoryEffectCmd(
+                req=self._next_id("s"), npc=npc.upper(), effects=effects, check=check or None,
+            )
+            try:
+                await self._request(cmd, max(deadline - loop.time(), 0.1))
+                break
+            except GameError as err:
+                # P30 owns the npc's body: the game asked it to let go and ran none of the effects
+                if not str(err).startswith(BODY_RELEASING) or loop.time() + STORY_EFFECT_RETRY >= deadline:
+                    raise
+            await asyncio.sleep(STORY_EFFECT_RETRY)
         for e in effects:
             if e.get("do") == "party":
                 self.party[npc.upper()] = (next(self._party_writes), 1 if e.get("value") else 0)
