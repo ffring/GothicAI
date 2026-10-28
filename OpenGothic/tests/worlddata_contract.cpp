@@ -19,6 +19,7 @@
 #include <rapidjson/stringbuffer.h>
 #include <rapidjson/writer.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -348,10 +349,11 @@ struct WorldDataContract {
             "messageByName must retain lower_bound's first result");
     // Fixed mono PCM16 at 1000 Hz; zero frames selects the existing text-duration fallback.
     const auto pcm=[](uint32_t frames) {
-      std::vector<uint8_t> bytes{
+      static constexpr std::array<uint8_t,44> header{
         'R','I','F','F',0,0,0,0,'W','A','V','E','f','m','t',' ',16,0,0,0,1,0,1,0,
         0xE8,0x03,0,0,0xD0,0x07,0,0,2,0,16,0,'d','a','t','a',0,0,0,0};
-      bytes.resize(44+2*frames);
+      std::vector<uint8_t> bytes(header.size()+2*size_t(frames));
+      std::copy(header.begin(),header.end(),bytes.begin());
       for(size_t i=0;i<4;++i) {
         bytes[4+i]=uint8_t((36+2*frames)>>(8*i));
         bytes[40+i]=uint8_t((2*frames)>>(8*i));
