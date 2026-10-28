@@ -109,15 +109,30 @@ void writeMeleeShadow(const std::string& row) {
 void writeMeleePosture(const std::string& row) {
   static std::mutex mutex;
   std::lock_guard<std::mutex> guard(mutex);
-  static std::ofstream out("melee-posture.jsonl",std::ios::app);
+  static std::ofstream out;
+  static uintmax_t bytes = 0;
+  constexpr uintmax_t limit = 8*1024*1024;
+  const char* path = "melee-posture.jsonl";
+  const auto entry = "{\"arena_seed\":" + (BodyArena::enabled() ? std::to_string(BodyArena::seed()) : "null") + ',' + row.substr(1);
+  if(!out.is_open()) {
+    std::error_code error;
+    bytes = std::filesystem::file_size(path,error);
+    if(error)
+      bytes = 0;
+    out.open(path,std::ios::app);
+    }
+  if(bytes+entry.size()+1>limit) {
+    out.close();
+    std::error_code error;
+    std::filesystem::remove("melee-posture.previous.jsonl",error);
+    std::filesystem::rename(path,"melee-posture.previous.jsonl",error);
+    out.open(path,std::ios::trunc);
+    bytes = 0;
+    }
   if(out) {
-    out << "{\"arena_seed\":";
-    if(BodyArena::enabled())
-      out << BodyArena::seed();
-    else
-      out << "null";
-    out << ',' << row.substr(1) << '\n';
+    out << entry << '\n';
     out.flush();
+    bytes += entry.size()+1;
     }
   }
 
