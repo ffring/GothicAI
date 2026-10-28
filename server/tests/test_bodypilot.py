@@ -2278,7 +2278,7 @@ async def test_world_transition_ownership_poll_timeout_is_info_and_preserves_rea
         assert not any(record.levelname == "WARNING" for record in polls)
 
 
-async def test_heartbeat_and_event_requests_overlap_with_acknowledgement_gates():
+async def test_heartbeat_and_event_requests_overlap_with_acknowledgement_gates(monkeypatch):
     async with running() as rig:
         original_dispatch = rig.link._dispatch
         original_heartbeat = rig.link.body_heartbeat
@@ -2322,18 +2322,46 @@ async def test_heartbeat_and_event_requests_overlap_with_acknowledgement_gates()
         rig.link.body_heartbeat = heartbeat
         try:
             await rig.active()
-            assert rig.bridge.commands("body_acquire")[0]["timeout_ms"] == 2000
-            await eventually(lambda: len(heartbeat_receipts) >= 10, timeout=3.5)
-            sent = rig.bridge.command_times("body_heartbeat")
-            assert len(sent) >= 10 and sent[-1] - sent[0] >= 2.0
-            assert max(later - earlier for earlier, later in pairwise(sent)) < 0.400
-            assert len(rig.bridge.commands("body_events")) >= 3
-            assert len(paired_polls) == len(heartbeat_receipts) >= 10
-            assert all(ack >= poll for poll, ack in zip(paired_polls, heartbeat_receipts, strict=True))
-            assert rig.bridge.lease_expirations == 0
-            assert rig.link.body_owned("NPC")
-            assert not rig.bridge.commands("body_release")
-            assert not rig.policy.commands("end_episode")
+            await eventually(lambda: (
+                heartbeat_receipts and held_heartbeat is None and held_event is None
+                and rig.fight._last_events_success_at >= paired_polls[-1]
+            ))
+            first_heartbeat = len(rig.bridge.commands("body_heartbeat"))
+            first_receipt, first_poll = len(heartbeat_receipts), len(paired_polls)
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+
+            async def advance_clock():
+                nonlocal now
+                while True:
+                    # Drain fake bridge callbacks before advancing timer deadlines.
+                    # Host scheduling pauses must not become heartbeat cadence gaps.
+                    for _ in range(10):
+                        await asyncio.sleep(0)
+                    now += 0.005
+
+            with monkeypatch.context() as clock:
+                clock.setattr(loop, "time", lambda: now)
+                clock_task = asyncio.create_task(advance_clock())
+                try:
+                    assert rig.bridge.commands("body_acquire")[0]["timeout_ms"] == 2000
+                    await eventually(lambda: len(heartbeat_receipts) >= first_receipt + 10, timeout=3.5)
+                    sent = rig.bridge.command_times("body_heartbeat")[first_heartbeat:]
+                    assert len(sent) >= 10 and sent[-1] - sent[0] >= 2.0
+                    assert max(later - earlier for earlier, later in pairwise(sent)) < 0.400
+                    assert len(rig.bridge.commands("body_events")) >= 3
+                    assert len(paired_polls[first_poll:]) == len(heartbeat_receipts[first_receipt:]) >= 10
+                    assert all(ack >= poll for poll, ack in zip(
+                        paired_polls, heartbeat_receipts, strict=True,
+                    ))
+                    assert rig.bridge.lease_expirations == 0
+                    assert rig.link.body_owned("NPC")
+                    assert not rig.bridge.commands("body_release")
+                    assert not rig.policy.commands("end_episode")
+                finally:
+                    clock_task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await clock_task
         finally:
             rig.link._dispatch = original_dispatch
             rig.link.body_heartbeat = original_heartbeat
