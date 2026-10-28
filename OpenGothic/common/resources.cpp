@@ -220,8 +220,11 @@ void Resources::loadBase() {
   try {
     const auto gothic=std::filesystem::path(CommandLine::inst().rootPath());
     BaseImport::Files archives;
-    for(const auto& archive:BaseImport::runtimeArchives(gothic))
-      if(!archive.mod) archives.emplace_back(archive.name,archive.size);
+    const auto* explicitBase=std::getenv("OPENGOTHIC_BASE");
+    const auto* fingerprint=std::getenv("OPENGOTHIC_BASE_FINGERPRINT");
+    if((explicitBase && *explicitBase) || !fingerprint || !*fingerprint)
+      for(const auto& archive:BaseImport::runtimeArchives(gothic))
+        if(!archive.mod) archives.emplace_back(archive.name,archive.size);
     inst->automaticBase=BaseStore::resolve(gothic,archives,
                                          [](std::string_view message) {
       Log::i(message);

@@ -27,11 +27,14 @@ struct Selection {
 // forks its loaded world, which needs a single thread, and does not live long enough to own it.
 void setPublication(bool enabled);
 // A nonempty OPENGOTHIC_BASE selects and validates an explicit base.
+// Otherwise OPENGOTHIC_BASE_FINGERPRINT selects a ready cache/store base without an installation.
 // Empty has the same meaning as unset: automatic resolution.
 Selection resolve(const std::filesystem::path& gothic, const BaseImport::Files& mounted,
                   const BaseImport::Progress& log);
 // P17: the independently fingerprinted video part. OPENGOTHIC_BASE does not
-// select this part; its cache and store are below the normal cache/store roots.
+// select this part; OPENGOTHIC_VIDEOS_FINGERPRINT selects a ready part without an installation.
+// An explicitly empty video fingerprint disables selection; unset retains automatic selection.
+// Its cache and store are below the normal cache/store roots.
 Selection resolveVideos(const std::filesystem::path& gothic, const BaseImport::Progress& log,
                         std::shared_ptr<std::atomic_bool> cancelled={}, size_t workers=12);
 }

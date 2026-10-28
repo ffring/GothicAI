@@ -1,5 +1,6 @@
 import hashlib
 import json
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -115,6 +116,48 @@ def test_the_game_lines_are_read_once(game_dir, monkeypatch):
     assert calls == [game_dir]
 
 
+def test_get_waits_for_the_first_warm_read(game_dir, monkeypatch):
+    loading, resume, requesting, warmed = (threading.Event() for _ in range(4))
+    load = persona_module.game_lines
+
+    def blocked(path):
+        loading.set()
+        if not resume.wait(2.0):
+            raise TimeoutError("first OU read was not released")
+        return load(path)
+
+    monkeypatch.setattr(persona_module, "game_lines", blocked)
+    personas = PersonaProvider(game_dir, {})
+    result = []
+
+    def warm():
+        personas.warm()
+        warmed.set()
+
+    def get():
+        requesting.set()
+        result.append(personas.get(BABERA, "Babera"))
+
+    warmer = threading.Thread(target=warm, daemon=True)
+    reader = threading.Thread(target=get, daemon=True)
+    warmer.start()
+    try:
+        assert loading.wait(1.0)
+        reader.start()
+        assert requesting.wait(1.0)
+        reader.join(0.1)
+        assert reader.is_alive(), "get returned before the first OU read finished"
+    finally:
+        resume.set()
+        warmer.join(2.0)
+        if reader.ident is not None:
+            reader.join(2.0)
+    assert warmed.is_set() and not warmer.is_alive() and not reader.is_alive()
+    assert len(result) == 1
+    assert "Реплика babera номер" in result[0].instructions
+    assert result[0].voice == FEMALE_VOICE
+
+
 def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeypatch, caplog):
     game, selected, cache = tmp_path / "game", tmp_path / "base", tmp_path / "cache"
     game.mkdir()
@@ -124,6 +167,13 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
     clock = SimpleNamespace(now=100.0)
     monkeypatch.setattr(persona_module.time, "monotonic", lambda: clock.now)
     load, attempts, exports = persona_module.game_lines, [], []
+    thread_class, workers = threading.Thread, []
+    exporting, resume = threading.Event(), threading.Event()
+
+    def worker(**kwargs):
+        thread = thread_class(**kwargs)
+        workers.append(thread)
+        return thread
 
     def counted(path):
         attempts.append(clock.now)
@@ -133,6 +183,8 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
 
     def export(*args, **kwargs):
         exports.append(args)
+        exporting.set()
+        assert resume.wait(2.0), "get/brief waited for the background OU export"
         return SimpleNamespace(stdout=json.dumps({
             "format": "gothic-ou-messages", "version": 1,
             "source": {"path": "original-ou", "sha256": "b" * 64},
@@ -141,6 +193,7 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
         }).encode(), stderr=b"")
 
     monkeypatch.setattr(persona_module, "game_lines", counted)
+    monkeypatch.setattr(persona_module.threading, "Thread", worker)
     monkeypatch.setattr(ou.subprocess, "run", export)
     personas = PersonaProvider(game, {})
     personas.warm()
@@ -151,6 +204,8 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
     assert personas.get(BABERA, "Babera") is first
     clock.now = 130.0
     assert text not in personas.brief(BABERA, "Babera")
+    workers[-1].join(2.0)
+    assert not workers[-1].is_alive()
     assert attempts == [100.0, 130.0] and exports == []
     assert len(caplog.records) == 1
     assert "no ready base" in caplog.text and "run the game once with the installation" in caplog.text
@@ -175,6 +230,15 @@ def test_missing_base_retries_without_breaking_cached_personas(tmp_path, monkeyp
     assert personas.get(BABERA, "Babera") is first
     assert attempts == [100.0, 130.0]
     clock.now = 160.0
+    try:
+        assert personas.get(BABERA, "Babera") is first
+        assert exporting.wait(1.0)
+        assert text not in personas.brief(BABERA, "Babera")
+        assert personas.get(BABERA, "Babera") is first
+    finally:
+        resume.set()
+        workers[-1].join(2.0)
+    assert not workers[-1].is_alive()
     recovered = personas.get(BABERA, "Babera")
     assert text in recovered.instructions and recovered.voice == FEMALE_VOICE
     assert text in personas.brief(BABERA, "Babera")
