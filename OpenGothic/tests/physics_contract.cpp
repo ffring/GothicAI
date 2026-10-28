@@ -10,6 +10,7 @@
 #include "graphics/bounds.h"
 #include "game/serialize.h"
 #include "game/damagecalculator.h"
+#include "game/meleeimpact.h"
 #include "world/objects/npc.h"
 #include "gothic.h"
 
@@ -3915,6 +3916,44 @@ namespace {
     }
 
   void testContracts() {
+    {
+      using MeleeImpact::Weapon;
+      const auto fist=MeleeImpact::impulse(Weapon::Fist,{600,800,0},90);
+      requireNear(fist.x,9.f,.0001f,"fist impulse must convert world cm/s into N s");
+      requireNear(fist.y,12.f,.0001f,"impulse must follow the contact velocity direction");
+      requireNear(MeleeImpact::impulse(Weapon::OneHand,{1000,0,0},0).length(),12.5f,.0001f,
+                  "one-hand impulse must use 2.5 kg and the glancing edge factor");
+      requireNear(MeleeImpact::impulse(Weapon::TwoHand,{1000,0,0},30).length(),30.f,.0001f,
+                  "two-hand impulse must use 4 kg and the sine of the blade angle");
+      const auto capped=MeleeImpact::impulse(Weapon::TwoHand,{-6000,0,8000},90);
+      requireNear(capped.length(),40.f,.0001f,"melee impulse magnitude must be capped at 40 N s");
+      requireNear(capped.x,-24.f,.0001f,"the impulse cap must retain contact direction");
+      requireNear(MeleeImpact::impulse(Weapon::Fist,{},90).length(),0.f,.0001f,
+                  "a motionless blade must not add an impulse");
+
+      MeleeImpact::Posture posture;
+      require(!posture.hit(10,75,1000),"a quarter-threshold impulse must not knock down");
+      requireNear(posture.value,25.f,.0001f,"posture must accumulate in units of body-mass-scaled impulse");
+      posture.tick(2500,1500);
+      requireNear(posture.value,25.f,.0001f,"posture must retain the full 1500 ms recovery delay");
+      posture.tick(2750,500);
+      requireNear(posture.value,17.5f,.0001f,"recovery must count only time after the hit grace period");
+      posture.tick(3750,1000);
+      requireNear(posture.value,0.f,.0001f,"posture recovery must stop at zero");
+      require(!posture.hit(39,75,4000),"posture just below 100 must not knock down");
+      require(posture.hit(1,75,4000),"posture must knock down exactly at 100");
+      requireNear(posture.value,100.f,.0001f,"posture must stop at 100");
+      posture.recover(5000);
+      requireNear(posture.value,0.f,.0001f,"getting up must reset posture");
+      require(!posture.hit(40,75,5000),"getting up must protect against another knockdown");
+      requireNear(posture.value,60.f,.0001f,"post-rise immunity must cap accumulating posture at 60");
+      require(!posture.hit(40,75,8999),"post-rise immunity must cover the first 3999 ms");
+      require(posture.hit(16,75,9000),"post-rise immunity must expire at 4000 ms");
+      posture.reset();
+      require(!posture.hit(40,150,10000),"a doubled body mass must double the knockdown impulse");
+      requireNear(posture.value,50.f,.0001f,"body mass must scale the posture threshold");
+      require(posture.hit(40,150,10000),"two full impulses must knock down a 150 kg body");
+      }
     CollisionWorld world;
     auto ground = world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),
                                          .75f,DynamicWorld::C_Landscape);
@@ -4142,6 +4181,8 @@ namespace {
       require(contacts.size()==1 && contacts[0].npc==inside,
               "shadow sweep must cover exactly the overlap with its active window");
       requireNear(contacts[0].speedCmS,1000.f,.1f,"clipping must retain the published pose velocity");
+      requireNear(contacts[0].velocityCmS.x,1000.f,.1f,"clipping must retain signed world contact velocity");
+      requireNear(contacts[0].velocityCmS.y,0.f,.001f,"contact velocity must retain the world vertical component");
       }
 
     // The 8 ms no-step frame already consumes its pose. The following 9 ms
@@ -4161,6 +4202,7 @@ namespace {
       const auto contacts=shadow.takeShadowBladeContacts(attacker);
       require(contacts.size()==1,"constant-speed shadow probe must cross its thin target");
       requireNear(contacts[0].speedCmS,100.f,.01f,"contact speed must use published pose time, not the Jolt step");
+      requireNear(contacts[0].velocityCmS.x,100.f,.01f,"world contact velocity must use published pose time");
       // The frame budget caps a 50 ms interval at two native steps. Each query
       // still advances its proportional share of animation time.
       shadow.updateShadowBody(target,{{{5,95,0},{5,105,0},.01f,1,1}});

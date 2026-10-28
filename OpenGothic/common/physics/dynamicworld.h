@@ -52,6 +52,7 @@ struct MeleeBladeContact final {
   uint8_t zone = 0;
   Tempest::Vec3 point;
   Tempest::Vec3 normal;
+  Tempest::Vec3 velocityCmS;
   asset::MaterialGroup material = asset::MaterialGroup::STONE;
   float bladeFraction = 0, speedCmS = 0, surfaceAngleDeg = 0;
   bool world = false;

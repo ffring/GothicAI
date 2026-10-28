@@ -2417,7 +2417,9 @@ void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
             contact.point=toCentimeters(point);
             contact.normal={normal.GetX(),normal.GetY(),normal.GetZ()};
             contact.bladeFraction=location;
-            contact.speedCmS=seconds>0.f ? (endpoints(to,location)-endpoints(from,location)).Length()*100.f/(seconds*(t1-t0)) : 0.f;
+            const auto velocity=seconds>0.f ? (endpoints(to,location)-endpoints(from,location))*100.f/(seconds*(t1-t0)) : JPH::Vec3::sZero();
+            contact.velocityCmS={velocity.GetX(),velocity.GetY(),velocity.GetZ()};
+            contact.speedCmS=velocity.Length();
             contact.surfaceAngleDeg=std::acos(std::clamp(std::abs(edge.Dot(normal)),0.f,1.f))*180.f/JPH::JPH_PI;
             contact.world=npc==nullptr;
             contact.step=impl->simulationStep;
