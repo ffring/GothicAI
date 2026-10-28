@@ -849,7 +849,7 @@ bool Interactive::attach(Npc &npc) {
 
 bool Interactive::detach(Npc &npc, bool quick) {
   for(auto& i:attPos) {
-    if(i.user==&npc && i.attachMode) {
+    if(i.user==&npc && (i.attachMode || (quick && Gothic::physicsFlags().meleePosture))) {
       if(quick || canQuitAtState(*i.user,state)) {
         if(!quick) {
           auto sq = npc.setAnimAngGet(Npc::Anim::InteractToStand);

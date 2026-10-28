@@ -13,6 +13,7 @@
 #include "game/archerai.h"
 #include "game/gamescript.h"
 #include "game/ragdollsave.h"
+#include "game/meleeimpact.h"
 #include "physics/dynamicworld.h"
 #include "physics/ragdoll.h"
 #include "world/aiqueue.h"
@@ -393,6 +394,10 @@ class Npc final {
     bool      isLie() const;
     bool      isUnconscious() const;
     bool      isDown() const;
+    bool      isMeleeKnockedDown() const { return meleeKnockdown; }
+    static bool canAccumulateMeleePosture(bool enabled, bool blocked, bool knockedDown, bool down) {
+      return enabled && !blocked && !knockedDown && !down;
+      }
     bool      isAttack() const;
     bool      isTalk() const;
     // whom this npc talks or listens to, for a while: it looks at them (gaze)
@@ -831,7 +836,7 @@ class Npc final {
     void               updateCharacterVisualHeight();
     bool               updateLyingVisualHeight();
     void               releaseRagdoll(bool blend);
-    bool               recoverRagdoll();
+    bool               recoverRagdoll(bool force = false);
     bool               createRagdoll();
     void               updateRagdollQuestAnchor();
     void               checkRagdollQuestHazard();
@@ -937,6 +942,15 @@ class Npc final {
     uint64_t                      ragdollStartTick = 0;
     bool                          ragdollLegacyDown = false;
     bool                          ragdollRecovering = false;
+    void                          applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked, float before);
+    bool                          tickMeleePosture(uint64_t dt);
+    MeleeImpact::Posture           meleePosture;
+    bool                          meleeKnockdown = false;
+    bool                          meleeGetupForced = false;
+    uint64_t                      meleeFallTick = 0, meleeRiseTick = 0;
+    uint64_t                      meleeSlowSince = 0;
+    uint32_t                      meleeReturnCount = 0;
+    Tempest::Vec3                 meleeSavePosition;
     RagdollSave::QuestReturn       ragdollQuestReturn;
     bool                          ragdollQuestSpellThrow = false;
     uint64_t                      ragdollQuestSampleTick = 0;

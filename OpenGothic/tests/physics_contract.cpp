@@ -10,6 +10,7 @@
 #include "graphics/bounds.h"
 #include "game/serialize.h"
 #include "game/damagecalculator.h"
+#include "game/meleeimpact.h"
 #include "world/objects/npc.h"
 #include "gothic.h"
 
@@ -3915,6 +3916,49 @@ namespace {
     }
 
   void testContracts() {
+    {
+      using MeleeImpact::Weapon;
+      const auto fist=MeleeImpact::impulse(Weapon::Fist,{600,800,0},90);
+      requireNear(fist.x,9.f,.0001f,"fist impulse must convert world cm/s into N s");
+      requireNear(fist.y,12.f,.0001f,"impulse must follow the contact velocity direction");
+      requireNear(MeleeImpact::impulse(Weapon::OneHand,{1000,0,0},0).length(),12.5f,.0001f,
+                  "one-hand impulse must use 2.5 kg and the glancing edge factor");
+      requireNear(MeleeImpact::impulse(Weapon::TwoHand,{1000,0,0},30).length(),30.f,.0001f,
+                  "two-hand impulse must use 4 kg and the sine of the blade angle");
+      const auto capped=MeleeImpact::impulse(Weapon::TwoHand,{-6000,0,8000},90);
+      requireNear(capped.length(),60.f,.0001f,"melee impulse magnitude must be capped at 60 N s");
+      requireNear(capped.x,-36.f,.0001f,"the impulse cap must retain contact direction");
+      requireNear(MeleeImpact::impulse(Weapon::Fist,{},90).length(),0.f,.0001f,
+                  "a motionless blade must not add an impulse");
+
+      MeleeImpact::Posture posture;
+      require(!posture.hit(30,75,1000),"a quarter-threshold impulse must not knock down");
+      requireNear(posture.value,25.f,.0001f,"posture must accumulate in units of body-mass-scaled impulse");
+      posture.tick(2500,1500);
+      requireNear(posture.value,25.f,.0001f,"posture must retain the full 1500 ms recovery delay");
+      posture.tick(2750,500);
+      requireNear(posture.value,17.5f,.0001f,"recovery must count only time after the hit grace period");
+      posture.tick(3750,1000);
+      requireNear(posture.value,0.f,.0001f,"posture recovery must stop at zero");
+      require(!posture.hit(60,75,4000),"a full capped impulse must add only half the 75 kg knockdown threshold");
+      requireNear(posture.value,50.f,.0001f,"a 75 kg body must require 120 N s for knockdown");
+      require(!posture.hit(59,75,4000),"posture just below 100 must not knock down");
+      require(posture.hit(1,75,4000),"posture must knock down exactly at 100");
+      requireNear(posture.value,100.f,.0001f,"posture must stop at 100");
+      posture.recover(5000);
+      requireNear(posture.value,0.f,.0001f,"getting up must reset posture");
+      require(!posture.hit(60,75,5000),"getting up must protect against another knockdown");
+      require(!posture.hit(60,75,5000),"successive hits during immunity must not knock down");
+      requireNear(posture.value,60.f,.0001f,"post-rise immunity must cap accumulating posture at 60");
+      require(!posture.hit(60,75,8999),"post-rise immunity must cover the first 3999 ms");
+      require(posture.hit(48,75,9000),"post-rise immunity must expire at 4000 ms");
+      posture.reset();
+      require(!posture.hit(60,150,10000),"a doubled body mass must double the knockdown impulse");
+      requireNear(posture.value,25.f,.0001f,"a 150 kg body must require 240 N s for knockdown");
+      require(!posture.hit(60,150,10000),"two full capped impulses must not knock down a 150 kg body");
+      require(!posture.hit(60,150,10000),"three full capped impulses must not knock down a 150 kg body");
+      require(posture.hit(60,150,10000),"four full capped impulses must knock down a 150 kg body");
+      }
     CollisionWorld world;
     auto ground = world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),
                                          .75f,DynamicWorld::C_Landscape);
@@ -4058,6 +4102,12 @@ namespace {
     require(!Npc::skipMeleeAlly(false,true,false,true,false),
             "the selected party target must receive NPC damage");
 
+    require(Npc::canAccumulateMeleePosture(true,false,false,false),"an enabled live human hit must accumulate posture");
+    require(!Npc::canAccumulateMeleePosture(false,false,false,false),"posture OFF must retain the old hit path");
+    require(!Npc::canAccumulateMeleePosture(true,true,false,false),"a blocked hit must leave posture unchanged");
+    require(!Npc::canAccumulateMeleePosture(true,false,true,false),"a knockdown must not accumulate another knockdown");
+    require(!Npc::canAccumulateMeleePosture(true,false,false,true),"death or unconsciousness must retain the old path");
+
     // The actual melee damage multiplier is bounded before cleave attenuation.
     requireNear(DamageCalculator::meleeMultiplier(0,1000,0,0,0),.5f,.0001f,"slow grip contacts must respect the lower damage bound");
     requireNear(DamageCalculator::meleeMultiplier(10000,1000,1,90,0),1.5f,.0001f,"fast tip contacts must respect the upper damage bound");
@@ -4142,6 +4192,8 @@ namespace {
       require(contacts.size()==1 && contacts[0].npc==inside,
               "shadow sweep must cover exactly the overlap with its active window");
       requireNear(contacts[0].speedCmS,1000.f,.1f,"clipping must retain the published pose velocity");
+      requireNear(contacts[0].velocityCmS.x,1000.f,.1f,"clipping must retain signed world contact velocity");
+      requireNear(contacts[0].velocityCmS.y,0.f,.001f,"contact velocity must retain the world vertical component");
       }
 
     // The 8 ms no-step frame already consumes its pose. The following 9 ms
@@ -4161,6 +4213,7 @@ namespace {
       const auto contacts=shadow.takeShadowBladeContacts(attacker);
       require(contacts.size()==1,"constant-speed shadow probe must cross its thin target");
       requireNear(contacts[0].speedCmS,100.f,.01f,"contact speed must use published pose time, not the Jolt step");
+      requireNear(contacts[0].velocityCmS.x,100.f,.01f,"world contact velocity must use published pose time");
       // The frame budget caps a 50 ms interval at two native steps. Each query
       // still advances its proportional share of animation time.
       shadow.updateShadowBody(target,{{{5,95,0},{5,105,0},.01f,1,1}});
