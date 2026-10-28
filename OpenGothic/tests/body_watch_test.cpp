@@ -6,6 +6,7 @@
 #include "resources.h"
 #include "game/bodycontroller.h"
 #include "game/bodyobservations.h"
+#include "game/bodypolicy.h"
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/serialize.h"
@@ -27,6 +28,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -123,6 +125,98 @@ void initialWatch(Npc& actor,uint64_t generation) {
   BodyObservations::watch({&actor});
   BodyController::setActors({&actor});
   BodyObservations::sampleAll();
+  }
+
+void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
+  ++cases;
+  BodyController::fixturePrepare(actor,target,150,0);
+  actor.setExternalControl(false);
+  initialWatch(actor,700);
+  const auto initialGame=BodyObservations::latestGameMs(actor);
+  auto acquireRequest=request("body_acquire",actor);
+  acquireRequest.AddMember("body_control",true,acquireRequest.GetAllocator());
+  acquireRequest.AddMember("mode","lockstep",acquireRequest.GetAllocator());
+  acquireRequest.AddMember("policy","engine",acquireRequest.GetAllocator());
+  number(acquireRequest,"timeout_ms",5000);
+  number(acquireRequest,"target_entity_id",BodyObservations::entityId(target));
+  const auto acquired=call(acquireRequest);
+  expect(acquired["accepted"].GetBool(),"engine policy acquires a real NPC");
+  const BodyNet weights(GOTHIC_BODY_ENGINE_NET);
+  BodyPolicyRuntime direct(weights,100,100,true);
+  direct.beginEpisode(BodyObservations::sessionEpoch(),BodyObservations::worldEpoch(),initialGame);
+  uint64_t sequence=0;
+  size_t started=0;
+  std::map<uint64_t,int> expected,applied;
+  std::string latest;
+  BodyObservations::setSink([&](std::string_view encoded) {
+    auto row=parse(std::string(encoded));
+    if(!row["periodic"].GetBool() || row["control_generation"].GetUint64()!=acquired["control_generation"].GetUint64()) return;
+    latest=encoded;
+    const bool eligible=row["can_decide"].GetBool() && row["action_mask_valid"].GetBool();
+    Json process(rapidjson::kObjectType);
+    auto& a=process.GetAllocator();
+    process.AddMember("observation",rapidjson::Value(row,a),a);
+    process.AddMember("stream_seq",++sequence,a);
+    process.AddMember("now_game_ms",row["t_game_ms"].GetUint64(),a);
+    process.AddMember("command_enabled",eligible,a);
+    process.AddMember("memory_only",!eligible,a);
+    const auto result=direct.process(process);
+    expect(result.status!="fallback","live periodic row is accepted by the direct runtime");
+    if(eligible) {
+      const auto action=direct.arbitrate(row,sequence);
+      expect(action.status=="decision" && action.actionId.has_value(),"live row has a direct policy decision");
+      expected.emplace(row["observation_seq"].GetUint64(),*action.actionId);
+      }
+    });
+  BodyController::drainJson();
+  for(unsigned i=0;i<90 && expected.size()<4 && BodyController::owns(actor);++i) {
+    step(player);
+    const auto events=parse(BodyController::drainJson());
+    for(const auto& event:events["events"].GetArray()) {
+      if(std::string_view(event["phase"].GetString())=="started") ++started;
+      if(std::string_view(event["phase"].GetString())=="accepted") {
+        applied.emplace(event["observation_seq"].GetUint64(),int(event["action_id"].GetUint64()));
+        expect(event["ttl_ms"].GetUint64()==100,"engine actions use the ordinary executor with ttl 100");
+        }
+      }
+    }
+  BodyObservations::setSink({});
+  expect(expected.size()>=1 && applied==expected,"real NPC applies exactly the direct policy sequence on the emitted rows");
+  expect(started>0,"engine policy physically starts an action through the native executor");
+  expect(BodyController::owns(actor) && !latest.empty(),"live engine lease survives the policy sequence");
+  auto refusal=parse(latest);
+  refusal["observation_seq"].SetUint64(refusal["observation_seq"].GetUint64()+1);
+  refusal["sample_period_ms"].SetUint64(100);
+  rapidjson::StringBuffer buffer;
+  rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+  refusal.Accept(writer);
+  BodyController::onObservation(actor,{buffer.GetString(),buffer.GetSize()});
+  auto reports=BodyController::drainPolicyJson();
+  bool measured=false,finalReport=false;
+  for(const auto& report:reports) {
+    const auto metrics=parse(report);
+    if(metrics["final"].GetBool()) {
+      expect(metrics["fallbacks"]["unsupported_sampling_rate"].GetUint64()==1,"live fallback telemetry retains the policy reason");
+      finalReport=true;
+      }
+    if(metrics["decisions"].GetUint64()>0) {
+      expect(metrics["p50_us"].GetDouble()>0 && metrics["p99_us"].GetDouble()>=metrics["p50_us"].GetDouble(),
+             "live body_policy contains actual inference timings");
+      measured=true;
+      }
+    std::cerr << "engine-policy-fixture body_policy=" << report << '\n';
+    }
+  expect(measured && finalReport,"policy fallback immediately emits a body_policy event with measured network steps");
+  for(unsigned i=0;i<100 && BodyController::owns(actor);++i) step(player);
+  const auto released=parse(BodyController::drainJson());
+  bool restored=false;
+  for(const auto& event:released["events"].GetArray())
+    if(std::string_view(event["reason"].GetString())=="native_restored" &&
+       std::string_view(event["release_reason"].GetString())=="policy_fallback:unsupported_sampling_rate") restored=true;
+  expect(restored && !BodyController::owns(actor),"policy refusal returns the actual NPC to native AI at its safe boundary");
+  BodyController::reset("engine_fixture_cleanup");
+  BodyController::fixturePrepare(actor,target,300,0);
+  actor.setExternalControl(false);
   }
 
 void liveLease(Npc& a,Npc& b,PlayerControl& player) {
@@ -694,18 +788,24 @@ int main(int argc,const char** argv) {
   dup2(STDERR_FILENO,STDOUT_FILENO);
   const auto workingDirectory=std::filesystem::current_path();
   try {
-    std::string save,scenario;
+    std::string save,scenario=GOTHIC_BODY_WATCH_SCENARIO;
+    bool hasGamePath=false;
     for(int i=1;i<argc;++i) {
       const std::string_view arg=argv[i];
+      if(arg=="-g") hasGamePath=true;
       if(arg=="--save" || arg=="--scenario") {
         if(++i>=argc) throw std::runtime_error("missing fixture option value");
         (arg=="--save" ? save : scenario)=std::filesystem::absolute(argv[i]).string();
         }
       }
-    if(scenario.empty()) throw std::runtime_error("--scenario scripts/bench/body-api.bench is required");
+    std::vector<const char*> arguments(argv,argv+argc);
+    if(!hasGamePath) if(const char* path=std::getenv("GOTHIC_DIR")) {
+      arguments.push_back("-g"); arguments.push_back(path); arguments.push_back("-g2");
+      }
+    setenv("OPENGOTHIC_BODY_NET",GOTHIC_BODY_ENGINE_NET,1);
     setenv("OPENGOTHIC_PHYSICS_THREADS","0",0);
     Workers::setSerialExecution(true);
-    CommandLine commandLine(argc,argv);
+    CommandLine commandLine(int(arguments.size()),arguments.data());
     Resources resources;
     Gothic gothic;
     gothic.isNpcInDialogFn=[](const Npc*) { return false; };
@@ -741,6 +841,7 @@ int main(int argc,const char** argv) {
     const auto wireStatus=parse(BodyController::statusJson(&a));
     for(const char* field:{"process_policy","segment_remaining_ms","fai_gate","ani_gate","ai_gate","output_gate","interruptible"})
       expect(!wireStatus["actors"][0].HasMember(field),"wire status keeps the strict server schema; boundary diagnostics are opt-in");
+    enginePolicy(a,b,player);
     liveLease(a,b,player);
     realtimeSentObservation(a,b,player);
     movementRelease(a,b,player);

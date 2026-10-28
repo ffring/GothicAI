@@ -1,0 +1,172 @@
+#include "game/bodyenginepolicy.h"
+#include "game/bodycontroller.h"
+
+#include <rapidjson/document.h>
+#include <zlib.h>
+
+#include <cstdlib>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <sys/wait.h>
+#include <unistd.h>
+
+namespace {
+using Json=rapidjson::Document;
+size_t assertions=0,decisions=0;
+void expect(bool value,const char* message) {
+  ++assertions;
+  if(!value) throw std::runtime_error(message);
+  }
+Json parse(const std::string& text) {
+  Json value;
+  value.Parse(text.data(),text.size());
+  if(value.HasParseError()) throw std::runtime_error("invalid fixture JSON");
+  return value;
+  }
+Json firstObservation() {
+  gzFile input=gzopen(GOTHIC_BODY_ENGINE_GOLDEN,"rb");
+  if(!input) throw std::runtime_error("cannot open body engine golden fixture");
+  std::string line;
+  char buffer[16384];
+  while(gzgets(input,buffer,sizeof(buffer))) {
+    line+=buffer;
+    if(line.back()!='\n') continue;
+    auto record=parse(line);
+    line.clear();
+    if(std::string_view(record["kind"].GetString())!="step") continue;
+    Json result;
+    result.CopyFrom(record["observation"],result.GetAllocator());
+    gzclose(input);
+    return result;
+    }
+  gzclose(input);
+  throw std::runtime_error("fixture has no periodic observations");
+  }
+void missingNetwork() {
+  const auto pid=fork();
+  if(pid<0) throw std::runtime_error("cannot fork missing-network fixture");
+  if(pid==0) {
+    setenv("OPENGOTHIC_BODY_NET","/nonexistent/gothic-body-engine-test.bodynet",1);
+    const auto engine=parse("{\"policy\":\"engine\"}");
+    const auto ordinary=parse("{}");
+    const auto status=parse(BodyEnginePolicy::netStatusJson());
+    _exit(std::string_view(BodyEnginePolicy::validateAcquire(engine))=="body_net_unavailable" &&
+          std::string_view(BodyEnginePolicy::validateAcquire(ordinary))=="allowed" &&
+          !status["loaded"].GetBool() && status["checkpoint_sha256"].IsNull() && status["error"].IsString() ? 0 : 1);
+    }
+  int status=0;
+  expect(waitpid(pid,&status,0)==pid && WIFEXITED(status) && WEXITSTATUS(status)==0,
+         "engine acquisition without weights refuses; ordinary acquisition remains available");
+  }
+FightAlgo::ResolverState ready() {
+  FightAlgo::ResolverState state;
+  state.targetValid=state.eligible=state.sword=true;
+  state.focus5=state.focus30=state.inWRange=state.lineClear=true;
+  state.hasMove=state.hasLeft=state.hasRight=state.hasBack=true;
+  state.hasAttack=state.hasAttackLeft=state.hasAttackRight=state.hasBlock=state.canRotate=true;
+  return state;
+  }
+void setMask(Json& row,bool eligible) {
+  row["can_decide"].SetBool(eligible);
+  row["native_decision_eligible"].SetBool(eligible);
+  row["action_mask_valid"].SetBool(true);
+  const auto mask=FightAlgo::actionMask(ready());
+  for(rapidjson::SizeType i=0;i<12;++i) {
+    const bool value=eligible ? mask[i] : i==0;
+    row["action_mask"][i].SetBool(value);
+    row["availability_mask"][i].SetBool(value);
+    }
+  }
+void parityAndFallback() {
+  const auto engine=parse("{\"policy\":\"engine\"}");
+  expect(std::string_view(BodyEnginePolicy::validateAcquire(engine))=="allowed","engine acquisition with fixture weights succeeds");
+  const auto status=parse(BodyEnginePolicy::netStatusJson());
+  expect(status["loaded"].GetBool() && status["checkpoint_sha256"].IsString() && status["error"].IsNull(),"loaded network hello status");
+  auto row=firstObservation();
+  row["self"]["weapon_state"].SetUint64(2);
+  const auto identity=BodyNet::actorIdentity(row);
+  const BodyNet directNet(GOTHIC_BODY_ENGINE_NET);
+  BodyPolicyRuntime direct(directNet,100,100,true);
+  BodyEnginePolicy policy(identity[0],identity[1],identity[2],identity[3],0,0);
+  BodyEnginePolicy other(identity[0],identity[1],identity[2],identity[3],0,0);
+  expect(policy.report().empty(),"policy telemetry is rate limited before one second");
+  direct.beginEpisode(identity[0],identity[1],0);
+  uint64_t directSequence=0;
+  size_t expectedDecisions=0,otherDecisions=0;
+  for(uint64_t tick=1;tick<=240;++tick) {
+    row["observation_seq"].SetUint64(tick);
+    row["t_game_ms"].SetUint64(tick*50);
+    row["sim_step"].SetUint64(tick*3);
+    row["self"]["hp_fraction"].SetDouble(0.3+0.001*double(tick));
+    setMask(row,tick%7!=0);
+    const auto now=tick*50+(tick%13==0 ? 150 : 0);
+    const bool eligible=row["can_decide"].GetBool() && now-tick*50<=100;
+    Json request(rapidjson::kObjectType);
+    auto& a=request.GetAllocator();
+    request.AddMember("observation",rapidjson::Value(row,a),a);
+    request.AddMember("stream_seq",++directSequence,a);
+    request.AddMember("now_game_ms",now,a);
+    request.AddMember("command_enabled",eligible,a);
+    request.AddMember("memory_only",!eligible,a);
+    const auto processed=direct.process(request);
+    auto expected=processed;
+    if(processed.status!="fallback" && eligible) expected=direct.arbitrate(row,directSequence);
+    expect(expected.status!="fallback","direct runtime accepts the ordered fixture sequence");
+    if(eligible && expected.status=="decision") ++expectedDecisions;
+    unsigned applied=0;
+    const auto release=policy.process(row,now,[&](int action,const rapidjson::Value& observed) {
+      ++applied; ++decisions;
+      expect(expected.actionId && action==*expected.actionId,"engine policy action matches the direct runtime on the same row");
+      BodyController::GateState gate;
+      gate.session=identity[0]; gate.world=identity[1]; gate.generation=identity[3];
+      gate.goal=gate.target=1; gate.observation=tick; gate.observedGame=gate.gameNow=tick*50;
+      gate.targetValid=true; gate.resolver=ready();
+      const BodyController::GateCommand command{identity[0],identity[1],identity[3],1,1,tick,
+                                                observed["t_game_ms"].GetUint64(),100,FightAlgo::PolicyAction(action)};
+      expect(std::string_view(BodyController::validate(gate,command))=="allowed","engine decision passes ordinary body_action validation with ttl 100");
+      expect(FightAlgo::resolve(command.action,gate.resolver).allowed,"engine decision resolves through the native primitive gate");
+      return std::string{};
+      });
+    expect(release.empty(),"ordinary, locked and stale-memory rows retain the engine lease");
+    expect(applied==(eligible && expected.status=="decision" ? 1u : 0u),"only eligible periodic decisions execute");
+    // The other lease shares the weights, with its own identical recurrent history.
+    expect(other.process(row,now,[&](int action,const rapidjson::Value&) {
+      ++otherDecisions;
+      expect(expected.actionId && action==*expected.actionId,"independent lease recurrent state matches");
+      return std::string{};
+      }).empty(),"second lease retains its independent state");
+    expect(policy.process(row,now,[&](int,const rapidjson::Value&) {
+      throw std::runtime_error("duplicate observation executed"); return std::string{};
+      }).empty(),"duplicate rows are ignored");
+    }
+  expect(expectedDecisions==decisions && otherDecisions==decisions && decisions>100,"all direct decisions are applied exactly once on both leases");
+  auto metrics=parse(policy.report(true));
+  expect(metrics["decisions"].GetUint64()==decisions && metrics["steps"].GetUint64()==240,"policy metrics count applied decisions and steps");
+  expect(metrics["p50_us"].GetDouble()>0 && metrics["p99_us"].GetDouble()>=metrics["p50_us"].GetDouble(),"policy step percentiles are measured");
+  std::cout << "body_policy " << metrics["decisions"].GetUint64() << " decisions p50_us=" << metrics["p50_us"].GetDouble()
+            << " p99_us=" << metrics["p99_us"].GetDouble() << '\n';
+  row["observation_seq"].SetUint64(241);
+  row["t_game_ms"].SetUint64(12050);
+  row["sample_period_ms"].SetUint64(100);
+  const auto release=policy.process(row,12050,[](int,const rapidjson::Value&) { return std::string{}; });
+  expect(release=="policy_fallback:unsupported_sampling_rate","policy fallback requests the ordinary native handoff with its exact reason");
+  metrics=parse(policy.report(true));
+  expect(metrics["final"].GetBool() && metrics["fallbacks"]["unsupported_sampling_rate"].GetUint64()==1,"fallback telemetry immediately reports its refusal reason");
+  }
+}
+
+int main() {
+  try {
+    missingNetwork();
+    setenv("OPENGOTHIC_BODY_NET",GOTHIC_BODY_ENGINE_NET,1);
+    BodyEnginePolicy::initialize();
+    parityAndFallback();
+    std::cout << "{\"type\":\"body_engine_test\",\"passed\":true,\"assertions\":" << assertions
+              << ",\"decisions\":" << decisions << "}\n";
+    return 0;
+    } catch(const std::exception& error) {
+    std::cerr << "body-engine-test failure: " << error.what() << '\n';
+    return 1;
+    }
+  }

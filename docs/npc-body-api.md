@@ -1,6 +1,6 @@
 # Боевой API и арбитр тела NPC
 
-Этап 4 [плана GRU](npc-body-control-plan.md). Общий CPU `BodyController` используется headless runner и обычным AI bridge. Scripted provider выбирает примитивы, а настоящие NPC, физика, анимационные окна и расчёт урона исполняют их. Нейросеть и обучение относятся к следующим этапам.
+Этап 4 [плана GRU](npc-body-control-plan.md). Общий CPU `BodyController` используется headless runner и обычным AI bridge. Примитивы выбирает внешний provider либо, с v54 по явному `policy:"engine"`, P30 в движке. Настоящие NPC, физика, анимационные окна и расчёт урона исполняют их.
 
 Этап прошёл полный серверный прогон `stage4-v5`: [результаты и границы проверки](../reports/npc-body/2026-10-13-body-api/validation-notes.md), [37 сценариев](../reports/npc-body/2026-10-13-body-api/body-api.md), [машинный отчёт](../reports/npc-body/2026-10-13-body-api/body-api.json).
 
@@ -22,7 +22,7 @@ Headless использует JSONL поле `cmd`; bridge — такое же �
 
 | Операция | Назначение |
 |---|---|
-| `body_acquire` | Получить lease: actor, provider, текущая цель, `body_control`, mode, timeout |
+| `body_acquire` | Получить lease: actor, provider, текущая цель, `body_control`, mode, timeout; с v54 необязательное `policy:"engine"` |
 | `body_goal` | Повысить `goal_version` для текущей native melee цели |
 | `body_action` | Передать выбранный примитив с полным контекстом наблюдения |
 | `body_heartbeat` | Обновить wall watchdog без изменения действия |
@@ -38,6 +38,38 @@ Lease identity: `session_epoch`, `world_epoch`, `entity_id`, `control_generation
 Snapshot должен быть последним для этого NPC, с точным game timestamp; в realtime обычного моста — последним отправленным провайдеру, ещё не отправленные строки его не устаревают. После acquire и смены goal нужен новый sample; прежнее наблюдение нельзя присвоить новому управлению. TTL 1–1000 мс проверяется при принятии и снова перед фактическим началом. В realtime учитываются game age и wall age исходного engine snapshot. В lockstep TTL определяется game time, а wall потеря provider отдельно завершает аварийный эпизод.
 
 Режим lease привязан к runner mode; в обычной игре разрешён только realtime. Timeout provider — 100–5000 wall мс, измеряется локальным `steady_clock`. Часы Mac и сервера не сравниваются.
+
+### Политика в движке (v54)
+
+`body_acquire` с необязательным `policy:"engine"` получает обычный lease, а выбор
+действий выполняет P30 в движке. Без этого поля внешние `body_action` работают как
+прежде. Сервер-владелец по-прежнему поддерживает `body_heartbeat`; watchdog lease
+не меняется. При отсутствии загруженной `.bodynet` acquire отклоняется с
+`body_net_unavailable`. Движок загружает сеть один раз при старте из
+`OPENGOTHIC_BODY_NET`, по умолчанию — из
+`~/.local/share/gothic-ai/body/nets/p30.bodynet`; `hello.body_net` сообщает
+`loaded`, `checkpoint_sha256` и `error`. Ошибка загрузки не останавливает игру.
+
+Один `BodyNet` общий для всех NPC, `BodyPolicyRuntime` и память GRU — свои у lease.
+Адаптер `common/game/bodyenginepolicy.*` получает новые periodic JSON-строки
+`body_observations` после захвата. Identity, sequence и гейты прежние;
+memory-only строки, повтор `observation_too_old` и сброс после `hidden_reset`
+соответствуют `BodyFight._row`. Десятый последовательный временный отказ
+завершает бой; остальные отказы политики завершают его сразу.
+Решение проходит тот же validator и `FightAlgo::resolve`, что внешний
+`body_action`, с `ttl_ms:100` от времени строки. Обычные наблюдения продолжают идти.
+
+При отказе NPC возвращается родному ИИ на безопасной границе: событие ownership
+имеет `reason:"native_restored"` и `release_reason:"policy_fallback:<reason>"`.
+Раз в секунду wall-времени движок отправляет отдельное сообщение `body_policy`
+с identity lease, `decisions` (применённые решения), `fallbacks` по причинам,
+`steps` (число измеренных шагов) и `p50_us` / `p99_us`
+за интервал; при отсутствии шагов процентиля равны 0. Сразу при конце по отказу
+приходит сводка `final:true`: runtime fallback имеет `reason:"policy_fallback:<reason>"`,
+ошибка политики — `policy_error`, окончательный отказ применения — `body_action_rejected`.
+Обычная сводка содержит `final:false`, `reason:""`.
+[Полная схема](protocol.md#политика-боя-в-движке-v54).
+Серверный пилот и лаунчер пока не запрашивают этот режим.
 
 ### Ожидание безопасной границы (v41)
 
@@ -120,6 +152,12 @@ Pure `FightAlgo` resolver получает числовое/boolean состоя
 В lockstep timeout/disconnect ставит `infrastructure_failure`; `advance` заканчивается с соответствующим `stopped_on`. Этот эпизод не продолжается как обычная native дуэль. Watchdog работает также при неподвижном game time и pause. `advance` во время pause отклоняется; resume не ускоряет симуляцию для компенсации wall паузы.
 
 ## Проверка изменения подписки
+
+`gothic-body-engine-test` не требует игровых ассетов: на фикстуре
+`scripts/body_net.py fixture` проверяет доступность сети для acquire с `policy`
+и без него, последовательность решений относительно `BodyPolicyRuntime`,
+валидацию примитивов и причину fallback. `gothic-body-watch-test` дополнительно
+проверяет acquire, применение решений к настоящим NPC и возврат native.
 
 `gothic-body-watch-test` рядом с resolver-тестом запускает два настоящих NPC без окна и звука: рост подписки под lease, прежние identity и команды, захват нового NPC, отказы при исключении владельца и смене частоты, сокращение списка и сохранение ожидающей заявки до выдачи lease.
 

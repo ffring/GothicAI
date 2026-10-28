@@ -1,4 +1,4 @@
-# Протокол игра ↔ ИИ-сервер (v53)
+# Протокол игра ↔ ИИ-сервер (v54)
 
 ## Версии
 
@@ -13,9 +13,7 @@
 3. Если PR брони конфликтует с `main`, номер уже заняли: подтяни `main` и возьми следующий.
 4. В своём PR сессия снимает пометку: убирает строку брони и добавляет строку в таблицу. Бронь, которая не понадобилась, снимают таким же маленьким PR.
 
-Брони:
-
-- `v54` — занято: `codex/bodynet-engine` (бой P30 сетью в самом движке).
+Брони: нет.
 
 ### Что добавила каждая версия
 
@@ -74,6 +72,7 @@
 | v51 | `combat_hit`: фактический урон, здоровье и состояние после удара для коротких реплик в бою | [Боевые события](#боевые-события-v51) |
 | v52 | `player_pose` (колени героя), `go_to_npc.close`, `play_ani.hold_ms`, состояния анимаций в `snapshot` и родной радиус `npc_view.senses_range` | [Действия](#действия), [Поза героя](#поза-героя-v52) |
 | v53 | `feat_toast`: тихий тост достижения героя | [Тост достижения](#тост-достижения-v53) |
+| v54 | P30 в движке: `hello.body_net`, `body_acquire.policy:"engine"`, сводки `body_policy` | [Политика боя в движке](#политика-боя-в-движке-v54) |
 
 `ProtocolVersion` в мосту отставал от серверного номера на v22 и с v27 снова равен ему.
 
@@ -102,6 +101,7 @@ Native-защитник явно возвращается арбитром с `r
 |---|---|---|
 | `GOTHIC_AI_URL` | `ws://127.0.0.1:47817` | адрес ИИ-сервера |
 | `GOTHIC_AI` | — | `0` выключает мост |
+| `OPENGOTHIC_BODY_NET` | `~/.local/share/gothic-ai/body/nets/p30.bodynet` | `.bodynet` P30, загружается один раз при старте; ошибка оставляет игру без сети |
 
 Мост сам переподключается раз в 0,5–3 с. Если связь с сервером рвётся, все NPC под управлением возвращаются к распорядку.
 
@@ -115,7 +115,7 @@ Native-защитник явно возвращается арбитром с `r
 
 | `type` | Поля | Когда |
 |---|---|---|
-| `hello` | `protocol`, `client`, `codepage` | сразу после подключения |
+| `hello` | `protocol`, `client`, `codepage`, `body_net` (v54) | сразу после подключения |
 | `session` | `branch`, `parent?`, `parent_seq?`, `reason` | ветка игры (см. «Сессии и память»): после `hello` (`reason:"connect"`), после новой игры (`new_game`) и загрузки сохранения (`load`), до `world_loaded` |
 | `world_loaded` | `world` | после подключения, загрузки и смены локации |
 | `loading` | — | перед загрузкой или сменой локации. Все NPC к этому моменту уже отпущены |
@@ -128,6 +128,7 @@ Native-защитник явно возвращается арбитром с `r
 | `snapshot` | `t`, `world{name,day,hour,minute}`, `npc{…}`, `player{…}?`, `nearby_waypoints[]` | для NPC под управлением — раз в 500 мс, после каждого действия и по запросу; с v7 по запросу и для свободного NPC, разово |
 | `body_observations` | версия схемы, generation, ограниченный пакет числовых наблюдений и счётчики пропусков | только после `body_watch`; 10 или 20 Гц на NPC, после world/player/animation updates. Обычный мост отправляет готовый пакет на следующем `onTick` |
 | `body_control_events` | process/world epoch, `events[]`, `dropped_total` | ограниченный поток lifecycle/ownership из общего encoder; отправляется при активной подписке. Начало/завершение связаны с command и execution IDs |
+| `body_policy` | identity lease, счётчики решений и отказов, p50/p99 шага в мкс | (v54) раз в секунду на NPC с `policy:"engine"` и сразу при конце боя по отказу политики; [контракт](#политика-боя-в-движке-v54) |
 | `action_result` | `id`, `npc`, `status`, `detail?`, `distance?` | действие завершилось |
 | `perception` | `npc`, `perc`, `other`, `distance`, `victim?` | восприятие NPC под управлением, не чаще 1 раза в секунду на пару (`perc`, `other`) |
 | `pong` | `req` | ответ на `ping` |
@@ -172,7 +173,7 @@ Native-защитник явно возвращается арбитром с `r
 | `snapshot` | `npc`: запросить снимок сейчас |
 | `player_pose` | `req`, `pose`: `kneel` или `none` (v52); родная поза героя, ответ `result` |
 | `body_watch` | `req`, `npcs[]` (до 4 явных символов NPC), `rate_hz` (10 или 20, по умолчанию 20). Ответ `result`. С v45 список может расти и сжиматься при прежней частоте, сохраняя всех NPC под lease или с `acquire_pending`; иначе отказ. Без владельцев пустой список выключает подписку, любая перенастройка полностью сбрасывает наблюдения. Неизвестные, повторяющиеся и неоднозначные символы отклоняются |
-| `body_acquire` | `req`, `entity_id`, `session_epoch`, `world_epoch`, `provider`, `target_entity_id`, `body_control:true`, `mode:"realtime"`, `timeout_ms` |
+| `body_acquire` | `req`, `entity_id`, `session_epoch`, `world_epoch`, `provider`, `target_entity_id`, `body_control:true`, `mode:"realtime"`, `timeout_ms`, необязательное `policy:"engine"` (v54) |
 | `body_action` | `req`, полная lease identity, `goal_version`, `target_entity_id`, `observation_seq`, `issued_game_ms`, `command_id`, `action_id` (0–11), `ttl_ms` (1–1000); [словарь и проверки](npc-body-api.md) |
 | `body_goal` | `req`, lease identity, возрастающая `goal_version`, текущая native `target_entity_id`; после обновления нужен свежий sample |
 | `body_heartbeat` / `body_release` / `body_disconnect` | `req`, lease identity: actor/process/world/control generation/provider. Внешний disconnect также scoped; потеря самого socket инвалидирует все его leases |
@@ -193,6 +194,51 @@ Native-защитник явно возвращается арбитром с `r
 **`attach`** отказывает в трёх случаях: NPC не найден в текущем мире, это игрок, или NPC без сознания либо в диалоге. Пока NPC под управлением:
 - его распорядок и скриптовые восприятия на паузе (восприятия уходят серверу событиями `perception`);
 - обычные диалоги с ним не открываются.
+
+### Политика боя в движке (v54)
+
+`hello.body_net` имеет вид `{"loaded":true,"checkpoint_sha256":"…","error":null}`.
+При ошибке загрузки `loaded:false`, `checkpoint_sha256:null`, `error` содержит причину;
+игра продолжает работать без сети. `.bodynet` загружается один раз при старте из
+`OPENGOTHIC_BODY_NET`, без переменной — из домашнего каталога
+`.local/share/gothic-ai/body/nets/p30.bodynet`.
+
+Необязательное `policy:"engine"` в `body_acquire` поручает выбор примитивов движку.
+Без загруженной сети запрос отклоняется с `body_net_unavailable`; остальные условия,
+identity, ожидание границы и возврат native остаются условиями обычного lease.
+Без `policy` сохраняется внешний путь `body_action`. Сервер и лаунчер этот режим
+пока не выбирают. Сервер-владелец по-прежнему поддерживает lease через
+`body_heartbeat`; локальная политика не заменяет watchdog владельца.
+
+Движок передаёт каждую новую периодическую строку lease в `BodyPolicyRuntime`
+в том же JSON, что публикуется в `body_observations`. Веса общие, память GRU у каждого
+lease своя. Строки старше принятого действия или допустимого возраста обрабатываются
+только для памяти по правилам `BodyFight._row`. `observation_too_old` допускает повтор:
+после `hidden_reset` перед следующей строкой сбрасывается runtime; десятый
+последовательный временный отказ завершает бой. Остальные отказы политики завершают
+его сразу. Действие проходит обычную проверку и `FightAlgo::resolve`, `ttl_ms:100`
+от `t_game_ms` строки. После безопасной передачи управление возвращается native:
+ownership-событие `reason:"native_restored"`, `release_reason:"policy_fallback:<reason>"`.
+Наблюдения для такого NPC продолжают идти как прежде.
+
+`body_policy` — отдельное сообщение игры, не элемент `body_control_events`:
+
+```json
+{"type":"body_policy","session_epoch":1,"world_epoch":2,"entity_id":3,"control_generation":4,"goal_version":1,"target_entity_id":5,"t_game_ms":1000,"t_wall_ms":1200,"decisions":18,"fallbacks":{},"steps":20,"p50_us":240.0,"p99_us":320.0,"final":false,"reason":""}
+```
+
+Оно отправляется раз в секунду wall-времени для каждого lease с `policy:"engine"`.
+`decisions` (применённые решения), `fallbacks` (словарь причина → число), `steps`
+(число измеренных шагов) и p50/p99 относятся к прошедшему интервалу.
+Отказы включают отказ политики и применения выбранного действия.
+Время шага измеряется в микросекундах; при отсутствии шагов оба процентиля равны 0.
+При завершении боя по отказу сообщение отправляется сразу с `final:true`:
+runtime fallback даёт `reason:"policy_fallback:<reason>"`, ошибка политики —
+`policy_error`, окончательный отказ применения — `body_action_rejected`.
+Отказы применения `stale_observation`, `expired`, `expired_wall`, `command_busy`,
+`target_invalid`, `masked`, `locked` допускают до десяти последовательных попыток
+по новым строкам, как в серверном пилоте.
+Периодическое сообщение имеет `final:false`, `reason:""`.
 
 ### Действия
 
