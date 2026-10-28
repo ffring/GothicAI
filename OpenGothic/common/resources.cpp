@@ -251,6 +251,8 @@ void Resources::mountWork(const std::filesystem::path& path) {
 
 void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFilter) {
   auto archives = BaseImport::runtimeArchives(std::filesystem::path(CommandLine::inst().rootPath()));
+  const bool installationAvailable=std::any_of(archives.begin(),archives.end(),
+                                               [](const auto& archive) { return !archive.mod && archive.name.ends_with(".VDF"); });
 
   // Remove all mod files, that are not listed in modvdfs
   if(modFilter) {
@@ -295,49 +297,58 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
       if(inst->baseProgress) inst->baseProgress(message);
       });
     inst->indexBaseContent();
-    inst->baseTextures.validate(mounted);
-    inst->baseMeshes.validate(mounted);
-    inst->baseZen.validate(mounted);
-    inst->baseZen.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
-    inst->baseModels.validate(mounted);
-    inst->baseModels.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
-    inst->baseFonts.validate(mounted);
-    inst->baseFonts.validateLoose(std::filesystem::path(CommandLine::inst().rootPath()));
-    if(inst->basePrograms.archives!=mounted)
+    auto validationArchives=mounted;
+    BaseImport::Files identityLoose;
+    if(!installationAvailable) {
+      validationArchives.clear();
+      const auto identity=BaseImport::readIdentity(inst->automaticBase.path);
+      rapidjson::Document metadata;
+      metadata.Parse(identity.json.data(),identity.json.size());
+      for(const auto& archive:metadata["archives"].GetArray())
+        validationArchives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
+      std::sort(validationArchives.begin(),validationArchives.end());
+      for(const auto& file:metadata["loose_files"].GetArray())
+        identityLoose.emplace_back(file["path"].GetString(),file["size"].GetUint64());
+      std::sort(identityLoose.begin(),identityLoose.end());
+      }
+    const auto validateLoose=[&](const BaseImport::Files& files, std::string_view family) {
+      for(const auto& file:files) {
+        bool matches=false;
+        if(installationAvailable) {
+          std::error_code error;
+          const auto actual=std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/file.first,error);
+          matches=!error && actual==file.second;
+          }
+        else {
+          matches=std::binary_search(identityLoose.begin(),identityLoose.end(),file);
+          }
+        if(!matches)
+          throw std::runtime_error("loose file differs from "+std::string(family)+" base index: "+file.first);
+        }
+      };
+    inst->baseTextures.validate(validationArchives);
+    inst->baseMeshes.validate(validationArchives);
+    inst->baseZen.validate(validationArchives);
+    validateLoose(inst->baseZen.looseFiles,"zen");
+    inst->baseModels.validate(validationArchives);
+    validateLoose(inst->baseModels.looseFiles,"models");
+    inst->baseFonts.validate(validationArchives);
+    validateLoose(inst->baseFonts.looseFiles,"fonts");
+    if(inst->basePrograms.archives!=validationArchives)
       throw std::runtime_error("mounted archives differ from program base index: "+inst->basePrograms.dir.string());
-    for(const auto& [path,size]:inst->basePrograms.looseFiles) {
-      std::error_code error;
-      const auto actual = std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/path,error);
-      if(error || actual!=size)
-        throw std::runtime_error("loose file differs from program base index: "+path);
-      }
+    validateLoose(inst->basePrograms.looseFiles,"program");
     Log::i("base: ",inst->basePrograms.programs.size()," programs from \"",inst->basePrograms.dir.string(),"\"");
-    if(inst->baseOutputUnits.archives!=mounted)
+    if(inst->baseOutputUnits.archives!=validationArchives)
       throw std::runtime_error("mounted archives differ from output units base index: "+inst->baseOutputUnits.dir.string());
-    for(const auto& [path,size]:inst->baseOutputUnits.looseFiles) {
-      std::error_code error;
-      const auto actual = std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/path,error);
-      if(error || actual!=size)
-        throw std::runtime_error("loose file differs from output units base index: "+path);
-      }
+    validateLoose(inst->baseOutputUnits.looseFiles,"output units");
     Log::i("base: ",inst->baseOutputUnits.records.size()," output units records from \"",inst->baseOutputUnits.dir.string(),"\"");
-    if(inst->baseAudio.archives!=mounted)
+    if(inst->baseAudio.archives!=validationArchives)
       throw std::runtime_error("mounted archives differ from audio base index: "+inst->baseAudio.dir.string());
-    for(const auto& [path,size]:inst->baseAudio.looseFiles) {
-      std::error_code error;
-      const auto actual = std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/path,error);
-      if(error || actual!=size)
-        throw std::runtime_error("loose file differs from audio base index: "+path);
-      }
+    validateLoose(inst->baseAudio.looseFiles,"audio");
     Log::i("base: ",inst->baseAudio.sounds.size()," sounds from \"",inst->baseAudio.dir.string(),"\"");
-    if(inst->baseMusic.archives!=mounted)
+    if(inst->baseMusic.archives!=validationArchives)
       throw std::runtime_error("mounted archives differ from music base index: "+inst->baseMusic.dir.string());
-    for(const auto& [path,size]:inst->baseMusic.looseFiles) {
-      std::error_code error;
-      const auto actual = std::filesystem::file_size(std::filesystem::path(CommandLine::inst().rootPath())/path,error);
-      if(error || actual!=size)
-        throw std::runtime_error("loose file differs from music base index: "+path);
-      }
+    validateLoose(inst->baseMusic.looseFiles,"music");
     Log::i("base: ",inst->baseMusic.records.size()," music records from \"",inst->baseMusic.dir.string(),"\"");
     inst->baseProgress={};
     }
@@ -958,19 +969,6 @@ void Resources::BaseIndex::validate(const std::vector<std::pair<std::string,uint
     Log::i("base: ",files.size()," entries from \"",dir.string(),"\"");
   else
     throw std::runtime_error("mounted archives differ from base index: "+dir.string());
-  }
-
-void Resources::BaseIndex::validateLoose(const std::filesystem::path& game) {
-  if(!enabled)
-    return;
-  for(const auto& [path,size]:looseFiles) {
-    std::error_code error;
-    const auto actual=std::filesystem::file_size(game/path,error);
-    if(error || actual!=size) {
-      enabled=false;
-      throw std::runtime_error("loose file differs from base index: "+path);
-      }
-    }
   }
 
 std::filesystem::path Resources::worldOverrideDir(std::string_view world) {

@@ -130,6 +130,14 @@ def test_the_quick_model_is_on_unless_turned_off(config, tmp_path):
     assert "--no-quick" in by_name(services(config, LAYOUT, PORTS, tmp_path))["server"].argv
 
 
+@pytest.mark.parametrize("policy", ["engine", "service"])
+def test_body_policy_is_passed_without_requiring_a_service_url(config, tmp_path, policy):
+    config.set("llm.body_policy", policy)
+    args = by_name(services(config, LAYOUT, PORTS, tmp_path))["server"].argv
+    assert args[args.index("--body-policy") + 1] == policy
+    assert "--body-url" not in args and "--no-neural-body" not in args
+
+
 def test_the_game_runs_in_its_home_and_finds_the_server(config):
     config.set("game.chat_scale", "1.5")
     g = game(config, LAYOUT, PORTS)
@@ -140,6 +148,8 @@ def test_the_game_runs_in_its_home_and_finds_the_server(config):
     assert game(config, LAYOUT, PORTS, new=True).argv[-1] == "-nomenu"
     config.set("game.dev_mode", "true")
     assert game(config, LAYOUT, PORTS).argv[-1] == "-devmode"
+    config.set("llm.body_net", "/nets/p30.bodynet")
+    assert game(config, LAYOUT, PORTS).env["OPENGOTHIC_BODY_NET"] == "/nets/p30.bodynet"
 
 
 def test_the_game_gets_the_sharper_textures_when_they_are_made(config, tmp_path):
@@ -204,10 +214,12 @@ def test_latest_save(tmp_path):
 def test_the_inherited_environment_cannot_override_the_settings(monkeypatch):
     monkeypatch.setenv("GOTHIC_TTS_PROVIDER", "codex")
     monkeypatch.setenv("INWORLD_API_KEY", "from-the-shell")
+    monkeypatch.setenv("OPENGOTHIC_BODY_NET", "/shell/p30.bodynet")
     monkeypatch.setenv("HOME_TEST_VALUE", "kept")
     monkeypatch.setenv("VIRTUAL_ENV", "/launcher/.venv")
     env = child_env({"GOTHIC_AI_URL": "ws://127.0.0.1:1"})
     assert "GOTHIC_TTS_PROVIDER" not in env and "INWORLD_API_KEY" not in env and "VIRTUAL_ENV" not in env
+    assert "OPENGOTHIC_BODY_NET" not in env
     assert env["HOME_TEST_VALUE"] == "kept" and env["GOTHIC_AI_URL"] == "ws://127.0.0.1:1"
     assert env["PYTHONUNBUFFERED"] == "1"
 
@@ -302,6 +314,7 @@ def test_smoke_overrides_never_spend_model_quota_or_change_saved_settings(config
     assert server.argv[server.argv.index("--llm") + 1] == "fake"
     assert {"--no-quick", "--no-voice", "--no-tts"}.issubset(server.argv)
     assert not {"--decider-url", "--quick-url", "--body-url"}.intersection(server.argv)
+    assert server.argv[server.argv.index("--body-policy") + 1] == "service"
     assert config.settings_path.read_text() == saved
 
 

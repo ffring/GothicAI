@@ -26,6 +26,7 @@
 #include "game/gamescript.h"
 #include "game/bodyobservations.h"
 #include "game/bodycontroller.h"
+#include "game/bodyenginepolicy.h"
 #include "game/inventory.h"
 #include "game/herodeed.h"
 #include "game/serialize.h"
@@ -66,7 +67,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 53;
+constexpr int         ProtocolVersion = 54;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -538,6 +539,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
         envelope.Parse(events.c_str(),events.size());
         if(envelope.HasMember("events") && !envelope["events"].Empty())
           send(std::move(events));
+        for(auto& report:BodyController::drainPolicyJson())
+          send(std::move(report));
         }
       }
     tickVoices(*world);
@@ -567,6 +570,7 @@ void AiBridge::Impl::processInbound(World* world, Inbound& in) {
              .integer("protocol",ProtocolVersion)
              .str("client","opengothic-ai-bridge")
              .str("codepage","cp1251")
+             .raw("body_net",BodyEnginePolicy::netStatusJson())
              .finish());
       session.reason = "connect";
       sendSession();

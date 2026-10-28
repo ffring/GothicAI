@@ -23,6 +23,7 @@ from gothic_ai.protocol import (
     NpcRoster,
     Result,
     RosterEntry,
+    parse_game_message,
 )
 from tests.test_body_control import controlled, event, events, receipt, visibility_diagnostics
 from tests.test_body_observations import message, observation, packet
@@ -872,14 +873,17 @@ class Rig:
 async def running(
     *, companion=False, unavailable=False, talking=False,
     max_fights=4, multi=False, protocol=PROTOCOL_VERSION,
+    body_policy="engine", body_net=None, has_url=True,
 ):
     bridge, policy, clock = MultiBridge() if multi else Bridge(), Policy(), Clock()
     if protocol is not None:
-        bridge.link._dispatch(Hello(type="hello", protocol=protocol, client="fake", codepage="utf-8"))
+        bridge.link._dispatch(Hello(
+            type="hello", protocol=protocol, client="fake", codepage="utf-8", body_net=body_net,
+        ))
     server = await asyncio.start_server(policy.handle, host="127.0.0.1", port=0)
     host, port = server.sockets[0].getsockname()
     pilot = BodyPilot(
-        bridge.link, f"tcp://{host}:{port}",
+        bridge.link, f"tcp://{host}:{port}" if has_url else None, body_policy=body_policy,
         companion=companion if callable(companion) else lambda _: companion,
         unavailable=lambda _: unavailable, clock=clock, max_fights=max_fights,
         talking=talking if callable(talking) else lambda _: talking,
@@ -894,6 +898,113 @@ async def running(
         await server.wait_closed()
         await policy.close()
         await bridge.close()
+
+
+@pytest.mark.parametrize(
+    ("requested", "body_net", "has_url", "selected"),
+    [
+        ("engine", {"loaded": True}, False, "engine"),
+        ("engine", {"loaded": False, "error": "missing weights"}, True, "service"),
+        ("engine", {"loaded": False, "error": "missing weights"}, False, None),
+        ("engine", None, False, None),
+        ("service", {"loaded": True}, True, "service"),
+        ("service", {"loaded": True}, False, None),
+    ],
+)
+async def test_policy_route_uses_current_hello_once_per_connection(
+    caplog, requested, body_net, has_url, selected,
+):
+    async with running(body_policy=requested, body_net=body_net, has_url=has_url) as rig:
+        assert rig.pilot.policy == selected
+        if selected is None:
+            rig.roster()
+            rig.combat()
+            rig.combat()
+            assert not rig.pilot.fights and not rig.bridge.commands("body_watch")
+        warnings = [record.message for record in caplog.records if "engine unavailable" in record.message]
+        unavailable = requested == "engine" and not (body_net and body_net["loaded"])
+        assert len(warnings) == int(unavailable)
+        if unavailable:
+            assert (body_net["error"] if body_net else "body_net missing from hello") in warnings[0]
+        rig.link._dispatch(Hello(
+            type="hello", protocol=PROTOCOL_VERSION, client="reconnected", codepage="utf-8",
+            body_net={"loaded": True},
+        ))
+        assert rig.pilot.policy == ("engine" if requested == "engine" else selected)
+
+
+@pytest.mark.parametrize(
+    ("end", "restore_first", "final_summary"),
+    [("npc_down", False, False), ("policy_fallback:policy_error", False, False), *[
+        (f"policy_fallback:{reason}", restore_first, True)
+        for reason in ("policy_error", "body_action_rejected")
+        for restore_first in (False, True)
+    ]],
+)
+async def test_engine_lease_heartbeats_and_interval_summaries_without_service_or_actions(
+    end, restore_first, final_summary, caplog,
+):
+    caplog.set_level("INFO", logger="gothic_ai.bodypilot")
+    async with running(body_net={"loaded": True}, has_url=False) as rig:
+        await rig.acquire()
+        await eventually(lambda: len(rig.bridge.commands("body_heartbeat")) >= 2)
+        lease = rig.fight.lease
+        assert rig.bridge.commands("body_acquire")[0]["policy"] == "engine"
+        assert rig.fight.client is None and rig.fight._policy_watchdog_task is None
+        assert not rig.policy.connections and not rig.bridge.commands("body_action")
+
+        def publish(**updates):
+            fields = {
+                "type": "body_policy", "session_epoch": lease.session_epoch,
+                "world_epoch": lease.world_epoch, "entity_id": lease.entity_id,
+                "control_generation": lease.control_generation, "goal_version": lease.goal_version,
+                "target_entity_id": lease.target_entity_id, "t_game_ms": 1000, "t_wall_ms": 1000,
+                "decisions": 6, "fallbacks": {}, "steps": 7, "p50_us": 50, "p99_us": 300,
+                "final": False, "reason": "",
+            }
+            rig.link._dispatch(parse_game_message(json.dumps({**fields, **updates})))
+
+        publish(entity_id=lease.entity_id + 1)
+        publish(control_generation=lease.control_generation - 1)
+        publish()
+        publish()  # A repeated interval must not count twice.
+        transient_refusals = {"command_busy": 1, "stale_observation": 1}
+        publish(
+            t_wall_ms=2000, decisions=8, steps=10, p50_us=40, p99_us=200,
+            fallbacks=transient_refusals,
+        )
+        assert rig.fight._fallbacks == 0
+        refusals = {"masked": 10} if end.endswith("body_action_rejected") else {"policy_error": 1}
+        if end.startswith("policy_fallback:"):
+            if restore_first:
+                rig.bridge.restore_native(release_reason=end)
+                rig.link._dispatch(events(rig.bridge.control_events.popleft()))
+            if final_summary:
+                publish(
+                    t_wall_ms=2100, decisions=3, steps=4, final=True,
+                    fallbacks=refusals, reason=end,
+                )
+            if not restore_first:
+                rig.bridge.restore_native(release_reason=end)
+        else:
+            down = fighter(4, owned=True)
+            down["self"]["down"] = True
+            rig.bridge.emit(down)
+        await eventually(lambda: rig.pilot.last_summary is not None)
+        summary = rig.pilot.last_summary
+        assert summary.policy == "engine" and summary.reason == end
+        assert summary.decisions == (17 if final_summary else 14)
+        assert summary.engine_steps == (21 if final_summary else 17)
+        assert summary.engine_max_interval_p50_us == 50 and summary.engine_p99_us == 300
+        assert summary.fallbacks == int(end.startswith("policy_fallback:"))
+        expected_refusals = transient_refusals | (refusals if summary.fallbacks else {})
+        assert summary.policy_fallbacks == tuple(sorted(expected_refusals.items()))
+        assert summary.release_confirmed and summary.release_seconds < 2 and summary.watch_removed
+        assert not rig.policy.requests and not rig.bridge.commands("body_action")
+        assert any(
+            f"decisions={summary.decisions}" in record.message and "policy=engine" in record.message
+            for record in caplog.records if record.message.startswith("neural-body end ")
+        )
 
 
 async def test_acquire_immediately_resets_before_first_owned_row_and_exact_wire_actions():

@@ -50,24 +50,27 @@
 #       intents moving the body, and an incident: the body reacts before the words (behavioral model:
 #       DECIDER_URL, or a fixed stand-in); with QUICK_URL the words are the quick model's line, at once
 #   neural: a one-handed bandit fights the hero under the P30 body pilot through the full lease cycle;
-#       requires GOTHIC_BODY_URL, a new game, >=10 decisions, no fallback, service p95 <=20 ms
-#   neural-companion: the bandit attacks the hero's swordsman companion, >=6 decisions, no fallback,
+#       requires a new game, >=10 decisions, no fallback, engine step p99 <=2000 us
+#   neural-companion: the bandit attacks the hero's swordsman companion, >=10 decisions (service >=6), no fallback,
 #       a companion target in the fight summary, natural fight end and confirmed release
 #   neural-group: three one-handed bandits fight the hero and his swordsman companion under P30 at once;
-#       each gets >=10 decisions, no fallback, release <=2 s, service p95 <=20 ms; requires GOTHIC_BODY_URL
+#       each gets >=10 decisions, no fallback, release <=2 s, engine step p99 <=2000 us
 #   neural-talk: a non-bandit swordsman attacks after words (AR_NONE), knocks the hero out alive, releases
 #       P30 and returns to his routine; the hero gets up. Then a hostile bandit gives a ten-second
 #       ultimatum, attacks after its expiry, loses the
 #       fleeing hero, returns to his routine, reattacks or talks again and starts a fresh fight. After
 #       return_to_second_fight, >=20 decisions or 20 s trigger another hero flight; fight_end_clean checks
-#       target_lost/npc_unavailable, release <=2 s and no lease/body/watch after 2 s; LLM=fake, GOTHIC_BODY_URL
+#       target_lost/npc_unavailable, release <=2 s and no lease/body/watch after 2 s; LLM=fake
 #       one hero hit breaks 15 s without target damage; stall_broken reports count and seconds as P30
 #       diagnostics. Only the separate knockout requires hero_down within 30 s after that hit;
 #       wildlife is cleared and the swordsman parked away
 #   neural-load: load an initial save while three bandits hold P30 leases; all fights end with loading,
-#       release their leases and watch, then one bandit fights under P30 again; requires GOTHIC_BODY_URL
+#       release their leases and watch, then one bandit fights under P30 again
 #   neural-soak: bandit waves in the ordinary new-game world with a swordsman companion; LLM=fake,
 #       GOTHIC_BODY_URL, GOTHIC_SOAK_SECONDS=1800 by default; TIMEOUT=2400 for the full run.
+#       Keeps service policy: WAIT_200 and accepted-action fractions need per-action RPC data absent
+#       from engine body_policy summaries. Other neural scenarios default to engine, or use
+#       GOTHIC_BODY_POLICY=service with GOTHIC_BODY_URL and service p95 <=20 ms.
 #       GOTHIC_SOAK_CONTROL=1 uses native combat with --no-neural-body and needs no body URL.
 #       Samples in neural_soak.jsonl; records 25 s of the first wave when normal-clock bench is available
 #   rescue: the hero next to the shepherd Maleth, a wolf attacks him: the body reacts (a call for help
@@ -115,7 +118,8 @@
 #        turns up, Xardas finds out, attacks him through the scripts, and Jora, standing by, hears it as a
 #        rumor and has it in mind when the hero speaks to her (story graph, stage 4)
 #   death_load: human deaths before/after older-save load, player credit, and no repeated saved deaths; LLM=fake, no SAVE.
-#   feats: save before a hero kill, chronicler feat with evidence, category toast icon and journal, then load rollback; LLM=fake, no SAVE.
+#   feats: save before a hero kill, chronicler feat with evidence, fake-generated picture, toast and journal;
+#       load rolls back feat/image facts while retaining picture files; LLM=fake, no SAVE, no codex call.
 #   repair: Lobart gives the hero the turnip quest and dies; the director finds the quest without an ending,
 #       its model proposes a repair (scripted with LLM=fake: first the dead Lobart, rejected by the validator,
 #       then Hilda), and the hero ends the quest with Hilda for Lobart's reward (story graph, stage 5)
@@ -397,7 +401,9 @@ GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 GAME_BIN="${GAME_BIN:-$ROOT/OpenGothic/build/opengothic/Gothic2Notr}"
 LOG_DIR="${LOG_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/gothic-e2e.XXXXXX")}"
 SCENARIO="${SCENARIO:-m0}"
-BODY_ARGS=(--neural-body)
+BODY_POLICY="${GOTHIC_BODY_POLICY:-engine}"
+BODY_ARGS=(--neural-body --body-policy "$BODY_POLICY")
+if [[ "$SCENARIO" == memprobe ]]; then BODY_ARGS=(--no-neural-body); fi
 if [[ "${GOTHIC_SOAK_CONTROL:-0}" == 1 && "$SCENARIO" != neural-soak ]]; then
   echo 'GOTHIC_SOAK_CONTROL requires SCENARIO=neural-soak' >&2
   exit 2
@@ -414,7 +420,13 @@ if [[ "$SCENARIO" = neural || "$SCENARIO" = neural-companion || "$SCENARIO" = ne
   if [[ "$SCENARIO" == neural-soak && "${GOTHIC_SOAK_CONTROL:-0}" == 1 ]]; then
     BODY_ARGS=(--no-neural-body)
   else
-    [ -n "${GOTHIC_BODY_URL:-}" ] || { echo "scenario $SCENARIO requires GOTHIC_BODY_URL=tcp://host:port" >&2; exit 2; }
+    if [[ "$SCENARIO" == neural-soak ]]; then
+      BODY_POLICY=service
+      BODY_ARGS=(--neural-body --body-policy service)
+    fi
+    if [[ "$BODY_POLICY" == service ]]; then
+      [ -n "${GOTHIC_BODY_URL:-}" ] || { echo "scenario $SCENARIO with service policy requires GOTHIC_BODY_URL=tcp://host:port" >&2; exit 2; }
+    fi
   fi
   [ -z "${SAVE:-}" ] || { echo "scenario $SCENARIO requires a new game (unset SAVE)" >&2; exit 2; }
 fi

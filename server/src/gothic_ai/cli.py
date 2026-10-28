@@ -16,6 +16,7 @@ import tomllib
 from array import array
 from contextlib import nullcontext
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from . import (
@@ -59,6 +60,7 @@ from .dialogue import REACT_HINT, SVM_HINT, DialogueManager
 from .director import Director
 from .errands import Errands
 from .executor import Intent
+from .feat_art import Artist
 from .feats import Feats
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
@@ -126,6 +128,7 @@ from .scenarios.crime_director import crime_director as crime_director_scenario
 from .scenarios.crime_law import crime_law as crime_law_scenario
 from .scenarios.crime_talk import crime_talk as crime_talk_scenario
 from .scenarios.crimes import crimes as crimes_scenario
+from .scenarios.feats import ScenarioArtist
 from .showrunner import Showrunner
 from .sightings import Sightings
 from .social import Rumors
@@ -738,11 +741,13 @@ def _start_showrunner(args: argparse.Namespace, showrunner: Showrunner) -> async
 
 
 def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -> BodyPilot | None:
-    if not args.neural_body or not args.body_url:
+    policy = getattr(args, "body_policy", "engine")
+    if not args.neural_body or (policy == "service" and not args.body_url):
         return None
     return BodyPilot(
         link,
         args.body_url,
+        body_policy=policy,
         max_fights=args.neural_body_max,
         companion=talk.orders.companion,
         unavailable=lambda npc: npc.upper() in talk.attached,
@@ -802,6 +807,9 @@ async def serve(args: argparse.Namespace) -> int:
     if soak_control and args.neural_body:
         log.error("scenario neural-soak control requires --no-neural-body")
         return 2
+    if args.scenario == "neural-soak" and not soak_control:
+        # Action-distribution thresholds need service RPC data, absent from body_policy summaries.
+        args.body_policy = "service"
     if args.scenario in {
         "neural",
         "neural-companion",
@@ -809,8 +817,11 @@ async def serve(args: argparse.Namespace) -> int:
         "neural-talk",
         "neural-load",
         "neural-soak",
-    } and not soak_control and (not args.body_url or not args.neural_body):
-        log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
+    } and not soak_control and (
+        not args.neural_body or (args.body_policy == "service" and not args.body_url)
+    ):
+        log.error("scenario %s requires --neural-body and, for service policy, GOTHIC_BODY_URL "
+                  "(or --body-url)", args.scenario)
         return 2
     if args.scenario in {"neural-soak", "feats"} and args.llm != "fake":
         log.error("scenario %s requires --llm fake", args.scenario)
@@ -841,7 +852,10 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
-    log.info("neural body: %s", args.body_url if args.neural_body and args.body_url else "off")
+    log.info(
+        "neural body: policy=%s service=%s",
+        args.body_policy if args.neural_body else "off", args.body_url,
+    )
     log.info("lines in a fight: %s", quick_at or "the conversational model")
     log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
     graph = (
@@ -962,10 +976,20 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
-        state.feats = (
-            Feats(link, state.chronicle, llm, journal=journal, gather_s=1 if args.scenario == "feats" else 20)
-            if not args.no_feats and args.scenario in {None, "feats"} else None
-        )
+        feat_image_root = None
+        if not args.no_feats and args.scenario in {None, "feats"}:
+            artist = None
+            if not args.no_feat_images:
+                if args.scenario == "feats":
+                    feat_image_root = TemporaryDirectory(prefix="feat-images-")
+                    artist = ScenarioArtist(Path(feat_image_root.name), codex="scenario")
+                else:
+                    artist = Artist()
+            state.feats = Feats(
+                link, state.chronicle, llm, journal=journal,
+                gather_s=1 if args.scenario == "feats" else 20,
+                artist=artist, image_wait_s=30 if args.scenario == "feats" else 150,
+            )
         if not args.no_crimes:
             state.crimes = Crimes(
                 link,
@@ -1460,6 +1484,8 @@ async def serve(args: argparse.Namespace) -> int:
                 task.cancel()
             if state.feats is not None:
                 await state.feats.close()
+            if feat_image_root is not None:
+                feat_image_root.cleanup()
             if state.questlog is not None:
                 await state.questlog.close()
             if state.book is not None:
@@ -3186,15 +3212,21 @@ def main() -> None:
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
     )
     p.add_argument(
+        "--body-policy",
+        choices=("engine", "service"),
+        default=os.environ.get("GOTHIC_BODY_POLICY", "engine"),
+        help="combat policy location (GOTHIC_BODY_POLICY; default: engine)",
+    )
+    p.add_argument(
         "--body-url",
         default=os.environ.get("GOTHIC_BODY_URL"),
-        help="body policy service at tcp://host:47835 (GOTHIC_BODY_URL; without it the pilot is off)",
+        help="backup body policy service at tcp://host:47835 (GOTHIC_BODY_URL)",
     )
     p.add_argument(
         "--neural-body",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="let the body policy fight the hero or companions with eligible npcs (requires --body-url)",
+        help="let the body policy fight the hero or companions with eligible npcs (default: on)",
     )
     p.add_argument(
         "--neural-body-max",
@@ -3247,6 +3279,11 @@ def main() -> None:
         "--no-feats",
         action="store_true",
         help="disable the chronicler's feats (enabled by default outside scenarios and in feats)",
+    )
+    p.add_argument(
+        "--no-feat-images",
+        action="store_true",
+        help="disable generated feat pictures; use category icons for toasts",
     )
     p.add_argument(
         "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"

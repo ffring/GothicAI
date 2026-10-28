@@ -244,7 +244,6 @@ class Resources final {
 
       void load(const std::filesystem::path& root, const char* kind);
       void validate(const std::vector<std::pair<std::string,uintmax_t>>& mounted);
-      void validateLoose(const std::filesystem::path& game);
       };
     BaseIndex baseTextures, baseMeshes, baseZen, baseModels, baseFonts;
     ProgramData::Index basePrograms;

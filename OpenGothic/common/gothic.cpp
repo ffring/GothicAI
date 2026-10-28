@@ -16,6 +16,7 @@
 #include <zenkit/addon/daedalus.hh>
 
 #include "game/definitions/definitiontypes.h"
+#include "game/bodyenginepolicy.h"
 #include "game/definitions/visualfxdefinitions.h"
 #include "game/definitions/sounddefinitions.h"
 #include "game/definitions/cameradefinitions.h"
@@ -38,6 +39,7 @@ Gothic* Gothic::instance = nullptr;
 
 Gothic::Gothic() {
   instance = this;
+  BodyEnginePolicy::initialize();
   if(!Resources::isHeadless())
     sndDev = std::make_unique<Tempest::SoundDevice>();
 
