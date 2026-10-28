@@ -410,7 +410,7 @@ void Resources::videoFrameRead(std::string_view name) {
   auto found=inst->videoBase->files.find(key);
   if(found==inst->videoBase->files.end()) found=inst->videoBase->files.find(key+".BIK");
   if(found!=inst->videoBase->files.end())
-    inst->census->replaced(key,"base/videos/"+found->second.filename().string());
+    inst->census->replaced(found->first,"base/videos/"+found->second.filename().string());
   }
 
 void Resources::initCensus() {

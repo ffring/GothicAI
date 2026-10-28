@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
-#include <array>
 #include <memory>
 #include <stdexcept>
 #include <system_error>
@@ -128,7 +127,7 @@ void publishVideo(const fs::path& temporary, const fs::path& destination,
 void copyVideo(const fs::path& source, const fs::path& destination,
                const VideoData::Identity& identity, const std::atomic_bool* cancelled) {
   Temporary temporary(destination);
-  std::array<char,1<<20> buffer;
+  std::vector<char> buffer(1<<20);
   for(const auto& entry:fs::recursive_directory_iterator(source)) {
     checkVideoCancelled(cancelled);
     const auto target=temporary.path/fs::relative(entry.path(),source);
