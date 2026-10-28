@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import resource
+import statistics
 import subprocess
 import sys
 import time
@@ -69,6 +70,47 @@ def damage_rows(output: Path) -> list[dict]:
                 if (row := json.loads(line)).get("kind") == "body_combat" and row.get("phase") == "damage"]
 
 
+def add_posture_metrics(episodes: list[dict], path: Path, *, enabled: bool) -> dict:
+    """Match journal rows by the configured duel seed and count subsequent defeats."""
+    groups = {}
+    for line in path.read_text().splitlines() if path.is_file() else ():
+        row = json.loads(line)
+        groups.setdefault(row["arena_seed"], []).append(row)
+    seeds = {episode["seed"] for episode in episodes}
+    if groups.keys()-seeds:
+        raise RuntimeError("posture journal contains an unknown duel seed")
+    for episode in episodes:
+        rows = groups.get(episode["seed"], [])
+        if enabled and not rows and any(d["damage_kind"] == "melee" and d["has_hit"] for d in episode["damage"]):
+            raise RuntimeError(f"posture journal is missing duel seed {episode['seed']}")
+        falls = [row for row in rows if row["event"] == "knockdown"]
+        defeats = [row for row in episode["damage"] if row["down"] or row["dead"]]
+        episode["knockdowns"] = len(falls)
+        episode["knockdown_defeats_within_3s"] = sum(
+            any(d["actor"] == fall["target"]["name"] and 0 <= d["t_game"]-fall["tick_ms"] <= 3000
+                for d in defeats) for fall in falls)
+    outcomes = Counter(episode["reason"] for episode in episodes)
+    knockdowns = sum(episode["knockdowns"] for episode in episodes)
+    defeats = sum(episode["knockdown_defeats_within_3s"] for episode in episodes)
+    rows = [row for group in groups.values() for row in group]
+    starts = [row for row in rows if row["event"] == "getup_start" and "wait_ms" in row]
+    durations = [row["getup_duration_ms"] for row in rows if row["event"] == "recover" and "getup_duration_ms" in row]
+    forced = sum(row["forced"] for row in starts)
+    result = {"duels": len(episodes), "wins": outcomes["opponent_down"], "losses": outcomes["primary_down"],
+              "timeouts": outcomes["time_limit"],
+              "mean_duration_s": sum(e.get("game_ms", e.get("elapsed_game_ms", 0)) for e in episodes)/1000/len(episodes),
+              "knockdowns": knockdowns, "knockdowns_per_duel": knockdowns/len(episodes),
+              "knockdown_defeats_within_3s": defeats,
+              "knockdown_defeat_fraction": defeats/knockdowns if knockdowns else 0,
+              "getup_starts": len(starts), "getup_completed": len(durations), "forced_getup_starts": forced,
+              "forced_getup_fraction": forced/knockdowns if knockdowns else None,
+              "forced_getup_start_fraction": forced/len(starts) if starts else None}
+    for name, values in (("getup_wait_ms", [row["wait_ms"] for row in starts]), ("getup_duration_ms", durations)):
+        result.update({name+"_median": statistics.median(values) if values else None,
+                       name+"_min": min(values) if values else None, name+"_max": max(values) if values else None})
+    return result
+
+
 def shadow_coverage(path: Path, episodes: list[dict]) -> dict:
     """Each fork starts at the same game time; account for its final hit too."""
     groups = []
@@ -121,7 +163,8 @@ def shadow_comparison(results: list[dict]) -> dict | None:
 
 
 def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: bool, watch: bool,
-                visibility: bool = True, off=(), env=None, extra=(), melee_shadow=None, melee_physics_hits=None) -> dict:
+                visibility: bool = True, off=(), env=None, extra=(), melee_shadow=None, melee_physics_hits=None,
+                melee_posture=None) -> dict:
     output = args.output/name
     output.mkdir(parents=True)
     variant = argparse.Namespace(**vars(args))
@@ -130,6 +173,7 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
     variant.compact_replies = True
     variant.runner_extra_args = list(extra)
     variant.melee_shadow = melee_shadow
+    variant.melee_posture = melee_posture
     if melee_shadow is not None:
         # Both collectors copy this private INI; the archived reference stays unchanged.
         variant.reference = output/"reference"
@@ -142,6 +186,8 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
         config.set("GAME", "melee_blade_shadow", str(melee_shadow))
         if melee_physics_hits is not None:
             config.set("GAME", "melee_physics_hits", str(melee_physics_hits))
+        if melee_posture is not None:
+            config.set("GAME", "melee_posture", str(melee_posture))
         with settings.open("w") as stream:
             config.write(stream)
     os.environ.pop("OPENGOTHIC_BODY_TRACE", None)
@@ -212,6 +258,13 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             "game_speed": sum(e["game_ms"] for e in episodes)/1000/max(wall, 1e-9)}
     if args.checkpoint is not None:
         result["policy"] = run_policy(variant, output)
+    if melee_posture is not None:
+        result["posture"] = {"native": add_posture_metrics(episodes, output/"run/melee-posture.jsonl",
+                                                            enabled=melee_posture == 1)}
+        if "policy" in result:
+            result["posture"]["policy"] = add_posture_metrics(result["policy"]["episodes"],
+                                                               output/"policy/worker-00/run/melee-posture.jsonl",
+                                                               enabled=melee_posture == 1)
     if melee_shadow == 1 and name=="shadow-on":
         result["shadow_coverage"] = {"native": shadow_coverage(output/"run/melee-blade-shadow.jsonl", episodes)}
         if "policy" in result:
@@ -262,7 +315,11 @@ def main() -> int:
              "hits-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
                               env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=0),
              "hits-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
-                             env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1)}
+                             env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1),
+             "posture-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                                 env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1, melee_posture=0),
+             "posture-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                                env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1, melee_posture=1)}
     results = [run_variant(args, name, **table[name]) for name in args.variants.split(",")]
     comparison = shadow_comparison(results)
     (args.output/"bench.json").write_text(json.dumps({"schema_version": 1, "kind": "body_sim_bench", "quality_credit": False,
@@ -277,6 +334,15 @@ def main() -> int:
             print(f"   policy: {policy['decisions_per_s']:.2f} decisions/s incl. resets, "
                   f"{policy['rollout_decisions_per_s']:.2f} rollout decisions/s, "
                   f"{policy['ms_per_tick']:.2f} ms/tick, fallbacks {policy['fallbacks']}", flush=True)
+        for provider, summary in result.get("posture", {}).items():
+            print(f"   posture {provider}: {summary['wins']}/{summary['losses']}/{summary['timeouts']} W/L/T, "
+                  f"{summary['mean_duration_s']:.3f} s, {summary['knockdowns_per_duel']:.3f} KD/duel, "
+                  f"{summary['knockdown_defeats_within_3s']}/{summary['knockdowns']} defeats within 3 s", flush=True)
+            print(f"   get-up {provider}: {summary['getup_starts']} starts, {summary['getup_completed']} completed, "
+                  f"wait median {summary['getup_wait_ms_median']} ms [{summary['getup_wait_ms_min']}, {summary['getup_wait_ms_max']}], "
+                  f"transition median {summary['getup_duration_ms_median']} ms "
+                  f"[{summary['getup_duration_ms_min']}, {summary['getup_duration_ms_max']}], "
+                  f"forced {summary['forced_getup_starts']}/{summary['knockdowns']} knockdowns", flush=True)
     coverage_failed = False
     for result in results:
         for name, row in result.get("shadow_coverage", {}).items():

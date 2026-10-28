@@ -807,9 +807,6 @@ async def serve(args: argparse.Namespace) -> int:
     if soak_control and args.neural_body:
         log.error("scenario neural-soak control requires --no-neural-body")
         return 2
-    if args.scenario == "neural-soak" and not soak_control:
-        # Action-distribution thresholds need service RPC data, absent from body_policy summaries.
-        args.body_policy = "service"
     if args.scenario in {
         "neural",
         "neural-companion",

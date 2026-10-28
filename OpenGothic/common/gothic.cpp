@@ -122,6 +122,8 @@ Gothic::Gothic() {
   defaults->set("GAME", "monster_character_virtual",1);
   defaults->set("GAME", "melee_blade_shadow",    1);
   defaults->set("GAME", "melee_physics_hits",    1);
+  defaults->set("GAME", "melee_reactions",       1);
+  defaults->set("GAME", "melee_posture",         1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -884,7 +886,9 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","npc_character_virtual")!=0,
     settingsGetI("GAME","monster_character_virtual")!=0,
     settingsGetI("GAME","melee_blade_shadow")!=0,
-    settingsGetI("GAME","melee_physics_hits")!=0
+    settingsGetI("GAME","melee_physics_hits")!=0,
+    settingsGetI("GAME","melee_reactions")!=0,
+    settingsGetI("GAME","melee_posture")!=0
     };
   }
 

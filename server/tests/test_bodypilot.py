@@ -960,6 +960,8 @@ async def test_engine_lease_heartbeats_and_interval_summaries_without_service_or
                 "control_generation": lease.control_generation, "goal_version": lease.goal_version,
                 "target_entity_id": lease.target_entity_id, "t_game_ms": 1000, "t_wall_ms": 1000,
                 "decisions": 6, "fallbacks": {}, "steps": 7, "p50_us": 50, "p99_us": 300,
+                "selected_actions": {"attack_front": 5, "wait_200": 2},
+                "accepted_actions": {"attack_front": 4, "wait_200": 2}, "hidden_reset": 1,
                 "final": False, "reason": "",
             }
             rig.link._dispatch(parse_game_message(json.dumps({**fields, **updates})))
@@ -971,7 +973,8 @@ async def test_engine_lease_heartbeats_and_interval_summaries_without_service_or
         transient_refusals = {"command_busy": 1, "stale_observation": 1}
         publish(
             t_wall_ms=2000, decisions=8, steps=10, p50_us=40, p99_us=200,
-            fallbacks=transient_refusals,
+            fallbacks=transient_refusals, selected_actions={"approach": 8},
+            accepted_actions={"approach": 8}, hidden_reset=0,
         )
         assert rig.fight._fallbacks == 0
         refusals = {"masked": 10} if end.endswith("body_action_rejected") else {"policy_error": 1}
@@ -983,6 +986,8 @@ async def test_engine_lease_heartbeats_and_interval_summaries_without_service_or
                 publish(
                     t_wall_ms=2100, decisions=3, steps=4, final=True,
                     fallbacks=refusals, reason=end,
+                    selected_actions={"attack_front": 3, "wait_200": 1},
+                    accepted_actions={"attack_front": 2, "wait_200": 1}, hidden_reset=0,
                 )
             if not restore_first:
                 rig.bridge.restore_native(release_reason=end)
@@ -995,6 +1000,15 @@ async def test_engine_lease_heartbeats_and_interval_summaries_without_service_or
         assert summary.policy == "engine" and summary.reason == end
         assert summary.decisions == (17 if final_summary else 14)
         assert summary.engine_steps == (21 if final_summary else 17)
+        assert dict(summary.selected_actions) == {
+            "approach": 8, "attack_front": 8 if final_summary else 5,
+            "wait_200": 3 if final_summary else 2,
+        }
+        assert dict(summary.accepted_actions) == {
+            "approach": 8, "attack_front": 6 if final_summary else 4,
+            "wait_200": 3 if final_summary else 2,
+        }
+        assert summary.policy_memory_resets == 1
         assert summary.engine_max_interval_p50_us == 50 and summary.engine_p99_us == 300
         assert summary.fallbacks == int(end.startswith("policy_fallback:"))
         expected_refusals = transient_refusals | (refusals if summary.fallbacks else {})
@@ -2264,7 +2278,7 @@ async def test_world_transition_ownership_poll_timeout_is_info_and_preserves_rea
         assert not any(record.levelname == "WARNING" for record in polls)
 
 
-async def test_heartbeat_and_event_requests_overlap_with_acknowledgement_gates():
+async def test_heartbeat_and_event_requests_overlap_with_acknowledgement_gates(monkeypatch):
     async with running() as rig:
         original_dispatch = rig.link._dispatch
         original_heartbeat = rig.link.body_heartbeat
@@ -2308,18 +2322,46 @@ async def test_heartbeat_and_event_requests_overlap_with_acknowledgement_gates()
         rig.link.body_heartbeat = heartbeat
         try:
             await rig.active()
-            assert rig.bridge.commands("body_acquire")[0]["timeout_ms"] == 2000
-            await eventually(lambda: len(heartbeat_receipts) >= 10, timeout=3.5)
-            sent = rig.bridge.command_times("body_heartbeat")
-            assert len(sent) >= 10 and sent[-1] - sent[0] >= 2.0
-            assert max(later - earlier for earlier, later in pairwise(sent)) < 0.400
-            assert len(rig.bridge.commands("body_events")) >= 3
-            assert len(paired_polls) == len(heartbeat_receipts) >= 10
-            assert all(ack >= poll for poll, ack in zip(paired_polls, heartbeat_receipts, strict=True))
-            assert rig.bridge.lease_expirations == 0
-            assert rig.link.body_owned("NPC")
-            assert not rig.bridge.commands("body_release")
-            assert not rig.policy.commands("end_episode")
+            await eventually(lambda: (
+                heartbeat_receipts and held_heartbeat is None and held_event is None
+                and rig.fight._last_events_success_at >= paired_polls[-1]
+            ))
+            first_heartbeat = len(rig.bridge.commands("body_heartbeat"))
+            first_receipt, first_poll = len(heartbeat_receipts), len(paired_polls)
+            loop = asyncio.get_running_loop()
+            now = loop.time()
+
+            async def advance_clock():
+                nonlocal now
+                while True:
+                    # Drain fake bridge callbacks before advancing timer deadlines.
+                    # Host scheduling pauses must not become heartbeat cadence gaps.
+                    for _ in range(10):
+                        await asyncio.sleep(0)
+                    now += 0.005
+
+            with monkeypatch.context() as clock:
+                clock.setattr(loop, "time", lambda: now)
+                clock_task = asyncio.create_task(advance_clock())
+                try:
+                    assert rig.bridge.commands("body_acquire")[0]["timeout_ms"] == 2000
+                    await eventually(lambda: len(heartbeat_receipts) >= first_receipt + 10, timeout=3.5)
+                    sent = rig.bridge.command_times("body_heartbeat")[first_heartbeat:]
+                    assert len(sent) >= 10 and sent[-1] - sent[0] >= 2.0
+                    assert max(later - earlier for earlier, later in pairwise(sent)) < 0.400
+                    assert len(rig.bridge.commands("body_events")) >= 3
+                    assert len(paired_polls[first_poll:]) == len(heartbeat_receipts[first_receipt:]) >= 10
+                    assert all(ack >= poll for poll, ack in zip(
+                        paired_polls, heartbeat_receipts, strict=True,
+                    ))
+                    assert rig.bridge.lease_expirations == 0
+                    assert rig.link.body_owned("NPC")
+                    assert not rig.bridge.commands("body_release")
+                    assert not rig.policy.commands("end_episode")
+                finally:
+                    clock_task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await clock_task
         finally:
             rig.link._dispatch = original_dispatch
             rig.link.body_heartbeat = original_heartbeat
@@ -2604,6 +2646,7 @@ async def test_completed_fight_summary_survives_counter_reset_and_the_next_fight
         assert summary.npc == "NPC" and summary.lease == lease
         assert summary.reason == "npc_down"
         assert summary.decisions == 3 and summary.fallbacks == 0
+        assert summary.selected_actions == summary.accepted_actions == (("approach", 3),)
         assert summary.service_p50_ms == latencies[1]
         assert summary.service_p95_ms == latencies[-1]
         assert summary.service_p99_ms == latencies[-1]
@@ -2616,6 +2659,7 @@ async def test_completed_fight_summary_survives_counter_reset_and_the_next_fight
         assert rig.fight.npc is rig.fight.lease is rig.fight.client is None
         assert not rig.link.body_leases and rig.bridge._watched_npc is None
         assert not rig.fight._latencies and rig.fight._decisions == rig.fight._fallbacks == 0
+        assert not rig.fight._selected_actions and not rig.fight._accepted_actions
         with pytest.raises(FrozenInstanceError):
             summary.decisions = 100
 

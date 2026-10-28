@@ -242,7 +242,8 @@ void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
     if(std::string_view(event["reason"].GetString())=="acquired") ownerHeartbeat=event["last_heartbeat_wall_ms"].GetUint64();
   expect(ownerHeartbeat>0,"watchdog fixture records the owner's acquisition heartbeat");
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
-  bool accepted=false,providerLost=false;
+  uint64_t accepted=0;
+  bool providerLost=false;
   restored=false;
   for(unsigned i=0;i<100 && BodyController::owns(actor);++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -251,7 +252,7 @@ void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
     for(const auto& event:events["events"].GetArray()) {
       const std::string_view reason=event["reason"].GetString();
       if(std::string_view(event["phase"].GetString())=="accepted") {
-        accepted=true;
+        ++accepted;
         expect(event["last_heartbeat_wall_ms"].GetUint64()==ownerHeartbeat,
                "local engine decisions do not refresh the owner's heartbeat");
         }
@@ -261,6 +262,19 @@ void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
     }
   expect(accepted,"engine accepts a decision before the owner watchdog expires");
   expect(providerLost && restored && !BodyController::owns(actor),"engine decisions cannot prevent watchdog_timeout and native restoration");
+  uint64_t reported=0,resets=0,finals=0;
+  for(const auto& report:BodyController::drainPolicyJson()) {
+    const auto metrics=parse(report);
+    reported+=metrics["decisions"].GetUint64();
+    resets+=metrics["hidden_reset"].GetUint64();
+    if(metrics["final"].GetBool()) {
+      ++finals;
+      expect(std::string_view(metrics["reason"].GetString())=="watchdog_timeout",
+             "ordinary release reports its final interval with the release reason");
+      }
+    }
+  expect(reported==accepted && resets==1 && finals==1,
+         "ordinary release retains all decisions and the initial memory reset exactly once");
   BodyController::reset("engine_watchdog_cleanup");
   BodyController::fixturePrepare(actor,target,300,0);
   actor.setExternalControl(false);

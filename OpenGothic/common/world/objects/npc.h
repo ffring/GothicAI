@@ -13,6 +13,7 @@
 #include "game/archerai.h"
 #include "game/gamescript.h"
 #include "game/ragdollsave.h"
+#include "game/meleeimpact.h"
 #include "physics/dynamicworld.h"
 #include "physics/ragdoll.h"
 #include "world/aiqueue.h"
@@ -393,6 +394,10 @@ class Npc final {
     bool      isLie() const;
     bool      isUnconscious() const;
     bool      isDown() const;
+    bool      isMeleeKnockedDown() const { return meleeKnockdown; }
+    static bool canAccumulateMeleePosture(bool enabled, bool blocked, bool knockedDown, bool down) {
+      return enabled && !blocked && !knockedDown && !down;
+      }
     bool      isAttack() const;
     bool      isTalk() const;
     // whom this npc talks or listens to, for a while: it looks at them (gaze)
@@ -525,6 +530,8 @@ class Npc final {
       uint32_t hits = 0, applied = 0, corpseImpulses = 0;
       };
     const ArrowPhysicsProbe& arrowPhysicsProbe() const { return arrowPhysics; }
+    // the last blade or fist blow handed to the living rig
+    const ArrowPhysicsProbe& meleeReactionProbe() const { return meleeReaction; }
     const Tempest::Matrix4x4& animationBone(size_t bone) const { return visual.pose().bone(bone); }
     const Tempest::Matrix4x4& renderedBone(size_t bone) const { return visual.renderedBone(bone); }
     using ArrowPinProbe = MdlVisual::ArrowPinProbe;
@@ -831,7 +838,7 @@ class Npc final {
     void               updateCharacterVisualHeight();
     bool               updateLyingVisualHeight();
     void               releaseRagdoll(bool blend);
-    bool               recoverRagdoll();
+    bool               recoverRagdoll(bool force = false);
     bool               createRagdoll();
     void               updateRagdollQuestAnchor();
     void               checkRagdollQuestHazard();
@@ -839,6 +846,8 @@ class Npc final {
     bool               recoverSpellThrow();
     void               queueArrowPhysics(const Bullet& bullet);
     void               dispatchArrowPhysics(Ragdoll& body);
+    bool               queueMeleeReaction(const Npc& other, const Tempest::Vec3& at, const MeleeBladeContact* contact);
+    Tempest::Vec3      meleeImpulse(const Npc& attacker, const MeleeBladeContact* contact) const;
     bool               hasQueuedPhysicalSpellState(const AiQueue& queue) const;
 
     World&                         owner;
@@ -916,11 +925,14 @@ class Npc final {
     auto meleeStep(uint64_t dt) -> Tempest::Vec3;
     void clearMeleeShadow();
     ArrowPhysicsProbe             arrowPhysics;
+    ArrowPhysicsProbe             meleeReaction;
     struct ArrowImpact {
       size_t bone;
       Tempest::Vec3 point, impulseNs;
       float strength;
       std::weak_ptr<zenkit::INpc> culprit;
+      bool melee = false;
+      float stiffness = 1.f;
       };
     std::vector<ArrowImpact>       arrowImpacts;
     Tempest::Vec3                  pendingSpellImpulse = {};
@@ -937,6 +949,15 @@ class Npc final {
     uint64_t                      ragdollStartTick = 0;
     bool                          ragdollLegacyDown = false;
     bool                          ragdollRecovering = false;
+    void                          applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked, float before);
+    bool                          tickMeleePosture(uint64_t dt);
+    MeleeImpact::Posture           meleePosture;
+    bool                          meleeKnockdown = false;
+    bool                          meleeGetupForced = false;
+    uint64_t                      meleeFallTick = 0, meleeRiseTick = 0;
+    uint64_t                      meleeSlowSince = 0;
+    uint32_t                      meleeReturnCount = 0;
+    Tempest::Vec3                 meleeSavePosition;
     RagdollSave::QuestReturn       ragdollQuestReturn;
     bool                          ragdollQuestSpellThrow = false;
     uint64_t                      ragdollQuestSampleTick = 0;
