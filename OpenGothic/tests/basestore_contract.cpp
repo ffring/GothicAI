@@ -9,6 +9,8 @@
 #include <zenkit/Stream.hh>
 #include <zenkit/Vfs.hh>
 #include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 
 #include <chrono>
 #include <cctype>
@@ -136,6 +138,42 @@ void snapshotSelection(const fs::path& root) {
   setenv("OPENGOTHIC_BASE",base.c_str(),1);
   require(BaseStore::resolve(game,mounted,observe).path==base && identifies==0,
           "explicit base with a matching snapshot must skip full source identification");
+  // An in-place rebuild can leave a current base behind an old importer's pointer.
+  {
+    rapidjson::Document stalePointer, staleIdentity;
+    stalePointer.Parse(read(pointerFile(cache,game)).c_str());
+    staleIdentity.Parse(stalePointer["base"]["identity"].GetString());
+    const std::string oldFormat(64,'0');
+    staleIdentity["format_sha256"].SetString(oldFormat.c_str(),64,staleIdentity.GetAllocator());
+    staleIdentity.RemoveMember("fingerprint");
+    rapidjson::StringBuffer source;
+    rapidjson::Writer<rapidjson::StringBuffer> sourceWriter(source);
+    staleIdentity.Accept(sourceWriter);
+    const auto oldFingerprint=BaseImport::sha256({source.GetString(),source.GetSize()});
+    staleIdentity.AddMember("fingerprint",rapidjson::Value(oldFingerprint.c_str(),staleIdentity.GetAllocator()),
+                            staleIdentity.GetAllocator());
+    rapidjson::StringBuffer identityBytes;
+    rapidjson::Writer<rapidjson::StringBuffer> identityWriter(identityBytes);
+    staleIdentity.Accept(identityWriter);
+    stalePointer["base"]["fingerprint"].SetString(oldFingerprint.c_str(),stalePointer.GetAllocator());
+    stalePointer["base"]["identity"].SetString(identityBytes.GetString(),rapidjson::SizeType(identityBytes.GetSize()),stalePointer.GetAllocator());
+    rapidjson::StringBuffer pointerBytes;
+    rapidjson::Writer<rapidjson::StringBuffer> pointerWriter(pointerBytes);
+    stalePointer.Accept(pointerWriter);
+    write(pointerFile(cache,game),{pointerBytes.GetString(),pointerBytes.GetSize()});
+    writeBaseFixture(base,identity);
+    identifies=0;
+    require(BaseStore::resolve(game,mounted,observe).path==base && identifies==1,
+            "explicit rebuilt base behind an old importer pointer must identify exactly once");
+    rapidjson::Document refreshed;
+    refreshed.Parse(read(pointerFile(cache,game)).c_str());
+    require(refreshed["base"]["fingerprint"].GetString()==identity.fingerprint &&
+            refreshed["base"]["identity"].GetString()==identity.json,
+            "rebuilt base selection must refresh the pointer's importer identity");
+    identifies=0;
+    require(BaseStore::resolve(game,mounted,observe).path==base && identifies==0,
+            "refreshed importer pointer must skip source identification on the next selection");
+  }
   unsetenv("OPENGOTHIC_BASE");
   const auto archive=game/"Data/FIXTURE.VDF";
   fs::last_write_time(archive,fs::last_write_time(archive)+std::chrono::seconds(1));
@@ -193,7 +231,7 @@ void snapshotSelection(const fs::path& root) {
             "concurrent pointer writer failed");
     }
   checkPointer(cache,game,base);
-  std::cout << "snapshot selection: zero source identifies on repeat/explicit/offline; VDF mtime/size refresh; missing/pruned pointer; two atomic writers verified\n";
+  std::cout << "snapshot selection: zero source identifies on repeat/explicit/offline; VDF mtime/size and importer refresh; missing/pruned pointer; two atomic writers verified\n";
   }
 
 
