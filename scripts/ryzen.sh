@@ -619,6 +619,8 @@ remote_run() {
   e2e_window_position "$display_slot"
   echo "Ryzen: e2e slot $display_slot; ports $PORT/$ASR_PORT/$TTS_PORT; window $TEMPEST_WINDOW_SIZE at $TEMPEST_WINDOW_POS; screen $RYZEN_SCREEN_SIZE"
   require_prepared "$action" "$state" "$run" "${SCENARIO:-m0}"
+  # Select the base and refresh its pointer before the server and TTS read it.
+  "$RYZEN_STORYGRAPH_BIN" "$GOTHIC_DIR" --ou-messages >/dev/null
   # Dependencies were synchronized without the display; uv run must not rebuild them here.
   export UV_NO_SYNC=1
   # Windowed on the logged-in desktop; never take it fullscreen or use a software display.
@@ -807,6 +809,11 @@ if [[ "$ACTION" == setup ]]; then
   { declare -f toolchain; echo 'set -euo pipefail; toolchain; echo "Ryzen: toolchain OK"'; } | remote bash -s
   GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
   started=$SECONDS
+  temporary=''
+  trap 'if [[ -n "$temporary" ]]; then remote rm -rf -- "$temporary" || echo "Ryzen: could not remove setup copy $temporary" >&2; fi' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   # Read only the ready pointer and the two INI files, never identify the installation.
   parts="$(python3 - "$GOTHIC_DIR" <<'PY'
 import hashlib
@@ -890,6 +897,7 @@ fi
 echo "Ryzen: $kind copied and verified at $destination"
 REMOTE
     } | remote bash -s -- "$kind" "$fingerprint" "$temporary" "$relative"
+    temporary=''
   done
   remote mkdir -p gothic-ai/game-settings/system
   rsync -a --checksum "$GOTHIC_DIR/system/Gothic.ini" "$GOTHIC_DIR/system/SystemPack.ini" "$RYZEN_HOST:gothic-ai/game-settings/system/"
