@@ -127,9 +127,12 @@ jobs:
           uv run --locked --project launcher/core gothic-launcher --help | Out-Null
           if ($LASTEXITCODE) { throw 'gothic-launcher --help failed' }
           $out = uv run --locked --project launcher/core gothic-launcher setup --check 2>&1 | Out-String
+          $code = $LASTEXITCODE
           Write-Host $out
-          if ($LASTEXITCODE -ne 2) { throw "setup --check: expected 2 (no game folder or sign-in here), got $LASTEXITCODE" }
-          if ($out -match 'не собран') { throw 'the launcher does not see the built game or storygraph' }
+          if ($code -ne 2) { throw "setup --check: expected 2 (no game folder or sign-in here), got $code" }
+          if ($out -match 'не собран|не найден uv') { throw 'the launcher does not see the built game or storygraph' }
+          # the expected 2 passed: the runner would otherwise end the step with it
+          exit 0
 
       - name: Package
         run: |
