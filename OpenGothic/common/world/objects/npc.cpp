@@ -4696,8 +4696,11 @@ bool Npc::tickMeleePosture(uint64_t dt) {
     // after that transition ends; this isolated live fall must do the same.
     if(meleeRiseTick!=0 && !visual.pose().hasAnim())
       setAnim(Anim::Idle);
-    if(visual.pose().isStanding() || !enabled) {
-      if(!enabled && !visual.pose().isStanding()) {
+    // Locomotion can replace the get-up with a non-standing loop (fall/swim).
+    // Give the authored transition its full time, but never leave controls locked.
+    const bool getupTimedOut = meleeRiseTick!=0 && now-meleeRiseTick>=6000 && !visual.pose().isStanding();
+    if(visual.pose().isStanding() || !enabled || getupTimedOut) {
+      if(!visual.pose().isStanding()) {
         visual.pose().stopAllAnim();
         setAnim(Anim::Idle);
         }
@@ -4708,7 +4711,7 @@ bool Npc::tickMeleePosture(uint64_t dt) {
                        ",\"target\":"+meleeShadowWho(this)+",\"fall_ms\":"+std::to_string(meleeFallTick)+
                        ",\"getup_ms\":"+std::to_string(meleeRiseTick)+",\"rise_ms\":"+std::to_string(now)+
                        (enabled && meleeRiseTick!=0 ? ",\"getup_duration_ms\":"+std::to_string(now-meleeRiseTick) : "")+
-                       (!enabled ? ",\"reason\":\"feature_disabled\"" : "")+
+                       (!enabled ? ",\"reason\":\"feature_disabled\"" : getupTimedOut ? ",\"reason\":\"getup_timeout\"" : "")+
                        ",\"returned\":"+(ragdollQuestReturns!=meleeReturnCount ? "true" : "false")+"}");
       if(!enabled)
         meleePosture.reset();
