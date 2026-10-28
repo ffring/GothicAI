@@ -1396,29 +1396,16 @@ class DialogueManager:
                 context = self.surrender_context(conv.npc) if opponent is None else opponent
                 text_in = (f"Перед этим противник сказал: «{context}»\n" if context else "")
                 text_in += f"Реплика игрока: «{phrase}»"
-                text = ""
-                self._quick_busy[slot] += 1
-                token = QUICK_SLOT.set(slot)
-                locked = time.monotonic()
+                # its own task, its slot held until the request really ends: httpx may swallow a cancel
+                # that lands while it connects, and the deadline must not wait for the answer (2026-10-28)
+                request = asyncio.create_task(self._classify(slot, text_in, conv.talked_at, attempt))
                 try:
-                    async with self._quick_locks[slot]:
-                        attempt["lock_wait_ms"] = round((time.monotonic() - locked) * 1000, 1)
-                        attempt["request_ms"] = round((time.monotonic() - conv.talked_at) * 1000, 1)
-                        async with aclosing(self.quick.stream(
-                            instructions=SURRENDER_CLASSIFIER, messages=[Message("user", text_in)],
-                            tools=[], temperature=0, max_tokens=4, grammar='root ::= "да" | "нет"',
-                        )) as events:
-                            async for event in events:
-                                if isinstance(event, TextDelta):
-                                    attempt.setdefault("first_token_ms", round(
-                                        (time.monotonic() - conv.talked_at) * 1000, 1,
-                                    ))
-                                    text += event.text
-                finally:
-                    attempt["timings"] = dict(getattr(self.quick, "timings", {}).get(slot, {}))
-                    QUICK_SLOT.reset(token)
-                    self._quick_busy[slot] -= 1
-                    self._quick_free.set()
+                    text = await asyncio.shield(request)
+                except asyncio.CancelledError:
+                    request.cancel()
+                    self._background.add(request)
+                    request.add_done_callback(self._background.discard)
+                    raise
                 answer = text.strip().lower()
                 attempt.update(answer=answer, outcome="yes" if answer == "да" else "no")
                 return answer == "да"
@@ -1432,6 +1419,30 @@ class DialogueManager:
             log.info("%s: surrender probe %s", conv.npc, json.dumps(attempt, ensure_ascii=False))
             if self.trace is not None:
                 self.trace.write(attempt)
+
+    async def _classify(self, slot: int, text_in: str, talked_at: float, attempt: dict[str, Any]) -> str:
+        text = ""
+        self._quick_busy[slot] += 1
+        QUICK_SLOT.set(slot)  # this task's own context
+        locked = time.monotonic()
+        try:
+            async with self._quick_locks[slot]:
+                attempt["lock_wait_ms"] = round((time.monotonic() - locked) * 1000, 1)
+                attempt["request_ms"] = round((time.monotonic() - talked_at) * 1000, 1)
+                async with aclosing(self.quick.stream(
+                    instructions=SURRENDER_CLASSIFIER, messages=[Message("user", text_in)],
+                    tools=[], temperature=0, max_tokens=4, grammar='root ::= "да" | "нет"',
+                )) as events:
+                    async for event in events:
+                        if isinstance(event, TextDelta):
+                            first = round((time.monotonic() - talked_at) * 1000, 1)
+                            attempt.setdefault("first_token_ms", first)
+                            text += event.text
+        finally:
+            attempt["timings"] = dict(getattr(self.quick, "timings", {}).get(slot, {}))
+            self._quick_busy[slot] -= 1
+            self._quick_free.set()
+        return text
 
     def _yield_to(self, npc: str) -> None:
         """Prioritize this NPC over other warming and SVM requests; its own warm is cancelled

@@ -204,26 +204,28 @@ async def surrender_live(
                     await health(npc, 250)
                 else:
                     # The typed phrase goes to the hero's focus, which a second fighter (MIL_309) can take
-                    # while the talk key is held: the focus is checked again right before the phrase.
-                    for _ in range(3):
+                    # while the talk key is held: the key is held once, then the focus is put back and
+                    # checked right before the phrase.
+                    async def focused(npc: str = npc) -> bool:
                         [view] = await link.npc_view([npc])
-                        if view.hero is None or view.hero.focus != npc:
-                            await link.debug("teleport", near=npc, distance=200)
-                        if not await _until_async(
-                            lambda npc=npc: link.npc_view([npc]),
-                            lambda views, npc=npc: bool(views and views[0].hero
-                                                        and views[0].hero.focus == npc),
+                        if view.hero is not None and view.hero.focus == npc:
+                            return True
+                        await link.debug("teleport", near=npc, distance=200)
+                        return await _until_async(
+                            lambda: link.npc_view([npc]),
+                            lambda views: bool(views and views[0].hero and views[0].hero.focus == npc),
                             4,
-                        ):
-                            continue
+                        )
+
+                    if await focused():
                         # The real talk key opens Sol's connection while the hero is still speaking.
                         await link.debug("ptt", state="start")
                         try:
                             await asyncio.sleep(1.5)
                         finally:
                             await link.debug("ptt", state="cancel")  # discard microphone audio; type below
-                        [view] = await link.npc_view([npc])
-                        if view.hero is not None and view.hero.focus == npc:
+                    for _ in range(5):
+                        if await focused():
                             break
                     else:
                         raise GameError("surrender_live preparation: hero focus is not the intended opponent")
