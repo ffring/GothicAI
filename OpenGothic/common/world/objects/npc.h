@@ -942,7 +942,7 @@ class Npc final {
     uint64_t                      ragdollStartTick = 0;
     bool                          ragdollLegacyDown = false;
     bool                          ragdollRecovering = false;
-    void                          applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked = false);
+    void                          applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked, float before);
     bool                          tickMeleePosture(uint64_t dt);
     MeleeImpact::Posture           meleePosture;
     bool                          meleeKnockdown = false;

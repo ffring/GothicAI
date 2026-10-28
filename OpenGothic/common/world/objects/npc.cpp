@@ -4555,8 +4555,8 @@ void Npc::commitDamage() {
     shadow->damage = std::max(0,hpBefore-shadowTarget->attribute(ATR_HITPOINTS));
   }
 
-void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked) {
-  if(!Gothic::physicsFlags().meleePosture || !isHuman() || !attacker.isHuman() || isDown())
+void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, bool blocked, float before) {
+  if(!Gothic::physicsFlags().meleePosture || !isHuman() || !attacker.isHuman())
     return;
   const auto mode = attacker.weaponState();
   if(mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)
@@ -4581,7 +4581,6 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
       velocity = Vec3::normalize(direction)*typical;
     }
   const auto impulse = MeleeImpact::impulse(weapon,velocity,angleDeg);
-  const float before = meleePosture.value;
   bool knocked = false;
   if(canAccumulateMeleePosture(Gothic::physicsFlags().meleePosture,blocked,meleeKnockdown,isDown()) &&
      meleePosture.hit(impulse.length(),physicsMass(),owner.tickCount())) {
@@ -4697,7 +4696,7 @@ void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence, float mele
     takeDamage(other,b,COLL_DOEVERYTHING,0,false,meleeScale,contact);
     } else {
     if(isBlock)
-      applyMeleePosture(other,contact,true);
+      applyMeleePosture(other,contact,true,meleePosture.value);
     if(invent.activeWeapon()!=nullptr)
       visual.emitBlockEffect(*this,other);
     }
@@ -4720,6 +4719,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t s
 
 void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell, float meleeScale, const MeleeBladeContact* contact) {
   const int32_t traceHpBefore = attribute(ATR_HITPOINTS);
+  const float postureBefore = meleePosture.value;
   float a  = angleDir(other.x-x,other.z-z);
   float da = a-angle;
   if(std::cos(da*M_PI/180.0)<0)
@@ -4853,8 +4853,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         }
       }
     }
-  if(hitResult.hasHit && !isSpell && b==nullptr && !isDown())
-    applyMeleePosture(other,contact);
+  if(hitResult.hasHit && !isSpell && b==nullptr)
+    applyMeleePosture(other,contact,false,postureBefore);
   traceDamage();
   }
 

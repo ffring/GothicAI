@@ -3926,13 +3926,13 @@ namespace {
       requireNear(MeleeImpact::impulse(Weapon::TwoHand,{1000,0,0},30).length(),30.f,.0001f,
                   "two-hand impulse must use 4 kg and the sine of the blade angle");
       const auto capped=MeleeImpact::impulse(Weapon::TwoHand,{-6000,0,8000},90);
-      requireNear(capped.length(),40.f,.0001f,"melee impulse magnitude must be capped at 40 N s");
-      requireNear(capped.x,-24.f,.0001f,"the impulse cap must retain contact direction");
+      requireNear(capped.length(),60.f,.0001f,"melee impulse magnitude must be capped at 60 N s");
+      requireNear(capped.x,-36.f,.0001f,"the impulse cap must retain contact direction");
       requireNear(MeleeImpact::impulse(Weapon::Fist,{},90).length(),0.f,.0001f,
                   "a motionless blade must not add an impulse");
 
       MeleeImpact::Posture posture;
-      require(!posture.hit(10,75,1000),"a quarter-threshold impulse must not knock down");
+      require(!posture.hit(30,75,1000),"a quarter-threshold impulse must not knock down");
       requireNear(posture.value,25.f,.0001f,"posture must accumulate in units of body-mass-scaled impulse");
       posture.tick(2500,1500);
       requireNear(posture.value,25.f,.0001f,"posture must retain the full 1500 ms recovery delay");
@@ -3940,19 +3940,24 @@ namespace {
       requireNear(posture.value,17.5f,.0001f,"recovery must count only time after the hit grace period");
       posture.tick(3750,1000);
       requireNear(posture.value,0.f,.0001f,"posture recovery must stop at zero");
-      require(!posture.hit(39,75,4000),"posture just below 100 must not knock down");
+      require(!posture.hit(60,75,4000),"a full capped impulse must add only half the 75 kg knockdown threshold");
+      requireNear(posture.value,50.f,.0001f,"a 75 kg body must require 120 N s for knockdown");
+      require(!posture.hit(59,75,4000),"posture just below 100 must not knock down");
       require(posture.hit(1,75,4000),"posture must knock down exactly at 100");
       requireNear(posture.value,100.f,.0001f,"posture must stop at 100");
       posture.recover(5000);
       requireNear(posture.value,0.f,.0001f,"getting up must reset posture");
-      require(!posture.hit(40,75,5000),"getting up must protect against another knockdown");
+      require(!posture.hit(60,75,5000),"getting up must protect against another knockdown");
+      require(!posture.hit(60,75,5000),"successive hits during immunity must not knock down");
       requireNear(posture.value,60.f,.0001f,"post-rise immunity must cap accumulating posture at 60");
-      require(!posture.hit(40,75,8999),"post-rise immunity must cover the first 3999 ms");
-      require(posture.hit(16,75,9000),"post-rise immunity must expire at 4000 ms");
+      require(!posture.hit(60,75,8999),"post-rise immunity must cover the first 3999 ms");
+      require(posture.hit(48,75,9000),"post-rise immunity must expire at 4000 ms");
       posture.reset();
-      require(!posture.hit(40,150,10000),"a doubled body mass must double the knockdown impulse");
-      requireNear(posture.value,50.f,.0001f,"body mass must scale the posture threshold");
-      require(posture.hit(40,150,10000),"two full impulses must knock down a 150 kg body");
+      require(!posture.hit(60,150,10000),"a doubled body mass must double the knockdown impulse");
+      requireNear(posture.value,25.f,.0001f,"a 150 kg body must require 240 N s for knockdown");
+      require(!posture.hit(60,150,10000),"two full capped impulses must not knock down a 150 kg body");
+      require(!posture.hit(60,150,10000),"three full capped impulses must not knock down a 150 kg body");
+      require(posture.hit(60,150,10000),"four full capped impulses must knock down a 150 kg body");
       }
     CollisionWorld world;
     auto ground = world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),

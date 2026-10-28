@@ -8,8 +8,8 @@ Tempest::Vec3 MeleeImpact::impulse(Weapon weapon, const Tempest::Vec3& velocityC
   const float edge = .5f+.5f*std::sin(std::clamp(surfaceAngleDeg,0.f,90.f)*float(M_PI)/180.f);
   auto result = velocityCmS*(mass*.01f*edge);
   const float magnitude = result.length();
-  if(magnitude>40.f)
-    result *= 40.f/magnitude;
+  if(magnitude>60.f)
+    result *= 60.f/magnitude;
   return result;
   }
 
@@ -21,7 +21,7 @@ void MeleeImpact::Posture::tick(uint64_t nowMs, uint64_t dtMs) {
   }
 
 bool MeleeImpact::Posture::hit(float impulseNs, float bodyMassKg, uint64_t nowMs) {
-  const float threshold = 40.f*bodyMassKg/75.f;
+  const float threshold = 120.f*bodyMassKg/75.f;
   value = std::min(nowMs<immuneUntilMs ? 60.f : 100.f,value+100.f*impulseNs/threshold);
   lastHitMs = nowMs;
   return value>=100.f;
