@@ -1332,8 +1332,8 @@ class DialogueManager:
 
     def _check_slots(self) -> None:
         count = getattr(self.quick, "slot_count", None)
-        if count is None or self._slot_check is not None:
-            return
+        if count is None or (self._slot_check is not None and not self._slot_check.done()):
+            return  # each hello asks again: the quick server may have been restarted with other slots
 
         async def check() -> None:
             slots = await count()
@@ -1398,13 +1398,19 @@ class DialogueManager:
                 text_in += f"Реплика игрока: «{phrase}»"
                 # its own task, its slot held until the request really ends: httpx may swallow a cancel
                 # that lands while it connects, and the deadline must not wait for the answer (2026-10-28)
-                request = asyncio.create_task(self._classify(slot, text_in, conv.talked_at, attempt))
+                classify = asyncio.create_task(self._classify(slot, text_in, conv.talked_at, attempt))
                 try:
-                    text = await asyncio.shield(request)
+                    text = await asyncio.shield(classify)
                 except asyncio.CancelledError:
-                    request.cancel()
-                    self._background.add(request)
-                    request.add_done_callback(self._background.discard)
+                    classify.cancel()
+                    self._background.add(classify)
+
+                    def abandoned(done: asyncio.Task[str]) -> None:
+                        self._background.discard(done)
+                        if not done.cancelled() and (error := done.exception()) is not None:
+                            log.info("%s: late surrender probe: %s", conv.npc, error)
+
+                    classify.add_done_callback(abandoned)
                     raise
                 answer = text.strip().lower()
                 attempt.update(answer=answer, outcome="yes" if answer == "да" else "no")
