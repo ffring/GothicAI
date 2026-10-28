@@ -525,7 +525,8 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
   struct ShadowBlade {
     const Npc* owner = nullptr;
     uint64_t swing = 0;
-    bool blocked = false;
+    bool blocked = false, groundRecorded = false;
+    float walkableCos = .7f;
     double poseTimeMs = 0, targetTimeMs = 0, activeBeginMs = 0, activeEndMs = 0;
     std::vector<MeleeBladeSegment> pose, target;
     std::vector<Npc*> hit;
@@ -2231,7 +2232,7 @@ void CollisionWorld::removeShadowBody(const Npc* owner) {
 
 void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
                                       const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
-                                      double activeBeginMs, double activeEndMs) {
+                                      double activeBeginMs, double activeEndMs, float walkableCos) {
   if(owner==nullptr || segments.empty()) throw std::runtime_error("Melee shadow blade requires an owner and geometry");
   for(const auto& segment:segments) {
     const auto from=toMeters(segment.from),to=toMeters(segment.to),edge=toMeters(segment.edgeNormal);
@@ -2253,6 +2254,7 @@ void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
   if(it->swing!=swingId) {
     it->swing=swingId;
     it->blocked=false;
+    it->groundRecorded=false;
     it->hit.clear();
     it->contacts.clear();
     }
@@ -2265,6 +2267,7 @@ void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
   it->targetTimeMs=double(timeMs);
   it->activeBeginMs=activeBeginMs;
   it->activeEndMs=activeEndMs;
+  it->walkableCos=walkableCos;
   impl->hasShadowBlades.store(true,std::memory_order_release);
   }
 
@@ -2288,7 +2291,51 @@ void CollisionWorld::removeShadowBlade(const Npc* owner) {
 void CollisionWorld::flushShadowBlades() {
   // Consume poses published after the last physics tick without advancing any
   // native bodies, animation, game clocks or physics side effects.
+  const auto started=std::chrono::steady_clock::now();
   stepShadowBlades(1.f);
+  const float elapsed=std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+  impl->stepMilliseconds += elapsed;
+  // The normal frame sample has already been published by tick(). Include this
+  // query in that frame's physics budget, without inventing a fixed physics step.
+  if(!impl->meleeOutput.empty() && !impl->meleeSamples.empty()) {
+    impl->meleeSamples.back().milliseconds += elapsed;
+    impl->meleeSamples.back().castMs += elapsed;
+    }
+  }
+
+float CollisionWorld::meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                                      const Tempest::Vec3& direction, float maxAdvanceCm) const {
+  const auto travel=toMeters(direction).NormalizedOr(JPH::Vec3::sZero())*(maxAdvanceCm*.01f);
+  JPH::ShapeCastSettings settings;
+  settings.mReturnDeepestPoint=true;
+  float advance=std::numeric_limits<float>::infinity();
+  for(const auto& blade:blades) {
+    const auto from=toMeters(blade.from),to=toMeters(blade.to),axis=to-from,center=(from+to)*.5f;
+    const JPH::CapsuleShape shape(std::max(axis.Length()*.5f,.00001f),blade.radiusCm*.01f);
+    const auto rotation=JPH::Quat::sFromTo(JPH::Vec3::sAxisY(),axis.NormalizedOr(JPH::Vec3::sAxisY()));
+    for(const auto& capsule:target) {
+      const auto a=toMeters(capsule.from),b=toMeters(capsule.to),targetAxis=b-a,targetCenter=(a+b)*.5f;
+      const JPH::CapsuleShape targetShape(std::max(targetAxis.Length()*.5f,.00001f),capsule.radiusCm*.01f);
+      const auto targetRotation=JPH::Quat::sFromTo(JPH::Vec3::sAxisY(),targetAxis.NormalizedOr(JPH::Vec3::sAxisY()));
+      const JPH::ShapeCast cast(&shape,JPH::Vec3::sOne(),
+          JPH::Mat44::sRotationTranslation(rotation,center-targetCenter),travel);
+      JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> hit;
+      JPH::CollisionDispatch::sCastShapeVsShapeWorldSpace(cast,settings,&targetShape,JPH::Vec3::sOne(),{},
+          JPH::Mat44::sRotation(targetRotation),{},{},hit);
+      if(hit.HadHit()) {
+        advance=std::min(advance,std::clamp(hit.mHit.mFraction,0.f,1.f)*maxAdvanceCm);
+        if(advance==0.f)
+          return 0.f;
+        }
+      }
+    }
+  return advance;
+  }
+
+void CollisionWorld::accountMeleeReachTime(float milliseconds) {
+  // Reach previews run in native AI before tick(), like CharacterVirtual queries.
+  // Charge the entire caller's pose replay and capsule casts to physics_ms.
+  impl->characterMilliseconds+=milliseconds;
   }
 
 void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
@@ -2368,6 +2415,7 @@ void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
             MeleeBladeContact contact;
             contact.npc=npc;contact.bone=bone;contact.zone=zone;
             contact.point=toCentimeters(point);
+            contact.normal={normal.GetX(),normal.GetY(),normal.GetZ()};
             contact.bladeFraction=location;
             contact.speedCmS=seconds>0.f ? (endpoints(to,location)-endpoints(from,location)).Length()*100.f/(seconds*(t1-t0)) : 0.f;
             contact.surfaceAngleDeg=std::acos(std::clamp(std::abs(edge.Dot(normal)),0.f,1.f))*180.f/JPH::JPH_PI;
@@ -2377,7 +2425,27 @@ void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
             };
           JPH::AllHitCollisionCollector<JPH::CastShapeCollector> worldHits;
           query.CastShape(cast,settings,JPH::RVec3(from.center),worldHits,broad,layers);
-          for(const auto& hit:worldHits.mHits) record(hit,from.center,nullptr,size_t(-1),0);
+          for(const auto& hit:worldHits.mHits) {
+            const JPH::BodyLockInterface& locks = bodiesLocked ?
+                static_cast<const JPH::BodyLockInterface&>(impl->system.GetBodyLockInterfaceNoLock()) : impl->system.GetBodyLockInterface();
+            JPH::BodyLockRead lock(locks,hit.mBodyID2);
+            if(!lock.Succeeded()) continue;
+            const auto& body=lock.GetBody();
+            // Small loose objects cannot arrest a human swing.
+            const auto layer=body.GetObjectLayer();
+            const auto extent=body.GetWorldSpaceBounds().GetSize();
+            if((layer==DynamicWorld::C_Item || layer==DynamicWorld::C_Fragment || layer==DynamicWorld::C_MovableVob) &&
+               std::max({extent.GetX(),extent.GetY(),extent.GetZ()})<.5f) continue;
+            record(hit,from.center,nullptr,size_t(-1),0);
+            auto& contact=contacts.back().contact;
+            const auto normal=body.GetWorldSpaceSurfaceNormal(hit.mSubShapeID2,JPH::RVec3(contact.point.x*.01f,contact.point.y*.01f,contact.point.z*.01f));
+            contact.normal={normal.GetX(),normal.GetY(),normal.GetZ()};
+            contact.stopsSwing=normal.GetY()<blade.walkableCos || layer==DynamicWorld::C_Item ||
+                               layer==DynamicWorld::C_Fragment || layer==DynamicWorld::C_MovableVob;
+            auto* object=reinterpret_cast<CollisionBody*>(body.GetUserData());
+            if(object!=nullptr)
+              contact.material=object->mesh!=nullptr ? object->mesh->materialId(Physics::triangleData(*body.GetShape(),hit.mSubShapeID2)) : object->noiseSurface;
+            }
 
           auto bounds=cast.mShapeWorldBounds;
           bounds.Encapsulate(JPH::AABox(bounds.mMin+cast.mDirection,bounds.mMax+cast.mDirection));
@@ -2413,9 +2481,16 @@ void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
     for(auto& value:contacts) {
       auto& contact=value.contact;
       if(contact.world) {
-        blade.contacts.push_back(contact);
-        blade.blocked=true;
-        break;
+        if(contact.stopsSwing) {
+          blade.contacts.push_back(contact);
+          blade.blocked=true;
+          break;
+          }
+        if(!blade.groundRecorded) {
+          blade.contacts.push_back(contact);
+          blade.groundRecorded=true;
+          }
+        continue;
         }
       if(std::find(blade.hit.begin(),blade.hit.end(),contact.npc)!=blade.hit.end()) continue;
       blade.hit.push_back(contact.npc);

@@ -51,6 +51,8 @@ static std::string_view humansTorchOverlay = "_TORCH.MDS";
 
 namespace {
 
+constexpr float meleeMagnetTorsoGapCm = 18.f;
+
 std::string meleeShadowPoint(const Vec3& p) {
   std::ostringstream out;
   out.imbue(std::locale::classic());
@@ -105,6 +107,12 @@ void writeMeleeShadow(const std::string& row) {
 
 }
 
+struct Npc::MeleeReach final {
+  float advanceCm = std::numeric_limits<float>::infinity(), contactMs = 0, yawDeg = 0, cpuMs = 0;
+  float uncoveredCm = std::numeric_limits<float>::infinity();
+  float torsoGapCm = std::numeric_limits<float>::infinity();
+  };
+
 struct Npc::MeleeShadow final {
   struct Window final {
     const Animation::Sequence* sequence = nullptr;
@@ -112,13 +120,17 @@ struct Npc::MeleeShadow final {
     uint32_t index = 0, first = 0, optimal = 0, last = 0;
     float beginMs = 0, optimalMs = 0, endMs = 0, peakCmS = 0, thresholdCmS = 0;
     bool left = false, normalY = true;
-    float eventBoundaryMs = 0;
+    float eventBoundaryMs = 0, reachCm = 0;
     };
   struct Contact final {
     MeleeBladeContact hit;
-    std::string target, bone;
+    std::string target, bone, result = "shadow";
+    float multiplier = 0;
+    int32_t damage = 0;
     };
   std::vector<Window> windows;
+  float reachCpuMs = 0, reachCpuMaxMs = 0;
+  uint64_t reachQueries = 0;
   std::optional<Window> window;
   uint64_t id = 0, start = 0, tick = 0;
   float speed = 1;
@@ -127,6 +139,32 @@ struct Npc::MeleeShadow final {
   bool legacyHit = false, legacyBlock = false, legacyDodge = false;
   int32_t damage = 0;
   std::vector<Contact> contacts;
+  size_t consumed = 0, targetsHit = 0;
+  bool stopped = false, physicsHits = false;
+  struct Magnet final {
+    const Npc* target = nullptr;
+    Vec3 direction;
+    float rawCm = std::numeric_limits<float>::infinity(), requestedCm = 0, offeredCm = 0;
+    float combinedCm = 0, estimatedCm = 0, peakCmS = 0, estimatedPeakCmS = 0;
+    float yawRequested = 0, yawApplied = 0, peakYawDegS = 0, durationMs = 0;
+    float forwardCm = 0, backwardCm = 0, safetyBackoffCm = 0;
+    float minTorsoGapCm = std::numeric_limits<float>::infinity(), previewTorsoGapCm = std::numeric_limits<float>::infinity();
+    uint64_t safetyFrames = 0, safetyClamps = 0;
+    uint64_t contactObservedMs = 0;
+    double lastFeedMs = 0;
+    const char* contactKind = "none";
+    bool eligible = false, feasible = false, contactStopped = false, forwardStopped = false;
+    } magnet;
+  std::string outcome = "miss";
+  struct Diagnostic final {
+    const Npc* target = nullptr;
+    std::string who = "null";
+    uint64_t sample = 0;
+    Vec3 targetStart, forward, nearestOffset;
+    float initialGapCm = 0, minClearanceCm = std::numeric_limits<float>::max(), retreatCm = 0;
+    float previewAdvanceCm = 0, previewContactMs = 0, previewCpuMs = 0, previewApproachCm = std::numeric_limits<float>::infinity();
+    bool sampled = false, jumpback = false;
+    } diagnostic;
   };
 
 // Npc::tick may intentionally return without calling MoveAlgo (for example a native attack gate).
@@ -200,7 +238,7 @@ Vec3 Npc::GoTo::target() const {
 
 bool Npc::GoTo::isClose(const Npc& self, float dist) const {
   if(flag==GT_Enemy)
-    return self.fghAlgo.isInWRange(self, *npc, self.owner.script()); //need to be consistent with implAttack
+    return self.fghAlgo.isInWRange(self, *npc, self.owner.script()); // consistent with implAttack
   if(npc!=nullptr && pointDistance>0.f && !self.canSeeNpc(*npc,true))
     return false;
   if(npc!=nullptr)
@@ -1383,13 +1421,267 @@ void Npc::updateMeleeBenchBlade() {
     }
   }
 
+void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, bool normalY) const {
+  if(!meleeShadow)
+    meleeShadow = std::make_unique<MeleeShadow>();
+  auto& shadow = *meleeShadow;
+  if(std::any_of(shadow.windows.begin(),shadow.windows.end(),[&](const MeleeShadow::Window& w) {
+       return w.sequence==seq && w.length==length && w.normalY==normalY;
+       }))
+    return;
+  const auto mode = weaponState();
+  const auto* skeleton = visual.visualSkeleton();
+  const auto& data = *seq->data;
+  // A scratch pose samples the selected MAN without changing the actor's
+  // animation clocks, events or RNG.
+  Pose sampled;
+  sampled.setSkeleton(skeleton);
+  AnimationSolver solver;
+  solver.setSkeleton(skeleton);
+  sampled.startAnim(solver,seq,0,BS_HIT,Pose::Force,0);
+  const auto& pose = sampled;
+  // Sample the actual MAN hand path in the actor's frame. Locomotion cannot
+  // open a stationary blade's window. Adjacent optimal tags partition combos.
+  const auto root = skeleton->findRootNode();
+  const auto right = skeleton->findNode(mode==WeaponState::Fist ? "BIP01 R HAND" : "ZS_RIGHTHAND");
+  const auto left = skeleton->findNode("BIP01 L HAND");
+  if(right>=pose.boneCount() || root>=pose.boneCount() || data.numFrames<2 || data.fpsRate<=0)
+    throw std::runtime_error("Melee shadow requires a sampled humanoid attack and hand bone");
+  std::vector<uint32_t> optimal;
+  for(const auto& event:data.events)
+    if(event.type==asset::MdsEventType::OPTIMAL_FRAME)
+      for(const auto frame:event.frames) {
+        // The same clamp as Sequence::processEvents, including truncated MAN ranges.
+        const auto clamped = frame<int32_t(data.firstFrame) ? 0u :
+                             (int64_t(frame)>=int64_t(data.firstFrame)+data.numFrames ? data.numFrames-1 :
+                              (frame>int32_t(data.lastFrame) ? data.lastFrame-data.firstFrame : uint32_t(frame)-data.firstFrame));
+        optimal.push_back(seq->reverse ? data.numFrames-1-clamped : clamped);
+        }
+  std::sort(optimal.begin(),optimal.end());
+  optimal.erase(std::unique(optimal.begin(),optimal.end()),optimal.end());
+  std::vector<float> rightSpeed(data.numFrames,0), leftSpeed(data.numFrames,0), rightReach(data.numFrames,0), leftReach(data.numFrames,0);
+  const auto sampleSpeeds = [&](size_t hand,std::vector<float>& speeds,std::vector<float>& reach) {
+    Vec3 previous;
+    for(uint32_t frame=0;frame<data.numFrames;++frame) {
+      const float progress = float(frame)/float(data.numFrames-1);
+      Matrix4x4 matrix;
+      if(!pose.animRelative(seq->name,seq->reverse ? 1.f-progress : progress,root,hand,matrix))
+        throw std::runtime_error("Cannot sample melee shadow attack hand");
+      Vec3 point(mode==WeaponState::Fist ? 0.f : -length,0,0);
+      matrix.project(point);
+      reach[frame] = Vec2(point.x,point.z).length();
+      if(frame>0)
+        speeds[frame] = (point-previous).length()*data.fpsRate;
+      previous = point;
+      }
+    speeds[0] = speeds[1];
+    };
+  sampleSpeeds(right,rightSpeed,rightReach);
+  if(mode==WeaponState::Fist && left<pose.boneCount())
+    sampleSpeeds(left,leftSpeed,leftReach);
+  for(uint32_t index=0;index<optimal.size();++index) {
+    const auto opt = optimal[index];
+    const uint32_t lo = index==0 ? 0 : (optimal[index-1]+opt)/2+1;
+    const uint32_t hi = index+1==optimal.size() ? data.numFrames-1 : (opt+optimal[index+1])/2;
+    const float rpeak = *std::max_element(rightSpeed.begin()+lo,rightSpeed.begin()+hi+1);
+    const float lpeak = *std::max_element(leftSpeed.begin()+lo,leftSpeed.begin()+hi+1);
+    const bool useLeft = mode==WeaponState::Fist && lpeak>rpeak;
+    const auto& speeds = useLeft ? leftSpeed : rightSpeed;
+    const float peak = std::max(rpeak,lpeak);
+    const float threshold = std::max(100.f,peak*.25f);
+    uint32_t first = opt, last = opt;
+    while(first>lo && speeds[first]>=threshold)
+      --first;
+    while(last<hi && speeds[last+1]>=threshold)
+      ++last;
+    // A low-speed optimal frame still has its own adjacent sample interval.
+    if(first==last) {
+      first = first>lo ? first-1 : first;
+      last = last<hi ? last+1 : last;
+      }
+    const uint32_t end = seq->reverse ? std::max(last+1,opt+2) : last+1;
+    shadow.windows.push_back({seq,length,index,first,opt,last,float(first)*1000.f/data.fpsRate,
+                              float(opt)*1000.f/data.fpsRate,float(end)*1000.f/data.fpsRate,
+                              peak,threshold,useLeft,normalY,float(opt+(seq->reverse ? 1u : 0u))*1000.f/data.fpsRate,
+                              *std::max_element((useLeft ? leftReach : rightReach).begin()+first,(useLeft ? leftReach : rightReach).begin()+last+1)});
+    }
+  }
+
+Npc::MeleeReach Npc::sampleMeleeReach(const Npc& target, Pose& sampled, const Pose::CombatLayer& attack, float yawDelta) const {
+  MeleeReach result;
+  const auto mode = weaponState();
+  const auto* item = mode==WeaponState::Fist ? nullptr : invent.activeWeapon();
+  float length = 12.f;
+  bool normalY = true;
+  if(item!=nullptr) {
+    const auto* mesh = Resources::loadMesh(item->handle().visual);
+    if(mesh==nullptr || mesh->bbox()[0].x>=-4.f)
+      throw std::runtime_error("Physical melee reach requires a weapon mesh extending along local -X");
+    length = -mesh->bbox()[0].x;
+    const auto extent = mesh->bbox()[1]-mesh->bbox()[0];
+    normalY = extent.y<=extent.z;
+    }
+  cacheMeleeShadowWindows(attack.sequence,length,normalY);
+  const MeleeShadow::Window* selected = nullptr;
+  const auto combo = uint32_t(sampled.comboLength());
+  for(const auto& window:meleeShadow->windows)
+    if(window.sequence==attack.sequence && window.length==length && window.normalY==normalY &&
+       (selected==nullptr || (window.index<=combo && window.index>selected->index)))
+      selected = &window;
+  if(selected==nullptr)
+    throw std::runtime_error("Physical melee reach requires an active attack window");
+  const auto window = *selected;
+  auto direction = target.position()-position();
+  direction.y = 0;
+  const float distance = direction.length();
+  if(distance<=0) {
+    result.advanceCm = 0;
+    result.uncoveredCm = 0;
+    return result;
+    }
+  direction /= distance;
+  // Rebase both read-only copies to this tick's transforms. Animation may still
+  // carry the preceding frame's position/yaw when native movement turns to hit.
+  sampled.setObjectMatrix(mkPositionMatrix(),false);
+  sampled.setBlendLog(false);
+  Pose targetPose = target.visual.pose();
+  targetPose.setBlendLog(false);
+  const auto targetMatrix = target.mkPositionMatrix();
+  targetPose.setObjectMatrix(targetMatrix,false);
+  targetPose.update(owner.tickCount(),true);
+  std::vector<HitZones::Posed> zones;
+  const float scale = Vec3(targetMatrix.at(0,0),targetMatrix.at(0,1),targetMatrix.at(0,2)).length();
+  target.visual.hitZoneShape().posed(targetPose.transform(),targetPose.boneCount(),scale,zones);
+  std::vector<MeleeBodyCapsule> body;
+  for(const auto& zone:zones)
+    body.push_back({zone.a,zone.b,zone.r,zone.bone,uint8_t(zone.zone)});
+  const double activeBegin = double(attack.start)+double(window.beginMs)/attack.speed;
+  const double activeEnd = double(attack.start)+double(window.endMs)/attack.speed;
+  if(activeEnd<=double(owner.tickCount()))
+    return result;
+  // Half-MAN-frame samples preserve the native blend, height and lateral lane.
+  // No events, actor clocks or RNG are advanced by Pose::update on these copies.
+  const auto interval = std::max<uint64_t>(1,uint64_t(500.f/(attack.sequence->data->fpsRate*attack.speed)));
+  const auto last = uint64_t(std::ceil(activeEnd))-1;
+  const auto hand = sampled.findNode(mode==WeaponState::Fist ? (window.left ? "BIP01 L HAND" : "BIP01 R HAND") : "ZS_RIGHTHAND");
+  const auto forearm = sampled.findNode(window.left ? "BIP01 L FOREARM" : "BIP01 R FOREARM");
+  const auto finger = sampled.findNode(window.left ? "BIP01 L FINGER0" : "BIP01 R FINGER0");
+  std::vector<MeleeBladeSegment> blades;
+  std::vector<std::pair<float,Vec3>> rootSteps;
+  auto previous = owner.tickCount();
+  for(uint64_t tick=owner.tickCount();tick<=last;) {
+    const float elapsed = float(tick-owner.tickCount());
+    if(tick>previous) {
+      Vec3 displacement;
+      mvAlgo.applyRotation(displacement,sampled.animMoveSpeed(tick,tick-previous));
+      displacement.y = 0; // the ordinary human CharacterVirtual root policy
+      rootSteps.emplace_back(elapsed,displacement);
+      }
+    previous = tick;
+    sampled.update(tick,true);
+    if(double(tick)>=activeBegin && hand<sampled.boneCount()) {
+      // Each candidate is a complete, frozen plan ending at this contact time.
+      // Root deltas are sampled once, then integrated under that plan's turn.
+      const float yawLimit = std::min(30.f,.18f*elapsed);
+      const float yaw = std::clamp(yawDelta,-yawLimit,yawLimit);
+      const float turn = yaw*float(M_PI)/180.f;
+      const float turnSin = std::sin(turn), turnCos = std::cos(turn);
+      Vec3 rootMotion;
+      for(const auto& [time,displacement]:rootSteps) {
+        const float rootTurn = elapsed>0.f ? turn*time/elapsed : 0.f;
+        rootMotion += Vec3(std::cos(rootTurn)*displacement.x-std::sin(rootTurn)*displacement.z,0,
+                           std::sin(rootTurn)*displacement.x+std::cos(rootTurn)*displacement.z);
+        }
+      const auto rotate = [&](Vec3 point) {
+        const auto offset = point-position();
+        return position()+rootMotion+Vec3(turnCos*offset.x-turnSin*offset.z,offset.y,
+                                         turnSin*offset.x+turnCos*offset.z);
+        };
+      const auto at = [&](size_t bone,Vec3 point) { sampled.bone(bone).project(point); return rotate(point); };
+      const auto grip = at(hand,{});
+      blades.clear();
+      if(mode==WeaponState::Fist) {
+        const auto knuckle = finger<sampled.boneCount() ? at(finger,{}) : grip;
+        blades.push_back({grip,knuckle,{0,1,0},6.f});
+        if(forearm<sampled.boneCount()) blades.push_back({at(forearm,{}),grip,{0,1,0},4.f});
+        }
+      else {
+        const auto blade = at(hand,{-length,0,0})-grip;
+        // Plan contact on the working outer blade, not beside the grip.
+        blades.push_back({grip+blade*.5f,grip+blade*.85f,{0,1,0},2.f});
+        }
+      std::vector<HitZones::Posed> torso;
+      const auto matrix = mkPositionMatrix();
+      const float ownScale = Vec3(matrix.at(0,0),matrix.at(0,1),matrix.at(0,2)).length();
+      visual.hitZoneShape().posed(sampled.transform(),sampled.boneCount(),ownScale,torso);
+      for(auto& capsule:torso) {
+        capsule.a = rotate(capsule.a);
+        capsule.b = rotate(capsule.b);
+        }
+      // Cast both ways: a short backward correction can put an overreaching
+      // blade back through a close target. Preserve the raw distance for cap statistics.
+      const float limit = distance+length+40.f;
+      const float forward = owner.physic()->meleeBladeAdvance(blades,body,direction,limit);
+      const float backward = owner.physic()->meleeBladeAdvance(blades,body,-direction,limit);
+      const auto consider = [&](float advance) {
+        if(!std::isfinite(advance))
+          return;
+        const float gap = HitZones::horizontalBodyGap(torso,zones,direction*advance);
+        if(gap<meleeMagnetTorsoGapCm || Vec3::dotProduct(target.position()-position()-rootMotion-direction*advance,direction)<0.f)
+          return;
+        const float available = std::min(advance<0.f ? 40.f : 120.f,.6f*elapsed);
+        const float uncovered = std::max(0.f,std::abs(advance)-available);
+        const float delivered = std::min(std::abs(advance),available);
+        const float priorAvailable = std::min(result.advanceCm<0.f ? 40.f : 120.f,.6f*result.contactMs);
+        const float priorDelivered = std::min(std::abs(result.advanceCm),priorAvailable);
+        const bool feasible = uncovered==0.f, priorFeasible = result.uncoveredCm==0.f;
+        const bool hasFeed = elapsed>0.f && delivered>0.f;
+        const bool priorHasFeed = result.contactMs>0.f && priorDelivered>0.f;
+        bool better = false;
+        if(feasible!=priorFeasible)
+          better = feasible;
+        else if(!feasible && hasFeed!=priorHasFeed)
+          better = hasFeed;
+        else if(uncovered!=result.uncoveredCm)
+          better = uncovered<result.uncoveredCm;
+        else
+          better = feasible ? std::abs(advance)<std::abs(result.advanceCm) : delivered>priorDelivered;
+        // An unreachable t=0 cast must not suppress a later partial feed.
+        // Genuine zero-time overlap remains a feasible, unassisted contact.
+        if(better) {
+          result.advanceCm = advance;
+          result.contactMs = elapsed;
+          result.yawDeg = yaw;
+          result.uncoveredCm = uncovered;
+          result.torsoGapCm = gap;
+          }
+        };
+      consider(forward);
+      consider(-backward);
+      if((forward==0.f || backward==0.f) && HitZones::horizontalBodyGap(torso,zones)<meleeMagnetTorsoGapCm) {
+        // Starting inside a target makes an ordinary cast return zero in both
+        // directions. Cast back from outside to retain a bounded retreat plan.
+        auto shifted = blades;
+        for(auto& segment:shifted) { segment.from-=direction*limit; segment.to-=direction*limit; }
+        consider(owner.physic()->meleeBladeAdvance(shifted,body,direction,2.f*limit)-limit);
+        }
+      }
+    if(tick==last) break;
+    tick = std::min(last,tick+interval);
+    }
+  return result;
+  }
+
 void Npc::syncMeleeShadowSwing() {
   const auto mode = weaponState();
-  if(meleeShadowSuspended || !Gothic::physicsFlags().meleeBladeShadow || !isHuman() || isDown() ||
+  const bool enabled = Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits;
+  if(meleeShadowSuspended || !isHuman() || isDown() ||
      (mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)) {
-    finishMeleeShadowSwing();
+    finishMeleeShadowSwing(true,meleeShadowSuspended);
     return;
     }
+  if(!enabled && !(meleeShadow && meleeShadow->window))
+    return;
   const auto& pose = visual.pose();
   std::optional<Pose::CombatLayer> attack;
   for(const auto& layer:pose.combatLayers(owner.tickCount()))
@@ -1401,7 +1693,7 @@ void Npc::syncMeleeShadowSwing() {
     }
   const auto* skeleton = visual.visualSkeleton();
   if(skeleton==nullptr)
-    return;
+    throw std::runtime_error("Melee shadow requires a humanoid attack skeleton");
   const auto* item = mode==WeaponState::Fist ? nullptr : invent.activeWeapon();
   float length = 12.f;
   bool normalY = true;
@@ -1419,87 +1711,28 @@ void Npc::syncMeleeShadowSwing() {
     meleeShadow = std::make_unique<MeleeShadow>();
   auto& shadow = *meleeShadow;
   const auto* seq = attack->sequence;
-  const auto& data = *seq->data;
   const auto combo = uint32_t(pose.comboLength());
   const auto cached = [&](const MeleeShadow::Window& w) {
     return w.sequence==seq && w.length==length && w.normalY==normalY;
     };
-  if(std::none_of(shadow.windows.begin(),shadow.windows.end(),cached)) {
-    // Sample the actual MAN hand path in the actor's frame. Locomotion cannot
-    // open a stationary blade's window. Adjacent optimal tags partition combos.
-    const auto root = skeleton->findRootNode();
-    const auto right = skeleton->findNode(mode==WeaponState::Fist ? "BIP01 R HAND" : "ZS_RIGHTHAND");
-    const auto left = skeleton->findNode("BIP01 L HAND");
-    if(right>=pose.boneCount() || root>=pose.boneCount() || data.numFrames<2 || data.fpsRate<=0)
-      throw std::runtime_error("Melee shadow requires a sampled humanoid attack and hand bone");
-    std::vector<uint32_t> optimal;
-    for(const auto& event:data.events)
-      if(event.type==asset::MdsEventType::OPTIMAL_FRAME)
-        for(const auto frame:event.frames) {
-          // The same clamp as Sequence::processEvents, including truncated MAN ranges.
-          const auto clamped = frame<int32_t(data.firstFrame) ? 0u :
-                               (int64_t(frame)>=int64_t(data.firstFrame)+data.numFrames ? data.numFrames-1 :
-                                (frame>int32_t(data.lastFrame) ? data.lastFrame-data.firstFrame : uint32_t(frame)-data.firstFrame));
-          optimal.push_back(seq->reverse ? data.numFrames-1-clamped : clamped);
-          }
-    std::sort(optimal.begin(),optimal.end());
-    optimal.erase(std::unique(optimal.begin(),optimal.end()),optimal.end());
-    std::vector<float> rightSpeed(data.numFrames,0), leftSpeed(data.numFrames,0);
-    const auto sampleSpeeds = [&](size_t hand,std::vector<float>& speeds) {
-      Vec3 previous;
-      for(uint32_t frame=0;frame<data.numFrames;++frame) {
-        const float progress = float(frame)/float(data.numFrames-1);
-        Matrix4x4 matrix;
-        if(!pose.animRelative(seq->name,seq->reverse ? 1.f-progress : progress,root,hand,matrix))
-          throw std::runtime_error("Cannot sample melee shadow attack hand");
-        Vec3 point(mode==WeaponState::Fist ? 0.f : -length,0,0);
-        matrix.project(point);
-        if(frame>0)
-          speeds[frame] = (point-previous).length()*data.fpsRate;
-        previous = point;
-        }
-      speeds[0] = speeds[1];
-      };
-    sampleSpeeds(right,rightSpeed);
-    if(mode==WeaponState::Fist && left<pose.boneCount())
-      sampleSpeeds(left,leftSpeed);
-    for(uint32_t index=0;index<optimal.size();++index) {
-      const auto opt = optimal[index];
-      const uint32_t lo = index==0 ? 0 : (optimal[index-1]+opt)/2+1;
-      const uint32_t hi = index+1==optimal.size() ? data.numFrames-1 : (opt+optimal[index+1])/2;
-      const float rpeak = *std::max_element(rightSpeed.begin()+lo,rightSpeed.begin()+hi+1);
-      const float lpeak = *std::max_element(leftSpeed.begin()+lo,leftSpeed.begin()+hi+1);
-      const bool useLeft = mode==WeaponState::Fist && lpeak>rpeak;
-      const auto& speeds = useLeft ? leftSpeed : rightSpeed;
-      const float peak = std::max(rpeak,lpeak);
-      const float threshold = std::max(100.f,peak*.25f);
-      uint32_t first = opt, last = opt;
-      while(first>lo && speeds[first]>=threshold)
-        --first;
-      while(last<hi && speeds[last+1]>=threshold)
-        ++last;
-      // A low-speed optimal frame still has its own adjacent sample interval.
-      if(first==last) {
-        first = first>lo ? first-1 : first;
-        last = last<hi ? last+1 : last;
-        }
-      const uint32_t end = seq->reverse ? std::max(last+1,opt+2) : last+1;
-      shadow.windows.push_back({seq,length,index,first,opt,last,float(first)*1000.f/data.fpsRate,
-                                float(opt)*1000.f/data.fpsRate,float(end)*1000.f/data.fpsRate,
-                                peak,threshold,useLeft,normalY,float(opt+(seq->reverse ? 1u : 0u))*1000.f/data.fpsRate});
-      }
-    }
+  cacheMeleeShadowWindows(seq,length,normalY);
   const MeleeShadow::Window* window = nullptr;
   for(const auto& w:shadow.windows)
     if(cached(w) && (window==nullptr || (w.index<=combo && w.index>window->index)))
       window = &w;
   if(window==nullptr)
-    return;
+    throw std::runtime_error("Melee shadow requires an optimal-frame attack window");
   if(shadow.window && shadow.window->sequence==seq && shadow.window->index==window->index &&
      shadow.start==attack->start && shadow.window->length==length && shadow.window->normalY==normalY)
     return;
   const auto selected = *window;
   finishMeleeShadowSwing(false);
+  if(meleeShadowSuspended)
+    return;
+  if(!enabled) {
+    owner.physic()->removeShadowBlade(this);
+    return;
+    }
   shadow.window = selected;
   ++shadow.id;
   shadow.start = attack->start;
@@ -1518,10 +1751,57 @@ void Npc::syncMeleeShadowSwing() {
   shadow.legacyResult = "no_optimal_frame";
   shadow.legacyHit = shadow.legacyBlock = shadow.legacyDodge = false;
   shadow.damage = 0;
+  shadow.consumed = shadow.targetsHit = 0;
+  shadow.stopped = false;
+  shadow.physicsHits = Gothic::physicsFlags().meleePhysicsHits;
+  shadow.outcome = "miss";
+  shadow.magnet = {};
+  shadow.reachCpuMs = shadow.reachCpuMaxMs = 0;
+  shadow.reachQueries = 0;
+  shadow.diagnostic = {};
+  if(TestBench::bodyTracing() && currentTarget!=nullptr) {
+    shadow.diagnostic.target = currentTarget;
+    shadow.diagnostic.who = meleeShadowWho(currentTarget);
+    }
+  if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget,60.f)) {
+    auto& magnet = shadow.magnet;
+    magnet.eligible = true;
+    magnet.target = currentTarget;
+    auto direction = currentTarget->position()-position();
+    direction.y = 0;
+    if(direction.length()>0.f)
+      magnet.direction = Vec3::normalize(direction);
+    const float yaw = std::remainder(angleDir(direction.x,direction.z)-angle,360.f);
+    // Fix the goal at the start of this swing. The active window is unchanged;
+    // Planned assistance ends at the preview contact. Only protective backoff
+    // may continue afterwards, including when no preview contact was found.
+    const auto started = std::chrono::steady_clock::now();
+    Pose sampled = pose;
+    auto reach = sampleMeleeReach(*currentTarget,sampled,*attack,yaw);
+    reach.cpuMs = std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count();
+    owner.physic()->accountMeleeReachTime(reach.cpuMs);
+    shadow.reachCpuMs = shadow.reachCpuMaxMs = reach.cpuMs;
+    shadow.reachQueries = 1;
+    shadow.diagnostic.previewAdvanceCm = reach.advanceCm;
+    shadow.diagnostic.previewContactMs = reach.contactMs;
+    shadow.diagnostic.previewCpuMs = reach.cpuMs;
+    shadow.diagnostic.previewApproachCm = reach.advanceCm;
+    magnet.rawCm = reach.advanceCm;
+    magnet.previewTorsoGapCm = reach.torsoGapCm;
+    if(std::isfinite(reach.advanceCm)) {
+      magnet.durationMs = reach.contactMs;
+      magnet.yawRequested = reach.yawDeg;
+      magnet.feasible = reach.uncoveredCm==0.f;
+      const float backward = std::min(40.f,.6f*reach.contactMs);
+      const float forward = std::min(120.f,.6f*reach.contactMs);
+      magnet.requestedCm = std::clamp(reach.advanceCm,-backward,forward);
+      }
+    }
   }
 
 void Npc::updateMeleeShadow() {
-  if(meleeShadowSuspended || !Gothic::physicsFlags().meleeBladeShadow) {
+  if(meleeShadowSuspended || (!(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits) &&
+                              !(meleeShadow && meleeShadow->window))) {
     clearMeleeShadow();
     return;
     }
@@ -1533,6 +1813,24 @@ void Npc::updateMeleeShadow() {
     body.push_back({capsule.a,capsule.b,capsule.r,capsule.bone,uint8_t(capsule.zone)});
   owner.physic()->updateShadowBody(this,body);
   meleeShadowBody = true;
+  if(TestBench::bodyTracing() && isHuman() && currentTarget!=nullptr && owner.npcId(currentTarget)!=uint32_t(-1)) {
+    std::vector<HitZones::Posed> targetZones;
+    currentTarget->visual.hitZonesPosed(targetZones);
+    const float gap = HitZones::horizontalBodyGap(zones,targetZones);
+    const auto radius = [](const std::vector<HitZones::Posed>& capsules) {
+      float largest = 0;
+      for(const auto& capsule:capsules)
+        if(capsule.zone==HitZones::Body) largest = std::max(largest,capsule.r);
+      return largest;
+      };
+    TestBench::bodyEvent(*this,currentTarget,"melee_torso_gap",owner.tickCount(),
+                        "\"gap_cm\":"+(std::isfinite(gap) ? std::to_string(gap) : "null")+
+                        ",\"overlap\":"+(gap<0.f ? "true" : "false")+
+                        ",\"attacker_down\":"+(isDown() ? "true" : "false")+
+                        ",\"target_down\":"+(currentTarget->isDown() ? "true" : "false")+
+                        ",\"attacker_body_radius_cm\":"+std::to_string(radius(zones))+
+                        ",\"target_body_radius_cm\":"+std::to_string(radius(targetZones)));
+    }
   syncMeleeShadowSwing();
   if(!meleeShadow || !meleeShadow->window)
     return;
@@ -1569,16 +1867,285 @@ void Npc::updateMeleeShadow() {
   // including frames whose endpoint is already past the end of that window.
   const double activeBegin = double(shadow.start)+double(window.beginMs)/shadow.speed;
   const double activeEnd   = double(shadow.start)+double(window.endMs)/shadow.speed;
-  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd);
+  if(TestBench::bodyTracing() && double(owner.tickCount())>=activeBegin && double(owner.tickCount())<activeEnd) {
+    auto& diagnostic = shadow.diagnostic;
+    if(const auto* target = diagnostic.target; target!=nullptr && owner.npcId(target)!=uint32_t(-1)) {
+      std::vector<HitZones::Posed> targetZones;
+      target->visual.hitZonesPosed(targetZones);
+      const auto root = position();
+      if(!diagnostic.sampled && !targetZones.empty()) {
+        diagnostic.sampled = true;
+        diagnostic.sample = owner.tickCount();
+        diagnostic.targetStart = target->position();
+        auto direction = target->position()-root;
+        direction.y = 0;
+        diagnostic.forward = direction.length()>0 ? Vec3::normalize(direction) : Vec3();
+        float distance = std::numeric_limits<float>::max();
+        for(const auto& zone:targetZones) {
+          const Vec2 a(zone.a.x-root.x,zone.a.z-root.z), b(zone.b.x-root.x,zone.b.z-root.z);
+          const auto axis = b-a;
+          const float at = axis.quadLength()>0 ? std::clamp(-(a.x*axis.x+a.y*axis.y)/axis.quadLength(),0.f,1.f) : 0.f;
+          distance = std::min(distance,(a+axis*at).length()-zone.r);
+          }
+        diagnostic.initialGapCm = distance-window.reachCm;
+        }
+      diagnostic.jumpback |= target->visual.pose().isJumpBack(owner.tickCount());
+      diagnostic.retreatCm = std::max(diagnostic.retreatCm,Vec3::dotProduct(target->position()-diagnostic.targetStart,diagnostic.forward));
+      // Closest points on the two capsule axes. This tracing-only summary uses
+      // actual published poses; it never changes the collision query or damage.
+      for(const auto& segment:blade)
+        for(const auto& zone:targetZones) {
+          const auto u = segment.to-segment.from, v = zone.b-zone.a, r = segment.from-zone.a;
+          const float a = Vec3::dotProduct(u,u), e = Vec3::dotProduct(v,v), f = Vec3::dotProduct(v,r);
+          float s = 0, t = 0;
+          if(a<=1.e-6f) {
+            t = e>1.e-6f ? std::clamp(f/e,0.f,1.f) : 0.f;
+            }
+          else {
+            const float c = Vec3::dotProduct(u,r);
+            if(e<=1.e-6f) s = std::clamp(-c/a,0.f,1.f);
+            else {
+              const float b = Vec3::dotProduct(u,v), denominator = a*e-b*b;
+              s = denominator>1.e-6f ? std::clamp((b*f-c*e)/denominator,0.f,1.f) : 0.f;
+              t = (b*s+f)/e;
+              if(t<0) { t = 0; s = std::clamp(-c/a,0.f,1.f); }
+              else if(t>1) { t = 1; s = std::clamp((b-c)/a,0.f,1.f); }
+              }
+            }
+          const auto offset = segment.from+u*s-(zone.a+v*t);
+          const float clearance = offset.length()-segment.radiusCm-zone.r;
+          if(clearance<diagnostic.minClearanceCm) {
+            diagnostic.minClearanceCm = clearance;
+            const auto side = Vec3(-diagnostic.forward.z,0,diagnostic.forward.x);
+            diagnostic.nearestOffset = {Vec3::dotProduct(offset,diagnostic.forward),offset.y,Vec3::dotProduct(offset,side)};
+            }
+          }
+      }
+    }
+  if(shadow.stopped)
+    return;
+  const float walkableCos = std::cos(float(owner.script().guildVal().slide_angle[guild()])*float(M_PI)/180.f);
+  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd,walkableCos);
   if(Gothic::inst().doMeleeBladeDraw()) {
     const double now = double(owner.tickCount());
     meleeShadowDrawPose   = blade;
     meleeShadowDrawActive = now>=activeBegin && now<activeEnd;
     }
+  }
+
+void Npc::resolveMeleeContacts() {
+  if(!meleeShadow || !meleeShadow->window)
+    return;
   auto contacts = owner.physic()->takeShadowBladeContacts(this);
   noteMeleeShadowMarks(contacts);
   for(const auto& hit:contacts)
-    shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
+    meleeShadow->contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
+  consumeMeleeContacts();
+  }
+
+auto Npc::meleeStep(uint64_t dt) -> Vec3 {
+  if(!meleeShadow || !meleeShadow->window || !meleeShadow->physicsHits || meleeShadow->stopped)
+    return {};
+  auto& swing = *meleeShadow;
+  auto& magnet = swing.magnet;
+  if(!magnet.eligible || dt==0)
+    return {};
+  if(magnet.target==nullptr || owner.npcId(magnet.target)==uint32_t(-1) || magnet.target->isDown()) {
+    magnet.forwardStopped = true;
+    return {};
+    }
+  const double begin = std::max(double(owner.tickCount())-double(dt),double(swing.tick));
+  const float milliseconds = float(double(owner.tickCount())-begin);
+  if(milliseconds<=0.f)
+    return {};
+  // Forward feed and turn keep their frozen deadline. Backoff alone can protect
+  // the rest of this swing from an approaching target or native attack root.
+  const double deadline = double(swing.tick)+magnet.durationMs;
+  const double end = std::min(double(owner.tickCount()),deadline);
+  const float plannedMs = !magnet.contactStopped && magnet.durationMs>0.f ? std::max(0.f,float(end-begin)) : 0.f;
+  float yawStep = 0, distance = 0;
+  if(plannedMs>0.f) {
+    const float fraction = std::clamp(float(end-double(swing.tick))/magnet.durationMs,0.f,1.f);
+    const float yawLeft = magnet.yawRequested*fraction-magnet.yawApplied;
+    yawStep = std::clamp(yawLeft,-.18f*plannedMs,.18f*plannedMs);
+    setDirection(angle+yawStep);
+    magnet.yawApplied += yawStep;
+    magnet.peakYawDegS = std::max(magnet.peakYawDegS,std::abs(yawStep)*1000.f/float(dt));
+    const float left = magnet.requestedCm*fraction-magnet.offeredCm;
+    distance = std::clamp(left,-.6f*plannedMs,.6f*plannedMs);
+    }
+  const auto started = std::chrono::steady_clock::now();
+  const auto posedAtRoot = [](const Npc& npc) {
+    std::vector<HitZones::Posed> capsules;
+    npc.visual.hitZonesPosed(capsules);
+    // Bones still contain the previous published transform during movement.
+    // Rebase to the live root, including an opponent that moved earlier this tick.
+    auto inverse = npc.visual.transform();
+    inverse.inverse();
+    const auto current = npc.mkPositionMatrix();
+    for(auto& capsule:capsules) {
+      inverse.project(capsule.a); inverse.project(capsule.b);
+      current.project(capsule.a); current.project(capsule.b);
+      }
+    return capsules;
+    };
+  const auto torso = posedAtRoot(*this), targetTorso = posedAtRoot(*magnet.target);
+  const float gap = HitZones::horizontalBodyGap(torso,targetTorso);
+  magnet.minTorsoGapCm = std::min(magnet.minTorsoGapCm,gap);
+  ++magnet.safetyFrames;
+  const float planned = distance;
+  if(!std::isfinite(gap)) {
+    magnet.forwardStopped = true;
+    distance = 0;
+    }
+  else {
+    const float forward = std::max(0.f,gap-meleeMagnetTorsoGapCm);
+    if(distance>0.f) {
+      // Once the feed reaches its safety boundary, do not chase a retreating target.
+      distance = magnet.forwardStopped ? 0.f : std::min(distance,forward);
+      if(distance<planned)
+        magnet.forwardStopped = true;
+      }
+    if(gap<=meleeMagnetTorsoGapCm)
+      magnet.forwardStopped = true;
+    if(gap<meleeMagnetTorsoGapCm)
+      distance = std::min(distance,-std::min(meleeMagnetTorsoGapCm-gap,.6f*milliseconds));
+    distance = std::max(distance,-std::max(0.f,40.f-magnet.backwardCm));
+    if(distance<0.f) {
+      const float firstGap = HitZones::horizontalBodyGap(torso,targetTorso,magnet.direction*-std::min(1.f,-distance));
+      const float lastGap = HitZones::horizontalBodyGap(torso,targetTorso,magnet.direction*distance);
+      // Intersecting projected axes have a flat distance until they separate.
+      // Permit that escape plateau, but never move towards a smaller clearance.
+      if(firstGap<gap || lastGap<gap)
+        distance = 0;
+      }
+    }
+  const float after = HitZones::horizontalBodyGap(torso,targetTorso,magnet.direction*distance);
+  if(distance!=planned)
+    ++magnet.safetyClamps;
+  if(distance<planned && distance<0.f)
+    magnet.safetyBackoffCm += -distance;
+  if(distance>0.f) magnet.forwardCm += distance;
+  else magnet.backwardCm -= distance;
+  if(TestBench::bodyTracing())
+    TestBench::bodyEvent(*this,magnet.target,"melee_magnet_step",owner.tickCount(),
+                        "\"swing\":"+std::to_string(swing.id)+",\"dt_ms\":"+std::to_string(dt)+
+                        ",\"planned_ms\":"+std::to_string(plannedMs)+",\"yaw_step_deg\":"+std::to_string(yawStep)+
+                        ",\"gap_cm\":"+(std::isfinite(gap) ? std::to_string(gap) : "null")+
+                        ",\"after_command_gap_cm\":"+(std::isfinite(after) ? std::to_string(after) : "null")+
+                        ",\"planned_cm\":"+std::to_string(planned)+",\"offered_cm\":"+std::to_string(distance)+
+                        ",\"backward_cm\":"+std::to_string(magnet.backwardCm)+
+                        ",\"forward_stopped\":"+(magnet.forwardStopped ? "true" : "false"));
+  owner.physic()->accountMeleeReachTime(std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count());
+  magnet.offeredCm += distance;
+  magnet.peakCmS = std::max(magnet.peakCmS,std::abs(distance)*1000.f/float(dt));
+  // This timestamp retains the deadline of planned assistance; protective
+  // backoff has its own per-frame trace and may outlive that deadline.
+  if(plannedMs>0.f && (distance>0.f || (distance==planned && distance<0.f) || yawStep!=0.f))
+    magnet.lastFeedMs = end;
+  return magnet.direction*distance;
+  }
+
+void Npc::noteMeleeStep(const Vec3& root, const Vec3& offered, const Vec3& moved, uint64_t dt) {
+  if(!meleeShadow || offered.quadLength()==0.f || dt==0)
+    return;
+  auto& magnet = meleeShadow->magnet;
+  // One CV solve owns root and assistance together. Record that accepted
+  // projection separately; root subtraction is a conservative attribution,
+  // not a second, hypothetical solve with assistance removed.
+  const auto direction = Vec3::normalize(offered);
+  const float accepted = Vec3::dotProduct(moved,direction);
+  const float estimated = std::clamp(accepted-std::max(0.f,Vec3::dotProduct(root,direction)),0.f,offered.length());
+  const float sign = Vec3::dotProduct(offered,magnet.direction)<0.f ? -1.f : 1.f;
+  magnet.combinedCm += sign*accepted;
+  magnet.estimatedCm += sign*estimated;
+  magnet.estimatedPeakCmS = std::max(magnet.estimatedPeakCmS,estimated*1000.f/float(dt));
+  }
+
+void Npc::stopMeleeSwing() {
+  owner.physic()->removeShadowBlade(this);
+  visual.interrupt();
+  setAnim(Anim::StumbleB);
+  }
+
+void Npc::consumeMeleeContacts() {
+  if(!meleeShadow || !meleeShadow->window)
+    return;
+  auto& swing = *meleeShadow;
+  while(swing.consumed<swing.contacts.size()) {
+    const auto index = swing.consumed++;
+    const auto id = swing.id;
+    auto& entry = swing.contacts[index];
+    const auto hit = entry.hit;
+    // Walkable ground is a logged brush, not the target contact ending assistance.
+    if(swing.magnet.eligible && !swing.magnet.contactStopped && (!hit.world || hit.stopsSwing)) {
+      swing.magnet.contactStopped = true;
+      swing.magnet.contactObservedMs = owner.tickCount();
+      swing.magnet.contactKind = hit.world ? "wall" : "body";
+      }
+    if(swing.stopped) {
+      entry.result = "after_stop";
+      continue;
+      }
+    if(hit.world) {
+      entry.result = hit.stopsSwing ? "wall" : "ground";
+      if(!hit.stopsSwing)
+        continue;
+      swing.stopped = true;
+      swing.outcome = "wall";
+      if(swing.physicsHits) {
+        const auto* weapon = inventory().activeWeapon();
+        Matrix4x4 at;
+        at.identity();
+        at.translate(hit.point);
+        owner.addLandHitEffect(weapon!=nullptr ? ItemMaterial(weapon->handle().material) : ItemMaterial::MAT_LEATHER,hit.material,at).play();
+        stopMeleeSwing();
+        }
+      continue;
+      }
+    auto* target = hit.npc;
+    if(target==nullptr || target->isDown()) {
+      entry.result = "target_down";
+      continue;
+      }
+    const int partyMember = Gothic::inst().version().game==2 ? 15 : 36;
+    const bool sameParty = owner.script().isFriendlyFire(*this,*target) ||
+                           (handle().aivar[partyMember]!=0 && target->handle().aivar[partyMember]!=0);
+    if(skipMeleeAlly(isPlayer(),target==currentTarget,guild()==target->guild(),sameParty,isEnemy(*target))) {
+      entry.result = "ally_skipped";
+      if(swing.outcome=="miss")
+        swing.outcome = "ally_skipped";
+      continue;
+      }
+    const auto& targetPose = target->visual.pose();
+    const bool dodge = targetPose.isJumpBack(owner.tickCount()) && target->fghAlgo.isInJumpBackAngle(*target,*this);
+    const bool block = target->fghAlgo.isInFocusAngle(*target,*this) && targetPose.isDefence(owner.tickCount());
+    entry.result = block ? "blocked" : (dodge ? "evaded" : "hit");
+    if(!block && !dodge) {
+      // The sampled MAN peak is fixed per animation/window, not learned from outcomes.
+      entry.multiplier = DamageCalculator::meleeMultiplier(hit.speedCmS,swing.window->peakCmS*.7f,
+                                                          hit.bladeFraction,hit.surfaceAngleDeg,swing.targetsHit++);
+      swing.outcome = "hit";
+      }
+    if(swing.physicsHits) {
+      BodyObservations::noteEvent(*this,target,"applied",owner.tickCount());
+      if(TestBench::bodyTracing())
+        TestBench::bodyEvent(*this,target,"hit_attempt",owner.tickCount(),
+                            "\"result\":"+TestBench::bodyJson(entry.result),visual.pose().animNames());
+      const auto before = target->attribute(ATR_HITPOINTS);
+      target->takeDamage(*this,nullptr,false,entry.multiplier,&hit);
+      // Damage scripts may remove the attacker, retiring and clearing this window.
+      if(!swing.window || swing.id!=id)
+        return;
+      swing.contacts[index].damage = std::max(0,before-target->attribute(ATR_HITPOINTS));
+      }
+    if(block) {
+      swing.stopped = true;
+      swing.outcome = "blocked";
+      if(swing.physicsHits)
+        stopMeleeSwing();
+      }
+    }
   }
 
 void Npc::noteMeleeShadowMarks(const std::vector<MeleeBladeContact>& contacts) {
@@ -1618,14 +2185,14 @@ void Npc::drawMeleeShadow(DbgPainter& p, uint64_t now) const {
   }
 
 void Npc::clearMeleeShadow() {
-  finishMeleeShadowSwing();
+  finishMeleeShadowSwing(true,true);
   if(meleeShadowBody && owner.physic()!=nullptr) {
     owner.physic()->removeShadowBody(this);
     meleeShadowBody = false;
     }
   }
 
-void Npc::finishMeleeShadowSwing(bool remove) {
+void Npc::finishMeleeShadowSwing(bool remove, bool discard) {
   if(!meleeShadow || !meleeShadow->window || owner.physic()==nullptr)
     return;
   auto& shadow = *meleeShadow;
@@ -1635,26 +2202,45 @@ void Npc::finishMeleeShadowSwing(bool remove) {
   meleeShadowDrawActive = false;
   for(const auto& hit:contacts)
     shadow.contacts.push_back({hit,meleeShadowWho(hit.npc),meleeShadowBone(hit)});
+  const auto id = shadow.id;
+  if(discard) {
+    if(shadow.consumed<shadow.contacts.size() && shadow.outcome=="miss")
+      shadow.outcome = "discarded";
+    while(shadow.consumed<shadow.contacts.size())
+      shadow.contacts[shadow.consumed++].result = "discarded";
+    }
+  else consumeMeleeContacts();
+  // A nested removal already wrote and cleared the window; do not flush it twice.
+  if(!shadow.window || shadow.id!=id)
+    return;
   if(remove)
     owner.physic()->removeShadowBlade(this);
   const auto& window = *shadow.window;
   bool physicalHit = false, sameTarget = false, extraTarget = false, worldHit = false;
-  std::string physical = "[", world = "null";
+  std::string physical = "[", world = "null", worldContacts = "[";
   for(const auto& entry:shadow.contacts) {
     const auto& contact = entry.hit;
     const auto point = meleeShadowPoint(contact.point);
     if(contact.world) {
-      worldHit = true;
-      world = "{\"point_cm\":" + point + ",\"step\":" + std::to_string(contact.step) + "}";
+      worldHit |= entry.result=="wall";
+      world = "{\"point_cm\":" + point + ",\"normal\":" + meleeShadowPoint(contact.normal) +
+              ",\"material\":" + std::to_string(int(contact.material)) +
+              ",\"result\":" + TestBench::bodyJson(entry.result) + ",\"step\":" + std::to_string(contact.step) + "}";
+      if(worldContacts.size()>1)
+        worldContacts += ',';
+      worldContacts += world;
       continue;
       }
-    physicalHit = true;
+    if(entry.result=="hit")
+      physicalHit = true;
     const bool same = contact.npc!=nullptr && contact.npc==shadow.legacyNpc;
-    sameTarget |= same;
-    extraTarget |= !same;
+    sameTarget |= same && entry.result=="hit";
+    extraTarget |= !same && entry.result=="hit";
     if(physical.size()>1)
       physical += ',';
-    physical += "{\"target\":" + entry.target +
+    physical += "{\"result\":" + TestBench::bodyJson(entry.result) +
+                ",\"multiplier\":" + std::to_string(entry.multiplier) + ",\"damage\":" + std::to_string(entry.damage) +
+                ",\"target\":" + entry.target +
                 ",\"part\":" + TestBench::bodyJson(HitZones::name(HitZones::Zone(contact.zone))) +
                 ",\"bone\":" + std::to_string(contact.bone) + ",\"bone_name\":" + TestBench::bodyJson(entry.bone) +
                 ",\"point_cm\":" + point +
@@ -1664,6 +2250,7 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                 ",\"step\":" + std::to_string(contact.step) + "}";
     }
   physical += ']';
+  worldContacts += ']';
   std::string comparison = "null";
   if(worldHit && shadow.legacyHit && !sameTarget)
     comparison = "\"world_before_target\"";
@@ -1676,6 +2263,42 @@ void Npc::finishMeleeShadowSwing(bool remove) {
   else if(shadow.legacyHit)
     comparison = "\"legacy_only\"";
   const auto number = [](auto value) { return std::to_string(value); };
+  std::string diagnostic = "null";
+  if(TestBench::bodyTracing()) {
+    const auto& value = shadow.diagnostic;
+    const double activeBegin = double(shadow.start)+double(window.beginMs)/shadow.speed;
+    const double activeEnd = double(shadow.start)+double(window.endMs)/shadow.speed;
+    diagnostic = "{\"target\":" + value.who +
+                 ",\"active_begin_ms\":" + number(activeBegin) +
+                 ",\"active_end_ms\":" + number(activeEnd) +
+                 ",\"sample_time_ms\":" + number(value.sample) +
+                 ",\"sampled\":" + (value.sampled ? "true" : "false") +
+                 ",\"reach_cm\":" + number(window.reachCm) +
+                 ",\"preview_advance_cm\":" + (std::isfinite(value.previewAdvanceCm) ? number(value.previewAdvanceCm) : "null") +
+                 ",\"preview_contact_ms\":" + number(value.previewContactMs) +
+                 ",\"preview_approach_cm\":" + (std::isfinite(value.previewApproachCm) ? number(value.previewApproachCm) : "null") +
+                 ",\"preview_cpu_ms\":" + number(value.previewCpuMs) +
+                 ",\"reach_queries\":" + number(shadow.reachQueries) +
+                 ",\"reach_cpu_total_ms\":" + number(shadow.reachCpuMs) +
+                 ",\"reach_cpu_max_ms\":" + number(shadow.reachCpuMaxMs) +
+                 ",\"initial_gap_cm\":" + (value.sampled ? number(value.initialGapCm) : "null") +
+                 ",\"min_clearance_cm\":" + (value.minClearanceCm<std::numeric_limits<float>::max() ? number(value.minClearanceCm) : "null") +
+                 ",\"nearest_offset_forward_up_side_cm\":" + meleeShadowPoint(value.nearestOffset) +
+                 ",\"target_retreat_cm\":" + number(value.retreatCm) +
+                 ",\"jumpback\":" + (value.jumpback ? "true" : "false") +
+                 ",\"window_completed\":" + (double(owner.tickCount())>=activeEnd ? "true" : "false") + "}";
+    }
+  const auto& magnet = shadow.magnet;
+  const double deadline = double(shadow.tick)+magnet.durationMs;
+  const char* magnetStop = "none";
+  if(magnet.eligible) {
+    if(magnet.contactStopped && (!std::isfinite(magnet.rawCm) || double(magnet.contactObservedMs)<=deadline))
+      magnetStop = magnet.contactKind;
+    else if(!std::isfinite(magnet.rawCm))
+      magnetStop = "no_preview";
+    else
+      magnetStop = double(owner.tickCount())>=deadline ? "predicted" : "swing_end";
+    }
   writeMeleeShadow("{\"swing\":" + number(shadow.id) + ",\"world\":" + TestBench::bodyJson(owner.name()) +
                   ",\"game_time_ms\":" + number(shadow.tick) + ",\"end_time_ms\":" + number(owner.tickCount()) +
                   ",\"attacker\":" + shadow.attacker + ",\"weapon\":" + shadow.weapon +
@@ -1692,8 +2315,40 @@ void Npc::finishMeleeShadowSwing(bool remove) {
                   ",\"damage\":" + number(shadow.damage) + ",\"blocked\":" + (shadow.legacyBlock ? "true" : "false") +
                   ",\"dodged\":" + (shadow.legacyDodge ? "true" : "false") +
                   ",\"result\":" + TestBench::bodyJson(shadow.legacyResult) +
-                  "},\"physical\":{\"targets\":" + physical + ",\"world\":" + world +
-                  "},\"comparison\":" + comparison + "}");
+                  "},\"physical\":{\"targets\":" + physical + ",\"world\":" + world + ",\"world_contacts\":" + worldContacts +
+                  "},\"decision\":{\"physics_hits\":" + (shadow.physicsHits ? "true" : "false") +
+                  ",\"outcome\":" + TestBench::bodyJson(shadow.outcome) +
+                  ",\"magnet\":{\"eligible\":" + (shadow.magnet.eligible ? "true" : "false") +
+                  ",\"preview_contact\":" + (std::isfinite(shadow.magnet.rawCm) ? "true" : "false") +
+                  ",\"raw_cm\":" + (std::isfinite(shadow.magnet.rawCm) ? number(shadow.magnet.rawCm) : "null") +
+                  ",\"requested_cm\":" + number(shadow.magnet.requestedCm) +
+                  ",\"offered_cm\":" + number(shadow.magnet.offeredCm) +
+                  ",\"forward_cm\":" + number(shadow.magnet.forwardCm) +
+                  ",\"backward_cm\":" + number(shadow.magnet.backwardCm) +
+                  ",\"safety_backoff_cm\":" + number(shadow.magnet.safetyBackoffCm) +
+                  ",\"safety_frames\":" + number(shadow.magnet.safetyFrames) +
+                  ",\"safety_clamps\":" + number(shadow.magnet.safetyClamps) +
+                  ",\"forward_stopped\":" + (shadow.magnet.forwardStopped ? "true" : "false") +
+                  ",\"min_torso_gap_cm\":" + (std::isfinite(shadow.magnet.minTorsoGapCm) ? number(shadow.magnet.minTorsoGapCm) : "null") +
+                  ",\"preview_torso_gap_cm\":" + (std::isfinite(shadow.magnet.previewTorsoGapCm) ? number(shadow.magnet.previewTorsoGapCm) : "null") +
+                  ",\"accepted_combined_cm\":" + number(shadow.magnet.combinedCm) +
+                  ",\"estimated_moved_cm\":" + number(shadow.magnet.estimatedCm) +
+                  ",\"estimate_method\":\"accepted_projection_minus_forward_root\"" +
+                  ",\"peak_speed_cm_s\":" + number(shadow.magnet.peakCmS) +
+                  ",\"estimated_peak_speed_cm_s\":" + number(shadow.magnet.estimatedPeakCmS) +
+                  ",\"duration_ms\":" + number(shadow.magnet.durationMs) +
+                  ",\"predicted_contact_time_ms\":" + (std::isfinite(shadow.magnet.rawCm) ? number(double(shadow.tick)+shadow.magnet.durationMs) : "null") +
+                  ",\"contact_observed_time_ms\":" + (shadow.magnet.contactStopped ? number(shadow.magnet.contactObservedMs) : "null") +
+                  ",\"last_assist_time_ms\":" + (shadow.magnet.lastFeedMs>0 ? number(shadow.magnet.lastFeedMs) : "null") +
+                  ",\"stop_reason\":" + TestBench::bodyJson(magnetStop) +
+                  ",\"preview_feasible\":" + (shadow.magnet.feasible ? "true" : "false") +
+                  ",\"time_limited\":" + (std::isfinite(shadow.magnet.rawCm) && std::abs(shadow.magnet.rawCm)>.6f*shadow.magnet.durationMs ? "true" : "false") +
+                  ",\"yaw_requested_deg\":" + number(shadow.magnet.yawRequested) +
+                  ",\"yaw_applied_deg\":" + number(shadow.magnet.yawApplied) +
+                  ",\"peak_yaw_deg_s\":" + number(shadow.magnet.peakYawDegS) +
+                  ",\"cap_forward\":" + (shadow.magnet.rawCm>=120.f && std::isfinite(shadow.magnet.rawCm) ? "true" : "false") +
+                  ",\"cap_backward\":" + (shadow.magnet.rawCm<=-40.f ? "true" : "false") + "}" +
+                  "},\"diagnostic\":" + diagnostic + ",\"comparison\":" + comparison + "}");
   shadow.contacts.clear();
   shadow.window.reset();
   }
@@ -2952,11 +3607,14 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 
   const auto ws = weaponState();
   const auto bs = bodyStateMasked();
+  const bool magnetHeading = visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window && meleeShadow->physicsHits &&
+                             meleeShadow->magnet.eligible;
 
   if(bs==BS_HIT && (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
     traceCombatGate("melee_hit_lock");
     //NOTE: 'storm' attack has BS_RUN state and not meant to be auto-rotated
-    implTurnToFai(*currentTarget,dt);
+    if(!magnetHeading)
+      implTurnToFai(*currentTarget,dt);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
@@ -2980,7 +3638,8 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 
   if(faiWaitTime>=owner.tickCount() || waitTime>=owner.tickCount()) {
     traceCombatGate("fai_or_script_wait");
-    implTurnToFai(*currentTarget,dt);
+    if(!magnetHeading)
+      implTurnToFai(*currentTarget,dt);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
     return true;
     }
@@ -3795,12 +4454,16 @@ void Npc::commitDamage() {
     if(TestBench::isActive())
       TestBench::destructionMeleeHit(*this,affected,weaponDamage+strength);
     }
+  auto* shadow = meleeShadow && meleeShadow->window ? meleeShadow.get() : nullptr;
+  const bool physicsHits = isHuman() && (shadow!=nullptr ? shadow->physicsHits : Gothic::physicsFlags().meleePhysicsHits);
   const auto hitTrace = [&](const char* result) {
-    if(Gothic::physicsFlags().meleeBladeShadow && meleeShadow && meleeShadow->window) {
+    if(shadow!=nullptr) {
       meleeShadow->legacyTarget = meleeShadowWho(currentTarget);
       meleeShadow->legacyNpc = currentTarget;
       meleeShadow->legacyResult = result;
       }
+    if(physicsHits)
+      return;
     BodyObservations::noteEvent(*this,currentTarget,result,owner.tickCount());
     if(TestBench::bodyTracing())
       TestBench::bodyEvent(*this,currentTarget,"hit_attempt",owner.tickCount(),
@@ -3819,7 +4482,6 @@ void Npc::commitDamage() {
     return;
     }
   hitTrace("applied");
-  auto* shadow = Gothic::physicsFlags().meleeBladeShadow && meleeShadow && meleeShadow->window ? meleeShadow.get() : nullptr;
   auto* shadowTarget = shadow!=nullptr ? currentTarget : nullptr;
   int32_t hpBefore = 0;
   if(shadow!=nullptr) {
@@ -3836,12 +4498,13 @@ void Npc::commitDamage() {
                                                  (shadow->legacyDodge ? "evaded" : "applied"));
     hpBefore = currentTarget->attribute(ATR_HITPOINTS);
     }
-  currentTarget->takeDamage(*this,nullptr);
+  if(!physicsHits)
+    currentTarget->takeDamage(*this,nullptr);
   if(shadow!=nullptr)
     shadow->damage = std::max(0,hpBefore-shadowTarget->attribute(ATR_HITPOINTS));
   }
 
-void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence) {
+void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence, float meleeScale, const MeleeBladeContact* contact) {
   if(isDown())
     return;
 
@@ -3867,7 +4530,7 @@ void Npc::takeDamage(Npc &other, const Bullet* b, bool ignoreDefence) {
   owner.sendPassivePerc(*this,other,*this,PERC_ASSESSFIGHTSOUND);
 
   if(!(isBlock || isJumpb) || b!=nullptr) {
-    takeDamage(other,b,COLL_DOEVERYTHING,0,false);
+    takeDamage(other,b,COLL_DOEVERYTHING,0,false,meleeScale,contact);
     } else {
     if(invent.activeWeapon()!=nullptr)
       visual.emitBlockEffect(*this,other);
@@ -3889,7 +4552,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t s
   takeDamage(other,b,bMask,splId,true);
   }
 
-void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell) {
+void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell, float meleeScale, const MeleeBladeContact* contact) {
   const int32_t traceHpBefore = attribute(ATR_HITPOINTS);
   float a  = angleDir(other.x-x,other.z-z);
   float da = a-angle;
@@ -3930,6 +4593,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
     }
 
   hitResult = DamageCalculator::damageValue(other,*this,b,isSpell,dmg,bMask);
+  if(contact!=nullptr && hitResult.hasHit && !hitResult.invincible)
+    hitResult.value = int32_t(std::lround(float(hitResult.value)*meleeScale));
   if(hitResult.hasHit && !isSpell && b!=nullptr)
     queueArrowPhysics(*b);
   const auto traceDamage = [&] {
@@ -3988,7 +4653,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
         stumble = setAnimAngGet(lastHitType=='A' ? Anim::StumbleA  : Anim::StumbleB)!=nullptr;
       }
     if((damageType & (1<<zenkit::DamageType::FLY))==0)
-      hitReaction(other,b,hitResult.value,stumble);
+      hitReaction(other,b,hitResult.value,stumble,contact);
     }
 
   // throw enemy
@@ -4025,7 +4690,7 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
   traceDamage();
   }
 
-void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble) {
+void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble, const MeleeBladeContact* contact) {
   // the upper body gives way to the blow (graphics/mesh/flinch), on top of the stumble if one plays
   const Vec3  feet   = position();
   const Vec3  center = collosionCenter();
@@ -4048,6 +4713,8 @@ void Npc::hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool st
     at      = center - left*(20.f*swing) - to*20.f;
     at.y    = feet.y + top*(other.isMonster() ? 0.6f : 0.85f);
     }
+  if(contact!=nullptr)
+    at = contact->point;
   // 0 the hips (half the height to the head), 1 the head
   hit.height = std::clamp((at.y - feet.y)/top*2.f - 1.f, 0.f, 1.f);
   // off the middle the blow turns the trunk: about up, by the lever
@@ -4252,7 +4919,7 @@ void Npc::tickRegen(int32_t& v, const int32_t max, const int32_t chg, const uint
   }
 
 void Npc::tickAnimationTags() {
-  if(Gothic::physicsFlags().meleeBladeShadow || (meleeShadow && meleeShadow->window))
+  if(Gothic::physicsFlags().meleeBladeShadow || Gothic::physicsFlags().meleePhysicsHits || (meleeShadow && meleeShadow->window))
     syncMeleeShadowSwing();
   Animation::EvCount ev;
   const bool hasEvents = visual.processEvents(owner,lastEventTime,ev);
@@ -4402,7 +5069,10 @@ void Npc::tick(uint64_t dt) {
     if(physicalMovement)
       return;
     if(!isPlayer() && go2.flag!=GT_Flee && faiWaitTime<owner.tickCount() && currentTarget!=nullptr) {
-      implTurnToFai(*currentTarget,dt);
+      const bool magnetHeading = visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window && meleeShadow->physicsHits &&
+                                 meleeShadow->magnet.eligible;
+      if(!magnetHeading)
+        implTurnToFai(*currentTarget,dt);
       }
     mvAlgo.tick(dt,MoveAlgo::WaitMove);
     return;
@@ -7971,13 +8641,11 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
                                                 float(std::max<uint64_t>(dt,1))*0.001f);
     if(syncAtt || force)
       visual.syncAttaches();
-    updateMeleeShadow();
     return;
     }
   if(ragdoll) {
     if(syncAtt || force)
       visual.syncAttaches();
-    updateMeleeShadow();
     return;
     }
   syncAtt |= visual.updateLean(*this,dt);
@@ -8001,7 +8669,6 @@ void Npc::updateAnimation(uint64_t dt, bool force) {
     syncAtt |= visual.setPhysicalPose(arrowPhysicalPose,living->reactionBones(),living->reactionWeight());
   if(syncAtt)
     visual.syncAttaches();
-  updateMeleeShadow();
   }
 
 bool Npc::updateLyingVisualHeight() {

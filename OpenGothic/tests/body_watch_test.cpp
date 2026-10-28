@@ -6,12 +6,15 @@
 #include "resources.h"
 #include "game/bodycontroller.h"
 #include "game/bodyobservations.h"
+#include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/serialize.h"
 #include "game/simulationstep.h"
+#include "physics/dynamicworld.h"
 #include "testbench.h"
 #include "utils/workers.h"
 #include "world/objects/npc.h"
+#include "world/world.h"
 
 #include <rapidjson/document.h>
 #include <rapidjson/stringbuffer.h>
@@ -22,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -614,11 +618,81 @@ void staleFarRelease(Npc& actor,Npc& target,Npc& hero,PlayerControl& player) {
   expect(std::string_view(BodyController::updateWatch({},50))=="allowed","stale far release permits removing its former body owner");
   hero.setPosition(heroStart); hero.updateTransform();
   }
+
+void meleeRemoval(Npc& victim) {
+  auto& gothic=Gothic::inst();
+  auto& world=victim.world();
+  Gothic::settingsSetI("GAME","melee_blade_shadow",1);
+  Gothic::settingsSetI("GAME","melee_physics_hits",1);
+  const auto attackerSymbol=world.script().findSymbolIndex("BDT_1003_BANDIT_M");
+  const auto sword=world.script().findSymbolIndex("ItMw_1h_Common_01");
+  const auto perception=world.script().findSymbolIndex("ZS_ATTACK");
+  expect(attackerSymbol!=size_t(-1) && sword!=size_t(-1) && perception!=size_t(-1),"melee removal stock symbols exist");
+  for(unsigned phase=0;phase<3;++phase) {
+    ++cases;
+    victim.clearAiQueue(); victim.clearState(true); victim.clearGoTo(); victim.stopWalking();
+    victim.closeWeapon(true); victim.setExternalControl(false);
+    victim.handle().attribute[ATR_HITPOINTS]=victim.handle().attribute[ATR_HITPOINTSMAX]=5000;
+    victim.setPerceptionEnable(PERC_ASSESSDAMAGE,perception);
+    auto* attacker=world.addNpc(attackerSymbol,victim.position()+Tempest::Vec3(150,0,0));
+    expect(attacker!=nullptr,"melee removal creates a real attacker");
+    attacker->clearAiQueue(); attacker->clearState(true); attacker->clearGoTo(); attacker->stopWalking();
+    attacker->setExternalControl(true); attacker->setToFightMode(sword); attacker->setTarget(&victim);
+    expect(attacker->playAnimByName("S_1HATTACK",BS_HIT)!=nullptr,"melee removal starts a stock attack");
+    attacker->updateAnimation(0,true); attacker->updateMeleeShadow();
+    if(phase==2) {
+      // Retain the old pending window while the existing fixture starts a
+      // different attack; sync must not resurrect it after callback removal.
+      BodyController::fixturePrepare(*attacker,victim,150,0);
+      victim.setExternalControl(false);
+      expect(attacker->playAnimByName("T_1HATTACKL",BS_HIT)!=nullptr,"melee removal starts the next stock attack");
+      }
+    // Use the production contact queue, with geometry above the map so this
+    // lifecycle regression does not depend on combat positioning or scenery.
+    const uint64_t now=world.tickCount();
+    world.physic()->updateShadowBody(&victim,{{{10,100000,0},{10,100020,0},1.f,0,1}});
+    world.physic()->updateShadowBlade(attacker,1,{{{0,100000,0},{0,100020,0},{0,0,1},1.f}},now,0,double(now+34));
+    world.physic()->updateShadowBlade(attacker,1,{{{20,100000,0},{20,100020,0},{0,0,1},1.f}},now+33,0,double(now+34));
+    world.physic()->flushShadowBlades();
+    const auto hp=victim.attribute(ATR_HITPOINTS);
+    unsigned callbacks=0;
+    gothic.interceptPerception=[&](Npc& self,Npc& other,Npc*,PercType type,const HeroDeed*) {
+      if(&self==&victim && &other==attacker && type==PERC_ASSESSDAMAGE) {
+        ++callbacks;
+        world.removeNpc(*attacker);
+        }
+      return true;
+      };
+    if(phase==1)
+      attacker->resolveMeleeContacts();
+    else if(phase==2)
+      attacker->updateMeleeShadow();
+    else
+      world.removeNpc(*attacker);
+    gothic.interceptPerception={};
+    expect(world.npcId(attacker)==uint32_t(-1),"melee callback/removal takes exactly the attacking NPC out of the world");
+    expect(callbacks==(phase==0 ? 0u : 1u),"only live contact resolution can run the damage perception");
+    attacker->resolveMeleeContacts();
+    attacker->finishMeleeShadowSwing();
+    expect(world.physic()->takeShadowBladeContacts(attacker).empty(),"removed attacker retains no blade contacts");
+    std::ifstream journal("melee-blade-shadow.jsonl");
+    std::string line,last;
+    while(std::getline(journal,line)) if(!line.empty()) last=line;
+    const auto row=parse(last);
+    expect(row["physical"]["targets"].Size()==1,"removal journals its contact once without opening another window");
+    if(phase==0) {
+      expect(victim.attribute(ATR_HITPOINTS)==hp,"removing an attacker must not apply its pending blade damage");
+      expect(std::string_view(row["physical"]["targets"][0]["result"].GetString())=="discarded",
+             "removal must journal its pending body contact as discarded");
+      }
+    }
+  }
 }
 
 int main(int argc,const char** argv) {
   std::FILE* result=fdopen(dup(STDOUT_FILENO),"w");
   dup2(STDERR_FILENO,STDOUT_FILENO);
+  const auto workingDirectory=std::filesystem::current_path();
   try {
     std::string save,scenario;
     for(int i=1;i<argc;++i) {
@@ -639,6 +713,8 @@ int main(int argc,const char** argv) {
     GameMusic music;
     const auto output=std::filesystem::temp_directory_path()/("gothic-body-watch-test-"+std::to_string(getpid()));
     std::filesystem::create_directories(output);
+    // The melee journal opens on the first swing, including earlier fixture cases.
+    std::filesystem::current_path(output);
     TestBench::configure(scenario,output.string(),17);
     if(save.empty()) {
       gothic.setGame(std::make_unique<GameSession>(std::string(gothic.defaultWorld())));
@@ -678,13 +754,16 @@ int main(int argc,const char** argv) {
     expect(!Resources::hasGraphicsDevice() && !gothic.gameSession()->hasAudioDevice(),"fixture creates no graphics/audio device");
     BodyController::reset();
     BodyObservations::disable();
+    meleeRemoval(b);
     TestBench::flushOutput();
     gothic.clearGame().reset();
+    std::filesystem::current_path(workingDirectory);
     std::filesystem::remove_all(output);
     std::fprintf(result,"{\"type\":\"body_watch_test\",\"passed\":true,\"cases\":%zu,\"assertions\":%zu}\n",cases,assertions);
     std::fclose(result);
     return 0;
     } catch(const std::exception& error) {
+    std::filesystem::current_path(workingDirectory);
     Json d(rapidjson::kObjectType);
     d.AddMember("type","body_watch_test",d.GetAllocator());
     d.AddMember("passed",false,d.GetAllocator());

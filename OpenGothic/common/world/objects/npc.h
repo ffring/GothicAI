@@ -99,6 +99,11 @@ class Npc final {
     void       drawVobRay(DbgPainter& p, const Npc& npc) const;
     // Debug overlay of the shadow melee blade: its pose during a swing and the latest contacts.
     void       drawMeleeShadow(DbgPainter& p, uint64_t now) const;
+    void       updateMeleeShadow();
+    void       resolveMeleeContacts();
+    static bool skipMeleeAlly(bool player, bool selectedTarget, bool sameGuild, bool sameParty, bool enemy) {
+      return !player && !selectedTarget && (sameGuild || sameParty || !enemy);
+      }
 
     bool       setPosition (float x,float y,float z);
     bool       setPosition (const Tempest::Vec3& pos);
@@ -535,7 +540,7 @@ class Npc final {
     void      prepareLivingBody();
     void      syncRagdoll();
     void      suspendRagdoll();
-    void      finishMeleeShadowSwing(bool remove=true);
+    void      finishMeleeShadowSwing(bool remove=true, bool discard=false);
     bool      setRagdollDown(bool death);
     void      addRagdollImpulse(const Tempest::Vec3& impulse);
     float     physicsMass() const;
@@ -679,7 +684,7 @@ class Npc final {
     bool      doAttack(Anim anim, BodyState bs);
     void      commitSpell();
     // ignoreDefence is reserved for a confirmed contact in the devmode npc_hit fixture.
-    void      takeDamage(Npc& other, const Bullet* b, bool ignoreDefence = false);
+    void      takeDamage(Npc& other, const Bullet* b, bool ignoreDefence = false, float meleeScale = 1.f, const MeleeBladeContact* contact = nullptr);
     void      takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t splId);
     bool      isTargetableBySpell(TargetType t) const;
 
@@ -802,8 +807,8 @@ class Npc final {
     bool      hasAutoroll() const;
     bool      prepareTurn();
     void      stopWalkAnimation();
-    void      takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell);
-    void      hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble);
+    void      takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell, float meleeScale = 1.f, const MeleeBladeContact* contact = nullptr);
+    void      hitReaction(const Npc& other, const Bullet* b, int32_t damage, bool stumble, const MeleeBladeContact* contact = nullptr);
     void      takeFallDamage(const Tempest::Vec3& fallSpeed);
     void      takeDrownDamage();
 
@@ -888,7 +893,8 @@ class Npc final {
     MeleeBenchMode meleeBenchMode() const;
     void updateMeleeBenchBlade();
     struct MeleeShadow;
-    std::unique_ptr<MeleeShadow>   meleeShadow;
+    struct MeleeReach;
+    mutable std::unique_ptr<MeleeShadow> meleeShadow;
     bool                          meleeShadowBody = false;
     bool                          meleeShadowSuspended = false;
     struct MeleeShadowMark final {
@@ -902,7 +908,12 @@ class Npc final {
     std::vector<MeleeShadowMark>  meleeShadowMarks;
     void          noteMeleeShadowMarks(const std::vector<MeleeBladeContact>& contacts);
     void syncMeleeShadowSwing();
-    void updateMeleeShadow();
+    void cacheMeleeShadowWindows(const Animation::Sequence* sequence, float length, bool normalY) const;
+    MeleeReach sampleMeleeReach(const Npc& target, Pose& sampled, const Pose::CombatLayer& attack, float yawDelta) const;
+    void consumeMeleeContacts();
+    void stopMeleeSwing();
+    void noteMeleeStep(const Tempest::Vec3& root, const Tempest::Vec3& offered, const Tempest::Vec3& moved, uint64_t dt);
+    auto meleeStep(uint64_t dt) -> Tempest::Vec3;
     void clearMeleeShadow();
     ArrowPhysicsProbe             arrowPhysics;
     struct ArrowImpact {

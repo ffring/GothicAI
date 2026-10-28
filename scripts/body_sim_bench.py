@@ -121,7 +121,7 @@ def shadow_comparison(results: list[dict]) -> dict | None:
 
 
 def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: bool, watch: bool,
-                visibility: bool = True, off=(), env=None, extra=(), melee_shadow=None) -> dict:
+                visibility: bool = True, off=(), env=None, extra=(), melee_shadow=None, melee_physics_hits=None) -> dict:
     output = args.output/name
     output.mkdir(parents=True)
     variant = argparse.Namespace(**vars(args))
@@ -140,6 +140,8 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
         if not config.has_section("GAME"):
             config.add_section("GAME")
         config.set("GAME", "melee_blade_shadow", str(melee_shadow))
+        if melee_physics_hits is not None:
+            config.set("GAME", "melee_physics_hits", str(melee_physics_hits))
         with settings.open("w") as stream:
             config.write(stream)
     os.environ.pop("OPENGOTHIC_BODY_TRACE", None)
@@ -210,7 +212,7 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             "game_speed": sum(e["game_ms"] for e in episodes)/1000/max(wall, 1e-9)}
     if args.checkpoint is not None:
         result["policy"] = run_policy(variant, output)
-    if melee_shadow == 1:
+    if melee_shadow == 1 and name=="shadow-on":
         result["shadow_coverage"] = {"native": shadow_coverage(output/"run/melee-blade-shadow.jsonl", episodes)}
         if "policy" in result:
             result["shadow_coverage"]["policy"] = shadow_coverage(
@@ -254,9 +256,13 @@ def main() -> int:
              "melee-blade-motors": dict(serial=True, trace=False, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
                                         env={**FROZEN_ENV, "OPENGOTHIC_MELEE_BENCH": "blade-motors"}),
              "shadow-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
-                                env=FROZEN_ENV, melee_shadow=0),
+                                env=FROZEN_ENV, melee_shadow=0, melee_physics_hits=0),
              "shadow-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
-                               env=FROZEN_ENV, melee_shadow=1)}
+                               env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=0),
+             "hits-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                              env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=0),
+             "hits-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                             env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1)}
     results = [run_variant(args, name, **table[name]) for name in args.variants.split(",")]
     comparison = shadow_comparison(results)
     (args.output/"bench.json").write_text(json.dumps({"schema_version": 1, "kind": "body_sim_bench", "quality_credit": False,

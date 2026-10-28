@@ -2316,12 +2316,17 @@ void DynamicWorld::removeMeleeBlade(const Npc* owner) { world->removeMeleeBlade(
 void DynamicWorld::updateShadowBody(Npc* owner,const std::vector<MeleeBodyCapsule>& capsules) { world->updateShadowBody(owner,capsules); }
 void DynamicWorld::removeShadowBody(const Npc* owner) { world->removeShadowBody(owner); }
 void DynamicWorld::updateShadowBlade(const Npc* owner,uint64_t swingId,const std::vector<MeleeBladeSegment>& segments,
-                                     uint64_t timeMs,double activeBeginMs,double activeEndMs) {
-  world->updateShadowBlade(owner,swingId,segments,timeMs,activeBeginMs,activeEndMs);
+                                     uint64_t timeMs,double activeBeginMs,double activeEndMs,float walkableCos) {
+  world->updateShadowBlade(owner,swingId,segments,timeMs,activeBeginMs,activeEndMs,walkableCos);
   }
 std::vector<MeleeBladeContact> DynamicWorld::takeShadowBladeContacts(const Npc* owner) { return world->takeShadowBladeContacts(owner); }
 void DynamicWorld::removeShadowBlade(const Npc* owner) { world->removeShadowBlade(owner); }
 void DynamicWorld::flushShadowBlades() { world->flushShadowBlades(); }
+float DynamicWorld::meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                                    const Tempest::Vec3& direction, float maxAdvanceCm) const {
+  return world->meleeBladeAdvance(blades,target,direction,maxAdvanceCm);
+  }
+void DynamicWorld::accountMeleeReachTime(float milliseconds) { world->accountMeleeReachTime(milliseconds); }
 void DynamicWorld::measureMeleeBench(std::string path) { world->measureMeleeBench(std::move(path)); }
 void DynamicWorld::reportMeleeBench() { world->reportMeleeBench(); }
 

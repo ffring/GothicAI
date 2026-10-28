@@ -179,10 +179,14 @@ class CollisionWorld final {
     // Pose time and the half-open active window use absolute game milliseconds.
     void updateShadowBlade(const Npc* owner, uint64_t swingId,
                            const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
-                           double activeBeginMs, double activeEndMs);
+                           double activeBeginMs, double activeEndMs, float walkableCos = .7f);
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void flushShadowBlades();
+    // Pure capsule query in centimetres; infinity means no contact along the cast.
+    float meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                            const Tempest::Vec3& direction, float maxAdvanceCm) const;
+    void accountMeleeReachTime(float milliseconds);
     void setWaterSurfaceCallback(std::function<bool(const Tempest::Vec3&,float,float&)> callback);
     void setBuoyancyEnabled(bool enabled);
     bool buoyancyEnabled() const;

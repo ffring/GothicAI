@@ -549,6 +549,33 @@ void WorldObjects::updateAnimation(uint64_t dt) {
       return;
     i->updateAnimation(dt);
     });
+  // Retiring a shadow window can also run damage scripts here. Scripts may
+  // append or remove NPCs, so retain neither vector iterators nor references.
+  for(size_t i=0;i<npcArr.size();) {
+    auto* npc = npcArr[i].get();
+    if(skipFar && npc->processPolicy()==NpcProcessPolicy::AiFar2 && !BodyObservations::watched(*npc))
+      ++i;
+    else if(frozen && npc!=pl && !BodyArena::isActor(*npc))
+      ++i;
+    else {
+      npc->updateMeleeShadow();
+      if(i<npcArr.size() && npcArr[i].get()==npc)
+        ++i;
+      else if(const auto at=npcId(npc); at!=uint32_t(-1))
+        i=size_t(at)+1;
+      }
+    }
+  // Query the final published interval before callers can decide a terminal
+  // combat outcome. The flush does not advance physics, animation or clocks.
+  owner.physic()->flushShadowBlades();
+  for(size_t i=0;i<npcArr.size();) {
+    auto* npc = npcArr[i].get();
+    npc->resolveMeleeContacts();
+    if(i<npcArr.size() && npcArr[i].get()==npc)
+      ++i;
+    else if(const auto at=npcId(npc); at!=uint32_t(-1))
+      i=size_t(at)+1;
+    }
   if(!frozen)
     interactiveObj.parallelFor([dt](Interactive& i){
       i.updateAnimation(dt);

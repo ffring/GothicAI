@@ -9,6 +9,8 @@
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/bounds.h"
 #include "game/serialize.h"
+#include "game/damagecalculator.h"
+#include "world/objects/npc.h"
 #include "gothic.h"
 
 #include <Tempest/MemReader>
@@ -4016,6 +4018,110 @@ namespace {
               "mesh hit must retain its sector beyond 32 segments");
       }
 
+    {
+      std::vector<HitZones::Posed> first{{{0,80,0},{0,140,0},10.f,HitZones::Body,0}};
+      std::vector<HitZones::Posed> second{{{60,90,0},{60,150,0},12.f,HitZones::Body,0}};
+      requireNear(HitZones::horizontalBodyGap(first,second),38.f,.0001f,
+                  "torso gap must subtract both posed capsule radii");
+      requireNear(HitZones::horizontalBodyGap(first,second,{20,0,0}),18.f,.0001f,
+                  "a bounded forward feed must retain the eighteen-centimetre torso clearance");
+      requireNear(HitZones::horizontalBodyGap(first,second,{45,0,0}),-7.f,.0001f,
+                  "overlapping torso capsules must report negative clearance");
+      first.push_back({{60,80,0},{60,140,0},100.f,HitZones::Head,1});
+      second.push_back({{0,90,0},{0,150,0},100.f,HitZones::Limb,1});
+      requireNear(HitZones::horizontalBodyGap(first,second),38.f,.0001f,
+                  "head and limb contacts must not replace the torso safety gap");
+      first={{{-10,80,-10},{10,140,10},2.f,HitZones::Body,0}};
+      second={{{-10,400,10},{10,460,-10},3.f,HitZones::Body,0}};
+      requireNear(HitZones::horizontalBodyGap(first,second),-5.f,.0001f,
+                  "crossed torso axes must overlap in the horizontal projection despite different heights");
+      requireNear(HitZones::horizontalBodyGap(first,second,{-1,0,0}),-5.f,.0001f,
+                  "a retreat can begin on a flat projected-axis overlap without worsening the clearance");
+      require(HitZones::horizontalBodyGap(first,second,{-25,0,0})>-5.f,
+              "continued retreat must be able to leave the projected-axis overlap plateau");
+      }
+
+    require(Npc::skipMeleeAlly(false,false,true,false,true),
+            "an incidental same-guild contact must skip NPC damage even with hostile attitude");
+    require(Npc::skipMeleeAlly(false,false,false,true,true),
+            "an incidental party contact must skip NPC damage even with hostile attitude");
+    require(Npc::skipMeleeAlly(false,false,false,false,false),
+            "an incidental nonhostile contact must skip NPC damage");
+    require(!Npc::skipMeleeAlly(false,false,false,false,true),
+            "an incidental enemy contact must receive NPC damage");
+    require(!Npc::skipMeleeAlly(true,false,true,true,false),
+            "the hero must damage incidental allies");
+    require(!Npc::skipMeleeAlly(false,true,false,false,false),
+            "the selected neutral or angry target must receive NPC damage");
+    require(!Npc::skipMeleeAlly(false,true,true,false,false),
+            "the selected same-guild target must receive NPC damage");
+    require(!Npc::skipMeleeAlly(false,true,false,true,false),
+            "the selected party target must receive NPC damage");
+
+    // The actual melee damage multiplier is bounded before cleave attenuation.
+    requireNear(DamageCalculator::meleeMultiplier(0,1000,0,0,0),.5f,.0001f,"slow grip contacts must respect the lower damage bound");
+    requireNear(DamageCalculator::meleeMultiplier(10000,1000,1,90,0),1.5f,.0001f,"fast tip contacts must respect the upper damage bound");
+    const auto full=DamageCalculator::meleeMultiplier(1000,1000,1,90,0);
+    requireNear(DamageCalculator::meleeMultiplier(1000,1000,1,90,1),full*.6f,.0001f,"second target must receive 0.6 of the physical multiplier");
+    requireNear(DamageCalculator::meleeMultiplier(1000,1000,1,90,2),full*.36f,.0001f,"third target must receive 0.36 of the physical multiplier");
+
+    {
+      CollisionWorld reach;
+      const std::vector<MeleeBladeSegment> blade{{{0,100,0},{100,100,0},{0,0,1},2.f}};
+      const std::vector<MeleeBodyCapsule> target{{{130,90,0},{130,110,0},6.f,0,1}};
+      requireNear(reach.meleeBladeAdvance(blade,target,{1,0,0},40),22.f,.02f,
+                  "blade reach must retain the capsule contact distance");
+      require(!std::isfinite(reach.meleeBladeAdvance(blade,target,{1,0,0},20)),
+              "blade reach must reject a target beyond the allowed advance");
+      require(!std::isfinite(reach.meleeBladeAdvance({{{0,100,30},{100,100,30},{0,0,1},2.f}},target,{1,0,0},60)),
+              "blade reach must reject a lateral miss despite sufficient forward projection");
+      require(!std::isfinite(reach.meleeBladeAdvance({{{0,150,0},{100,150,0},{0,0,1},2.f}},target,{1,0,0},60)),
+              "blade reach must reject a height miss despite sufficient forward projection");
+      const std::vector<MeleeBodyCapsule> behind{{{-30,90,0},{-30,110,0},6.f,0,1}};
+      require(!std::isfinite(reach.meleeBladeAdvance(blade,behind,{1,0,0},40)),
+              "a blade beyond a close target cannot correct by moving forward");
+      requireNear(reach.meleeBladeAdvance(blade,behind,{-1,0,0},40),22.f,.02f,
+                  "backward magnet must retain the signed capsule contact distance");
+      auto targets=target;
+      targets.insert(targets.begin(),{{160,90,0},{160,110,0},6.f,1,1});
+      requireNear(reach.meleeBladeAdvance(blade,targets,{1,0,0},80),22.f,.02f,
+                  "blade reach must choose the nearest actual capsule contact");
+      requireNear(reach.meleeBladeAdvance(blade,{{{100,90,0},{100,110,0},6.f,0,1}},{1,0,0},60),0.f,.0001f,
+                  "a blade already touching its target needs no advance");
+      }
+
+    {
+      CollisionWorld shadow;
+      int attackerId=0,firstId=0,secondId=0,missId=0;
+      auto* attacker=reinterpret_cast<Npc*>(&attackerId);
+      auto* first=reinterpret_cast<Npc*>(&firstId);
+      auto* second=reinterpret_cast<Npc*>(&secondId);
+      auto* miss=reinterpret_cast<Npc*>(&missId);
+      auto ground=shadow.addCollisionBody(new JPH::BoxShape({2,.01f,2}),at(0,-1,0),.7f,DynamicWorld::C_Landscape);
+      shadow.updateShadowBody(first,{{{-30,0,0},{-30,20,0},1.f,0,1}});
+      shadow.updateShadowBody(second,{{{30,0,0},{30,20,0},1.f,0,1}});
+      shadow.updateShadowBody(miss,{{{0,0,50},{0,20,50},1.f,0,1}});
+      const MeleeBladeSegment before{{-100,1,0},{-100,20,0},{1,0,0},2.f};
+      const MeleeBladeSegment after{{100,1,0},{100,20,0},{1,0,0},2.f};
+      shadow.updateShadowBlade(attacker,1,{before},0,0,100);
+      shadow.updateShadowBlade(attacker,1,{after},100,0,100);
+      shadow.flushShadowBlades();
+      const auto hits=shadow.takeShadowBladeContacts(attacker);
+      std::vector<Npc*> bodies;
+      size_t floors=0;
+      for(const auto& hit:hits) {
+        if(hit.world) {
+          require(!hit.stopsSwing && hit.normal.y>.99f,"walkable ground must not arrest the swing");
+          ++floors;
+          }
+        else bodies.push_back(hit.npc);
+        }
+      require(floors==1 && bodies==std::vector<Npc*>{first,second},"blade must hit both crossed bodies in order, miss the offset body and continue through ground");
+      shadow.updateShadowBlade(attacker,1,{before},150,0,200);
+      shadow.flushShadowBlades();
+      require(shadow.takeShadowBladeContacts(attacker).empty(),"floor and targets must not repeat during a swing");
+      }
+
     // Clip both ends of a published pose interval, including a whole window
     // between two inactive poses. A target outside that overlap stays untouched.
     for(const auto window: {std::pair(0.,240.),std::pair(240.,260.),std::pair(235.,245.)}) {
@@ -4153,7 +4259,7 @@ namespace {
       shadow.updateShadowBlade(attacker,1,{after},17,0,100);
       shadow.tick(17);
       const auto contacts=shadow.takeShadowBladeContacts(attacker);
-      require(contacts.size()==2 && contacts[0].npc==nearTarget && contacts[1].world,
+      require(contacts.size()==2 && contacts[0].npc==nearTarget && contacts[1].world && contacts[1].stopsSwing,
               "shadow contacts must be ordered and the first wall must hide the later target");
       requireNear(contacts[1].point.x,-.1f,.02f,"shadow world contact must retain the wall surface point");
       shadow.updateShadowBlade(attacker,1,{before},34,0,100);
