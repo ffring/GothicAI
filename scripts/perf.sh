@@ -134,7 +134,7 @@ import sys
 out = Path(sys.argv[1])
 # Parse shell-like quoting as data. PERF_ENV accepts assignments, never shell commands.
 args = shlex.split(os.environ['PERF_ARGS'])
-extra_env = {}
+extra_env = {'GOTHIC_AI': '0'}
 for item in shlex.split(os.environ['PERF_ENV']):
     key, sep, value = item.partition('=')
     if not sep or not key.isidentifier():
@@ -180,6 +180,7 @@ env.update(meta['game_env'])
 for key in ('OPENGOTHIC_BENCH_KEEP', 'OPENGOTHIC_BENCH_REALTIME', 'TEMPEST_AUDIO_LOOPBACK'):
     env.pop(key, None)
 env.update(TEMPEST_BACKGROUND='0', TEMPEST_WINDOW_SIZE=meta['requested_window'],
+           OPENGOTHIC_BENCH_VISIBLE='1',
            OPENGOTHIC_BENCH=scenario, OPENGOTHIC_BENCH_OUT=str(leaf),
            OPENGOTHIC_FRAME_PROFILE=str(leaf / 'frameprofile.csv'))
 ini = ['[ENGINE]', 'zMaxFps=0', '[INTERNAL]', 'vidResIndex=0',
@@ -219,6 +220,7 @@ PY
 import csv
 import json
 from pathlib import Path
+import re
 import sys
 
 leaf, place = Path(sys.argv[1]), sys.argv[2]
@@ -240,6 +242,10 @@ try:
     if errors:
         raise ValueError(f'scenario errors: {errors[:3]}')
     meta = json.loads((leaf / 'metadata.json').read_text())
+    drawable = re.findall(r'\[bench\] drawable (\d+)x(\d+)', (leaf / 'game.log').read_text())
+    if not drawable or min(map(int, drawable[-1])) <= 0:
+        raise ValueError('missing actual drawable dimensions in game.log')
+    meta['drawable_width'], meta['drawable_height'] = map(int, drawable[-1])
     segments = [event for event in events if event.get('kind') == 'perf_segment']
     if segments:
         meta['segments'] = segments
