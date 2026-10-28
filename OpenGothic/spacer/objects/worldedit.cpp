@@ -11,6 +11,7 @@
 #include "graphics/worldview.h"
 #include "physics/dynamicworld.h"
 #include "physics/physicmesh.h"
+#include "project/projectmgr.h"
 #include "utils/workers.h"
 #include "resources.h"
 
@@ -181,7 +182,7 @@ void WorldEdit::Vob::setCollision(WorldEdit& owner, bool cd) {
 
 
 WorldEdit::WorldEdit(std::string_view wname) {
-  const auto* entry = Resources::vdfsIndex().find(wname);
+  const auto* entry = ProjectMgr::inst().vdfsIndex().find(wname);
 
   if(entry == nullptr) {
     Log::e("unable to open Zen-file: \"",wname,"\"");

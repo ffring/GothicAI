@@ -6,7 +6,6 @@
 #include <Tempest/Pixmap>
 #include <Tempest/SoundDevice>
 
-#include <zenkit/Vfs.hh>
 #include "asset/staticmesh.h"
 #include "asset/modeltypes.h"
 #include "basestore.h"
@@ -20,6 +19,7 @@
 #include <tuple>
 #include <string_view>
 #include <map>
+#include <set>
 #include <thread>
 
 #include "graphics/material.h"
@@ -36,7 +36,6 @@ class ContentCensus;
 
 namespace asset { struct WorldMesh; }
 
-namespace zenkit { class ReadArchive; }
 namespace WorldData { struct Data; struct ZenFile; }
 namespace VideoData { class Reader; }
 
@@ -47,7 +46,7 @@ class PatternList;
 
 class Resources final {
   public:
-    // Simulation resources: archives, geometry, skeletons and animation data,
+    // Simulation resources: base geometry, skeletons and animation data,
     // without constructing a graphics or audio device.
     Resources();
     explicit Resources(Tempest::Device& device, BaseImport::Progress progress = {});
@@ -103,8 +102,7 @@ class Resources final {
     static bool                      hasGraphicsDevice() { return inst!=nullptr && inst->dev!=nullptr; }
     static bool                      isHeadless() { return inst!=nullptr && inst->dev==nullptr; }
     static const char*               renderer();
-    static void                      mountWork(const std::filesystem::path& path);
-    static void                      loadVdfs(const std::vector<std::u16string> &modvdfs, bool modFilter);
+    static void                      loadBase();
 
     static const Tempest::Sampler&   shadowSampler();
 
@@ -197,15 +195,11 @@ class Resources final {
     static void recycle(Tempest::ZBuffer&& img);
     static void recycle(Tempest::AccelerationStructure&& rtas);
 
-    static std::vector<uint8_t>      getFileData(std::string_view name);
-    static bool                      getFileData(std::string_view name, std::vector<uint8_t>& dat);
-    struct CensusSource {
-      const zenkit::VfsNode* node = nullptr;
-      std::string source;
-      };
-    static std::unique_ptr<zenkit::Read> getFileBuffer(std::string_view name, CensusSource* source = nullptr);
-    static auto                      openReader(std::string_view name, std::unique_ptr<zenkit::Read>& read, CensusSource* source = nullptr) -> std::unique_ptr<zenkit::ReadArchive>;
-    static bool                      hasFile    (std::string_view fname);
+    static bool                      hasWorld(std::string_view name);
+    static int                       baseLanguage();
+    static zenkit::DaedalusScript     loadBaseProgram(std::string_view request, int language);
+    static bool                      loadBaseOutputUnits(std::string_view request, int language,
+                                                        std::vector<std::shared_ptr<asset::CutsceneBlock>>& blocks);
     static zenkit::DaedalusScript     loadBaseProgram(std::string_view request, int language,
                                                      std::string_view branch, std::u16string_view hostPath = {});
     static bool                      loadBaseOutputUnits(std::string_view request, int language,
@@ -213,15 +207,10 @@ class Resources final {
                                                         std::vector<std::shared_ptr<asset::CutsceneBlock>>& blocks,
                                                         std::u16string_view hostPath = {});
 
-    static const zenkit::Vfs&        vdfsIndex();
     static std::filesystem::path      worldBaseDir(std::string_view world);
     static std::filesystem::path      worldOverrideDir(std::string_view world);
     static void                      censusFile(std::u16string_view path);
     static void                      censusProfile(std::string_view game, std::string_view outputUnits, int language);
-    static void                      censusSelected(std::string_view consumer, std::string_view request, int language,
-                                                   std::string_view branch, const CensusSource& source, zenkit::Read& read) noexcept;
-    static void                      censusSelected(std::string_view consumer, std::string_view request, int language,
-                                                   std::string_view branch, std::u16string_view path, zenkit::Read& read) noexcept;
     static void                      loadWorld(WorldData::Data& world, asset::WorldMesh& worldMesh, std::string_view name);
     static bool                      loadBaseZen(std::string_view name, std::string_view kind, WorldData::ZenFile& out);
     static bool                      writeCensus();
@@ -250,7 +239,8 @@ class Resources final {
     OutputUnits::Index baseOutputUnits;
     AudioData::Index baseAudio;
     MusicData::Index baseMusic;
-    std::vector<std::pair<std::string,uintmax_t>> mountedArchives;
+    std::vector<std::pair<std::string,uintmax_t>> baseArchives;
+    std::set<std::string> baseWorlds;
     BaseStore::Selection automaticBase;
     struct VideoBase;
     std::shared_ptr<VideoBase> videoBase;
@@ -347,7 +337,6 @@ class Resources final {
     std::unique_ptr<Dx8::DirectMusic> dxMusic;
     DmLoader*                         dmLoader = nullptr;
     std::unique_ptr<ContentCensus>     census;
-    zenkit::Vfs                       gothicAssets;
 
     std::vector<uint8_t>              fBuff;
     Tempest::IndexBuffer<uint16_t>    cube;

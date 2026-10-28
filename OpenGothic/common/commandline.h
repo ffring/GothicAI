@@ -25,10 +25,6 @@ class CommandLine {
       };
     auto                graphicsApi() const -> GraphicBackend;
     std::u16string_view rootPath() const;
-    std::u16string      scriptPath() const;
-    std::u16string      scriptPath(ScriptLang lang) const;
-    std::u16string      cutscenePath() const;
-    std::u16string      cutscenePath(ScriptLang lang) const;
     std::u16string_view modPath() const { return gmod; }
     std::u16string      nestedPath(const std::initializer_list<const char16_t*> &name, Tempest::Dir::FileType type) const;
 
@@ -54,12 +50,8 @@ class CommandLine {
     std::string         wrldDef;
 
   private:
-    bool                validateGothicPath() const;
-
     GraphicBackend      graphics = GraphicBackend::Vulkan;
     std::u16string      gpath, gmod;
-    std::u16string      gscript;
-    std::u16string      gcutscene;
     std::string         saveDef;
     bool                devmode      = false;
     bool                noMenu       = false;

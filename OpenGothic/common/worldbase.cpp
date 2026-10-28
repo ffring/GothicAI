@@ -12,7 +12,7 @@
 WorldBaseResult tryWorldData(WorldData::Data& world, asset::WorldMesh& worldMesh,
                             std::string_view name, const std::filesystem::path& dir,
                             const std::filesystem::path& overrideDir,
-                            const std::vector<std::pair<std::string,uintmax_t>>& mounted) {
+                            const std::vector<std::pair<std::string,uintmax_t>>& baseArchives) {
   WorldBaseResult result;
   const auto started = std::chrono::steady_clock::now();
   try {
@@ -35,8 +35,8 @@ WorldBaseResult tryWorldData(WorldData::Data& world, asset::WorldMesh& worldMesh
       archives.emplace_back(archive["name"].GetString(),archive["size"].GetUint64());
       }
     std::sort(archives.begin(),archives.end());
-    if(archives!=mounted)
-      throw std::runtime_error("mounted archives differ from world.json");
+    if(archives!=baseArchives)
+      throw std::runtime_error("selected base archives differ from world.json");
     for(const char* required:{"vobs.json","waynet.json","sectors.json","bsp.bin","rooms.bin"})
       if(!std::filesystem::is_regular_file(dir/required))
         throw std::runtime_error(std::string(required)+" missing");
