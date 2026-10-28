@@ -183,6 +183,7 @@ void snapshotSelection(const fs::path& root) {
   pointer=read(pointerFile(cache,game));
   { std::ofstream append(archive,std::ios::binary|std::ios::app); append.put('x'); }
   mounted.front().second=fs::file_size(archive);
+  const auto previousBase=base;
   identity=BaseImport::identify(game,mounted);
   base=cache/identity.fingerprint;
   writeBaseFixture(base,identity);
@@ -195,6 +196,21 @@ void snapshotSelection(const fs::path& root) {
   identifies=0;
   require(BaseStore::resolve(game,{},observe).path==base && identifies==0,
           "installation-free selection must use the pointer without source identification");
+  setenv("OPENGOTHIC_BASE",previousBase.c_str(),1);
+  require(previousBase!=base && BaseStore::resolve(game,{},observe).path==previousBase && identifies==0,
+          "explicit offline base must use its own identity despite a pointer to a different base");
+  checkPointer(cache,game,previousBase);
+  const auto otherGame=root/"other-game";
+  fs::create_directory(otherGame);
+  setenv("OPENGOTHIC_BASE",base.c_str(),1);
+  require(BaseStore::resolve(otherGame,{},observe).path==base && identifies==0,
+          "explicit offline base must ignore another game directory's pointer in the same cache");
+  checkPointer(cache,otherGame,base);
+  checkPointer(cache,game,previousBase);
+  require(BaseStore::resolve(game,{},observe).path==base && identifies==0,
+          "explicit offline selection must replace the old pointer without source identification");
+  unsetenv("OPENGOTHIC_BASE");
+  checkPointer(cache,game,base);
   fs::remove_all(base);
   const auto missing=[&](const fs::path& directory) {
     std::string reason;
@@ -231,7 +247,7 @@ void snapshotSelection(const fs::path& root) {
             "concurrent pointer writer failed");
     }
   checkPointer(cache,game,base);
-  std::cout << "snapshot selection: zero source identifies on repeat/explicit/offline; VDF mtime/size and importer refresh; missing/pruned pointer; two atomic writers verified\n";
+  std::cout << "snapshot selection: zero source identifies on repeat/explicit/offline; foreign offline pointers; VDF mtime/size and importer refresh; missing/pruned pointer; two atomic writers verified\n";
   }
 
 
@@ -249,13 +265,9 @@ void offlineResources(const fs::path& source, const fs::path& reference, const f
         for(auto& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
         if(name!="DATA" && name!="_WORK") continue;
         const auto targetDirectory=game/directory.path().filename();
-        fs::create_directories(targetDirectory);
+        // Preserve Data's directory order: tied VDF timestamps use it in the identity.
+        fs::create_directory_symlink(fs::absolute(directory.path()),targetDirectory);
         installationDirectories.push_back(targetDirectory);
-        for(const auto& entry:fs::recursive_directory_iterator(directory.path())) {
-          const auto target=game/entry.path().lexically_relative(source);
-          if(entry.is_directory()) fs::create_directories(target);
-          else fs::create_symlink(fs::absolute(entry.path()),target);
-          }
         }
       setenv("OPENGOTHIC_BASE_CACHE",cache.c_str(),1);
       setenv("OPENGOTHIC_BASE_STORE","",1);
@@ -266,7 +278,7 @@ void offlineResources(const fs::path& source, const fs::path& reference, const f
       const char* arguments[]={"gothic-base-store-contract","-g",path.c_str()};
       CommandLine commandLine(3,arguments);
       // CommandLine's installation prerequisite remains P18b; this contract starts at loadVdfs.
-      for(const auto& directory:installationDirectories) fs::remove_all(directory);
+      for(const auto& directory:installationDirectories) fs::remove(directory);
       unsetenv("OPENGOTHIC_BASE");
       {
         Resources resources;
