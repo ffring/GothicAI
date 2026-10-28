@@ -114,6 +114,60 @@ void checkPointer(const fs::path& cache, const fs::path& game, const fs::path& b
           "current base pointer must remain complete JSON with the selected path");
   }
 
+void fingerprintSelection(const fs::path& root) {
+  const auto game=root/"game", cache=root/"cache", store=root/"store";
+  fs::create_directories(game);
+  const auto source=root/"source";
+  writeVdf(source/"Data/FIXTURE.VDF",{{"FIXTURE.TXT","fingerprint source"}},1000000000);
+  const auto identity=BaseImport::identify(source);
+  const auto base=cache/identity.fingerprint;
+  writeBaseFixture(base,identity);
+  setenv("OPENGOTHIC_BASE_CACHE",cache.c_str(),1);
+  setenv("OPENGOTHIC_BASE_STORE",store.c_str(),1);
+  setenv("OPENGOTHIC_BASE_FINGERPRINT",identity.fingerprint.c_str(),1);
+  unsetenv("OPENGOTHIC_BASE");
+  size_t identifies=0;
+  const auto observe=[&](std::string_view message) {
+    if(message=="base: identifying installation" || message=="base: importing installation") ++identifies;
+    };
+  require(BaseStore::resolve(game,{},observe).path==base && identifies==0,
+          "fingerprint must select cache without an installation or identification");
+  checkPointer(cache,game,base);
+  fs::create_directories(store/"base");
+  fs::rename(base,store/"base"/identity.fingerprint);
+  require(BaseStore::resolve(game,{},observe).path==base && identifies==0,
+          "fingerprint must copy store into cache without an installation");
+  equal(store/"base"/identity.fingerprint,base);
+  checkPointer(cache,game,base);
+  fs::remove_all(store);
+  const auto manifest=read(base/"base-files.json");
+  write(base/"base-files.json",manifest+" ");
+  std::string reason;
+  try { (void)BaseStore::resolve(game,{},observe); }
+  catch(const std::exception& error) { reason=error.what(); }
+  require(reason.find("base-files.json")!=std::string::npos && identifies==0,
+          "fingerprint selection must reject a corrupt manifest without importing: "+reason);
+  fs::remove_all(base);
+  reason.clear();
+  try { (void)BaseStore::resolve(game,{},observe); }
+  catch(const std::exception& error) { reason=error.what(); }
+  require(reason.find(identity.fingerprint)!=std::string::npos && identifies==0,
+          "missing fingerprint must fail clearly without importing: "+reason);
+  writeBaseFixture(base,identity);
+  const std::string absent(64,'0');
+  setenv("OPENGOTHIC_BASE_FINGERPRINT",absent.c_str(),1);
+  setenv("OPENGOTHIC_BASE",base.c_str(),1);
+  require(BaseStore::resolve(game,{},observe).path==base,"explicit base must take priority over fingerprint");
+  checkPointer(cache,game,base);
+  // storygraph passes the base itself as -g; this must not create current or take its lock.
+  fs::remove_all(cache/"current");
+  require(BaseStore::resolve(base,{},observe).path==base && !fs::exists(cache/"current"),
+          "explicit base used as game directory must not create a pointer or current lock");
+  unsetenv("OPENGOTHIC_BASE_FINGERPRINT");
+  unsetenv("OPENGOTHIC_BASE");
+  std::cout << "fingerprint selection: cache/store, pointer, missing/corrupt refusal, explicit precedence; direct base has no current pointer/lock\n";
+  }
+
 void snapshotSelection(const fs::path& root) {
   const auto game=root/"game", cache=root/"cache";
   fs::create_directories(game);
@@ -854,6 +908,7 @@ int main() {
             "full payload verification must report a same-size corruption");
     }
     std::cout << "base manifest: corrupt index, missing/resized payload and altered manifest rejected with reasons\n";
+    fingerprintSelection(temporary.path/"fingerprints");
     snapshotSelection(temporary.path/"snapshots");
     syntheticSources(temporary.path/"synthetic-game");
     const auto cache=temporary.path/"cache", store=temporary.path/"store";

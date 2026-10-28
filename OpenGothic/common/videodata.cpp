@@ -273,6 +273,10 @@ void compare(const fs::path& file,Bink::Video& video) {
 std::string formatSha256() { return VideoFormatSha256; }
 std::vector<Source> sources(const fs::path& gothic) { return Selected(gothic).list; }
 Identity identify(const fs::path& gothic,const std::atomic_bool* cancelled) { return identityOf(Selected(gothic,cancelled).list); }
+Identity readIdentity(const fs::path& dir) {
+  const auto doc=document(dir/"videos.json");
+  return {str(doc,"fingerprint"),str(doc,"identity")};
+  }
 std::vector<Entry> readIndex(const fs::path& dir) {
   const auto doc=document(dir/"videos.json"); require(number(doc,"version")==1,"unsupported index version"); const auto& list=member(doc,"videos"); require(list.IsArray(),"invalid video list");
   std::vector<Entry> result; std::set<std::string> names;

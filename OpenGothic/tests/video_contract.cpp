@@ -748,6 +748,55 @@ void snapshotSelection(const fs::path& gothic, const fs::path& root, const fs::p
   std::cout << "video snapshots: zero source identifies for repeat/explicit/offline; BIK mtime refresh; concurrent main/video pointer; missing and pruned pointer reasons verified\n";
   }
 
+void fingerprintSelection(const fs::path& root, const fs::path& part, const VideoData::Identity& identity) {
+  const auto game=root/"game", cache=root/"cache", store=root/"store";
+  const auto destination=cache/"videos"/identity.fingerprint;
+  fs::create_directories(game);
+  fs::create_directories(destination);
+  // Keep the large immutable payload linked; mutations below affect only the copied index.
+  for(const auto& entry:fs::directory_iterator(part)) {
+    const auto target=destination/entry.path().filename();
+    if(entry.path().filename()=="videos.json") fs::copy_file(entry.path(),target);
+    else if(entry.is_regular_file()) fs::create_hard_link(entry.path(),target);
+    }
+  Environment cacheEnvironment("OPENGOTHIC_BASE_CACHE",cache), storeEnvironment("OPENGOTHIC_BASE_STORE",store);
+  Environment fingerprintEnvironment("OPENGOTHIC_VIDEOS_FINGERPRINT",identity.fingerprint);
+  size_t identifies=0;
+  const auto observe=[&](std::string_view message) {
+    if(message=="video base: identifying installation" || message=="video base: importing installation") ++identifies;
+    };
+  require(BaseStore::resolveVideos(game,observe).path==destination && identifies==0,
+          "video fingerprint must select cache without an installation or identification");
+  const auto pointer=cache/"current"/(BaseImport::sha256(fs::weakly_canonical(game).generic_string())+".json");
+  const auto checkPointer=[&] {
+    std::ifstream input(pointer,std::ios::binary);
+    const std::string bytes{std::istreambuf_iterator<char>(input),{}};
+    require(bytes.find(identity.fingerprint)!=std::string::npos && bytes.find(destination.string())!=std::string::npos,
+            "video fingerprint selection must write its game-directory pointer");
+    };
+  checkPointer();
+  fs::create_directories(store/"base/videos");
+  fs::rename(destination,store/"base/videos"/identity.fingerprint);
+  require(BaseStore::resolveVideos(game,observe).path==destination && identifies==0,
+          "video fingerprint must copy store into cache without an installation");
+  require(hashes(destination)==hashes(store/"base/videos"/identity.fingerprint),"fingerprint video copy differs");
+  checkPointer();
+  fs::remove_all(store);
+  { std::ofstream broken(destination/"videos.json",std::ios::binary|std::ios::app); broken << ' '; }
+  std::string reason;
+  try { (void)BaseStore::resolveVideos(game,observe); }
+  catch(const std::exception& error) { reason=error.what(); }
+  require(reason.find("index SHA-256")!=std::string::npos && identifies==0,
+          "video fingerprint must reject a corrupt index without importing: "+reason);
+  fs::remove_all(destination);
+  reason.clear();
+  try { (void)BaseStore::resolveVideos(game,observe); }
+  catch(const std::exception& error) { reason=error.what(); }
+  require(reason.find(identity.fingerprint)!=std::string::npos && identifies==0,
+          "missing video fingerprint must fail clearly without importing: "+reason);
+  std::cout << "video fingerprint selection: cache/store, pointer, missing/corrupt refusal without source identification\n";
+  }
+
 void identityInputs(const fs::path& gothic, const fs::path& root, const VideoData::Identity& identity) {
   fs::create_directories(root);
   fs::path nonvideo, video;
@@ -891,6 +940,7 @@ int main() {
     require(events.find("video base: rejected cache directory")!=std::string::npos &&
             events.find("video base: store ")!=std::string::npos,"corrupted cache was not replaced from store");
     require(hashes(repaired.path)==expected,"repaired cache differs");
+    fingerprintSelection(temporary.path/"fingerprints",repaired.path,identity);
     snapshotSelection(game,temporary.path/"snapshots",repaired.path,identity);
     identityInputs(game,temporary.path/"identity-game",identity);
     std::cout << "video contract passed: 21/21, all planes/PCM, deterministic decoder and import, import/cache/store, corruption, independent inputs\n";

@@ -78,6 +78,17 @@ fs::path cacheRoot() {
   return fs::weakly_canonical(fs::absolute(cache));
   }
 
+fs::path storeRoot() {
+  if(const auto* env=std::getenv("OPENGOTHIC_BASE_STORE")) return env;
+#ifdef __APPLE__
+  const fs::path shared="/Volumes/shared/gothic-ai";
+#else
+  const fs::path shared="/mnt/shared/gothic-ai";
+#endif
+  std::error_code error;
+  return fs::is_directory(shared,error) ? shared : fs::path();
+  }
+
 bool hasInstallation(const fs::path& gothic) {
   if(!fs::is_directory(gothic)) return false;
   const auto archives=BaseImport::runtimeArchives(gothic);
@@ -323,12 +334,39 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     cacheLock=std::make_unique<Lock>(cache/".lock");
     removeInterrupted(cache);
     }
-  Current current(cache,gothic);
-  const bool installed=hasInstallation(gothic);
+  const auto* fingerprint=std::getenv("OPENGOTHIC_BASE_FINGERPRINT");
+  if((!explicitBase || !*explicitBase) && fingerprint && *fingerprint) {
+    if(!fingerprintName(fingerprint)) throw std::runtime_error("invalid OPENGOTHIC_BASE_FINGERPRINT");
+    const auto destination=cache/fingerprint;
+    const auto store=storeRoot();
+    const auto stored=store.empty() ? fs::path() : store/"base"/fingerprint;
+    std::string rejection;
+    for(const auto& source:{destination,stored}) {
+      if(source.empty() || !fs::exists(source)) continue;
+      try {
+        const auto identity=BaseImport::readIdentity(source);
+        if(identity.fingerprint!=fingerprint) throw std::runtime_error("base fingerprint differs");
+        if(!BaseImport::matches(source,identity,false,&rejection)) throw std::runtime_error(rejection);
+        if(source!=destination) copy(source,destination,identity);
+        Current(cache,gothic).save("base",destination,identity,"");
+        Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared),{}};
+        prune(cache,destination);
+        log(std::string("base: ")+(source==destination ? "cache " : "store ")+destination.string());
+        return selected;
+        }
+      catch(const std::exception& error) { rejection=error.what(); }
+      }
+    throw std::runtime_error(std::string("no ready base for OPENGOTHIC_BASE_FINGERPRINT=")+fingerprint+
+                             (rejection.empty() ? "; not found in cache or store" : ": "+rejection));
+    }
+  const bool directBase=explicitBase && *explicitBase && fs::weakly_canonical(explicitBase)==fs::weakly_canonical(gothic);
+  std::unique_ptr<Current> current;
+  if(!directBase) current=std::make_unique<Current>(cache,gothic);
+  const bool installed=!directBase && hasInstallation(gothic);
   const auto snapshot=installed ? BaseImport::snapshot(gothic,mounted) : std::string();
   BaseImport::Identity identity;
   fs::path pointed;
-  bool reused=current.part("base",pointed,identity,installed ? &snapshot : nullptr);
+  bool reused=current && current->part("base",pointed,identity,installed ? &snapshot : nullptr);
   const auto identify=[&] {
     log("base: identifying installation");
     return BaseImport::identify(gothic,mounted);
@@ -349,7 +387,7 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     std::string reason;
     if(!BaseImport::matches(explicitBase,identity,false,&reason))
       throw std::runtime_error(std::string("OPENGOTHIC_BASE does not match this installation or importer: ")+explicitBase+": "+reason);
-    current.save("base",explicitBase,identity,snapshot);
+    if(current) current->save("base",explicitBase,identity,snapshot);
     return selected;
     }
   std::string rejection;
@@ -357,20 +395,10 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   if(!installed && !reused) throw missingBase(gothic,rejection);
   if(!reused) identity=identify();
   const auto destination=reused ? pointed : cache/identity.fingerprint;
-  fs::path store;
-  if(const auto* env=std::getenv("OPENGOTHIC_BASE_STORE")) store=env;
-  else {
-#ifdef __APPLE__
-    const fs::path shared="/Volumes/shared/gothic-ai";
-#else
-    const fs::path shared="/mnt/shared/gothic-ai";
-#endif
-    std::error_code error;
-    if(fs::is_directory(shared,error)) store=shared;
-    }
+  auto store=storeRoot();
   const auto finish=[&](const char* source, bool upload=true) {
     Selection selected{destination,{},{}};
-    current.save("base",destination,identity,snapshot);
+    current->save("base",destination,identity,snapshot);
     if(destination.parent_path()==cache) {
       selected.lease=std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared);
       try { prune(cache,destination); }
@@ -457,6 +485,38 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
   const auto cache=root/"videos";
   fs::create_directories(cache);
   Lock cacheLock(cache/".lock",Lock::Exclusive,cancelled.get());
+  const auto* fingerprint=std::getenv("OPENGOTHIC_VIDEOS_FINGERPRINT");
+  if(fingerprint && *fingerprint) {
+    if(!fingerprintName(fingerprint)) throw std::runtime_error("invalid OPENGOTHIC_VIDEOS_FINGERPRINT");
+    removeInterrupted(cache,{},cancelled.get());
+    const auto destination=cache/fingerprint;
+    const auto store=storeRoot();
+    const auto stored=store.empty() ? fs::path() : store/"base/videos"/fingerprint;
+    std::string rejection;
+    for(const auto& source:{destination,stored}) {
+      checkVideoCancelled(cancelled.get());
+      if(source.empty() || !fs::exists(source)) continue;
+      try {
+        const auto identity=VideoData::readIdentity(source);
+        if(identity.fingerprint!=fingerprint) throw std::runtime_error("video fingerprint differs");
+        if(!videoMatches(source,identity,cancelled.get(),rejection)) throw std::runtime_error(rejection);
+        if(source!=destination) {
+          Lock replacement(cache/(identity.fingerprint+".use"),Lock::TryExclusive);
+          if(!replacement.acquired()) throw std::runtime_error("cannot replace a video cache part in use");
+          copyVideo(source,destination,identity,cancelled.get());
+          }
+        Current(root,gothic,cancelled.get()).save("videos",destination,identity,"");
+        Selection selected{destination,std::make_shared<Lock>(cache/(identity.fingerprint+".use"),Lock::Shared,cancelled.get()),{}};
+        prune(cache,destination,cancelled.get());
+        log(std::string("video base: ")+(source==destination ? "cache " : "store ")+destination.string());
+        return selected;
+        }
+      catch(const std::exception& error) { rejection=error.what(); }
+      }
+    checkVideoCancelled(cancelled.get());
+    throw std::runtime_error(std::string("no ready video base for OPENGOTHIC_VIDEOS_FINGERPRINT=")+fingerprint+
+                             (rejection.empty() ? "; not found in cache or store" : ": "+rejection));
+    }
   Current current(root,gothic,cancelled.get());
   const bool installed=hasInstallation(gothic);
   const auto snapshot=installed ? BaseImport::snapshot(gothic) : std::string();
@@ -478,17 +538,7 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
   checkVideoCancelled(cancelled.get());
   removeInterrupted(cache,{},cancelled.get());
   const auto destination=reused ? pointed : cache/identity.fingerprint;
-  fs::path store;
-  if(const auto* env=std::getenv("OPENGOTHIC_BASE_STORE")) store=env;
-  else {
-#ifdef __APPLE__
-    const fs::path shared="/Volumes/shared/gothic-ai";
-#else
-    const fs::path shared="/mnt/shared/gothic-ai";
-#endif
-    std::error_code error;
-    if(fs::is_directory(shared,error)) store=shared;
-    }
+  auto store=storeRoot();
   if(!store.empty()) store/="base/videos";
   const auto finish=[&](const char* source, bool upload=true) {
     checkVideoCancelled(cancelled.get());
