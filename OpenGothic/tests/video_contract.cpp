@@ -587,6 +587,167 @@ void concurrentFirstPublications(const fs::path& gothic,const fs::path& part,con
   std::cout << "video concurrent publication: two caches, empty shared store, both publishers succeeded\n";
   }
 
+void snapshotSelection(const fs::path& gothic, const fs::path& root, const fs::path& part,
+                       const VideoData::Identity& identity) {
+  const auto game=root/"game", cache=root/"cache";
+  fs::create_directories(game);
+  fs::path mutableVideo;
+  for(const auto& directory:fs::directory_iterator(gothic)) {
+    auto name=directory.path().filename().string();
+    for(auto& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
+    if(name!="DATA" && name!="_WORK") continue;
+    fs::create_directories(game/directory.path().filename());
+    for(const auto& entry:fs::recursive_directory_iterator(directory.path())) {
+      const auto target=game/entry.path().lexically_relative(gothic);
+      if(entry.is_directory()) { fs::create_directories(target); continue; }
+      fs::create_symlink(fs::absolute(entry.path()),target);
+      auto extension=entry.path().extension().string();
+      for(auto& c:extension) c=char(std::toupper(static_cast<unsigned char>(c)));
+      if(extension==".BIK" && (mutableVideo.empty() || entry.file_size()<fs::file_size(mutableVideo))) mutableVideo=target;
+      }
+    }
+  require(!mutableVideo.empty(),"video snapshot fixture needs a loose BIK");
+  const auto videoSource=fs::read_symlink(mutableVideo);
+  fs::remove(mutableVideo); fs::copy_file(videoSource,mutableVideo);
+  const auto destination=cache/"videos"/identity.fingerprint;
+  fs::create_directories(destination);
+  for(const auto& entry:fs::directory_iterator(part))
+    if(entry.is_regular_file()) fs::create_hard_link(entry.path(),destination/entry.path().filename());
+  Environment cacheEnvironment("OPENGOTHIC_BASE_CACHE",cache), storeEnvironment("OPENGOTHIC_BASE_STORE","");
+  Environment baseEnvironment("OPENGOTHIC_BASE","");
+  size_t identifies=0;
+  const auto observe=[&](std::string_view message) {
+    if(message=="video base: identifying installation") ++identifies;
+    };
+  require(BaseStore::resolveVideos(game,observe).path==destination && identifies>0,
+          "first video selection must identify before writing its pointer");
+  identifies=0;
+  require(BaseStore::resolveVideos(game,observe).path==destination && identifies==0,
+          "matching video snapshot must skip source identification and BIK hashing");
+  {
+    Environment explicitBase("OPENGOTHIC_BASE",root/"explicit-main");
+    require(BaseStore::resolveVideos(game,observe).path==destination && identifies==0,
+            "explicit main base must retain the video's snapshot selection");
+  }
+  fs::last_write_time(mutableVideo,fs::last_write_time(mutableVideo)+std::chrono::seconds(1));
+  require(BaseStore::resolveVideos(game,observe).path==destination && identifies>0,
+          "changed BIK mtime must take the full video identification path");
+  // Main and video use the same pointer document and must retain each other's update.
+  const auto mainIdentity=BaseImport::identify(game);
+  const auto mainBase=cache/mainIdentity.fingerprint;
+  fs::create_directories(mainBase/"sources");
+  { std::ofstream source(mainBase/"sources/sources.json"); source << "{\"format\":\"gothic-sources\",\"version\":1}\n"; }
+  BaseImport::writeBaseMetadata(mainBase,mainIdentity);
+  BaseImport::Files mounted;
+  for(const auto& archive:BaseImport::runtimeArchives(game))
+    if(!archive.mod) mounted.emplace_back(archive.name,archive.size);
+  // A cold video import must not hold the lock needed to select a ready main base.
+  {
+    const auto coldCache=root/"cold-cache", coldBase=coldCache/mainIdentity.fingerprint;
+    fs::create_directories(coldCache);
+    fs::copy(mainBase,coldBase,fs::copy_options::recursive);
+    Environment coldEnvironment("OPENGOTHIC_BASE_CACHE",coldCache);
+    require(BaseStore::resolve(game,mounted,[](std::string_view) {}).path==coldBase,
+            "cold video fixture did not prime the ready main pointer");
+    int importing[2], release[2];
+    require(pipe(importing)==0 && pipe(release)==0,"cold video import pipes failed");
+    std::cout.flush(); std::cerr.flush();
+    const auto video=fork(); require(video>=0,"cold video import fork failed");
+    if(video==0) {
+      close(importing[0]); close(release[1]); alarm(30);
+      try {
+        (void)BaseStore::resolveVideos(game,[&](std::string_view message) {
+          if(message!="video base: importing installation") return;
+          require(::write(importing[1],"x",1)==1,"cold video import signal failed");
+          char token=0;
+          require(::read(release[0],&token,1)==1,"cold video import gate failed");
+          throw std::runtime_error("cold video import gate released");
+          });
+        }
+      catch(const std::exception& error) {
+        _exit(std::string_view(error.what())=="cold video import gate released" ? 0 : 1);
+        }
+      _exit(2);
+      }
+    close(importing[1]); close(release[0]);
+    char token=0;
+    const bool started=::read(importing[0],&token,1)==1;
+    close(importing[0]);
+    pid_t main=-1;
+    int mainStatus=0;
+    bool mainCompleted=false;
+    if(started) {
+      main=fork();
+      if(main==0) {
+        close(release[1]); alarm(5);
+        try {
+          auto selected=BaseStore::resolve(game,mounted,[](std::string_view) {});
+          _exit(selected.path==coldBase ? 0 : 1);
+          }
+        catch(...) { _exit(1); }
+        }
+      if(main>0) mainCompleted=waitpid(main,&mainStatus,0)==main;
+      require(::write(release[1],"x",1)==1,"cold video import release failed");
+      }
+    close(release[1]);
+    int videoStatus=0;
+    const bool videoCompleted=waitpid(video,&videoStatus,0)==video;
+    require(started && mainCompleted && WIFEXITED(mainStatus) && WEXITSTATUS(mainStatus)==0,
+            "ready main base selection waited for the cold video import");
+    require(videoCompleted && WIFEXITED(videoStatus) && WEXITSTATUS(videoStatus)==0,
+            "cold video import did not stop at its gate");
+    std::cout << "cold video import: ready main base selected before import gate release\n";
+  }
+  int gate[2]; require(pipe(gate)==0,"combined pointer gate failed");
+  std::cout.flush(); std::cerr.flush();
+  pid_t children[2];
+  for(size_t i=0;i<2;++i) {
+    children[i]=fork(); require(children[i]>=0,"combined pointer fork failed");
+    if(children[i]==0) {
+      close(gate[1]); char token=0;
+      if(::read(gate[0],&token,1)!=1) _exit(2);
+      close(gate[0]);
+      try {
+        if(i==0) (void)BaseStore::resolve(game,mounted,[](std::string_view) {});
+        else (void)BaseStore::resolveVideos(game,[](std::string_view) {});
+        _exit(0);
+        }
+      catch(...) { _exit(1); }
+      }
+    }
+  close(gate[0]); require(::write(gate[1],"xx",2)==2,"combined pointer gate write failed"); close(gate[1]);
+  for(const auto child:children) {
+    int status=0;
+    require(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0,
+            "combined pointer writer failed");
+    }
+  identifies=0;
+  fs::path data;
+  for(const auto& entry:fs::directory_iterator(game)) {
+    auto name=entry.path().filename().string();
+    for(auto& c:name) c=char(std::toupper(static_cast<unsigned char>(c)));
+    if(name=="DATA") data=entry.path();
+    }
+  require(!data.empty(),"video snapshot fixture has no Data");
+  fs::rename(data,game/"saved-Data");
+  require(BaseStore::resolveVideos(game,observe).path==destination && identifies==0,
+          "installation-free video selection must reuse its pointer without source hashing");
+  require(BaseStore::resolve(game,{},[](std::string_view) {}).path==mainBase,
+          "concurrent main/video pointer writes must retain both parts for offline selection");
+  fs::remove_all(destination);
+  std::string reason;
+  try { (void)BaseStore::resolveVideos(game,observe); }
+  catch(const std::exception& error) { reason=error.what(); }
+  require(!reason.empty(),"pruned video pointer without installation must explain the unavailable part");
+  const auto empty=root/"no-pointer";
+  fs::create_directory(empty);
+  reason.clear();
+  try { (void)BaseStore::resolveVideos(empty,observe); }
+  catch(const std::exception& error) { reason=error.what(); }
+  require(!reason.empty(),"video without installation or pointer must retain a skip reason");
+  std::cout << "video snapshots: zero source identifies for repeat/explicit/offline; BIK mtime refresh; concurrent main/video pointer; missing and pruned pointer reasons verified\n";
+  }
+
 void identityInputs(const fs::path& gothic, const fs::path& root, const VideoData::Identity& identity) {
   fs::create_directories(root);
   fs::path nonvideo, video;
@@ -670,6 +831,8 @@ int main() {
     events.clear();
     const auto cachedStarted=Clock::now();
     auto cached=BaseStore::resolveVideos(game,log);
+    require(events.find("video base: identifying installation")==std::string::npos,
+            "warm video cache snapshot must not invoke identify or hash BIK sources");
     const auto cachedSeconds=std::chrono::duration<double>(Clock::now()-cachedStarted).count();
     const auto backgroundStarted=Clock::now();
     if(cached.publication.valid()) cached.publication.get();
@@ -728,6 +891,7 @@ int main() {
     require(events.find("video base: rejected cache directory")!=std::string::npos &&
             events.find("video base: store ")!=std::string::npos,"corrupted cache was not replaced from store");
     require(hashes(repaired.path)==expected,"repaired cache differs");
+    snapshotSelection(game,temporary.path/"snapshots",repaired.path,identity);
     identityInputs(game,temporary.path/"identity-game",identity);
     std::cout << "video contract passed: 21/21, all planes/PCM, deterministic decoder and import, import/cache/store, corruption, independent inputs\n";
     return 0;
