@@ -267,7 +267,8 @@ def test_ready_base_contract_rejects_missing_foreign_or_corrupt_data(tmp_path, m
                 "base": {"path": str(directory), "fingerprint": "a" * 64},
             }))
     elif failure == "manifest":
-        (directory / "base-files.json").write_bytes(b"broken manifest")
+        manifest = directory / "base-files.json"
+        manifest.write_bytes(manifest.read_bytes().replace(b'"version": 1', b'"version": 2'))
     else:
         (directory / "test.txt").write_bytes(b"short" if failure == "size" else b"changed")
     with pytest.raises(RuntimeError, match="base"):
