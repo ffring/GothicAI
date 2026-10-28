@@ -320,6 +320,29 @@ if(NOT ANDROID AND NOT IOS)
     lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)
   target_link_libraries(gothic-navpolicy-contract PRIVATE zlibstatic)
   find_package(Python3 COMPONENTS Interpreter QUIET)
+  add_executable(gothic-bodypolicy-contract EXCLUDE_FROM_ALL
+    tests/bodypolicy_contract.cpp common/game/bodypolicy.cpp common/nets/smallnet.cpp)
+  target_include_directories(gothic-bodypolicy-contract PRIVATE
+    common lib/Tempest/Engine/thirdparty/zlib ${CMAKE_BINARY_DIR}/lib/Tempest/thirdparty/zlib)
+  target_include_directories(gothic-bodypolicy-contract SYSTEM BEFORE PRIVATE lib/rapidjson/include)
+  target_link_libraries(gothic-bodypolicy-contract PRIVATE zlibstatic)
+  find_program(BODY_POLICY_UV_EXECUTABLE NAMES uv HINTS "$ENV{HOME}/.local/bin")
+  if(BODY_POLICY_UV_EXECUTABLE)
+    set(BODY_POLICY_PYTHON ${BODY_POLICY_UV_EXECUTABLE} run --no-project --with numpy python)
+  elseif(Python3_Interpreter_FOUND)
+    set(BODY_POLICY_PYTHON ${Python3_EXECUTABLE})
+  endif()
+  if(BODY_POLICY_PYTHON)
+    add_custom_target(check-bodypolicy
+      COMMAND ${CMAKE_COMMAND} -E env
+        OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1
+        ${BODY_POLICY_PYTHON} -I ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/body_net.py
+        fixture ${CMAKE_CURRENT_BINARY_DIR}/bodypolicy-fixture
+      COMMAND $<TARGET_FILE:gothic-bodypolicy-contract>
+        ${CMAKE_CURRENT_BINARY_DIR}/bodypolicy-fixture/fixture.bodynet
+        ${CMAKE_CURRENT_BINARY_DIR}/bodypolicy-fixture/golden.jsonl.gz
+      DEPENDS gothic-bodypolicy-contract USES_TERMINAL)
+  endif()
   if(Python3_Interpreter_FOUND)
     add_custom_target(check-navpolicy
       COMMAND ${CMAKE_COMMAND} -E env
