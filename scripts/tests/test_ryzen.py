@@ -885,6 +885,21 @@ PY
         })
         self.assertFalse((self.home / 'gothic-ai/game').exists())
 
+    def test_pytest_keeps_installation_without_game_settings_setup(self):
+        (self.home / 'gothic-ai/game-base.json').unlink()
+        shutil.rmtree(self.home / 'gothic-ai/game-settings')
+        self.env.pop('GOTHIC_DIR', None)
+        self.shell(r'''
+build_storygraph() { :; }
+uv() { printf '%s\n' "$GOTHIC_DIR" "$@" >"$TEST_ROOT/pytest-env"; }
+remote_run pytest "$TEST_ROOT/worktree" run -rs tests/test_storygraph.py
+''')
+        self.assertEqual((self.root / 'pytest-env').read_text().splitlines(), [
+            str(self.home / 'gothic-ai/game'), 'run', 'pytest', '-rs', 'tests/test_storygraph.py',
+        ])
+        self.assertFalse((self.home / 'gothic-ai/game-base.json').exists())
+        self.assertFalse((self.home / 'gothic-ai/game-settings').exists())
+
     def test_setup_removes_only_its_temporary_copy_on_failure_or_interrupt(self):
         import hashlib
 

@@ -589,11 +589,11 @@ remote_run() {
   local action="$1" state="$2" run="$3"
   shift 3
   toolchain
-  game_settings
   export GOTHIC_AI_DATA="$state/data"
   local started=$SECONDS rc digest
   [[ "${RYZEN_JOBS:-12}" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; return 2; }
   if [[ "$action" == pytest ]]; then
+    export GOTHIC_DIR="$HOME/gothic-ai/game"
     digest="$(storygraph_digest)"
     build_storygraph "$state" "$digest"
     cd "$ROOT/server"
@@ -601,6 +601,7 @@ remote_run() {
     echo "Ryzen: pytest $((SECONDS - started))s, exit $rc"
     return "$rc"
   fi
+  game_settings
   echo 'Ryzen: game admitted'
   export LOG_DIR="$state/runs/$run"
   # The worktree lock spans preparation and the game; retain converted graphs.
