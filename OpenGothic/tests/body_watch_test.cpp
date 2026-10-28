@@ -6,7 +6,7 @@
 #include "resources.h"
 #include "game/bodycontroller.h"
 #include "game/bodyobservations.h"
-#include "game/bodypolicy.h"
+#include "game/bodyenginepolicy.h"
 #include "game/gamescript.h"
 #include "game/playercontrol.h"
 #include "game/serialize.h"
@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 #include <unistd.h>
+#include <sys/wait.h>
 
 namespace {
 using Json = rapidjson::Document;
@@ -90,9 +91,10 @@ Json action(Npc& actor,FightAlgo::PolicyAction policy) {
   return call(d);
   }
 
-Json acquire(Npc& actor,uint64_t awaitMs=0,const char* mode="lockstep",uint64_t timeoutMs=5000) {
+Json acquire(Npc& actor,uint64_t awaitMs=0,const char* mode="lockstep",uint64_t timeoutMs=5000,const char* policy=nullptr) {
   auto d=request("body_acquire",actor);
   d.AddMember("body_control",true,d.GetAllocator());
+  if(policy) d.AddMember("policy",rapidjson::Value(policy,d.GetAllocator()),d.GetAllocator());
   d.AddMember("mode",rapidjson::Value(mode,d.GetAllocator()),d.GetAllocator());
   number(d,"timeout_ms",timeoutMs);
   number(d,"await_boundary_ms",awaitMs);
@@ -127,19 +129,30 @@ void initialWatch(Npc& actor,uint64_t generation) {
   BodyObservations::sampleAll();
   }
 
+#ifdef GOTHIC_BODY_ENGINE_NET
+void missingEngineNetwork(Npc& actor) {
+  ++cases;
+  const auto network=parse(BodyEnginePolicy::netStatusJson());
+  expect(!network["loaded"].GetBool() && network["checkpoint_sha256"].IsNull() && network["error"].IsString(),
+         "missing network hello status includes the load error");
+  initialWatch(actor,700);
+  const auto response=acquire(actor,0,"lockstep",5000,"engine");
+  expect(!response["accepted"].GetBool() && std::string_view(response["reason"].GetString())=="body_net_unavailable",
+         "body_acquire without weights returns body_net_unavailable");
+  expect(!BodyController::owns(actor),"missing network does not grant ownership");
+  expect(acquire(actor)["accepted"].GetBool(),"ordinary acquire still succeeds without network weights");
+  release(actor);
+  BodyController::reset("missing_network_cleanup");
+  BodyObservations::disable();
+  }
+
 void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
   ++cases;
   BodyController::fixturePrepare(actor,target,150,0);
   actor.setExternalControl(false);
   initialWatch(actor,700);
   const auto initialGame=BodyObservations::latestGameMs(actor);
-  auto acquireRequest=request("body_acquire",actor);
-  acquireRequest.AddMember("body_control",true,acquireRequest.GetAllocator());
-  acquireRequest.AddMember("mode","lockstep",acquireRequest.GetAllocator());
-  acquireRequest.AddMember("policy","engine",acquireRequest.GetAllocator());
-  number(acquireRequest,"timeout_ms",5000);
-  number(acquireRequest,"target_entity_id",BodyObservations::entityId(target));
-  const auto acquired=call(acquireRequest);
+  const auto acquired=acquire(actor,0,"lockstep",5000,"engine");
   expect(acquired["accepted"].GetBool(),"engine policy acquires a real NPC");
   const BodyNet weights(GOTHIC_BODY_ENGINE_NET);
   BodyPolicyRuntime direct(weights,100,100,true);
@@ -170,6 +183,7 @@ void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
     });
   BodyController::drainJson();
   for(unsigned i=0;i<90 && expected.size()<4 && BodyController::owns(actor);++i) {
+    expect(call(request("body_heartbeat",actor))["accepted"].GetBool(),"owner heartbeat keeps the engine lease alive");
     step(player);
     const auto events=parse(BodyController::drainJson());
     for(const auto& event:events["events"].GetArray()) {
@@ -181,7 +195,7 @@ void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
       }
     }
   BodyObservations::setSink({});
-  expect(expected.size()>=1 && applied==expected,"real NPC applies exactly the direct policy sequence on the emitted rows");
+  expect(expected.size()==4 && applied==expected,"real NPC applies exactly the direct policy sequence on the emitted rows");
   expect(started>0,"engine policy physically starts an action through the native executor");
   expect(BodyController::owns(actor) && !latest.empty(),"live engine lease survives the policy sequence");
   auto refusal=parse(latest);
@@ -191,6 +205,7 @@ void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
   rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
   refusal.Accept(writer);
   BodyController::onObservation(actor,{buffer.GetString(),buffer.GetSize()});
+  expect(BodyController::owns(actor),"policy fallback defers native restoration until the next simulation boundary");
   auto reports=BodyController::drainPolicyJson();
   bool measured=false,finalReport=false;
   for(const auto& report:reports) {
@@ -215,9 +230,42 @@ void enginePolicy(Npc& actor,Npc& target,PlayerControl& player) {
        std::string_view(event["release_reason"].GetString())=="policy_fallback:unsupported_sampling_rate") restored=true;
   expect(restored && !BodyController::owns(actor),"policy refusal returns the actual NPC to native AI at its safe boundary");
   BodyController::reset("engine_fixture_cleanup");
+
+  ++cases;
+  BodyController::fixturePrepare(actor,target,150,0);
+  actor.setExternalControl(false);
+  initialWatch(actor,701);
+  expect(acquire(actor,0,"realtime",500,"engine")["accepted"].GetBool(),"watchdog fixture acquires an engine lease");
+  const auto ownership=parse(BodyController::drainJson());
+  uint64_t ownerHeartbeat=0;
+  for(const auto& event:ownership["events"].GetArray())
+    if(std::string_view(event["reason"].GetString())=="acquired") ownerHeartbeat=event["last_heartbeat_wall_ms"].GetUint64();
+  expect(ownerHeartbeat>0,"watchdog fixture records the owner's acquisition heartbeat");
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  bool accepted=false,providerLost=false;
+  restored=false;
+  for(unsigned i=0;i<100 && BodyController::owns(actor);++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    step(player);
+    const auto events=parse(BodyController::drainJson());
+    for(const auto& event:events["events"].GetArray()) {
+      const std::string_view reason=event["reason"].GetString();
+      if(std::string_view(event["phase"].GetString())=="accepted") {
+        accepted=true;
+        expect(event["last_heartbeat_wall_ms"].GetUint64()==ownerHeartbeat,
+               "local engine decisions do not refresh the owner's heartbeat");
+        }
+      if(reason=="provider_lost" && std::string_view(event["release_reason"].GetString())=="watchdog_timeout") providerLost=true;
+      if(reason=="native_restored" && std::string_view(event["release_reason"].GetString())=="watchdog_timeout") restored=true;
+      }
+    }
+  expect(accepted,"engine accepts a decision before the owner watchdog expires");
+  expect(providerLost && restored && !BodyController::owns(actor),"engine decisions cannot prevent watchdog_timeout and native restoration");
+  BodyController::reset("engine_watchdog_cleanup");
   BodyController::fixturePrepare(actor,target,300,0);
   actor.setExternalControl(false);
   }
+#endif
 
 void liveLease(Npc& a,Npc& b,PlayerControl& player) {
   ++cases;
@@ -788,24 +836,31 @@ int main(int argc,const char** argv) {
   dup2(STDERR_FILENO,STDOUT_FILENO);
   const auto workingDirectory=std::filesystem::current_path();
   try {
-    std::string save,scenario=GOTHIC_BODY_WATCH_SCENARIO;
-    bool hasGamePath=false;
+    std::string save,scenario;
     for(int i=1;i<argc;++i) {
       const std::string_view arg=argv[i];
-      if(arg=="-g") hasGamePath=true;
       if(arg=="--save" || arg=="--scenario") {
         if(++i>=argc) throw std::runtime_error("missing fixture option value");
         (arg=="--save" ? save : scenario)=std::filesystem::absolute(argv[i]).string();
         }
       }
-    std::vector<const char*> arguments(argv,argv+argc);
-    if(!hasGamePath) if(const char* path=std::getenv("GOTHIC_DIR")) {
-      arguments.push_back("-g"); arguments.push_back(path); arguments.push_back("-g2");
+    if(scenario.empty()) throw std::runtime_error("--scenario scripts/bench/body-api.bench is required");
+    bool missingNetwork=false;
+#ifdef GOTHIC_BODY_ENGINE_NET
+    // A fresh process exercises the one-time startup load with absent weights.
+    const auto child=fork();
+    if(child<0) throw std::runtime_error("cannot fork missing-network fixture");
+    missingNetwork=child==0;
+    if(child>0) {
+      int status=0;
+      expect(waitpid(child,&status,0)==child && WIFEXITED(status) && WEXITSTATUS(status)==0,
+             "missing-network body_acquire fixture passes in a fresh process");
       }
-    setenv("OPENGOTHIC_BODY_NET",GOTHIC_BODY_ENGINE_NET,1);
+    setenv("OPENGOTHIC_BODY_NET",missingNetwork ? "/nonexistent/gothic-body-watch-test.bodynet" : GOTHIC_BODY_ENGINE_NET,1);
+#endif
     setenv("OPENGOTHIC_PHYSICS_THREADS","0",0);
     Workers::setSerialExecution(true);
-    CommandLine commandLine(int(arguments.size()),arguments.data());
+    CommandLine commandLine(argc,argv);
     Resources resources;
     Gothic gothic;
     gothic.isNpcInDialogFn=[](const Npc*) { return false; };
@@ -841,7 +896,12 @@ int main(int argc,const char** argv) {
     const auto wireStatus=parse(BodyController::statusJson(&a));
     for(const char* field:{"process_policy","segment_remaining_ms","fai_gate","ani_gate","ai_gate","output_gate","interruptible"})
       expect(!wireStatus["actors"][0].HasMember(field),"wire status keeps the strict server schema; boundary diagnostics are opt-in");
-    enginePolicy(a,b,player);
+#ifdef GOTHIC_BODY_ENGINE_NET
+    if(missingNetwork) {
+      missingEngineNetwork(a);
+      } else {
+      enginePolicy(a,b,player);
+#endif
     liveLease(a,b,player);
     realtimeSentObservation(a,b,player);
     movementRelease(a,b,player);
@@ -856,11 +916,15 @@ int main(int argc,const char** argv) {
     BodyController::reset();
     BodyObservations::disable();
     meleeRemoval(b);
+#ifdef GOTHIC_BODY_ENGINE_NET
+      }
+#endif
     TestBench::flushOutput();
     gothic.clearGame().reset();
     std::filesystem::current_path(workingDirectory);
     std::filesystem::remove_all(output);
-    std::fprintf(result,"{\"type\":\"body_watch_test\",\"passed\":true,\"cases\":%zu,\"assertions\":%zu}\n",cases,assertions);
+    std::fprintf(result,"{\"type\":\"%s\",\"passed\":true,\"cases\":%zu,\"assertions\":%zu}\n",
+                 missingNetwork ? "body_watch_missing_net_test" : "body_watch_test",cases,assertions);
     std::fclose(result);
     return 0;
     } catch(const std::exception& error) {

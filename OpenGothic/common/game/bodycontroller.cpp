@@ -241,7 +241,7 @@ void cache(Lease& l,const Command& c,const std::string& response) {
   l.retries.push_back({c.id,signature(c),response});
   }
 std::string applyAction(Lease& owner,const rapidjson::Value& req,uint64_t session,uint64_t world,
-                        uint64_t generation,bool sentObservations) {
+                        uint64_t generation,bool sentObservations,bool refreshHeartbeat) {
   auto l=&owner; auto actor=l->npc;
   Command c;
   uint64_t action=0;
@@ -277,7 +277,7 @@ std::string applyAction(Lease& owner,const rapidjson::Value& req,uint64_t sessio
   c.primitive=resolution.primitive;
   c.deadline=Clock::time_point(std::chrono::milliseconds(observation.wallMs+c.ttl));
   if(l->mode=="realtime" && Clock::now()>=c.deadline) return reject("expired_wall");
-  l->heartbeat=Clock::now();
+  if(refreshHeartbeat) l->heartbeat=Clock::now();
   if(c.action==PolicyAction::Continue) {
     c.execution=l->command ? l->active.execution : 0;
     if(l->command) { c.identity=l->active.identity; c.beforeIdentity=l->active.beforeIdentity; c.started=l->active.started; c.consumed=l->active.consumed; }
@@ -630,13 +630,12 @@ void BodyController::onObservation(Npc& actor,std::string_view encoded) {
     // Identical acceptance, TTL, resolver and executor as a server action, using the
     // locally published row rather than waiting for a WebSocket send acknowledgement.
     Json receipt; receipt.Parse(applyAction(*l,request,BodyObservations::sessionEpoch(),
-                              BodyObservations::worldEpoch(),l->generation,false).c_str());
+                              BodyObservations::worldEpoch(),l->generation,false,false).c_str());
     return receipt["accepted"].GetBool() ? std::string() : std::string(receipt["reason"].GetString());
     });
   if(reason.empty()) { policyReport(*l); return; }
   policyReport(*l,true,reason);
   requestRelease(*l,reason);
-  pumpWatchdogs();
   }
 
 BodyController::AcquireState BodyController::acquireState(const Npc& actor,uint64_t target) {
@@ -798,7 +797,7 @@ std::string BodyController::handleJson(const rapidjson::Value& req,bool sentObse
     event(*l,"ownership","goal_changed"); return result(l,actor,true,"goal_updated");
     }
   if(type!="body_action") return result(l,actor,false,"unknown_operation");
-  return applyAction(*l,req,session,world,generation,sentObservations);
+  return applyAction(*l,req,session,world,generation,sentObservations,true);
   }
 
 void BodyController::consumed(Npc& actor) { if(auto l=lease(actor); l && l->command) l->active.consumed=true; }

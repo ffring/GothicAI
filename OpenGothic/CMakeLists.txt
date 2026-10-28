@@ -297,8 +297,6 @@ if(UNIX AND NOT IOS AND NOT ANDROID)
   target_link_libraries(gothic-body-watch-test PRIVATE OpenGothic AiBridge)
   target_include_directories(gothic-body-watch-test SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
   target_compile_options(gothic-body-watch-test PRIVATE -Wall -Wconversion -Werror)
-  target_compile_definitions(gothic-body-watch-test PRIVATE
-    GOTHIC_BODY_WATCH_SCENARIO="${PROJECT_SOURCE_DIR}/../scripts/bench/body-api.bench")
   # Real Resources/material loading with temporary DDS files; no game assets or window.
   add_executable(gothic-material-texture-test EXCLUDE_FROM_ALL tests/material_texture_test.cpp)
   target_link_libraries(gothic-material-texture-test PRIVATE OpenGothic AiBridge)

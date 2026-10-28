@@ -8,8 +8,6 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <sys/wait.h>
-#include <unistd.h>
 
 namespace {
 using Json=rapidjson::Document;
@@ -42,22 +40,6 @@ Json firstObservation() {
     }
   gzclose(input);
   throw std::runtime_error("fixture has no periodic observations");
-  }
-void missingNetwork() {
-  const auto pid=fork();
-  if(pid<0) throw std::runtime_error("cannot fork missing-network fixture");
-  if(pid==0) {
-    setenv("OPENGOTHIC_BODY_NET","/nonexistent/gothic-body-engine-test.bodynet",1);
-    const auto engine=parse("{\"policy\":\"engine\"}");
-    const auto ordinary=parse("{}");
-    const auto status=parse(BodyEnginePolicy::netStatusJson());
-    _exit(std::string_view(BodyEnginePolicy::validateAcquire(engine))=="body_net_unavailable" &&
-          std::string_view(BodyEnginePolicy::validateAcquire(ordinary))=="allowed" &&
-          !status["loaded"].GetBool() && status["checkpoint_sha256"].IsNull() && status["error"].IsString() ? 0 : 1);
-    }
-  int status=0;
-  expect(waitpid(pid,&status,0)==pid && WIFEXITED(status) && WEXITSTATUS(status)==0,
-         "engine acquisition without weights refuses; ordinary acquisition remains available");
   }
 FightAlgo::ResolverState ready() {
   FightAlgo::ResolverState state;
@@ -154,14 +136,41 @@ void parityAndFallback() {
   metrics=parse(policy.report(true));
   expect(metrics["final"].GetBool() && metrics["fallbacks"]["unsupported_sampling_rate"].GetUint64()==1,"fallback telemetry immediately reports its refusal reason");
   }
+
+void transientActionRefusals() {
+  auto row=firstObservation();
+  row["self"]["weapon_state"].SetUint64(2);
+  setMask(row,true);
+  const auto identity=BodyNet::actorIdentity(row);
+  BodyEnginePolicy policy(identity[0],identity[1],identity[2],identity[3],0,0);
+  uint64_t sequence=0;
+  const auto step=[&](const char* refusal) {
+    row["observation_seq"].SetUint64(++sequence);
+    row["t_game_ms"].SetUint64(sequence*50);
+    row["sim_step"].SetUint64(sequence);
+    unsigned applied=0;
+    const auto reason=policy.process(row,sequence*50,[&](int,const rapidjson::Value&) {
+      ++applied;
+      return std::string(refusal);
+      });
+    expect(applied==1,"each retry uses a fresh policy decision");
+    return reason;
+    };
+  for(unsigned i=0;i<9;++i)
+    expect(step("command_busy").empty(),"nine transient action refusals retain the lease");
+  expect(step("").empty(),"an accepted action breaks the transient refusal streak");
+  for(unsigned i=0;i<9;++i)
+    expect(step("stale_observation").empty(),"a new refusal streak receives all nine retries");
+  expect(step("stale_observation")=="body_action_rejected","the tenth consecutive action refusal ends the fight");
+  }
 }
 
 int main() {
   try {
-    missingNetwork();
     setenv("OPENGOTHIC_BODY_NET",GOTHIC_BODY_ENGINE_NET,1);
     BodyEnginePolicy::initialize();
     parityAndFallback();
+    transientActionRefusals();
     std::cout << "{\"type\":\"body_engine_test\",\"passed\":true,\"assertions\":" << assertions
               << ",\"decisions\":" << decisions << "}\n";
     return 0;
