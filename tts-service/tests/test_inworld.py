@@ -1,12 +1,15 @@
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
 import sys
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
+import numpy as np
 import pytest
 
 from gothic_tts import cli, service
@@ -109,6 +112,24 @@ def api(monkeypatch) -> FakeInworld:
 
 def _provider(api: FakeInworld, tmp_path, **opts) -> InworldTTS:
     return InworldTTS(cache=tmp_path / "voices.json", transport=httpx.MockTransport(api), **opts)
+
+
+@pytest.fixture
+def original_base(tmp_path, monkeypatch):
+    selected = tmp_path / "base"
+    selected.mkdir()
+    manifest = json.dumps({"format": "gothic-base-files", "version": 1, "files": []}).encode()
+    (selected / "base-files.json").write_bytes(manifest)
+    (selected / "base.json").write_text(json.dumps({
+        "format": "gothic-base", "version": 2, "fingerprint": "a" * 64,
+        "manifest": {
+            "path": "base-files.json", "size": len(manifest),
+            "sha256": hashlib.sha256(manifest).hexdigest(),
+        },
+    }))
+    monkeypatch.setenv("OPENGOTHIC_BASE", str(selected))
+    monkeypatch.setenv("OPENGOTHIC_BASE_CACHE", str(tmp_path / "cache"))
+    return selected
 
 
 async def _speak(p: InworldTTS, voice: Voice = XARDAS) -> tuple[bytes, float]:
@@ -379,13 +400,14 @@ async def test_original_preparation_never_delays_a_game_line(api, tmp_path, monk
 
 
 @pytest.mark.parametrize("changed", [False, True])
-async def test_cached_originals_are_ready_before_source_export_finishes(api, tmp_path, monkeypatch, changed):
+async def test_cached_originals_are_ready_before_source_export_finishes(
+    api, tmp_path, monkeypatch, original_base, changed
+):
     import threading
 
     source = service.originals
     game, out = tmp_path / "game", tmp_path / "original"
-    (game / "Data").mkdir(parents=True)
-    (game / "Data/Speech.vdf").write_bytes(b"synthetic archive")
+    game.mkdir()
     monkeypatch.setenv("STORYGRAPH_TOOL", __file__)
     monkeypatch.setattr(source, "CHARACTERS", {XARDAS.id: source.CHARACTERS[XARDAS.id]})
     monkeypatch.setattr(source, "speech_index", lambda game: {})
@@ -405,7 +427,7 @@ async def test_cached_originals_are_ready_before_source_export_finishes(api, tmp
     def build(cid, index, texts, directory):
         built.append(cid)
         sample = directory / f"{cid}.wav"
-        sample.write_bytes(f"RIFF synthetic {len(built)}".encode())
+        sample.write_bytes(f"RIFF synthetic {texts[messages[0][0][:-4]]}".encode())
         return {"id": cid, "aliases": ["OTHER_XARDAS"], "file": str(sample)}
 
     monkeypatch.setattr(source.subprocess, "run", export)
@@ -416,6 +438,9 @@ async def test_cached_originals_are_ready_before_source_export_finishes(api, tmp
     requests = len(api.requests)
     if changed:
         messages[0][1] = "Changed synthetic text."
+    metadata = json.loads((original_base / "base.json").read_text())
+    metadata["fingerprint"] = "b" * 64
+    (original_base / "base.json").write_text(json.dumps(metadata))
     blocked = True
     synth = Synthesizer(p)
     svc = TtsService(synth, original_voices_dir=out, game_dir=game)
@@ -438,13 +463,69 @@ async def test_cached_originals_are_ready_before_source_export_finishes(api, tmp
         assert api.streams()[-1]["voiceId"] == "ws__clone-voice-1"
         release_export.set()
         await asyncio.wait_for(preparation, 2)
-        assert built == [XARDAS.id] * (2 if changed else 1)
+        assert built == [XARDAS.id] * 2
         assert api.cloned == (2 if changed else 1)
         expected = "ws__clone-voice-2" if changed else "ws__clone-voice-1"
         assert svc.original_voices["other_xardas"].preset == expected
     finally:
         release_export.set()
         await asyncio.gather(preparation, return_exceptions=True)
+        await synth.aclose()
+
+
+async def test_base_snapshot_rebuild_reuses_all_original_clones(
+    api, tmp_path, monkeypatch, original_base
+):
+    source = service.originals
+    game, out = tmp_path / "game", tmp_path / "original"
+    game.mkdir()
+    # Use every pinned character and the real build/prepare pipeline, with synthetic speech only.
+    lines = {line for selected in source.ORIGINAL_LINES.values() for line in selected}
+    index = {line: (None, line) for line in lines}
+    monkeypatch.setattr(source, "speech_index", lambda selected: index)
+    monkeypatch.setattr(source, "_texts", lambda selected, ou: dict.fromkeys(lines, "Synthetic speech."))
+    monkeypatch.setattr(source, "RATE", 100)
+    monkeypatch.setattr(source, "decode", lambda *_: np.tile(np.array([-0.125, 0.125], np.float32), 100))
+    manifest = source.prepare(game, out)
+    previous = json.loads(manifest.read_text())
+    entries = previous["characters"]
+    assert len(entries) == len(source.CHARACTERS) == 36
+    assert all("error" not in entry for entry in entries)
+    before = {entry["id"]: (out / f"{entry['id']}.wav").read_bytes() for entry in entries}
+    # Simulate the installation-era manifest and the existing Inworld clone cache.
+    previous["algorithm_version"] = 1
+    previous["source"] = {"game_dir": str(game), "speech": [{"name": "Data/Speech.vdf"}]}
+    manifest.write_text(json.dumps(previous))
+    p = _provider(api, tmp_path, keep_warm=0)
+    p.cache.write_text(json.dumps({
+        f"{cid}@original": {
+            "voice_id": f"cached-{cid}", "sample": hashlib.sha1(sample).hexdigest()[:16],
+        }
+        for cid, sample in before.items()
+    }))
+    clone = AsyncMock(side_effect=AssertionError("a matching sample must not call clone"))
+    monkeypatch.setattr(p, "clone", clone)
+    real_build, built = source.build, []
+
+    def build(cid, *args):
+        built.append(cid)
+        return real_build(cid, *args)
+
+    monkeypatch.setattr(source, "build", build)
+    synth = Synthesizer(p)
+    svc = TtsService(synth, original_voices_dir=out, game_dir=game)
+    try:
+        await svc._prepare_originals()
+        assert built == list(source.CHARACTERS)
+        assert json.loads(manifest.read_text())["source"] == {"base_fingerprint": "a" * 64}
+        for cid, sample in before.items():
+            assert (out / f"{cid}.wav").read_bytes() == sample
+            assert svc.original_voices[cid.casefold()].preset == f"cached-{cid}"
+            voice = Voice(f"{cid}@original", sample=str(out / f"{cid}.wav"))
+            assert p.cached_clone(voice) == f"cached-{cid}"
+        clone.assert_not_called()
+        assert api.requests == [] and api.cloned == 0
+    finally:
         await synth.aclose()
 
 

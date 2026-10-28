@@ -34,7 +34,8 @@ STORYGRAPH = REPO / "OpenGothic" / "ai_bridge" / "storygraph" / "build" / "story
 DEFAULT_OUT = Path.home() / ".local/share/gothic-ai/voices/original"
 TARGET_S = (20.0, 28.0)
 GAP_S = 0.35
-ALGORITHM_VERSION = 2
+ALGORITHM_VERSION = 3
+ORIGINAL_LINES = json.loads(Path(__file__).with_name("original_lines.json").read_text())
 log = logging.getLogger(__name__)
 
 # id (primary instance) -> name, dialog tokens (first part of a line name after DIA_/ADDON_), other instances
@@ -325,19 +326,40 @@ def rms_db(x: np.ndarray) -> float:
 
 def build(cid: str, index, texts, out: Path) -> dict:
     name, tokens, aliases = CHARACTERS[cid]
+    pinned = ORIGINAL_LINES.get(cid)
+    for line in pinned or []:
+        if line not in index:
+            raise ValueError(f"pinned original voice {cid}: missing speech line {line}")
     lines = own_lines(index.keys(), tokens)
-    cands = []
+    if pinned:
+        known = {line for line, _ in lines}
+        lines.extend((line, LINE.fullmatch(line)[2]) for line in pinned if line not in known)
+    # Retain the old normalization pool even when the selected lines are pinned.
+    cands, pinned_cands = [], {}
     for line, voice in lines:
         text = texts.get(line, "")
-        if not text:
+        required = pinned is not None and line in pinned
+        if not text and not required:
             continue
-        audio = trim(decode(*index[line]))
+        try:
+            audio = trim(decode(*index[line]))
+            if required and not len(audio):
+                raise ValueError("no speech samples")
+        except (ValueError, OSError, KeyError, struct.error, RuntimeError) as error:
+            if required:
+                raise ValueError(f"pinned original voice {cid}: cannot decode {line}: {error}") from error
+            raise
         dur = len(audio) / RATE
-        if 1.2 <= dur <= 12.0:
-            cands.append(
-                {"line": line, "text": text, "s": dur, "db": rms_db(audio), "audio": audio, "voice": voice}
-            )
+        candidate = {
+            "line": line, "text": text, "s": dur, "db": rms_db(audio), "audio": audio, "voice": voice
+        }
+        if required:
+            pinned_cands[line] = candidate
+        if text and 1.2 <= dur <= 12.0:
+            cands.append(candidate)
     if not cands:
+        if pinned:
+            raise ValueError(f"pinned original voice {cid}: no normalization lines")
         return {"id": cid, "name": name, "error": "no lines"}
     med = float(np.median([c["db"] for c in cands]))
     # calm first: no shouts, short questions are mostly a tone, not the voice; then looser for the few-lined
@@ -351,22 +373,28 @@ def build(cid: str, index, texts, out: Path) -> dict:
         lambda c: c["s"] <= 8 and "!" not in c["text"] and abs(c["db"] - med) <= 4.5,
         lambda c: abs(c["db"] - med) <= 6,
     ]
-    picked, dialogs, total = [], set(), 0.0
-    for last, ok in enumerate(passes, 1 - len(passes)):
-        calm = sorted((c for c in cands if ok(c) and c not in picked), key=lambda c: abs(c["s"] - 4.5))
-        for c in calm:  # 3-6 s phrases first: whole sentences, more of them per snapshot
-            dialog = LINE.match(c["line"])[1]
-            if (dialog in dialogs and last) or total + c["s"] > TARGET_S[1]:
-                continue
-            picked.append(c)
-            dialogs.add(dialog)
-            total += c["s"] + GAP_S
+    if pinned:
+        picked = [pinned_cands[line] for line in pinned]
+    else:
+        picked, dialogs, total = [], set(), 0.0
+        for last, ok in enumerate(passes, 1 - len(passes)):
+            calm = sorted(
+                (c for c in cands if ok(c) and c not in picked),
+                key=lambda c: (abs(c["s"] - 4.5), c["line"]),
+            )
+            for c in calm:  # 3-6 s phrases first: whole sentences, more of them per snapshot
+                dialog = LINE.match(c["line"])[1]
+                if (dialog in dialogs and last) or total + c["s"] > TARGET_S[1]:
+                    continue
+                picked.append(c)
+                dialogs.add(dialog)
+                total += c["s"] + GAP_S
+                if total >= TARGET_S[0]:
+                    break
             if total >= TARGET_S[0]:
                 break
-        if total >= TARGET_S[0]:
-            break
+        picked.sort(key=lambda c: c["line"])
     calm = [c for c in cands if passes[0](c)]
-    picked.sort(key=lambda c: c["line"])
     gap = np.zeros(int(GAP_S * RATE), dtype=np.float32)
     parts = []
     for c in picked:

@@ -159,7 +159,9 @@ class TtsService:
         for done, voice in enumerate(voices.values(), 1):
             cid = voice.id.removesuffix("@original")
             try:
-                voice_id = await provider.clone(voice)
+                voice_id = await asyncio.to_thread(provider.cached_clone, voice)
+                if voice_id is None:
+                    voice_id = await provider.clone(voice)
             except Exception as err:
                 log.warning("original voices: %s: %s", cid, " ".join(str(err).split()))
             else:

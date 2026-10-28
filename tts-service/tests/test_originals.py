@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from gothic_tts import originals
 
@@ -208,3 +209,52 @@ def test_base_helper_matches_server_contract():
     assert (root / "server/src/gothic_ai/gamedata/base.py").read_bytes() == (
         root / "tts-service/src/gothic_tts/base.py"
     ).read_bytes()
+
+
+def test_pinned_lines_keep_reference_order_and_fail_explicitly(tmp_path, monkeypatch):
+    assert set(originals.ORIGINAL_LINES) == set(originals.CHARACTERS)
+    assert len(originals.ORIGINAL_LINES) == 36
+    assert all(
+        lines and len(lines) == len(set(lines)) and all(originals.LINE.fullmatch(line) for line in lines)
+        for lines in originals.ORIGINAL_LINES.values()
+    )
+    cid = "NONE_100_XARDAS"
+    pinned = ["DIA_XARDAS_Z_14_00", "DIA_XARDAS_A_14_00"]
+    monkeypatch.setattr(originals, "ORIGINAL_LINES", {cid: pinned})
+    monkeypatch.setattr(originals, "RATE", 100)
+    index = {line: (None, line) for line in reversed(pinned)}
+    texts = dict.fromkeys(pinned, "A shout!")
+    samples = {
+        pinned[0]: np.full(1300, 0.1, dtype=np.float32),
+        pinned[1]: np.full(450, 0.2, dtype=np.float32),
+    }
+    monkeypatch.setattr(originals, "decode", lambda _, line: samples[line])
+    result = originals.build(cid, index, texts, tmp_path)
+    assert [entry["line"] for entry in result["lines"]] == pinned
+    assert result["seconds"] == 17.9  # Pinned lines bypass the duration and calmness filters.
+    del index[pinned[0]]
+    with pytest.raises(ValueError, match=f"{cid}: missing speech line {pinned[0]}"):
+        originals.build(cid, index, texts, tmp_path)
+    index[pinned[0]] = (None, pinned[0])
+
+    def corrupt(_, line):
+        raise ValueError("invalid WAV")
+
+    monkeypatch.setattr(originals, "decode", corrupt)
+    with pytest.raises(ValueError, match=f"{cid}: cannot decode .*: invalid WAV"):
+        originals.build(cid, index, texts, tmp_path)
+
+
+def test_heuristic_duration_ties_are_broken_by_line_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(originals, "CHARACTERS", {"TEST": ("Test", ["TEST"], [])})
+    monkeypatch.setattr(originals, "ORIGINAL_LINES", {})
+    monkeypatch.setattr(originals, "RATE", 100)
+    names = [f"DIA_TEST_{letter}_14_00" for letter in "ABCDEFG"]
+    monkeypatch.setattr(originals, "decode", lambda *_: np.full(450, 0.1, dtype=np.float32))
+    texts = dict.fromkeys(names, "A calm sentence.")
+    first = originals.build("TEST", {line: (None, line) for line in names}, texts, tmp_path)
+    before = Path(first["file"]).read_bytes()
+    second = originals.build("TEST", {line: (None, line) for line in reversed(names)}, texts, tmp_path)
+    assert [entry["line"] for entry in first["lines"]] == names[:5]
+    assert first == second
+    assert Path(second["file"]).read_bytes() == before
