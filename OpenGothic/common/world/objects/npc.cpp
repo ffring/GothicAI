@@ -1773,7 +1773,8 @@ void Npc::syncMeleeShadowSwing() {
       magnet.direction = Vec3::normalize(direction);
     const float yaw = std::remainder(angleDir(direction.x,direction.z)-angle,360.f);
     // Fix the goal at the start of this swing. The active window is unchanged;
-    // assistance ends at the chosen preview contact, never at a new target pose.
+    // Planned assistance ends at the preview contact. Only protective backoff
+    // may continue afterwards, including when no preview contact was found.
     const auto started = std::chrono::steady_clock::now();
     Pose sampled = pose;
     auto reach = sampleMeleeReach(*currentTarget,sampled,*attack,yaw);
@@ -1947,27 +1948,32 @@ auto Npc::meleeStep(uint64_t dt) -> Vec3 {
     return {};
   auto& swing = *meleeShadow;
   auto& magnet = swing.magnet;
-  if(!magnet.eligible || magnet.contactStopped || magnet.durationMs<=0.f || dt==0)
+  if(!magnet.eligible || dt==0)
     return {};
   if(magnet.target==nullptr || owner.npcId(magnet.target)==uint32_t(-1) || magnet.target->isDown()) {
     magnet.forwardStopped = true;
     return {};
     }
-  // Integrate only the part of this movement interval before the frozen deadline.
-  const double deadline = double(swing.tick)+magnet.durationMs;
-  const double end = std::min(double(owner.tickCount()),deadline);
   const double begin = std::max(double(owner.tickCount())-double(dt),double(swing.tick));
-  const float milliseconds = float(end-begin);
+  const float milliseconds = float(double(owner.tickCount())-begin);
   if(milliseconds<=0.f)
     return {};
-  const float fraction = std::clamp(float(end-double(swing.tick))/magnet.durationMs,0.f,1.f);
-  const float yawLeft = magnet.yawRequested*fraction-magnet.yawApplied;
-  const float yawStep = std::clamp(yawLeft,-.18f*milliseconds,.18f*milliseconds);
-  setDirection(angle+yawStep);
-  magnet.yawApplied += yawStep;
-  magnet.peakYawDegS = std::max(magnet.peakYawDegS,std::abs(yawStep)*1000.f/float(dt));
-  const float left = magnet.requestedCm*fraction-magnet.offeredCm;
-  float distance = std::clamp(left,-.6f*milliseconds,.6f*milliseconds);
+  // Forward feed and turn keep their frozen deadline. Backoff alone can protect
+  // the rest of this swing from an approaching target or native attack root.
+  const double deadline = double(swing.tick)+magnet.durationMs;
+  const double end = std::min(double(owner.tickCount()),deadline);
+  const float plannedMs = !magnet.contactStopped && magnet.durationMs>0.f ? std::max(0.f,float(end-begin)) : 0.f;
+  float yawStep = 0, distance = 0;
+  if(plannedMs>0.f) {
+    const float fraction = std::clamp(float(end-double(swing.tick))/magnet.durationMs,0.f,1.f);
+    const float yawLeft = magnet.yawRequested*fraction-magnet.yawApplied;
+    yawStep = std::clamp(yawLeft,-.18f*plannedMs,.18f*plannedMs);
+    setDirection(angle+yawStep);
+    magnet.yawApplied += yawStep;
+    magnet.peakYawDegS = std::max(magnet.peakYawDegS,std::abs(yawStep)*1000.f/float(dt));
+    const float left = magnet.requestedCm*fraction-magnet.offeredCm;
+    distance = std::clamp(left,-.6f*plannedMs,.6f*plannedMs);
+    }
   const auto started = std::chrono::steady_clock::now();
   const auto posedAtRoot = [](const Npc& npc) {
     std::vector<HitZones::Posed> capsules;
@@ -2024,6 +2030,7 @@ auto Npc::meleeStep(uint64_t dt) -> Vec3 {
   if(TestBench::bodyTracing())
     TestBench::bodyEvent(*this,magnet.target,"melee_magnet_step",owner.tickCount(),
                         "\"swing\":"+std::to_string(swing.id)+",\"dt_ms\":"+std::to_string(dt)+
+                        ",\"planned_ms\":"+std::to_string(plannedMs)+",\"yaw_step_deg\":"+std::to_string(yawStep)+
                         ",\"gap_cm\":"+(std::isfinite(gap) ? std::to_string(gap) : "null")+
                         ",\"after_command_gap_cm\":"+(std::isfinite(after) ? std::to_string(after) : "null")+
                         ",\"planned_cm\":"+std::to_string(planned)+",\"offered_cm\":"+std::to_string(distance)+
@@ -2032,7 +2039,9 @@ auto Npc::meleeStep(uint64_t dt) -> Vec3 {
   owner.physic()->accountMeleeReachTime(std::chrono::duration<float,std::milli>(std::chrono::steady_clock::now()-started).count());
   magnet.offeredCm += distance;
   magnet.peakCmS = std::max(magnet.peakCmS,std::abs(distance)*1000.f/float(dt));
-  if(distance!=0.f || yawStep!=0.f)
+  // This timestamp retains the deadline of planned assistance; protective
+  // backoff has its own per-frame trace and may outlive that deadline.
+  if(plannedMs>0.f && (distance>0.f || (distance==planned && distance<0.f) || yawStep!=0.f))
     magnet.lastFeedMs = end;
   return magnet.direction*distance;
   }
