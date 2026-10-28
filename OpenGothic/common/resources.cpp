@@ -393,9 +393,13 @@ std::unique_ptr<VideoData::Reader> Resources::loadVideo(std::string_view name) {
     if(found!=inst->videoBase->files.end()) path=found->second;
     }
   if(path.empty()) {
-    const char* reason=ready ? "missing from video base" : "video base is still preparing";
-    Log::i("video skipped: \"",name,"\": ",reason);
     if(std::filesystem::path(key).extension().empty()) key+=".BIK";
+    // Requested by GOTHIC.DAT, with no source in the supported installation.
+    static constexpr std::string_view absentFromInstallation[]={"ADDON_TITLE.BIK"};
+    const bool absent=std::find(std::begin(absentFromInstallation),std::end(absentFromInstallation),key)!=std::end(absentFromInstallation);
+    const char* reason=absent ? "absent from installation" :
+                       ready ? "missing from video base" : "video base is still preparing";
+    Log::i("video skipped: \"",name,"\": ",reason);
     if(inst->census) inst->census->missing(key,reason);
     return {};
     }
