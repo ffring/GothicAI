@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .chronicle import Chronicle, Fact
+from .feat_art import Artist, Picture
 from .game import GameError, GameLink
 from .journal import Journal
 from .llm import LLMBackend, LLMError, Message, Tool, ToolCall
@@ -313,12 +314,16 @@ class Feats:
     def __init__(
         self, link: GameLink, chronicle: Chronicle, llm: LLMBackend, *,
         journal: Journal | None = None, gather_s: float = 20,
+        artist: Artist | None = None, image_wait_s: float = 150,
     ) -> None:
         self.link, self.chronicle = link, chronicle
         self.model = ChroniclerModel(llm)
         self.journal = journal or Journal()
         self.gather_s = gather_s
+        self.artist, self.image_wait_s = artist, image_wait_s
         self._work: asyncio.Task[None] | None = None
+        self._drawings: set[asyncio.Task[Picture | None]] = set()
+        self._toasts: set[asyncio.Task[None]] = set()
         self._pending: _Occasion | None = None
         self._generation = 0
         self._loading = False
@@ -359,6 +364,40 @@ class Feats:
             self._work.cancel()
             await asyncio.gather(self._work, return_exceptions=True)
             self._work = None
+        tasks = [*self._toasts, *self._drawings]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _draw(self, feat: Fact, generation: int) -> Picture | None:
+        assert self.artist is not None
+        picture = await self.artist.draw(feat["id"], feat["emblem"])
+        if picture is not None and generation == self._generation:
+            self.chronicle.record({
+                "fact": "feat_image", "id": feat["id"], "hash": picture.hash, "style": picture.style,
+            })
+            self.journal.add("feat_image", id=feat["id"], dir=str(picture.dir))
+        return picture
+
+    async def _toast(
+        self, feat: Fact, generation: int, drawing: asyncio.Task[Picture | None] | None,
+    ) -> None:
+        picture = None
+        if drawing is not None:
+            try:
+                picture = await asyncio.wait_for(asyncio.shield(drawing), self.image_wait_s)
+            except TimeoutError:
+                pass
+        if generation != self._generation:
+            return
+        icon = picture.icon if picture is not None else CATEGORY_ICONS / feat["category"] / "icon.png"
+        try:
+            await self.link.send(FeatToastCmd(
+                feat=feat["id"], title=feat["title"], text=feat["text"],
+                icon=str(icon) if icon.is_file() else "",
+            ))
+        except GameError:
+            pass
 
     async def _run(self, occasion: _Occasion, generation: int) -> None:
         try:
@@ -437,14 +476,14 @@ class Feats:
                 **{key: state[key] for key in ("day", "hour", "minute")},
             }
             self.chronicle.record(feat)
-            icon = CATEGORY_ICONS / feat["category"] / "icon.png"
             self.journal.add("feat", **{key: feat[key] for key in ("id", "title", "text", "category")})
-            try:
-                await self.link.send(FeatToastCmd(
-                    feat=feat["id"], title=feat["title"], text=feat["text"],
-                    icon=str(icon) if icon.is_file() else "",
-                ))
-            except GameError:
-                pass
+            drawing = None
+            if self.artist is not None:
+                drawing = asyncio.create_task(self._draw(feat, generation))
+                self._drawings.add(drawing)
+                drawing.add_done_callback(self._drawings.discard)
+            toast = asyncio.create_task(self._toast(feat, generation, drawing))
+            self._toasts.add(toast)
+            toast.add_done_callback(self._toasts.discard)
             return
         log.warning("feats: rejected occasion #%s after 2 attempts: %s", occasion.seq, errors)

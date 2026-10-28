@@ -16,6 +16,7 @@ import tomllib
 from array import array
 from contextlib import nullcontext
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from . import (
@@ -59,6 +60,7 @@ from .dialogue import REACT_HINT, SVM_HINT, DialogueManager
 from .director import Director
 from .errands import Errands
 from .executor import Intent
+from .feat_art import Artist
 from .feats import Feats
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
@@ -126,6 +128,7 @@ from .scenarios.crime_director import crime_director as crime_director_scenario
 from .scenarios.crime_law import crime_law as crime_law_scenario
 from .scenarios.crime_talk import crime_talk as crime_talk_scenario
 from .scenarios.crimes import crimes as crimes_scenario
+from .scenarios.feats import ScenarioArtist
 from .showrunner import Showrunner
 from .sightings import Sightings
 from .social import Rumors
@@ -962,10 +965,20 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
-        state.feats = (
-            Feats(link, state.chronicle, llm, journal=journal, gather_s=1 if args.scenario == "feats" else 20)
-            if not args.no_feats and args.scenario in {None, "feats"} else None
-        )
+        feat_image_root = None
+        if not args.no_feats and args.scenario in {None, "feats"}:
+            artist = None
+            if not args.no_feat_images:
+                if args.scenario == "feats":
+                    feat_image_root = TemporaryDirectory(prefix="feat-images-")
+                    artist = ScenarioArtist(Path(feat_image_root.name), codex="scenario")
+                else:
+                    artist = Artist()
+            state.feats = Feats(
+                link, state.chronicle, llm, journal=journal,
+                gather_s=1 if args.scenario == "feats" else 20,
+                artist=artist, image_wait_s=30 if args.scenario == "feats" else 150,
+            )
         if not args.no_crimes:
             state.crimes = Crimes(
                 link,
@@ -1460,6 +1473,8 @@ async def serve(args: argparse.Namespace) -> int:
                 task.cancel()
             if state.feats is not None:
                 await state.feats.close()
+            if feat_image_root is not None:
+                feat_image_root.cleanup()
             if state.questlog is not None:
                 await state.questlog.close()
             if state.book is not None:
@@ -3247,6 +3262,11 @@ def main() -> None:
         "--no-feats",
         action="store_true",
         help="disable the chronicler's feats (enabled by default outside scenarios and in feats)",
+    )
+    p.add_argument(
+        "--no-feat-images",
+        action="store_true",
+        help="disable generated feat pictures; use category icons for toasts",
     )
     p.add_argument(
         "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"
