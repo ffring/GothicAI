@@ -1032,8 +1032,10 @@ bool matches(const fs::path& dir, const Identity& identity, bool payloadHashes, 
         require(entry["sha256"]==sourceSum.c_str(),"source manifest SHA-256 binding differs");
         }
       const auto file=dir/relative;
-      require(fs::is_regular_file(file),"missing base file: "+file.string());
-      require(fs::file_size(file)==entry["size"].GetUint64(),"base file size differs: "+file.string());
+      std::error_code error;
+      const auto size=fs::file_size(file,error);
+      require(!error,"missing or unreadable base file: "+file.string());
+      require(size==entry["size"].GetUint64(),"base file size differs: "+file.string());
       if(payloadHashes || relative.extension()==".json") {
         checkedFiles.push_back(file);
         expectedSums.emplace_back(entry["sha256"].GetString());

@@ -321,6 +321,13 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     return BaseImport::identify(gothic,mounted);
     };
   if(const auto* explicitBase=std::getenv("OPENGOTHIC_BASE"); explicitBase && *explicitBase) {
+    if(installed && reused) {
+      rapidjson::Document previous, selected;
+      previous.Parse(identity.json.c_str());
+      selected.Parse(BaseImport::readIdentity(explicitBase).json.c_str());
+      reused=!previous.HasParseError() && previous.IsObject() && previous.HasMember("format_sha256") &&
+             previous["format_sha256"]==selected["format_sha256"];
+      }
     if(!installed) identity=BaseImport::readIdentity(explicitBase);
     else if(!reused) identity=identify();
     std::string reason;

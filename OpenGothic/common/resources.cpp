@@ -300,6 +300,7 @@ void Resources::loadVdfs(const std::vector<std::u16string>& modvdfs, bool modFil
     auto validationArchives=mounted;
     BaseImport::Files identityLoose;
     if(!installationAvailable) {
+      validationArchives.clear();
       const auto identity=BaseImport::readIdentity(inst->automaticBase.path);
       rapidjson::Document metadata;
       metadata.Parse(identity.json.data(),identity.json.size());
