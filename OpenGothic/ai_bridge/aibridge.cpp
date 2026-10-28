@@ -41,6 +41,7 @@
 #include "world/worldsound.h"
 #include "npcchests.h"
 #include "gothic.h"
+#include "frameprofile.h"
 
 #include "beasts.h"
 #include "chatoverlay.h"
@@ -506,14 +507,17 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
   BodyController::pumpWatchdogs();
   finishBodyReset(Gothic::inst().world());
   std::vector<Inbound> queue;
+  World* world = nullptr;
   {
-    std::lock_guard<std::mutex> guard(sync);
-    queue.swap(inbound);
-  }
-
-  World* world = Gothic::inst().world();
-  for(auto& in:queue)
-    processInbound(world,in);
+    FrameProfile::Scope timing(FrameProfile::Zone::AiBridge);
+    {
+      std::lock_guard<std::mutex> guard(sync);
+      queue.swap(inbound);
+      }
+    world = Gothic::inst().world();
+    for(auto& in:queue)
+      processInbound(world,in);
+    }
 
   if(world!=nullptr) {
     ctrl.tick(*world);

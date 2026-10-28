@@ -8,6 +8,7 @@
 #include "worldwind.h"
 #include "gothic.h"
 #include "arrowtrace.h"
+#include "frameprofile.h"
 #include <Tempest/Log>
 #include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/protomesh.h"
@@ -2273,13 +2274,16 @@ void DynamicWorld::tick(uint64_t dt) {
   npcList   ->tickAabbs();
   bulletList->tick(dt);
   world     ->tick(dt);
-  for(auto* obj:movableVobs->bodies)
-    if(movableVobs->enabled || obj->className=="fence" || obj->pose->broken) {
-      if(obj->pendingBreak) breakMovableVob(*obj);
-      syncMovableVob(*obj);
-      cleanupFragments(*obj);
-      syncFragments(*obj);
-      }
+  {
+    FrameProfile::Scope timing(FrameProfile::Zone::Destruction);
+    for(auto* obj:movableVobs->bodies)
+      if(movableVobs->enabled || obj->className=="fence" || obj->pose->broken) {
+        if(obj->pendingBreak) breakMovableVob(*obj);
+        syncMovableVob(*obj);
+        cleanupFragments(*obj);
+        syncFragments(*obj);
+        }
+    }
   // NPC walking runs before native body integration. Finish only the motion
   // of an already accepted moving support against the integrated world.
   // onMove may thaw a frozen entry, so collect pointers before updating them.

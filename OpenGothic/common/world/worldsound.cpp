@@ -15,6 +15,7 @@
 #include "gamemusic.h"
 #include "resources.h"
 #include "testbench.h"
+#include "frameprofile.h"
 
 namespace {
 bool usesSimulationAudioClock() {
@@ -222,6 +223,7 @@ Sound WorldSound::implAddSimulationSound(const Tempest::Sound& snd, float volume
   }
 
 void WorldSound::tick(Npc& player) {
+  FrameProfile::Scope timing(FrameProfile::Zone::Sound);
   std::lock_guard<std::mutex> guard(sync);
 
   auto cx = game.camera().listenerPosition();

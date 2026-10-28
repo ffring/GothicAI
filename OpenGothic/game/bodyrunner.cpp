@@ -9,6 +9,7 @@
 #include "gothic.h"
 #include "gamemusic.h"
 #include "resources.h"
+#include "basestore.h"
 #include "game/playercontrol.h"
 #include "game/serialize.h"
 #include "game/simulationstep.h"
@@ -1413,6 +1414,9 @@ int main(int argc, const char** argv) {
     // Jolt steps on this thread unless asked otherwise: one schedule for lockstep and realtime runs,
     // and a single-threaded template for --fork-reset.
     setenv("OPENGOTHIC_PHYSICS_THREADS","0",0);
+    // No background copy of the base to the store: --fork-reset needs a single thread, and the
+    // copy would serialize every parallel runner on the store's lock.
+    BaseStore::setPublication(false);
     std::filesystem::create_directories(opts.output);
     CommandLine commandLine(argc,argv);
     zenkit::Logger::set(zenkit::LogLevel::WARNING,Resources::zenkitLog);

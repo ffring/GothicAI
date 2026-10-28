@@ -1270,6 +1270,10 @@ bool Npc::recoverRagdoll(bool force) {
   }
 
 void Npc::updateRagdollQuestAnchor() {
+  // Training (OPENGOTHIC_FREEZE_WORLD): NPCs outside the arena stand still, so their anchors
+  // keep the value sampled before the arena; resampling all of them costs two rays each.
+  if(BodyArena::frozenWorld() && !BodyArena::isActor(*this))
+    return;
   if(isPlayer() || !isHuman() || isDown() || ragdoll || interactive()!=nullptr ||
      ragdollQuestReturn.armed ||
      !Gothic::physicsFlags().questGuard ||

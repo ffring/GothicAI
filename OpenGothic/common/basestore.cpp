@@ -66,6 +66,8 @@ class BaseStore::Lock {
 namespace {
 using BaseStore::Lock;
 
+std::atomic_bool publicationEnabled{true};
+
 bool fingerprintName(std::string_view name) {
   return name.size()==64 && name.find_first_not_of("0123456789abcdef")==std::string_view::npos;
   }
@@ -335,6 +337,8 @@ void prune(const fs::path& cache, const fs::path& current, const std::atomic_boo
   }
 }
 
+void BaseStore::setPublication(bool enabled) { publicationEnabled=enabled; }
+
 BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mounted, const BaseImport::Progress& log) {
   const auto start=std::chrono::steady_clock::now();
   const auto cache=cacheRoot();
@@ -423,7 +427,7 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     else upload=false;
     const auto ms=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
     log(std::string("base: ")+source+" "+destination.string()+" ("+std::to_string(ms)+" ms)");
-    if(upload && !store.empty()) {
+    if(upload && publicationEnabled && !store.empty()) {
       // The worker owns a lease too: pruning cannot remove its source while copying.
       std::packaged_task<void()> publication([store,destination,identity,lease=selected.lease] {
         const auto started=std::chrono::steady_clock::now();

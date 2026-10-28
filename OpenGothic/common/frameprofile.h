@@ -16,7 +16,12 @@ enum class Zone : size_t {
   Encode, Submit, Present, Limiter, WorldLogic, Prepare, Physics, Sync, WorldMisc,
   ParallelAnimation, NativeExport, ForcedSyncAnimation, ActorAnimationCpu,
   PoseCpu, PaletteCpu, StorageJoin, StorageCommit, StoragePack, StorageDispatch,
-  StorageGrow, StorageUploadWorker, Count
+  StorageGrow, StorageUploadWorker,
+  BodyNet, Cloth,
+  // Main-thread buoyancy preparation/finish plus the synchronous Jolt step
+  // listener (possibly a worker): elapsed sum, overlapping Physics wall time.
+  Water, Destruction, AiBridge, Sound,
+  EncodeShadows, EncodeMain, EncodeWater, EncodePost, EncodeUi, Count
   };
 enum class Amount : size_t { PaletteCalls, PaletteBytes, IdenticalCalls, IdenticalBytes,
   PatchCalls, PatchBytes, PatchBlocks, GrowBytes, UploadBytes, Count };
@@ -32,6 +37,9 @@ void observer(uint64_t dt, std::chrono::steady_clock::time_point now);
 void sample(std::string_view segment, uint64_t frame);
 void add(Amount amount, uint64_t value);
 void flush();
+// Capture the attempt at submission, never look up a reused cmdId on completion.
+void* gpuSubmitted();
+void gpuCompleted(void* record, double startSeconds, double endSeconds);
 
 class Scope final {
   public:
@@ -67,6 +75,8 @@ constexpr void observer(uint64_t, std::chrono::steady_clock::time_point) noexcep
 constexpr void sample(std::string_view, uint64_t) noexcept {}
 constexpr void add(Amount, uint64_t) noexcept {}
 constexpr void flush() noexcept {}
+constexpr void* gpuSubmitted() noexcept { return nullptr; }
+constexpr void gpuCompleted(void*, double, double) noexcept {}
 
 class Scope final {
   public:
