@@ -333,9 +333,23 @@ PY
     assert {path.name for path in (task / "runs/fixture").iterdir()} == set(variants)
 
 
-def test_census_rejects_compiled_original_alias_even_with_replacement(tmp_path):
+def test_census_accepts_prepared_base_originals(tmp_path):
+    directory, scenario, index, census, original = fixture_capture(tmp_path, "before")
+    census["files"] = []
+    census["replacements"] = [dict(original, kind="basetexture", replacement="/base/textures/wall.dds")]
+    (directory / "census.json").write_text(json.dumps(census))
+    result = run_check(directory, scenario, index, "before")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "replaced=0 originals_opened=1" in result.stdout
+
+
+@pytest.mark.parametrize("source", ("archive", "base"))
+def test_census_rejects_compiled_original_alias_even_with_replacement(tmp_path, source):
     directory, scenario, index, census, original = fixture_capture(tmp_path)
-    census["files"].append(original)
+    if source == "archive":
+        census["files"].append(original)
+    else:
+        census["replacements"].append(dict(original, kind="basetexture", replacement="/base/textures/wall.dds"))
     (directory / "census.json").write_text(json.dumps(census))
     result = run_check(directory, scenario, index)
     assert result.returncode != 0

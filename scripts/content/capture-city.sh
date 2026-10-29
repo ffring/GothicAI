@@ -129,6 +129,7 @@ targets = {texture_key(name) for name in expected}
 albedos = {texture_key(name): 'materials/' + entry['albedo'].replace('\\', '/').casefold()
            for name, entry in expected.items()}
 opened = {texture_key(row['name']) for row in census['files'] if row['kind'] == 'texture'}
+opened.update(texture_key(row['name']) for row in census['replacements'] if row['kind'] == 'basetexture')
 replaced = {texture_key(row['name']) for row in census['replacements'] if row['kind'] == 'texture'}
 if variant != 'before':
     require(not (targets & opened), 'original target textures opened: ' + ', '.join(sorted(targets & opened)))
