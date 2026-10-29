@@ -20,6 +20,7 @@
 #      SOUND, MUSIC  volumes 0..1 (default 0); with TEMPEST_AUDIO_LOOPBACK=48000 the sound of a segment
 #                    goes into <segment>.wav instead of the speakers
 #      MOVABLE_VOBS  optional initial GAME movable_vobs setting (0 or 1), before world loading
+#      ITEM_HULLS    optional initial GAME item_hulls setting (0 or 1), for new item bodies
 #      ARROW_STICKING optional initial GAME arrow_sticking setting (0 or 1), before world loading
 #      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
 #      DESTRUCTION optional initial GAME destruction setting (0 or 1), before world loading
@@ -189,11 +190,15 @@ musicVolume=${MUSIC:-0}
 musicEnabled=$([[ "${MUSIC:-0}" == 0 || "${MUSIC:-0}" == 0.0 ]] && echo 0 || echo 1)
 worldSounds=${WORLD_SOUNDS:-1}
 EOF
-if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CLOTH:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}${MONSTER_CHARACTER_VIRTUAL:-}${MELEE_BLADE_SHADOW:-}${MELEE_PHYSICS_HITS:-}${MELEE_POSTURE:-}${MELEE_REACTIONS:-}${MELEE_DOWN_TACTICS:-}" ]]; then
+if [[ -n "${MOVABLE_VOBS:-}${ITEM_HULLS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CLOTH:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}${MONSTER_CHARACTER_VIRTUAL:-}${MELEE_BLADE_SHADOW:-}${MELEE_PHYSICS_HITS:-}${MELEE_POSTURE:-}${MELEE_REACTIONS:-}${MELEE_DOWN_TACTICS:-}" ]]; then
   printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
   if [[ -n "${MOVABLE_VOBS:-}" ]]; then
     [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
     printf 'movable_vobs=%s\n' "$MOVABLE_VOBS" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${ITEM_HULLS:-}" ]]; then
+    [[ "$ITEM_HULLS" == 0 || "$ITEM_HULLS" == 1 ]] || { echo "ITEM_HULLS must be 0 or 1" >&2; exit 2; }
+    printf 'item_hulls=%s\n' "$ITEM_HULLS" >>"$RUN/Gothic.ini"
   fi
   if [[ -n "${ARROW_STICKING:-}" ]]; then
     [[ "$ARROW_STICKING" == 0 || "$ARROW_STICKING" == 1 ]] || { echo "ARROW_STICKING must be 0 or 1" >&2; exit 2; }

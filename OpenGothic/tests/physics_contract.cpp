@@ -332,11 +332,16 @@ namespace {
     cube.assign(std::pair(Tempest::Vec3(-20,-20,-20),Tempest::Vec3(20,20,20)));
     Bounds arrow;
     arrow.assign(std::pair(Tempest::Vec3(-1,-1,-30),Tempest::Vec3(1,1,30)));
-    auto wood=world.addDynamicObj(at(100,110,0),cube,asset::MaterialGroup::WOOD);
-    auto metal=world.addDynamicObj(at(300,110,0),cube,asset::MaterialGroup::METAL);
-    auto stone=world.addDynamicObj(at(500,110,0),cube,asset::MaterialGroup::STONE);
-    auto woodenArrow=world.addDynamicObj(at(700,110,0),arrow,asset::MaterialGroup::WOOD);
-    auto metalBlade=world.addDynamicObj(at(900,110,0),arrow,asset::MaterialGroup::METAL);
+    ProtoMesh itemCube(PackedMesh(movableBox({40,40,40}),PackedMesh::PK_Visual),"CONTRACT_WATER_ITEM.MRM");
+    ProtoMesh itemArrow(PackedMesh(movableBox({2,2,60}),PackedMesh::PK_Visual),"CONTRACT_WATER_ARROW.MRM");
+    auto wood=world.addDynamicObj(at(100,110,0),cube,asset::MaterialGroup::WOOD,&itemCube,"CONTRACT_WATER_ITEM.MRM");
+    auto metal=world.addDynamicObj(at(300,110,0),cube,asset::MaterialGroup::METAL,&itemCube,"CONTRACT_WATER_ITEM.MRM");
+    auto stone=world.addDynamicObj(at(500,110,0),cube,asset::MaterialGroup::STONE,&itemCube,"CONTRACT_WATER_ITEM.MRM");
+    auto woodenArrow=world.addDynamicObj(at(700,110,0),arrow,asset::MaterialGroup::WOOD,&itemArrow,"CONTRACT_WATER_ARROW.MRM");
+    auto metalBlade=world.addDynamicObj(at(900,110,0),arrow,asset::MaterialGroup::METAL,&itemArrow,"CONTRACT_WATER_ARROW.MRM");
+    requireNear(wood.mass(),.4f*.4f*.4f*700.f,.001f,"a wood hull must retain its density-derived physical mass in water");
+    requireNear(woodenArrow.mass(),.02f*.02f*.6f*700.f,.000001f,
+                "a thin wood hull must displace its real hull volume without the legacy thirty-centimetre box");
     const std::array<DynamicWorld::Item*,11> objects={&barrel,&heavyBarrel,&table,&crate,&cupboard,&otherWood,
                                                     &wood,&metal,&stone,&woodenArrow,&metalBlade};
     const std::array<const char*,11> names={"barrel","heavier barrel","wooden table","wooden crate","wooden cupboard",
@@ -384,7 +389,7 @@ namespace {
     requireNear(wood.position().y,20.f-40.f*.7f,2.5f,"solid wood items must float with seventy percent of their volume submerged");
     requireNear(woodenArrow.position().y,1.f-2.f*.7f,1.f,"a thin wooden item must use its actual shell for water draft");
     require(metal.position().y<-350.f && stone.position().y<-350.f && metalBlade.position().y<-350.f,
-            "metal, stone and a padded thin metal item must sink to the bottom instead of floating");
+            "metal, stone and a thin metal hull must sink to the bottom instead of floating");
     require(!splashes.empty(),"entering water must emit a water noise through the existing NPC noise callback");
     require(std::all_of(splashes.begin(),splashes.end(),[](const auto& splash) {
       return splash.volume>0.f && splash.volume<=1.f && splash.radius>0.f;

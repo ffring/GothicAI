@@ -157,6 +157,10 @@ struct DynamicWorld::MovableVobs {
   bool destructionEnabled = true;
   };
 
+struct DynamicWorld::ItemHulls {
+  std::unordered_map<std::string,ItemHull> shapes;
+  };
+
 struct DynamicWorld::BodyData {
   ~BodyData() {
     if(movableOwner!=nullptr) {
@@ -724,6 +728,7 @@ DynamicWorld::DynamicWorld(World* owner, const asset::WorldMesh& worldMesh, cons
   clothWorld=std::make_unique<Cloth>(*world);
   bodies.reset(new WorldBodies());
   movableVobs.reset(new MovableVobs());
+  itemHulls=std::make_unique<ItemHulls>();
   world->setWaterSurfaceCallback([this](const Tempest::Vec3& center,float bottom,float& surface) {
     // Start below the entire envelope: the centre of a floating barrel is
     // usually above water. Only solids can separate an underwater body from
@@ -1021,6 +1026,112 @@ DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, co
   // box shares that centre while the body's transform keeps the visual pivot.
   const auto waterHalfExtent=JPH::Vec3::sMax(extent*.5f,JPH::Vec3::sReplicate(.0005f));
   obj->body->setBuoyancyShape(new JPH::BoxShape(waterHalfExtent,0.f));
+  obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");
+  return Item(this,obj.release());
+  }
+
+const DynamicWorld::ItemHull& DynamicWorld::itemHullShape(const ProtoMesh& proto, std::string_view visual) {
+  std::string key(visual);
+  std::transform(key.begin(),key.end(),key.begin(),[](unsigned char c) { return char(std::toupper(c)); });
+  auto [cached,inserted]=itemHulls->shapes.try_emplace(key);
+  auto& hull=cached->second;
+  if(!inserted)
+    return hull;
+  const auto extent=CollisionWorld::toMeters(proto.bbox()[1]-proto.bbox()[0]);
+  hull.boundsVolume=extent.GetX()*extent.GetY()*extent.GetZ();
+  proto.appendItemVertices(hull.vertices);
+  std::vector<JPH::Vec3> points;
+  points.reserve(hull.vertices.size());
+  for(const auto& point:hull.vertices) {
+    if(!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+      hull.fallbackReason="nonfinite mesh vertex";
+      return hull;
+      }
+    points.push_back(CollisionWorld::toMeters(point));
+    }
+  std::sort(points.begin(),points.end(),[](const auto& a,const auto& b) {
+    if(a.GetX()!=b.GetX()) return a.GetX()<b.GetX();
+    if(a.GetY()!=b.GetY()) return a.GetY()<b.GetY();
+    return a.GetZ()<b.GetZ();
+    });
+  points.erase(std::unique(points.begin(),points.end()),points.end());
+  if(points.size()<4) {
+    hull.fallbackReason="fewer than four mesh vertices";
+    return hull;
+    }
+  // Find the mesh's broad plane, including tilted leaves and scrolls. A flat
+  // surface gets 4 mm of symmetric thickness, while a line stays a fallback.
+  const auto origin=points.front();
+  auto longest=JPH::Vec3::sZero();
+  for(const auto& point:points)
+    if((point-origin).LengthSq()>longest.LengthSq())
+      longest=point-origin;
+  auto normal=JPH::Vec3::sZero();
+  for(const auto& point:points) {
+    const auto candidate=longest.Cross(point-origin);
+    if(candidate.LengthSq()>normal.LengthSq())
+      normal=candidate;
+    }
+  if(longest.LengthSq()<=1.e-12f || normal.LengthSq()<=1.e-12f*longest.LengthSq()) {
+    hull.fallbackReason="collinear mesh vertices";
+    return hull;
+    }
+  normal=normal.Normalized();
+  float low=std::numeric_limits<float>::infinity(),high=-low;
+  for(const auto& point:points) {
+    const float projection=normal.Dot(point-origin);
+    low=std::min(low,projection);
+    high=std::max(high,projection);
+    }
+  constexpr float minimumThickness=.004f;
+  if(high-low<minimumThickness) {
+    const auto padding=normal*((minimumThickness-(high-low))*.5f);
+    const auto size=points.size();
+    points.reserve(2*size);
+    for(size_t i=0;i<size;++i) {
+      points.push_back(points[i]+padding);
+      points[i]-=padding;
+      }
+    }
+  Physics::initialize();
+  // Jolt subtracts this radius internally; it does not inflate the envelope.
+  // A small hull tolerance preserves millimetre-scale detail on coins/leaves.
+  JPH::ConvexHullShapeSettings settings(points.data(),int(points.size()),.00025f);
+  settings.mHullTolerance=.0001f;
+  settings.mMaxErrorConvexRadius=.0001f;
+  const auto result=settings.Create();
+  if(result.HasError()) {
+    hull.fallbackReason="Jolt: "+std::string(result.GetError().c_str());
+    return hull;
+    }
+  const float volume=result.Get()->GetVolume();
+  if(!std::isfinite(volume) || volume<=0.f) {
+    hull.fallbackReason="zero or nonfinite hull volume";
+    return hull;
+    }
+  hull.shape=result.Get();
+  hull.volume=volume;
+  hull.vertices.clear();
+  const auto& shape=static_cast<const JPH::ConvexHullShape&>(*hull.shape);
+  hull.vertices.reserve(shape.GetNumPoints());
+  for(JPH::uint i=0;i<shape.GetNumPoints();++i)
+    hull.vertices.push_back(CollisionWorld::toCentimeters(shape.GetPoint(i)+shape.GetCenterOfMass()));
+  return hull;
+  }
+
+DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bounds,
+                                               asset::MaterialGroup mat, const ProtoMesh* proto,
+                                               std::string_view visual, bool hulls) {
+  if(!hulls || proto==nullptr)
+    return addDynamicObj(pos,bounds,mat);
+  const auto& hull=itemHullShape(*proto,visual);
+  if(hull.shape==nullptr)
+    return addDynamicObj(pos,bounds,mat);
+  const float mass=std::max(.05f,float(materialDensity(mat)*hull.volume*volumeScale(pos)));
+  auto obj=std::make_unique<BodyData>();
+  obj->body=world->addDynamicBody(hull.shape,pos,materialFriction(mat),mass);
+  // The native hull also supplies submerged volume and water resistance.
+  // Dynamic bodies already use LinearCast, including the smallest items.
   obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");
   return Item(this,obj.release());
   }

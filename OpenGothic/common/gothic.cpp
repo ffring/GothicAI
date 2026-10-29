@@ -115,6 +115,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "arrow_sticking",      1);
   defaults->set("GAME", "spell_physics",       1);
   defaults->set("GAME", "movable_vobs",        1);
+  defaults->set("GAME", "item_hulls",          1);
   defaults->set("GAME", "physics_noise",       1);
   defaults->set("GAME", "destruction",         1);
   defaults->set("GAME", "buoyancy",            1);
@@ -894,7 +895,8 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","melee_physics_hits")!=0,
     settingsGetI("GAME","melee_reactions")!=0,
     settingsGetI("GAME","melee_posture")!=0,
-    settingsGetI("GAME","melee_down_tactics")!=0
+    settingsGetI("GAME","melee_down_tactics")!=0,
+    settingsGetI("GAME","item_hulls")!=0
     };
   }
 

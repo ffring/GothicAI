@@ -7,6 +7,7 @@
 #include "physics/physicmeshshape.h"
 #include "graphics/bounds.h"
 #include "graphics/mesh/hitzones.h"
+#include "graphics/mesh/protomesh.h"
 #include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/pose.h"
 #include "graphics/mesh/animmath.h"
@@ -536,6 +537,21 @@ void testScaledMassAndInertia() {
   }
 
 void testItemMassImpulseAndWake() {
+  Resources resources;
+  const auto tetrahedron=[](float scale) {
+    asset::StaticMesh mesh;
+    mesh.positions={{-10*scale,-20*scale,-30*scale},{10*scale,-20*scale,-30*scale},
+                    {-10*scale,20*scale,-30*scale},{-10*scale,-20*scale,30*scale}};
+    mesh.bbox={{-10*scale,-20*scale,-30*scale},{10*scale,20*scale,30*scale}};
+    mesh.sub_meshes.resize(1);
+    auto& part=mesh.sub_meshes[0];
+    part.mat.group=asset::MaterialGroup::WOOD;
+    for(size_t i=0;i<mesh.positions.size();++i)
+      part.wedges.push_back({{0,1,0},{0,0},uint16_t(i)});
+    part.triangles={{{0,2,1}},{{0,1,3}},{{0,3,2}},{{1,2,3}}};
+    return mesh;
+    };
+  ProtoMesh proto(PackedMesh(tetrahedron(1),PackedMesh::PK_Visual),"CONTRACT_ITEM.MRM");
   DynamicWorld::Item empty;
   require(empty.mass()==0 && empty.isSleeping() && empty.velocity().quadLength()==0 && !empty.addImpulse({1,0,0}),
           "an empty item handle must safely reject impulse and report no dynamic state");
@@ -553,9 +569,17 @@ void testItemMassImpulseAndWake() {
             "static and animation-driven handles must never accept dynamic impulses");
   Bounds bounds; bounds.bbox[0]={-10,-20,-30}; bounds.bbox[1]={10,20,30};
   auto matrix=at(0,300,0); matrix.rotateOY(31); matrix.scale(.5f,2.f,3.f);
-  auto body=world.addDynamicObj(matrix,bounds,asset::MaterialGroup::WOOD);
-  const float expected=.2f*.4f*.6f*700.f*3.f;
-  near(body.mass(),expected,.001f,"native item mass must include material density, source volume and nonuniform object scale");
+  auto body=world.addDynamicObj(matrix,bounds,asset::MaterialGroup::WOOD,&proto,"contract_item.mrm");
+  // This tetrahedron occupies exactly one sixth of its bounds. Keep the old
+  // tolerance while replacing the bounds-volume oracle with the actual hull.
+  const float expected=.2f*.4f*.6f/6.f*700.f*3.f;
+  near(body.mass(),expected,.001f,"native item mass must use hull volume, material density and the nonuniform scale determinant");
+  const auto& hull=world.itemHullShape(proto,"CONTRACT_ITEM.MRM");
+  require(hull.shape!=nullptr && hull.fallbackReason.empty(),"four noncoplanar mesh points must build an item hull");
+  near(hull.volume,.2f*.4f*.6f/6.f,.000001f,"item hull volume must be the tetrahedron volume rather than its bounds");
+  require(&hull==&world.itemHullShape(proto,"CoNtRaCt_ItEm.MrM"),"item hull cache keys must be case insensitive");
+  auto legacy=world.addDynamicObj(at(700,300,0),bounds,asset::MaterialGroup::WOOD,&proto,"CONTRACT_ITEM.MRM",false);
+  near(legacy.mass(),.2f*.4f*.6f*700.f,.001f,"item_hulls=0 must preserve the previous bounds-volume material mass");
   require(!body.addImpulse({std::numeric_limits<float>::quiet_NaN(),0,0}) &&
           !body.addImpulse({0,std::numeric_limits<float>::infinity(),0}) && !body.addImpulse({0,0,0}),
           "nonfinite or zero item impulses must be harmless no-ops");
@@ -566,9 +590,39 @@ void testItemMassImpulseAndWake() {
   require(body.isSleeping(),"a dropped item must settle and retain a queryable sleeping native body");
   require(body.addImpulse({expected,0,0}) && !body.isSleeping(),"a spell-sized impulse must awaken the sleeping native item immediately");
   near(body.velocity().x,100,.001f,"the woken item's mass must still govern its actual native velocity");
-  Bounds tiny; tiny.bbox[0]={-1,-1,-1}; tiny.bbox[1]={1,1,1};
-  auto small=world.addDynamicObj(at(500,300,0),tiny,asset::MaterialGroup::WOOD);
-  near(small.mass(),.02f*.02f*.02f*700.f,.000001f,"minimum collision padding must not inflate a small item's material mass");
+  Bounds tiny; tiny.bbox[0]={-1,-2,-3}; tiny.bbox[1]={1,2,3};
+  ProtoMesh tinyProto(PackedMesh(tetrahedron(.1f),PackedMesh::PK_Visual),"CONTRACT_TINY_ITEM.MRM");
+  auto small=world.addDynamicObj(at(500,102,0),tiny,asset::MaterialGroup::WOOD,&tinyProto,"CONTRACT_TINY_ITEM.MRM");
+  near(small.mass(),.05f,.000001f,"small hull items must keep the fifty gram minimum mass");
+  int sleepFrames=0;
+  for(;sleepFrames<180 && !small.isSleeping();++sleepFrames) world.tick(sleepFrames%3==2 ? 16 : 17);
+  std::printf("Small item hull: mass %.9g kg, sleep %.3f s, sleeping %d\n",
+              double(small.mass()),double(sleepFrames)/60.,int(small.isSleeping()));
+  require(small.isSleeping(),"a small mesh hull must sleep within three seconds after a one metre drop");
+  auto lowest=std::numeric_limits<float>::max();
+  const auto settled=small.matrix();
+  for(auto point:world.itemHullShape(tinyProto,"CONTRACT_TINY_ITEM.MRM").vertices) {
+    settled.project(point);
+    lowest=std::min(lowest,point.y);
+    }
+  std::printf("Small item hull: support gap %.9g cm\n",double(lowest));
+  near(lowest,0.f,1.f,"a small hull's lower support point must remain within one centimetre of the floor");
+  for(int frame=0;frame<60;++frame) world.tick(frame%3==2 ? 16 : 17);
+  require(small.isSleeping(),"a small sleeping hull must not wake or jitter on level ground");
+  for(int c=0;c<4;++c)
+    for(int r=0;r<4;++r)
+      exact(small.matrix().at(c,r),settled.at(c,r),"a sleeping item hull must retain its exact transform");
+  auto oldSmall=world.addDynamicObj(at(-500,300,0),tiny,asset::MaterialGroup::WOOD,&tinyProto,"CONTRACT_TINY_ITEM.MRM",false);
+  near(oldSmall.mass(),.02f*.04f*.06f*700.f,.000001f,"item_hulls=0 must retain even a sub-fifty-gram legacy mass");
+  auto triangle=tetrahedron(1);
+  triangle.positions.resize(3);
+  triangle.sub_meshes[0].wedges.resize(3);
+  triangle.sub_meshes[0].triangles={{{0,2,1}}};
+  ProtoMesh incomplete(PackedMesh(triangle,PackedMesh::PK_Visual),"CONTRACT_TRIANGLE.MRM");
+  const auto& fallback=world.itemHullShape(incomplete,"CONTRACT_TRIANGLE.MRM");
+  require(fallback.shape==nullptr && !fallback.fallbackReason.empty(),"fewer than four referenced mesh vertices must report a box fallback");
+  auto boxed=world.addDynamicObj(at(-700,300,0),bounds,asset::MaterialGroup::WOOD,&incomplete,"CONTRACT_TRIANGLE.MRM");
+  near(boxed.mass(),.2f*.4f*.6f*700.f,.001f,"a failed hull must preserve the legacy box and its material mass");
   }
 
 void testCorpseRayMetadata() {
