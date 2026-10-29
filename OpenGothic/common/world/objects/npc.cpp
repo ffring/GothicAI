@@ -1556,6 +1556,10 @@ void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, 
   sampleSpeeds(right,rightSpeed,rightReach);
   if(mode==WeaponState::Fist && left<pose.boneCount())
     sampleSpeeds(left,leftSpeed,leftReach);
+  // The original's finishing move (T_1HSFINISH, T_2HSFINISH) has no optimal frame: it kills by
+  // script. As a chop at one lying, its blow is where the blade is fastest.
+  if(optimal.empty())
+    optimal.push_back(uint32_t(std::max_element(rightSpeed.begin(),rightSpeed.end())-rightSpeed.begin()));
   for(uint32_t index=0;index<optimal.size();++index) {
     const auto opt = optimal[index];
     const uint32_t lo = index==0 ? 0 : (optimal[index-1]+opt)/2+1;
@@ -1764,11 +1768,25 @@ void Npc::syncMeleeShadowSwing() {
   const auto& pose = visual.pose();
   std::optional<Pose::CombatLayer> attack;
   for(const auto& layer:pose.combatLayers(owner.tickCount()))
-    if(layer.sequence->isAttackAnim())
+    if(layer.sequence->isAttackAnim() || (meleeDownStrike && isFinishSequence(*layer.sequence)))
       attack = layer;
   if(!attack) {
+    meleeDownStrike = false;
     finishMeleeShadowSwing();
     return;
+    }
+  if(meleeDownStrike && meleeShadow && meleeShadow->window && meleeShadow->window->sequence==attack->sequence &&
+     meleeShadow->start==attack->start) {
+    // The finishing move stands on over the body for seconds (a pull-out, a look); the chop
+    // ends a moment after its blow and blends back into the fight stance.
+    constexpr double holdMs = 250;
+    if(double(owner.tickCount())>=double(attack->start)+double(meleeShadow->window->endMs)/attack->speed+holdMs) {
+      meleeDownStrike = false;
+      finishMeleeShadowSwing();
+      visual.interrupt();
+      setAnim(Anim::Idle);
+      return;
+      }
     }
   const auto* skeleton = visual.visualSkeleton();
   if(skeleton==nullptr)
@@ -7101,8 +7119,10 @@ bool Npc::doAttack(Anim anim, BodyState bs) {
   // T_2HSFINISH): the swings at standing height pass over a body on the ground. The blade
   // decides the hit and the damage as for any blow; only the unconscious are finished off.
   if(isMeleeDownStrike(anim,weaponSt))
-    if(visual.continueCombo(*this,Anim::AttackFinish,bs,weaponSt,wlk)!=nullptr)
+    if(visual.continueCombo(*this,Anim::AttackFinish,bs,weaponSt,wlk)!=nullptr) {
+      meleeDownStrike = true;
       return result(true);
+      }
   if(auto sq = visual.continueCombo(*this,anim,bs,weaponSt,wlk)) {
     (void)sq;
     // implAniWait(uint64_t(sq->atkTotalTime(visual.comboLength())+1));
@@ -7123,6 +7143,10 @@ bool Npc::blockFist() {
     return false;
   visual.setAnimRotate(*this,0);
   return setAnim(Anim::AttackBlock);
+  }
+
+bool Npc::isFinishSequence(const Animation::Sequence& seq) {
+  return seq.name=="T_1HSFINISH" || seq.name=="T_2HSFINISH";
   }
 
 bool Npc::isMeleeDownStrike(Anim anim, WeaponState ws) const {
