@@ -11,9 +11,9 @@ import pytest
 from gothic_launcher import cli, commands
 from gothic_launcher import control as control_module
 from gothic_launcher import supervisor as sv
-from gothic_launcher.commands import Ports, Proc
+from gothic_launcher.commands import LaunchError, Ports, Proc
 from gothic_launcher.control import Control
-from gothic_launcher.state import SessionFile
+from gothic_launcher.state import AlreadyRunning, SessionFile
 from tests.test_supervisor import FAKE, gone
 
 NPC_LINE = {"kind": "npc", "npc": "NONE_100_XARDAS", "name": "Ксардас", "text": "Придержи язык."}
@@ -149,8 +149,25 @@ async def test_session_events_and_journal_reach_the_window(setup):
     assert state["session"]["services"]["server"]["state"] == "stopped"
 
 
-async def test_a_second_session_is_refused_while_one_runs(setup):
+async def test_a_second_session_is_refused_while_one_runs(setup, monkeypatch):
     c, window, tmp_path = setup
+    with monkeypatch.context() as broken:
+        def invalid_layout(_config):
+            raise LaunchError("invalid layout")
+
+        broken.setattr(control_module, "find_layout", invalid_layout)
+        held = SessionFile(c.state_file)
+        held.acquire()
+        try:
+            with pytest.raises(AlreadyRunning):
+                await c.session_start()
+        finally:
+            held.release()
+        with pytest.raises(LaunchError, match="invalid layout"):
+            await c.session_start()
+        released = SessionFile(c.state_file)
+        released.acquire()
+        released.release()
     await call(c, "session.start")
     with pytest.raises(RuntimeError, match="уже запущена"):
         await call(c, "session.start")

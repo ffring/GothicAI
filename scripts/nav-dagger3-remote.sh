@@ -6,6 +6,18 @@ stage="${1:-}"
 [[ $# == 1 ]] || { echo 'Usage: nav-dagger3-remote.sh prepare-detours|baseline-detours|train-hd|measure-hd' >&2; exit 2; }
 case "$stage" in prepare-detours|baseline-detours|train-hd|measure-hd) ;; *) echo "Unknown phase: $stage" >&2; exit 2 ;; esac
 export GQ_OWNER=nav-dagger3
+# Validate the shared settings before creating task directories or queue jobs.
+game_env=()
+for key in OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
+printf -v game_command '%q ' env ${game_env[@]+"${game_env[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")"
+game_settings="$(ssh -o ConnectTimeout=10 ryzen "$game_command")"
+eval "$game_settings"
+game_env=()
+for key in OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-dagger3" "$HOME"')"
 ssh ryzen 'df -h "$HOME"'
 if [[ "$stage" == measure-hd ]]; then
@@ -16,6 +28,8 @@ if [[ "$stage" == measure-hd ]]; then
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/source/scripts/ryzen_game.py")"
+eval "$game_settings"
 corpus="$HOME/gothic-ai/nav-demos-v4"
 bc3="$HOME/gothic-ai/nav-bc3"
 exec > >(tee -a "$task/logs/measure-hd.log") 2>&1
@@ -103,7 +117,7 @@ for policy in bc3 hd; do
   output="$task/hd-validation/$policy"
   "$python" -B -I scripts/nav_rl.py drive --manifest "$corpus/manifest.json" --lean \
     --runner "$task/build/opengothic/gothic-body-runner" \
-    --assets "$HOME/gothic-ai/game" --save "$corpus/input/save.sav" \
+    --assets "$GOTHIC_DIR" --save "$corpus/input/save.sav" \
     --cache "$task/hd-measure-cache" --links "$corpus/input/accepted-links.txt" \
     --jump-links "$corpus/input/jump-links.txt" --roads "$corpus/input/places.json" \
     --weights "$weights" --output "$output" --physics cv --parallel 18 \
@@ -116,7 +130,7 @@ done
 # The completed BC3 detour cohort is read, never re-executed.
 "$python" -B -I scripts/nav_rl.py drive --detour-scenarios "$task/detours/detour-val.jsonl" \
   --runner "$task/build/opengothic/gothic-body-runner" \
-  --assets "$HOME/gothic-ai/game" --save "$corpus/input/save.sav" \
+  --assets "$GOTHIC_DIR" --save "$corpus/input/save.sav" \
   --cache "$task/hd-measure-cache" --links "$corpus/input/accepted-links.txt" --roads "$corpus/input/places.json" \
   --weights "$task/hd-run/policy.navbc" --output "$task/hd-detour" --physics cv --parallel 18 \
   --action-mode sample --action-seeds 18102027,18102028,18102029 \
@@ -155,7 +169,7 @@ CHECK
 df -h "$HOME"
 MEASURE
   "$ROOT/scripts/gq" submit --class batch --threads 28 --cpu-quota 2800% --mem 20G --max 2h \
-    --name "nav dagger3 HD vs BC3 lean validation" -- bash "$task/measure-hd.sh"
+    --name "nav dagger3 HD vs BC3 lean validation" -- env "${game_env[@]}" bash "$task/measure-hd.sh"
   exit
 fi
 if [[ "$stage" == train-hd ]]; then
@@ -167,6 +181,8 @@ if [[ "$stage" == train-hd ]]; then
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/hd-source/scripts/ryzen_game.py")"
+eval "$game_settings"
 corpus="$HOME/gothic-ai/nav-demos-v4"
 bc3="$HOME/gothic-ai/nav-bc3"
 exec > >(tee -a "$task/logs/train-hd.log") 2>&1
@@ -233,7 +249,7 @@ sha256sum "$bc3/run/it35/policy.navbc" "$task/hd-run/policy.navbc"
 df -h "$HOME"
 HD
   "$ROOT/scripts/gq" submit --class batch --threads 6 --cpu-quota 600% --mem 10G --gpu-mem 4G --max 2h \
-    --name "nav dagger3 HD BC training and contract" -- bash "$task/train-hd.sh"
+    --name "nav dagger3 HD BC training and contract" -- env "${game_env[@]}" bash "$task/train-hd.sh"
   exit
 fi
 ssh ryzen "mkdir -p '$task/source' '$task/logs'"
@@ -243,6 +259,8 @@ ssh ryzen "cat > '$task/prepare-detours.sh'" <<'PHASE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/source/scripts/ryzen_game.py")"
+eval "$game_settings"
 exec > >(tee -a "$task/logs/prepare-detours.log") 2>&1
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
 export PATH="$HOME/.local/bin:$VULKAN_SDK/bin:$PATH"
@@ -271,7 +289,7 @@ df -h "$HOME"
 PHASE
 if [[ "$stage" == prepare-detours ]]; then
   "$ROOT/scripts/gq" submit --class batch --threads 12 --cpu-quota 1200% --mem 8G --max 2h \
-    --name "nav dagger3 prepare detours" -- bash "$task/prepare-detours.sh"
+    --name "nav dagger3 prepare detours" -- env "${game_env[@]}" bash "$task/prepare-detours.sh"
   exit
 fi
 # Freezing is a small transformation of existing geometry, with no runner,
@@ -281,6 +299,8 @@ ssh ryzen "cat > '$task/baseline-detours.sh'" <<'BASELINE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/source/scripts/ryzen_game.py")"
+eval "$game_settings"
 corpus="$HOME/gothic-ai/nav-demos-v4"
 exec > >(tee -a "$task/logs/baseline-detours.log") 2>&1
 export UV_CACHE_DIR="$HOME/.cache/uv"
@@ -303,7 +323,7 @@ for policy in bc3 it35; do
   "$python" -I scripts/nav_rl.py drive \
     --detour-scenarios "$task/detours/detour-val.jsonl" \
     --runner "$task/build/opengothic/gothic-body-runner" \
-    --assets "$HOME/gothic-ai/game" --save "$corpus/input/save.sav" \
+    --assets "$GOTHIC_DIR" --save "$corpus/input/save.sav" \
     --cache "$cache" --links "$corpus/input/accepted-links.txt" --roads "$corpus/input/places.json" \
     --weights "$weights" --output "$output" --physics cv --parallel 8 \
     --action-mode sample --action-seeds 18102027,18102028,18102029 \
@@ -327,4 +347,4 @@ done
 df -h "$HOME"
 BASELINE
 "$ROOT/scripts/gq" submit --class batch --threads 24 --cpu-quota 2400% --mem 12G --max 2h \
-  --name "nav dagger3 bc3 it35 detour baseline" -- bash "$task/baseline-detours.sh"
+  --name "nav dagger3 bc3 it35 detour baseline" -- env "${game_env[@]}" bash "$task/baseline-detours.sh"

@@ -16,6 +16,7 @@ import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'ryzen.sh'
 BENCH_SCRIPT = SCRIPT.with_name('bench.sh')
+GAME_HELPER = SCRIPT.with_name('ryzen_game.py')
 
 
 def function(name):
@@ -43,6 +44,7 @@ class KilledGameRetryTests(unittest.TestCase):
         binaries = root / 'bin'
         (source / 'scripts').mkdir(parents=True)
         (source / 'server').mkdir()
+        shutil.copyfile(GAME_HELPER, source / 'scripts/ryzen_game.py')
         settings = root / 'home/gothic-ai/game-settings/system'
         settings.mkdir(parents=True)
         for name in ('Gothic.ini', 'SystemPack.ini'):
@@ -762,6 +764,7 @@ class CacheTests(unittest.TestCase):
         self.bin.mkdir()
         (self.source / 'scripts').mkdir(parents=True)
         (self.source / 'server').mkdir()
+        shutil.copyfile(GAME_HELPER, self.source / 'scripts/ryzen_game.py')
         (self.source / 'OpenGothic/ai_bridge/storygraph').mkdir(parents=True)
         settings = self.home / 'gothic-ai/game-settings/system'
         settings.mkdir(parents=True)
@@ -893,7 +896,68 @@ PY
             'OPENGOTHIC_BASE_FINGERPRINT': 'c' * 64,
             'OPENGOTHIC_VIDEOS_FINGERPRINT': '',
         })
-        self.assertFalse((self.home / 'gothic-ai/game').exists())
+        self.assertFalse((self.home / 'gothic-ai' / 'game').exists())
+
+        stamp = r'''python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+Path(os.environ['TEST_ROOT'], 'received-env.json').write_text(json.dumps({key: os.environ[key] for key in
+    ('GOTHIC_DIR', 'OPENGOTHIC_BASE_FINGERPRINT', 'OPENGOTHIC_VIDEOS_FINGERPRINT')}))
+PY
+if [[ -n "${LOG_DIR:-}" ]]; then : >"$LOG_DIR/game.log"; fi
+'''
+        for filename in ('e2e.sh', 'bench.sh'):
+            (self.source / 'scripts' / filename).write_text(stamp)
+        self.env['GOTHIC_DIR'] = '/Volumes/x'
+        # Exercise the real Mac forwarding list, then enter a fresh remote environment.
+        forwarding = SCRIPT.read_text().split('BASE_ENV_ARGS=()\n', 1)[1].split('if [[ "$ACTION" != clean ]]', 1)[0]
+        for action in ('e2e', 'bench', 'pytest'):
+            with self.subTest(action=action):
+                entry = 'remote_bench' if action == 'bench' else f'remote_run {action}'
+                self.shell('BASE_ENV_ARGS=()\n' + forwarding + r'''
+unset GOTHIC_DIR
+for assignment in ${BASE_ENV_ARGS[@]+"${BASE_ENV_ARGS[@]}"}; do export "$assignment"; done
+require_prepared() { :; }
+build_storygraph() { export RYZEN_STORYGRAPH_BIN=/usr/bin/true; }
+export RYZEN_STORYGRAPH_BIN=/usr/bin/true RYZEN_GAME_BIN=/usr/bin/true
+ffmpeg() { :; }
+uv() { bash "$TEST_ROOT/source/scripts/bench.sh"; }
+''' + entry + ' "$TEST_ROOT/worktree" run smoke\n')
+                received = json.loads((self.root / 'received-env.json').read_text())
+                self.assertEqual(received, {
+                    'GOTHIC_DIR': str(self.home / 'gothic-ai/game-settings'),
+                    'OPENGOTHIC_BASE_FINGERPRINT': 'c' * 64,
+                    'OPENGOTHIC_VIDEOS_FINGERPRINT': '',
+                })
+
+    def test_game_settings_rejects_bad_setup_and_preserves_caller_overrides(self):
+        import runpy
+
+        environment = runpy.run_path(str(GAME_HELPER))["game_environment"]
+        overrides = {
+            "GOTHIC_DIR": "/custom/settings",
+            "OPENGOTHIC_BASE": "/custom/base",
+            "OPENGOTHIC_BASE_FINGERPRINT": "e" * 64,
+            "OPENGOTHIC_VIDEOS_FINGERPRINT": "",
+            "OPENGOTHIC_BASE_CACHE": "/custom/cache",
+            "OPENGOTHIC_BASE_STORE": "",
+        }
+        self.assertEqual(environment(self.home, overrides), overrides)
+        self.assertEqual(environment(self.home, overrides, assets="/custom/assets")["GOTHIC_DIR"],
+                         "/custom/assets")
+        self.assertEqual(environment(self.home, {"OPENGOTHIC_BASE_FINGERPRINT": ""})[
+            "OPENGOTHIC_BASE_FINGERPRINT"], "c" * 64)
+        manifest = self.home / "gothic-ai/game-base.json"
+        for contents in ('{}', '{"base": "invalid", "videos": ""}'):
+            manifest.write_text(contents)
+            with self.assertRaisesRegex(ValueError, "Run scripts/ryzen.sh setup first"):
+                environment(self.home, {})
+        manifest.unlink()
+        with self.assertRaisesRegex(ValueError, "Run scripts/ryzen.sh setup first"):
+            environment(self.home, {})
+        self.assertFalse(manifest.exists())
+        self.assertEqual(environment(self.home, overrides), overrides)
 
     def test_pytest_requires_setup_and_uses_game_settings(self):
         storygraph = self.bin / 'storygraph'
@@ -918,7 +982,6 @@ remote_run pytest "$TEST_ROOT/worktree" run -rs tests/test_storygraph.py
         self.assertEqual((self.root / 'pytest-env').read_text().splitlines(), [
             str(self.home / 'gothic-ai/game-settings'), 'run', 'pytest', '-rs', 'tests/test_storygraph.py',
         ])
-        self.assertFalse((self.home / 'gothic-ai/game').exists())
         (self.root / 'pytest-env').unlink()
         (self.home / 'gothic-ai/game-base.json').unlink()
         shutil.rmtree(self.home / 'gothic-ai/game-settings')
@@ -927,6 +990,7 @@ remote_run pytest "$TEST_ROOT/worktree" run -rs tests/test_storygraph.py
         self.assertFalse((self.root / 'pytest-env').exists())
         self.assertFalse((self.home / 'gothic-ai/game-base.json').exists())
         self.assertFalse((self.home / 'gothic-ai/game-settings').exists())
+        self.assertFalse((self.home / 'gothic-ai' / 'game').exists())
 
     def test_setup_removes_only_its_temporary_copy_on_failure_or_interrupt(self):
         import hashlib

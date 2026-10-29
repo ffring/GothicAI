@@ -9,10 +9,12 @@ argv, so they stay out of logs and `ps`.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import socket
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -73,6 +75,7 @@ class Layout:
     hd_textures: Path | None = None  # the game loads them instead of its own (OPENGOTHIC_TEXTURES)
     fracture_cache: Path | None = None  # pre-cut breakable meshes (OPENGOTHIC_FRACTURE)
     play_content: Path | None = None  # the personal Linux install's content (OPENGOTHIC_CONTENT)
+    game_env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -139,22 +142,32 @@ def find_layout(config: Config) -> Layout:
     if not os.access(game_bin, os.X_OK):
         problems.append(f"the game is not built: no {game_bin} (see README, «Сборка и запуск»)")
     game_dir = config.settings.game.dir
+    game_env = {}
     if game_dir is None:
         problems.append("game folder is not set: gothic-launcher config set game.dir '/path/to/Gothic II'")
         game_dir = Path()
     else:
+        if sys.platform == "linux" and game_dir == Path.home() / "gothic-ai/game-settings":
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(repo / "scripts/ryzen_game.py"), "--json", f"--assets={game_dir}"],
+                    capture_output=True, text=True, check=True,
+                )
+                game_env = json.loads(result.stdout)
+            except subprocess.CalledProcessError as error:
+                raise LaunchError(error.stderr.strip()) from error
         try:
             with base.resolve(game_dir):
                 pass
         except RuntimeError as error:
-            if not _has_child(game_dir, "data"):
+            if not _has_child(game_dir, "data") and not game_env.get("OPENGOTHIC_BASE_FINGERPRINT"):
                 problems.append(f"select an installed Gothic II folder once: {error}")
     if problems:
         raise LaunchError("\n".join(problems))
     hd = HD_TEXTURES if HD_TEXTURES.is_dir() else None
     fracture = FRACTURE_CACHE if FRACTURE_CACHE.is_dir() else None
     content = PLAY_CONTENT if sys.platform == "linux" else None
-    return Layout(repo, uv, game_bin, game_dir, paths.game_home or GAME_HOME, hd, fracture, content)
+    return Layout(repo, uv, game_bin, game_dir, paths.game_home or GAME_HOME, hd, fracture, content, game_env)
 
 
 def texture_env(layout: Layout) -> dict[str, str]:
@@ -287,6 +300,7 @@ def game(config: Config, layout: Layout, ports: Ports, save: str | None = None, 
     if s.dev_mode:
         argv.append("-devmode")
     env = {
+        **layout.game_env,
         "GOTHIC_AI_URL": f"ws://127.0.0.1:{ports.server}",
         **texture_env(layout),
         **fracture_env(layout),
@@ -304,7 +318,12 @@ def preparation(
 ) -> Proc | None:
     """Prepare content with the converter shipped beside the selected game executable."""
     inherited = child_env(env or {})
-    if inherited.get("OPENGOTHIC_BASE") or inherited.get("OPENGOTHIC_BASE_FINGERPRINT"):
+    if inherited.get("OPENGOTHIC_BASE"):
+        return None
+    # Services read the game's current pointer before the engine starts. Resolve
+    # the prepared Ryzen fingerprints to publish it, without an installation import.
+    ryzen_settings = str(Path.home() / "gothic-ai/game-settings")
+    if inherited.get("OPENGOTHIC_BASE_FINGERPRINT") and inherited.get("GOTHIC_DIR") != ryzen_settings:
         return None
     converter = game_bin.parent / "content-convert"
     if not converter.is_file() or not os.access(converter, os.X_OK):
