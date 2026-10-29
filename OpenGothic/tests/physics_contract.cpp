@@ -3958,6 +3958,17 @@ namespace {
       require(!posture.hit(60,150,10000),"two full capped impulses must not knock down a 150 kg body");
       require(!posture.hit(60,150,10000),"three full capped impulses must not knock down a 150 kg body");
       require(posture.hit(60,150,10000),"four full capped impulses must knock down a 150 kg body");
+      requireNear(MeleeImpact::skillThresholdScale(60,60,60),1.248f,.0001f,
+                  "two 60% masters of strength 60 must need 1.248 times the base knockdown impulse");
+      require(MeleeImpact::skillThresholdScale(100,100,30)<MeleeImpact::skillThresholdScale(60,60,30),
+              "a trained strong attacker must knock down sooner");
+      require(MeleeImpact::skillThresholdScale(30,40,100)>MeleeImpact::skillThresholdScale(30,40,10),
+              "a trained defender must stand longer");
+      requireNear(MeleeImpact::skillThresholdScale(0,0,0),1.2f*.8f/.58f,.0001f,"an untrained weak attacker keeps a floor of 0.58");
+      requireNear(MeleeImpact::skillThresholdScale(200,500,200),1.2f*1.2f/1.4f,.0001f,"skill inputs must be clamped");
+      MeleeImpact::Posture skilled;
+      require(!skilled.hit(60,75,20000,1.248f),"a full capped impulse must fill 40% of a 60% masters' threshold");
+      requireNear(skilled.value,100.f*60.f/(120.f*1.248f),.0001f,"the skill scale must multiply the body-mass threshold");
       }
     CollisionWorld world;
     auto ground = world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),

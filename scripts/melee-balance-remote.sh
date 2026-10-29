@@ -25,6 +25,7 @@ Default series: native-vanilla-1h,native-posture-on-1h,native-vanilla-2h,
 native-posture-on-2h,p30-vanilla-1h,p30-posture-on-1h.
 MELEE_BALANCE_HOST selects the SSH alias (default: ryzen).
 MELEE_BALANCE_PYTHON selects a remote Python with torch (default: body/.venv).
+MELEE_POSTURE_SCALE multiplies the knockdown threshold in every series (sweeps).
 USAGE
 }
 
@@ -65,7 +66,7 @@ done
 remote_script() {
   local remote_args='' remote_env='' arg key
   for arg in "$@"; do printf -v remote_args '%s %q' "$remote_args" "$arg"; done
-  for key in GQ_BIN GQ_PROFILE MELEE_BALANCE_PYTHON; do
+  for key in GQ_BIN GQ_PROFILE MELEE_BALANCE_PYTHON MELEE_POSTURE_SCALE; do
     if [[ -n "${!key:-}" ]]; then printf -v remote_env '%s %q' "$remote_env" "$key=${!key}"; fi
   done
   { cat "$ROOT/scripts/gq-job.sh"; cat; } |
@@ -144,6 +145,11 @@ for name in "${series[@]}"; do
   policy_args=()
   [[ "$provider" != p30 ]] || policy_args=(--checkpoint "$HOME/gothic-ai/body/models/working/best.pt" --policy-only)
   mkdir -p "$out"
+  scale_env=()
+  if [[ -n "${MELEE_POSTURE_SCALE:-}" ]]; then
+    scale_env=("OPENGOTHIC_MELEE_POSTURE_SCALE=$MELEE_POSTURE_SCALE")
+    printf '%s\n' "$MELEE_POSTURE_SCALE" > "$out/posture-scale.txt"
+  fi
   cp "$task_root/provenance/source-commit.txt" "$task_root/provenance/source.patch" \
      "$task_root/provenance/runner.sha256" "$out/"
   # --archive accepts the local source; gq moves it to the same relative NAS path.
@@ -155,7 +161,7 @@ for name in "${series[@]}"; do
     "VK_DRIVER_FILES=/nonexistent/melee-balance-no-vulkan.json" \
     "VK_ICD_FILENAMES=/nonexistent/melee-balance-no-vulkan.json" "OPENGOTHIC_TEXTURES=" \
     "OPENGOTHIC_BASE=" "OPENGOTHIC_BASE_CACHE=$task_root/base-cache" \
-    "OPENGOTHIC_BASE_STORE=/mnt/shared/gothic-ai/melee-balance" \
+    "OPENGOTHIC_BASE_STORE=/mnt/shared/gothic-ai/melee-balance" "${scale_env[@]}" \
     bash -c 'out="$1"; shift; exec "$@" > "$out/launcher.log" 2>&1' bash "$out" \
     "$python" "$task_root/source/scripts/body_sim_bench.py" --runner "$runner" \
     --assets "$HOME/gothic-ai/body-baseline/assets" --save "$reference/run/save_slot_1.sav" \
