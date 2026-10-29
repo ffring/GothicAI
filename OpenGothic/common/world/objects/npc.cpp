@@ -3760,7 +3760,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
   if(targetKnockdown) {
     const bool rising = currentTarget->meleeRiseTick!=0;
     // Use the same root-transformed distance as isInFinishRange, bounded by its script limit.
-    const float finishRange = std::min(fghAlgo.attackFinishDistance(owner.script()),ws==WeaponState::W1H ? 150.f : 130.f);
+    const float finishRange = std::min(fghAlgo.attackFinishDistance(owner.script()),ws==WeaponState::W1H ? 165.f : 170.f);
     const bool inRange = rising ? fghAlgo.isInWRange(*this,*currentTarget,owner.script()) :
                                  fghAlgo.qDistTo(*this,*currentTarget)<=finishRange*finishRange;
     const auto action = FightAlgo::resolveDownTactics(downTactics,currentTarget->meleeKnockdown,rising,inRange,
