@@ -1,15 +1,11 @@
 import type React from 'react';
 import {Easing, interpolate, spring} from 'remotion';
+import {MOTION} from './timing';
 
-// The series' motion: one set of durations, curves and springs, so every short moves alike. A plan picks from
-// these by name; a new movement is added here, not tuned per short.
+// The series' motion: one set of durations (timing.ts), curves and springs, so every short moves alike. A plan
+// picks from these by name; a new movement is added here, not tuned per short.
 
-export const MOTION = {
-  fast: 0.2, // a small thing appearing: a label line, a number
-  base: 0.35, // a text, a panel, a transition between beats
-  slow: 0.6, // a big move: a zoom, a line drawing itself
-  stagger: 0.08, // between items of one group entering together
-};
+export {MOTION, TRANSITION_DUR} from './timing';
 
 // out: arrives fast and settles (entrances); in: leaves slowly then fast (exits); inOut: moves between two rests
 export const EASE = {

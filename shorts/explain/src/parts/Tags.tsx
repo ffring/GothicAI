@@ -4,7 +4,7 @@ import type {TagT} from '../schema';
 import {chance} from '../dice';
 import {COLOR, FONT, OUTLINE} from '../theme';
 import {rise, shown} from './anim';
-import {enterTransform} from './motion';
+import {enterTransform, MOTION} from './motion';
 
 // `{chance:exe:40:14.7}`: the chance by that rule for that talent and distance, as the game counts it
 const withChances = (text: string) =>
@@ -13,10 +13,13 @@ const withChances = (text: string) =>
   );
 
 const SHIFT = {center: 'translateX(-50%)', right: 'translateX(-36px)', left: 'translateX(calc(-100% + 36px))'};
+// the point of the box over the pin, where it grows from
+const ORIGIN = {center: '50% 100%', right: '36px 100%', left: 'calc(100% - 36px) 100%'};
 
 // a label over a thing in the picture: a pin at (x, y), the box above it (opening to the side near an edge), its
 // lines appear one by one; a line with `count` runs random numbers (seeded: the same every render) and stops on
-// the real one
+// the real one. The pin lands first and the box follows from it `MOTION.follow` later, so the label reads as
+// coming out of the thing it marks
 export const Tags: React.FC<{tags: TagT[]}> = ({tags}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
@@ -28,9 +31,9 @@ export const Tags: React.FC<{tags: TagT[]}> = ({tags}) => {
         if (o <= 0) {
           return null;
         }
+        const boxAt = tag.at + MOTION.follow;
         return (
-          <div key={i} style={{position: 'absolute', left: tag.x, top: tag.y, opacity: o, transformOrigin: '0 0',
-            transform: enterTransform(tag.enter, t, frame, fps, tag.at)}}>
+          <div key={i} style={{position: 'absolute', left: tag.x, top: tag.y, opacity: o}}>
             <div
               style={{
                 position: 'absolute',
@@ -41,6 +44,7 @@ export const Tags: React.FC<{tags: TagT[]}> = ({tags}) => {
                 borderRadius: 9,
                 border: `3px solid ${COLOR.text}`,
                 boxShadow: '0 0 8px #000',
+                transform: enterTransform(tag.enter, t, frame, fps, tag.at),
               }}
             />
             <div
@@ -48,7 +52,9 @@ export const Tags: React.FC<{tags: TagT[]}> = ({tags}) => {
                 position: 'absolute',
                 bottom: 30,
                 left: 0,
-                transform: SHIFT[tag.side],
+                opacity: shown(t, boxAt),
+                transformOrigin: ORIGIN[tag.side],
+                transform: `${SHIFT[tag.side]} ${enterTransform(tag.enter, t, frame, fps, boxAt)}`,
                 background: COLOR.shade,
                 borderRadius: 16,
                 padding: '12px 22px',
