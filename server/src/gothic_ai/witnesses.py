@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass, field
@@ -94,7 +95,8 @@ HERO_ASK_TOOL = Tool(
     ASK,
     "Расспросить знакомого о герое, когда сам ты не видел, а его слова проверить хочешь (кого можно спросить "
     "и где он — в обстановке). Рядом — окликнешь, и он подойдёт; поодаль — сходишь к нему и вернёшься; "
-    "далеко — спросишь при встрече, ответ узнаешь потом. Сначала скажи вслух, кого и о чём спросишь. Ответ "
+    "далеко — спросишь при встрече, ответ узнаешь потом. Сначала скажи вслух, кого и о чём спросишь, и "
+    "вызови: «спрошу» без вызова ничего не делает. Ответ "
     "придёт ремаркой и строкой С1 в «Что тебе рассказали о герое другие»; уличить по ней — catch_lie.",
     {
         "type": "object",
@@ -357,6 +359,15 @@ class Witnesses:
             ]
             parts.append("Кого из знакомых можно расспросить о герое (ask_witness):\n" + "\n".join(lines))
         waiting = [q for q in self.inquiries.values() if q.npc == npc]
+        trigger = conv.trigger if (conv := self.dialogue.conversations.get(npc)) is not None else None
+        phrase = trigger.content if trigger is not None and trigger.role == "user" else ""
+        asked = {q.witness for q in waiting} | {t.witness for t in self.testimonies(npc)}
+        if offered := [c.name for c in _named(near, phrase) if c.npc not in asked]:
+            # 2026-10-29 live: on «спроси Ватраса» Lobart said «Встречу Ватраса — спрошу» and called nothing
+            parts.append(
+                f"Герой предлагает расспросить: {', '.join(offered)}. Решишь расспросить — вызови "
+                "ask_witness: сказать «спрошу» мало, без вызова ты не спросишь."
+            )
         if waiting:
             lines = [
                 f"- {q.witness_name} — "
@@ -1245,6 +1256,16 @@ def _find(near: list[Candidate], who: str) -> Candidate | None:
         if len(c.name) >= 3 and c.name.lower()[: max(3, min(4, len(c.name) - 1))] in w:
             return c
     return None
+
+
+def _named(near: list[Candidate], phrase: str) -> list[Candidate]:
+    """Those the hero's phrase names: a capitalized word of it begins with the root of the name («Ватраса»,
+    «Малета»), so «вино» the drink is not Вино."""
+    words = [w.lower() for w in re.findall(r"\w+", phrase) if w[:1].isupper()]
+    return [
+        c for c in near
+        if (root := max(roots(c.name), key=len, default="")) and any(w.startswith(root) for w in words)
+    ]
 
 
 def _busy(state: str, body: str) -> str | None:

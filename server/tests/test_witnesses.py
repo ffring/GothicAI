@@ -29,7 +29,7 @@ from gothic_ai.sightings import Sightings
 from gothic_ai.social import Tie
 from gothic_ai.storyguard import StoryGuard
 from gothic_ai.trust import Trust
-from gothic_ai.witnesses import ASK_TOOL, Inquiry, Witnesses
+from gothic_ai.witnesses import ASK_TOOL, Candidate, Inquiry, Witnesses, _named
 from gothic_ai.witnesses import Testimony as WitnessTestimony
 from tests.fake_game import FakeGame, connected
 from tests.test_crimes import deed
@@ -559,6 +559,35 @@ async def test_gate_claim_error_reports_unanswered_near_question(error, tier):
                 and m["action"] == "go_to_npc" and m.get("args", {}).get("npc") == "PLAYER"
                 for m in fake.received
             )
+
+
+async def test_whom_the_hero_names_to_ask_is_pointed_out_with_the_call_it_takes():
+    # 2026-10-29 live: on «спроси Ватраса» Lobart said «Встречу Ватраса — спрошу» and called nothing
+    fake = FakeGame(branch="A")
+    async with connected(fake) as link:
+        w = World(link, fake, lobart())
+        conv = w.dialogue.open(LOBART, "Лобарт")
+        await w.witnesses.prepare(LOBART)
+
+        def offered(phrase: str, role: str = "user") -> str:
+            conv.trigger = Message(role, phrase)
+            situation = w.witnesses.situation(LOBART) or ""
+            line = next((x for x in situation.splitlines() if x.startswith("Герой предлагает")), "")
+            return line
+
+        assert offered("Не веришь — спроси Андре, он подтвердит.") == (
+            "Герой предлагает расспросить: Андре. Решишь расспросить — вызови ask_witness: сказать «спрошу» "
+            "мало, без вызова ты не спросишь."
+        )
+        assert offered("Спроси Малета или Хильду.").startswith("Герой предлагает расспросить: Хильда, Малет.")
+        vino = Candidate("BAU_952_VINO", "Вино", "near", 900.0, True)
+        assert _named([vino], "Налей мне вино, хозяин.") == []  # the drink, not Вино
+        assert _named([vino], "Спроси у Вино.") == [vino]
+        assert offered("[Андре спрашивает тебя о герое]", "developer") == ""  # not the hero's words
+        w.witnesses._inquire(
+            Inquiry("q", LOBART, "Лобарт", ANDRE, "Андре", "всё утро был в городе", AT_8, DAY + 18 * 60)
+        )
+        assert offered("Спроси Андре.") == ""  # already going to
 
 
 async def test_who_may_be_asked_and_when_not():
