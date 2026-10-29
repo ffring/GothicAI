@@ -528,7 +528,7 @@ Talking, for shorts (`shorts/`; needs the AI server, see `shorts/README.md`):
 | `near <npc> [dist] [deg]`, `approach <npc>`, `face npc <npc>` | the hero in front of an npc (teleport), walks up to it, turns to it |
 | `cam shoulder\|face\|two <npc> [dist] [height] [side\|deg]`, `cam cut`, `cam smooth <k>` | shots of the hero and an npc; they glide from one to the next unless `cut`. `cam face` with an npc's name is this shot, with a number the close-up above. `cam two arena`: the two participants of a body arena, a yellow dot over the primary (`bodyreplay`, `scripts/body_replay_film.py`) |
 | `caption <text>`, `mark <text>` | events for the cut of a short |
-| `ai <...>` | the AI bridge's console: `ai attach <npc>`, `ai ptt start [<wav>]\|stop\|cancel` |
+| `ai <...>` | the AI bridge's console: `ai attach <npc>`, `ai skip <npc>` (its important dialogs count as told: it does not stop the hero), `ai ptt start [<wav>]\|stop\|cancel` |
 
 Every talking command writes `events.jsonl` (what was said when, in frames of the recording). A line of the
 AI is `npc line <npc>: <text>` in `bench.log`, `npc line <npc> -> <to>: <text>` when it is said to another npc

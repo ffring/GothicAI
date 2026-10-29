@@ -92,6 +92,7 @@ shots:
 | `cam cut`, `cam smooth <0..1>` | the next shot jumps instead of gliding; how fast the camera glides |
 | `caption <text>`, `caption off` | text at the top of the short from here |
 | `ai attach <npc>`, `ai detach <npc>` | the bridge's console: the npc is held (stands, answers in the game's queue) |
+| `ai skip <npc>` | its important dialogs count as told: it does not stop the hero with the game's own greeting |
 
 ## Making a short (the agent's loop)
 
