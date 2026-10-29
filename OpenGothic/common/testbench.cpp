@@ -38,6 +38,7 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
 #include <rapidjson/document.h>
+#include <Jolt/Jolt.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/CollisionDispatch.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
