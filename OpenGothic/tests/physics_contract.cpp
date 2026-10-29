@@ -4133,6 +4133,23 @@ namespace {
             "a standing target must retain native fight instructions");
     require(FightAlgo::resolveDownTactics(false,true,false,true,true)==FightAlgo::MV_NULL,
             "down tactics OFF must retain native fight instructions");
+    {
+      const auto bytes = saveArchive([](Serialize& output) {
+        output.setEntry("fight");
+        output.write(int32_t(Def::FightMove::WAIT));
+        for(int i=0;i<FightAlgo::MV_MAX;++i)
+          output.write(uint8_t(FightAlgo::MV_ATTACK));
+        output.write(false);
+        });
+      Tempest::MemReader reader(bytes);
+      Serialize input(reader);
+      input.setEntry("fight");
+      FightAlgo fight;
+      fight.load(input);
+      fight.onTargetKnockdown();
+      for(auto action:fight.queueSnapshot())
+        require(action==FightAlgo::MV_NULL,"target knockdown must discard the entire remaining combo");
+      }
 
     // The actual melee damage multiplier is bounded before cleave attenuation.
     requireNear(DamageCalculator::meleeMultiplier(0,1000,0,0,0),.5f,.0001f,"slow grip contacts must respect the lower damage bound");

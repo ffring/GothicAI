@@ -3718,7 +3718,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
   const bool targetKnockdown = downTactics && currentTarget->meleeKnockdown;
   // Discard the remaining native combo, but let the attack already in flight finish below.
   if(targetKnockdown)
-    fghAlgo.onClearTarget();
+    fghAlgo.onTargetKnockdown();
   const bool magnetHeading = visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window && meleeShadow->physicsHits &&
                              meleeShadow->magnet.eligible;
 
@@ -3766,8 +3766,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     const auto action = FightAlgo::resolveDownTactics(downTactics,currentTarget->meleeKnockdown,rising,inRange,
                                                      fghAlgo.isInFocusAngle(*this,*currentTarget,5.f));
     if(action==FightAlgo::MV_MOVE) {
-      if(mvAlgo.checkLastBounce() && implTurnToFai(*currentTarget,dt))
-        return true;
+      implTurnToFai(*currentTarget,dt);
       setAnim(AnimationSolver::Move);
       go2.set(currentTarget,GT_Enemy);
       go2.nativeCombatTarget = currentTarget;

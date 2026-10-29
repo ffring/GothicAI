@@ -255,6 +255,12 @@ void FightAlgo::onClearTarget() {
   tr[0]   = MV_NULL;
   }
 
+void FightAlgo::onTargetKnockdown() {
+  onClearTarget();
+  for(auto& action:tr)
+    action = MV_NULL;
+  }
+
 void FightAlgo::onTakeHit() {
   hitFlg = true;
   for(auto& i:tr)

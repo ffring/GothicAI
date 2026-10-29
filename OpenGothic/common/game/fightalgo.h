@@ -63,6 +63,7 @@ class FightAlgo final {
     Action nextFromQueue(Npc &npc, Npc &tg, GameScript& owner);
     void   consumeAction();
     void   onClearTarget();
+    void   onTargetKnockdown();
     void   onTakeHit();
 
     bool   hasInstructions() const;
