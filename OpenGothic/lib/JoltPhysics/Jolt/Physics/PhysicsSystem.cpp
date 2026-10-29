@@ -1668,7 +1668,7 @@ void PhysicsSystem::JobIntegrateVelocity(const PhysicsUpdateContext *ioContext, 
 						uint32 ccd_body_idx = ioStep->mNumCCDBodies++;
 						JPH_ASSERT(active_body_idx < ioStep->mNumActiveBodyToCCDBody);
 						ioStep->mActiveBodyToCCDBody[active_body_idx] = ccd_body_idx;
-						new (&ioStep->mCCDBodies[ccd_body_idx]) CCDBody(body_id, delta_pos, linear_cast_threshold_sq, min(mPhysicsSettings.mPenetrationSlop, mPhysicsSettings.mLinearCastMaxPenetration * inner_radius));
+						new (&ioStep->mCCDBodies[ccd_body_idx]) CCDBody(body_id, delta_pos, linear_cast_threshold_sq, min(min(mPhysicsSettings.mPenetrationSlop, body.GetMaxPenetrationSlop()), mPhysicsSettings.mLinearCastMaxPenetration * inner_radius));
 
 						update_position = false;
 					}
@@ -1844,6 +1844,8 @@ void PhysicsSystem::JobFindCCDContacts(const PhysicsUpdateContext *ioContext, Ph
 				{
 					// Normalize normal
 					Vec3 normal = inResult.mPenetrationAxis.Normalized();
+					const Body &body2 = mBodyManager.GetBody(inResult.mBodyID2);
+					const float max_penetration = min(mCCDBody.mMaxPenetration, body2.GetMaxPenetrationSlop());
 
 					// Calculate how much we can add to the fraction to penetrate the collision point by mMaxPenetration.
 					// Note that the normal is pointing towards body 2!
@@ -1851,13 +1853,11 @@ void PhysicsSystem::JobFindCCDContacts(const PhysicsUpdateContext *ioContext, Ph
 					// <=> dist = mMaxPenetration * |delta_pos| / normal . delta_pos
 					// Converting to a faction: delta_fraction = dist / |delta_pos| = mLinearCastTreshold / normal . delta_pos
 					float denominator = normal.Dot(mCCDBody.mDeltaPosition);
-					if (denominator > mCCDBody.mMaxPenetration) // Avoid dividing by zero, if extra hit fraction > 1 there's also no point in continuing
+					if (denominator > max_penetration) // Avoid dividing by zero, if extra hit fraction > 1 there's also no point in continuing
 					{
-						float fraction_plus_slop = fraction + mCCDBody.mMaxPenetration / denominator;
+						float fraction_plus_slop = fraction + max_penetration / denominator;
 						if (fraction_plus_slop < mCCDBody.mFractionPlusSlop)
 						{
-							const Body &body2 = mBodyManager.GetBody(inResult.mBodyID2);
-
 							// Check if we've already accepted all hits from this body
 							if (mValidateBodyPair)
 							{

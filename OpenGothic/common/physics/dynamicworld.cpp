@@ -1131,6 +1131,13 @@ DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, co
   auto obj=std::make_unique<BodyData>();
   obj->body=world->addDynamicBody(hull.shape,pos,materialFriction(mat),mass);
   obj->body->setPenetrationSlop(.004f);
+  // LinearCast rotates before sweeping translation. Bound the furthest point's
+  // rotation travel as for fragments, without adding world collision substeps.
+  const auto* scaled=obj->body->shape();
+  const auto localBounds=scaled->GetLocalBounds();
+  const float radius=JPH::Vec3::sMax(localBounds.mMin.Abs(),localBounds.mMax.Abs()).Length();
+  const float travel=std::min(scaled->GetInnerRadius()*.25f,.01f);
+  obj->body->setMaxAngularVelocity(std::min(.25f*JPH::JPH_PI*60.f,60.f*travel/radius));
   // The native hull also supplies submerged volume and water resistance.
   // Dynamic bodies already use LinearCast, including the smallest items.
   obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");

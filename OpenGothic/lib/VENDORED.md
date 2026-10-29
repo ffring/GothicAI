@@ -48,8 +48,9 @@ Keep these when updating a library from upstream.
   by the permitted riser height, slope and capsule toe; actual forward travel is unchanged.
   This lets finite slanted risers and narrow treads work without accepting continuous steep
   slopes. Contracts live in `tests/physics_contract.cpp`.
-- `JoltPhysics/Jolt/Physics/Body/Body.h` and `Physics/Constraints/ContactConstraintManager.cpp`:
-  a runtime body limit can reduce contact penetration slop. The position solver uses the minimum
+- `JoltPhysics/Jolt/Physics/Body/Body.h`, `Physics/Constraints/ContactConstraintManager.cpp` and
+  `Physics/PhysicsSystem.cpp`: a runtime body limit can reduce contact penetration slop. The
+  position solver and linear CCD use the minimum
   of the global tolerance and both body limits; the default inherits the global tolerance unchanged.
   OpenGothic enables a 4 mm limit only for Item mesh hulls so small objects settle within 5 mm of
   their support, while ordinary bodies retain the existing 2 cm allowance. Game save records and
