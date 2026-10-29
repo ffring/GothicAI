@@ -895,7 +895,7 @@ while IFS= read -r name; do
   esac
 done < <(compgen -e)
 if [[ "$ACTION" != clean ]]; then
-  remote env "${BASE_ENV_ARGS[@]}" python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")" --check
+  remote env ${BASE_ENV_ARGS[@]+"${BASE_ENV_ARGS[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")" --check
 fi
 if [[ "$ACTION" == bench ]]; then
   mkdir -p "$LOG_DIR"
@@ -1270,7 +1270,7 @@ else
   [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; exit 2; }
 fi
 if [[ "$ACTION" == pytest ]]; then GQ_ARGS+=(--wait-max "$LOCK_WAIT"); fi
-ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS" "${BASE_ENV_ARGS[@]}")
+ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS" ${BASE_ENV_ARGS[@]+"${BASE_ENV_ARGS[@]}"})
 sync_content
 if [[ "$ACTION" == bench ]]; then
   [[ -z "$AI_PORT" ]] || ENV_ARGS+=("RYZEN_AI_TUNNEL=1")

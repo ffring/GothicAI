@@ -146,9 +146,11 @@ raise SystemExit(subprocess.run(["bash", "-c", sys.argv[-1]]).returncode)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("SSH_CALLS", str(calls))
-    script = Path(__file__).resolve().parents[1] / "nav-jumps-remote.sh"
-    result = subprocess.run(["bash", str(script), "build"], capture_output=True, text=True)
-    assert result.returncode == 1
-    assert "Run scripts/ryzen.sh setup first" in result.stderr
-    assert calls.read_text().splitlines() == ["ssh"]
-    assert not (home / "gothic-ai").exists()
+    for filename, action in (("nav-jumps-remote.sh", "build"), ("ryzen.sh", "pytest")):
+        calls.write_text("")
+        script = Path(__file__).resolve().parents[1] / filename
+        result = subprocess.run(["bash", str(script), action], capture_output=True, text=True)
+        assert result.returncode == 1
+        assert "Run scripts/ryzen.sh setup first" in result.stderr
+        assert calls.read_text().splitlines() == ["ssh"]
+        assert not (home / "gothic-ai").exists()
