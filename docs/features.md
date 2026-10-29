@@ -182,6 +182,8 @@ PR, который добавляет фичу или выключатель, д
 | CharacterVirtual NPC-людей в 20 м от героя | `[GAME] npc_character_virtual=0` | `common/game/movealgo.cpp`, `common/physics/collisionworld.cpp` | бенчи `npc-character-virtual*` | [physics.md](physics.md) |
 | CharacterVirtual наземных монстров в 20 м от героя (по умолчанию включено с 2026-10-19); подъём ступенями с сохранением шага гильдии, родной отскок от крутой статичной/кинематической грани при продвижении <60% | `[GAME] monster_character_virtual=0`; Marvin `toggle monster_character_virtual` | `common/game/movealgo.cpp`, `common/world/objects/npc.cpp`, `common/physics/collisionworld.cpp`, `dynamicworld.cpp` | `check-physics` (косой упор, исключения, 10-см ступени и одиночные уступы); бенчи `monster-character-virtual`, `monster-character-virtual-stairs`, `monster-character-virtual-stair-attack`, `monster-character-virtual-ledges`; e2e `wolf` с ON | [Числа и видео шага 4](../reports/physics/2026-10-18-monster-character-virtual/validation-notes.md) |
 
+| Слой предметов мира: свои статичные меши/свет, удаление и сдвиг базы по ID; атомарные файлы по имени, совместимость сохранений | `OPENGOTHIC_VOB_LAYERS=0`; `OPENGOTHIC_CONTENT=` отключает контент | `common/worlddata.*`, `common/world/objects/vob.*`, `common/world/movablevobs.*` | `gothic-vob-layer-test`; `content-convert check-vob-layer`; бенч `vob-layer`, e2e `graph` | [asset-migration.md](asset-migration.md#данные-мира), [world-detail-plan.md](world-detail-plan.md#как-работает-сейчас) |
+
 ## Движок: анимация
 
 Все — в `common/graphics/mesh/`.

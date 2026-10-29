@@ -27,10 +27,23 @@ struct Data {
   // Raw mesh polygon references are omitted, as specified for bsp.bin.
   asset::BspTree bsp {};
   std::vector<Room> rooms;
+  // Retain removed base records so later layer files can still address their IDs.
+  std::vector<std::shared_ptr<asset::VirtualObject>> layerRemovedVobs;
   };
 
 void write(const Data& data, const std::filesystem::path& dir);
 Data read(const std::filesystem::path& dir, const std::filesystem::path& overrideDir = {});
+
+struct VobLayerResult {
+  size_t added = 0, removed = 0, moved = 0;
+  std::vector<std::string> errors;
+  };
+// A file commits only when every record is valid. Errors include file and key/ID.
+VobLayerResult applyVobLayer(Data& data, const std::filesystem::path& baseWorldDir,
+                            const std::filesystem::path& file, const std::filesystem::path& contentRoot = {});
+// Checks the file after the world's replacement and earlier valid layer files, without environment flags.
+VobLayerResult checkVobLayer(const std::filesystem::path& baseWorldDir, const std::filesystem::path& file,
+                            const std::filesystem::path& contentRoot = {});
 // Complete own object records, references and ordered waypoint/edge comparison.
 // Individual retained BSP fields and room floats.
 // Also samples isIndoor on a grid of at most 400 cm spacing at three heights.

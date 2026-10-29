@@ -1,0 +1,370 @@
+#include "worlddata.h"
+#include "basemesh.h"
+#include "commandline.h"
+#include "resources.h"
+#include "graphics/mesh/protomesh.h"
+#include "gothic.h"
+#include "gamemusic.h"
+#include "game/gamesession.h"
+#include "game/serialize.h"
+#include "world/world.h"
+#include "world/movablevobs.h"
+#include "utils/workers.h"
+
+#include <Tempest/Log>
+#include <Tempest/MemReader>
+#include <Tempest/MemWriter>
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+#include <sys/wait.h>
+#include <unistd.h>
+
+namespace fs=std::filesystem;
+namespace {
+size_t assertions=0;
+
+void require(bool value, const std::string& message) {
+  ++assertions;
+  if(!value) throw std::runtime_error(message);
+  }
+
+void textFile(const fs::path& path, const std::string& text) {
+  fs::create_directories(path.parent_path());
+  std::ofstream out(path); out << text;
+  require(bool(out),"write "+path.string());
+  }
+
+int subprocess(const std::vector<std::string>& args) {
+  const auto pid=fork();
+  require(pid>=0,"subprocess must start");
+  if(pid==0) {
+    std::vector<char*> argv;
+    for(const auto& arg:args) argv.push_back(const_cast<char*>(arg.c_str()));
+    argv.push_back(nullptr);
+    execvp(argv.front(),argv.data());
+    _exit(127);
+    }
+  int status=0;
+  require(waitpid(pid,&status,0)==pid,"subprocess must finish");
+  return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
+  }
+
+struct Fixture {
+  fs::path root,base,content,world,layers;
+  Fixture() {
+    std::string pattern=(fs::temp_directory_path()/"gothic-vob-layer-XXXXXX").string();
+    const auto* dir=mkdtemp(pattern.data());
+    require(dir!=nullptr,"temporary fixture directory");
+    root=dir; base=root/"base"; content=root/"content";
+    world=base/"worlds/TEST"; layers=content/"worlds/TEST/vobs.d";
+    auto data=original();
+    WorldData::write(data,world);
+    fs::create_directories(base/"meshes");
+    asset::StaticMesh mesh;
+    mesh.positions={{0,0,0},{100,0,0},{0,100,0}};
+    mesh.bbox.min={0,0,0}; mesh.bbox.max={100,100,0};
+    mesh.sub_meshes.resize(1);
+    auto& sub=mesh.sub_meshes[0];
+    sub.mat.name="BASE"; sub.mat.group=asset::MaterialGroup::STONE;
+    sub.wedges={{{0,0,1},{0,0},0},{{0,0,1},{1,0},1},{{0,0,1},{0,1},2}};
+    sub.triangles={{{0,1,2}}};
+    writeBaseMesh(mesh,"BASE",base/"meshes/BASE.glb");
+    textFile(base/"meshes/meshes.json",R"({"format":"gothic-meshes","version":1,"archives":[],"meshes":{"BASE":"BASE.glb"}})");
+    }
+  ~Fixture() { std::error_code error; fs::remove_all(root,error); }
+  static WorldData::Data original() {
+    WorldData::Data data;
+    data.source={"TEST.ZEN",1234,42}; data.name="TEST";
+    data.waynet=std::make_shared<asset::WayNet>();
+    for(uint32_t id:{7u,19u,31u}) {
+      auto v=std::make_shared<asset::VirtualObject>();
+      v->type=asset::VirtualObjectType::zCVob; v->id=id;
+      v->position={float(id),10,20}; v->show_visual=true;
+      v->visual_name="BASE.3DS"; v->associated_visual_type=asset::VisualType::MESH;
+      v->visual=std::make_shared<asset::VisualMesh>();
+      v->visual->type=asset::VisualType::MESH; v->visual->name=v->visual_name;
+      data.vobs.push_back(v);
+      }
+    auto child=std::make_shared<asset::VirtualObject>(*data.vobs[0]);
+    child->id=43; data.vobs[0]->children.push_back(child);
+    return data;
+    }
+  void clearLayers() const {
+    fs::remove_all(layers); fs::create_directories(layers);
+    }
+  WorldData::Data read() const { return WorldData::read(world,content/"worlds/TEST"); }
+  };
+
+std::string mesh(const std::string& key, const std::string& visual="BASE.3DS", const std::string& collision="none") {
+  return "{\"key\":\""+key+"\",\"kind\":\"mesh\",\"visual\":\""+visual+
+         "\",\"collision\":\""+collision+"\",\"position\":[100,200,300],\"yaw_deg\":90}";
+  }
+
+const asset::VirtualObject* find(const WorldData::Data& data, uint32_t id) {
+  const auto visit=[&](const auto& self,const auto& list)->const asset::VirtualObject* {
+    for(const auto& v:list) {
+      if(v->id==id) return v.get();
+      if(const auto* child=self(self,v->children)) return child;
+      }
+    return nullptr;
+    };
+  return visit(visit,data.vobs);
+  }
+
+void noLayers(const Fixture& f) {
+  const auto expected=Fixture::original();
+  require(WorldData::compare(expected,f.read()).empty(),"no layers must retain every base field, order and id");
+  require(WorldData::compare(expected,WorldData::read(f.world)).empty(),"empty content path must retain base");
+  setenv("OPENGOTHIC_CONTENT","",1);
+  require(Resources::worldOverrideDir("TEST.ZEN").empty(),"empty content disables layers");
+  setenv("OPENGOTHIC_CONTENT",f.content.c_str(),1);
+  }
+
+void validLayers(const Fixture& f) {
+  f.clearLayers();
+  textFile(f.layers/"10-add.json","{\"format\":1,\"add\":["+mesh("base-solid","BASE.3DS","mesh")+","+
+           mesh("own-ghost","VOB_LAYER_TEST_CUBE","none")+
+           R"(,{"key":"lamp","kind":"light","position":[1,2,3],"rotation":[[1,0,0],[0,1,0],[0,0,1]],"range":450,"color":[255,128,0]}],"remove":[19],"move":[{"id":7,"position":[11,22,33],"yaw_deg":0}]})");
+  textFile(f.layers/"20-move.json",R"({"format":1,"move":[{"id":7,"position":[44,55,66],"rotation":[[0,0,1],[0,1,0],[-1,0,0]]},{"id":43,"position":[10,20,30],"yaw_deg":90}]})");
+  const auto checked=WorldData::checkVobLayer(f.world,f.layers/"10-add.json",f.content);
+  require(checked.errors.empty() && checked.added==3 && checked.removed==1 && checked.moved==1,"offline checker valid layer counts");
+  const auto data=f.read();
+  require(data.vobs.size()==5 && WorldData::vobCount(data.vobs)==6,"add three roots and remove one base root");
+  require(data.vobs[0]->id==7 && data.vobs[1]->id==31,"untouched base ordering and ids");
+  require(find(data,19)==nullptr,"remove must erase base id");
+  require(find(data,7)->position.x==44 && find(data,7)->position.y==55,"filename order must determine the last move");
+  require(find(data,43)->position.x==10,"move can target nested base id");
+  require(data.vobs[2]->cd_static && data.vobs[2]->cd_dynamic &&
+          !data.vobs[3]->cd_static && !data.vobs[3]->cd_dynamic,"mesh/none world and player collision flags");
+  auto movable=*data.vobs[2];
+  movable.visual=std::make_shared<asset::VisualMesh>();
+  movable.visual->type=asset::VisualType::MESH; movable.visual->name="BARREL_01.3DS";
+  require(MovableVobs::classify(movable)==nullptr,"layer props never become dynamic movable vobs");
+  require(data.vobs[2]->visual_name=="BASE.3DS" && data.vobs[3]->visual_name=="VOB_LAYER_TEST_CUBE.3DS","base and own visuals use runtime loadable names");
+  require(std::abs(data.vobs[2]->rotation.columns[0].x)<.0001f &&
+          std::abs(std::abs(data.vobs[2]->rotation.columns[0].z)-1.f)<.0001f,"yaw rotates about the vertical axis");
+  const auto* light=dynamic_cast<asset::VLight*>(data.vobs[4].get());
+  require(light!=nullptr && light->is_static && light->range==450 && light->color.r==255 && light->color.g==128 && light->color.b==0,"static light properties");
+  setenv("OPENGOTHIC_VOB_LAYERS","0",1);
+  require(WorldData::compare(Fixture::original(),f.read()).empty(),"OPENGOTHIC_VOB_LAYERS=0 skips all files");
+  unsetenv("OPENGOTHIC_VOB_LAYERS");
+  require(subprocess({GOTHIC_CONTENT_CONVERT,"check-vob-layer",f.world.string(),(f.layers/"10-add.json").string(),f.content.string()})==0,"converter CLI accepts a valid layer");
+  }
+
+void rejectedLayers(const Fixture& f) {
+  const std::vector<std::pair<std::string,std::string>> bad={
+    {"missing-id",R"({"format":1,"remove":[98765]})"},
+    {"missing-move-id",R"({"format":1,"move":[{"id":98765,"position":[0,0,0],"yaw_deg":0}]})"},
+    {"duplicate-key","{\"format\":1,\"add\":["+mesh("existing")+"]}"},
+    {"duplicate-in-file","{\"format\":1,\"add\":["+mesh("same")+","+mesh("same")+"]}"},
+    {"unknown-visual","{\"format\":1,\"add\":["+mesh("missing","NO_SUCH_VISUAL")+"]}"},
+    {"schema",R"({"format":1,"add":[{"key":"bad-schema","kind":"mesh","position":[0,0],"yaw_deg":0,"visual":"BASE","collision":"none"}]})"},
+    {"format",R"({"format":2})"}
+    };
+  for(const auto& [name,text]:bad) {
+    f.clearLayers();
+    textFile(f.layers/"00-valid.json","{\"format\":1,\"add\":["+mesh("existing")+"]}");
+    // A valid mutation preceding the error must also be rolled back.
+    auto transaction=text;
+    transaction.insert(1,"\"move\":[{\"id\":31,\"position\":[999,0,0],\"yaw_deg\":0}],");
+    if(name=="missing-move-id") transaction=text; // avoid duplicate JSON fields.
+    const auto file=f.layers/("10-"+name+".json");
+    textFile(file,transaction);
+    textFile(f.layers/"20-valid.json","{\"format\":1,\"add\":["+mesh("after-error")+"]}");
+    const auto checked=WorldData::checkVobLayer(f.world,file,f.content);
+    require(!checked.errors.empty(),name+": offline validation must reject");
+    require(checked.errors.front().find(file.string())!=std::string::npos,name+": error must identify file");
+    if(name=="missing-id" || name=="missing-move-id")
+      require(checked.errors.front().find("98765")!=std::string::npos,name+": error must identify id");
+    if(name=="unknown-visual")
+      require(checked.errors.front().find("missing")!=std::string::npos,name+": error must identify key");
+    size_t errors=0;
+    Tempest::Log::setOutputCallback([&](Tempest::Log::Mode mode,const char* line) {
+      if(mode==Tempest::Log::Error && std::string_view(line).find(file.filename().string())!=std::string::npos) ++errors;
+      });
+    const auto data=f.read();
+    Tempest::Log::setOutputCallback({});
+    require(errors==1,name+": exactly one error log per rejected file");
+    require(data.vobs.size()==5 && find(data,31)->position.x==31,name+": rejected file is atomic and subsequent files still apply");
+    if(name=="schema")
+      require(subprocess({GOTHIC_CONTENT_CONVERT,"check-vob-layer",f.world.string(),file.string(),f.content.string()})!=0,"converter CLI rejects schema errors");
+    }
+  }
+
+void runtimeMesh(const Fixture& f) {
+  setenv("OPENGOTHIC_CONTENT",f.content.c_str(),1);
+  setenv("OPENGOTHIC_CENSUS","",1);
+  const auto game=f.root.string();
+  const char* args[]={"gothic-vob-layer-test","-g",game.c_str()};
+  CommandLine commandLine(3,args);
+  Resources resources;
+  const auto* proto=Resources::loadMesh("VOB_LAYER_TEST_CUBE.3DS");
+  require(proto!=nullptr && !proto->attach.empty() && proto->attach[0].shape!=nullptr,"own visual without a base counterpart loads through meshes.json and builds collision geometry");
+  require(Resources::meshReplacementLoaded("VOB_LAYER_TEST_CUBE.3DS"),"own mesh must be loaded from content");
+  }
+}
+
+struct WorldDataContract {
+  static const Vob* runtimeVob(const Vob& root,uint32_t id) {
+    if(root.vobObjectID==id) return &root;
+    for(const auto& child:root.child)
+      if(const auto* found=runtimeVob(*child,id)) return found;
+    return nullptr;
+    }
+  static const Vob* runtimeVob(const World& world,uint32_t id) {
+    for(const auto& root:world.wobj.rootVobs)
+      if(const auto* found=runtimeVob(*root,id)) return found;
+    return nullptr;
+    }
+  static size_t layerCount(const Vob& root) {
+    size_t count=root.layerObject ? 1u : 0u;
+    for(const auto& child:root.child) count+=layerCount(*child);
+    return count;
+    }
+  static size_t layerCount(const World& world) {
+    size_t count=0;
+    for(const auto& root:world.wobj.rootVobs) count+=layerCount(*root);
+    return count;
+    }
+  static std::vector<uint8_t> save(World& world) {
+    std::vector<uint8_t> bytes;
+    Tempest::MemWriter writer(bytes);
+    { Serialize output(writer); world.save(output); }
+    return bytes;
+    }
+  static void load(World& world,const std::vector<uint8_t>& bytes) {
+    Tempest::MemReader reader(bytes);
+    Serialize input(reader);
+    world.load(input);
+    }
+  static void promotedChildSave(const Fixture& fixture,World& world) {
+    WorldData::Data original;
+    original.name="PARENT"; original.source={"PARENT.ZEN",1,1};
+    original.waynet=std::make_shared<asset::WayNet>();
+    auto parent=std::make_shared<asset::VirtualObject>();
+    parent->type=asset::VirtualObjectType::zCVobLevelCompo;
+    parent->id=100001; parent->position={100,0,0};
+    auto child=std::make_shared<asset::VirtualObject>();
+    child->type=asset::VirtualObjectType::zCVobLevelCompo;
+    child->id=100002; child->position={130,0,0};
+    parent->children.push_back(child); original.vobs.push_back(parent);
+    const auto base=fixture.root/"parent-base/worlds/PARENT";
+    const auto content=fixture.root/"parent-content/worlds/PARENT";
+    WorldData::write(original,base);
+    textFile(content/"vobs.d/remove.json",R"({"format":1,"remove":[100001]})");
+    const auto layer=WorldData::read(base,content);
+    require(layer.vobs.size()==1 && layer.vobs[0]->layer_base_parent,"promoted child retains its original parent pose");
+    Vob promoted(nullptr,world,*layer.vobs[0],Vob::None);
+    std::vector<uint8_t> bytes;
+    Tempest::MemWriter writer(bytes);
+    { Serialize output(writer); output.setContext(&world); promoted.saveVobTree(output); }
+    Vob restored(nullptr,world,*parent,Vob::None);
+    {
+      Tempest::MemReader reader(bytes);
+      Serialize input(reader); input.setContext(&world);
+      restored.loadVobTree(input);
+    }
+    require(restored.child.size()==1 && restored.child[0]->position()==Tempest::Vec3(130,0,0),"promoted-child save restores the base world pose");
+    auto translated=Tempest::Matrix4x4::mkIdentity(); translated.translate(200,0,0);
+    restored.setLocalTransform(translated);
+    require(restored.child[0]->position()==Tempest::Vec3(230,0,0),"promoted-child save restores the original parent-local relation");
+    }
+  static void saves(const Fixture& fixture) {
+    const auto* gameDir=std::getenv("GOTHIC_DIR");
+    require(gameDir && *gameDir,"save interchange needs prepared GOTHIC_DIR");
+    const char* args[]={"gothic-vob-layer-test","-g",gameDir,"-g2"};
+    CommandLine commandLine(4,args);
+    setenv("OPENGOTHIC_FRACTURE","",1);
+    setenv("OPENGOTHIC_TEXTURES","",1);
+    setenv("OPENGOTHIC_PHYSICS_THREADS","0",1);
+    Workers::setSerialExecution(true);
+    const auto layer=fixture.content/"worlds/NEWWORLD/vobs.d/save-test.json";
+    std::vector<uint8_t> baseline,layered;
+    uint32_t removed=0,moved=0;
+    Tempest::Vec3 originalPosition;
+    size_t baseRoots=0;
+    for(int phase=0;phase<3;++phase) {
+      if(phase==2) fs::remove(layer);
+      Resources resources;
+      Gothic gothic;
+      gothic.isNpcInDialogFn=[](const Npc*) { return false; };
+      gothic.setupGlobalScripts();
+      GameMusic music;
+      if(phase==0) {
+        const auto data=WorldData::read(Resources::baseDir()/"worlds/NEWWORLD");
+        bool foundMesh=false,foundLight=false;
+        for(const auto& vob:data.vobs) {
+          if(!foundMesh && vob->type==asset::VirtualObjectType::zCVob && vob->children.empty()) {
+            removed=vob->id; foundMesh=true;
+            }
+          if(!foundLight && vob->type==asset::VirtualObjectType::zCVobLight) {
+            moved=vob->id; originalPosition={vob->position.x,vob->position.y,vob->position.z}; foundLight=true;
+            }
+          }
+        require(foundMesh && foundLight,"real base must contain a removable static mesh and movable light");
+        }
+      gothic.setGame(std::make_unique<GameSession>("NEWWORLD.ZEN"));
+      auto& world=*gothic.world();
+      if(phase==0) {
+        promotedChildSave(fixture,world);
+        baseRoots=world.wobj.rootVobs.size();
+        baseline=save(world);
+        require(!baseline.empty(),"save without layer writes an archive");
+        textFile(layer,"{\"format\":1,\"remove\":["+std::to_string(removed)+"],\"move\":[{\"id\":"+
+                 std::to_string(moved)+",\"position\":[111,222,333],\"yaw_deg\":0}],\"add\":["+
+                 mesh("save-cube","VOB_LAYER_TEST_CUBE","mesh")+
+                 R"(,{"key":"save-light","kind":"light","position":[10,20,30],"yaw_deg":0,"range":400,"color":[255,100,20]}]})");
+        }
+      else if(phase==1) {
+        load(world,baseline);
+        require(world.wobj.rootVobs.size()==baseRoots+1 && layerCount(world)==2,"old save loads current added mesh/light exactly once");
+        require(runtimeVob(world,removed)==nullptr,"old save cannot resurrect a removed base vob");
+        const auto* movedVob=runtimeVob(world,moved);
+        require(movedVob && movedVob->position()==Tempest::Vec3(111,222,333),"old save cannot undo an authored layer move");
+        layered=save(world);
+        load(world,layered);
+        require(layerCount(world)==2 && runtimeVob(world,removed)==nullptr,"layered save reload keeps additions once and removal active");
+        require(runtimeVob(world,moved)->position()==Tempest::Vec3(111,222,333),"layered save reload keeps current layer move");
+        }
+      else {
+        load(world,layered);
+        require(world.wobj.rootVobs.size()==baseRoots && layerCount(world)==0,"layered save loads without the layer or extra objects");
+        const auto* movedVob=runtimeVob(world,moved);
+        require(movedVob && movedVob->position()==originalPosition,"layer move is not baked into a layer-free save load");
+        require(runtimeVob(world,removed)!=nullptr,"disabled layer restores the base tree when reading a layered save");
+        }
+      gothic.clearGame().reset();
+      }
+    }
+  };
+
+int main() {
+  try {
+    Fixture fixture;
+    setenv("OPENGOTHIC_CONTENT",fixture.content.c_str(),1);
+    unsetenv("OPENGOTHIC_VOB_LAYERS");
+    require(subprocess({"python3",GOTHIC_VOB_FIXTURE_SCRIPT,"--content",fixture.content.string()})==0,"cube fixture generator");
+    fs::create_directories(fixture.layers);
+    noLayers(fixture);
+    validLayers(fixture);
+    rejectedLayers(fixture);
+    WorldDataContract::saves(fixture);
+    runtimeMesh(fixture);
+    std::cout << "{\"test\":\"vob_layer\",\"passed\":true,\"assertions\":" << assertions << "}\n";
+    return 0;
+    }
+  catch(const std::exception& error) {
+    Tempest::Log::setOutputCallback({});
+    std::cerr << "vob layer test failed: " << error.what() << '\n';
+    return 1;
+    }
+  }

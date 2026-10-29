@@ -59,6 +59,9 @@ const std::vector<MovableVobs::Rule>& rules() {
 }
 
 const MovableVobs::Rule* MovableVobs::classify(const asset::VirtualObject& vob) {
+  // Layer meshes request either static mesh collision or no collision.
+  if(!vob.layer_key.empty())
+    return nullptr;
   if(vob.type!=asset::VirtualObjectType::zCVob || !vob.show_visual || vob.visual==nullptr)
     return nullptr;
   if(vob.visual->type!=asset::VisualType::MESH && vob.visual->type!=asset::VisualType::MULTI_RESOLUTION_MESH)
