@@ -252,7 +252,10 @@ def cmd_build(a) -> int:
     if record is not None and not materials:
         materials = [str(staging / p) for p in record.get('materials_from', [])]
     own = staging / set_name / 'materials' / 'materials.json'
-    indexes = ([own] if own.exists() else []) + [Path(m).expanduser() for m in materials]
+    indexes = []
+    for index in ([own] if own.exists() else []) + [Path(m).expanduser() for m in materials]:
+        if index.resolve() not in [i.resolve() for i in indexes]:
+            indexes.append(index)
     report = chunk_glb.check(src, out, allowed_open=allowed_edges(allowed), material_indexes=indexes,
                              world_json=src.parent.parent / 'world.json')
     (work / 'report.json').write_text(json.dumps({'problems': report.problems, **report.summary}, indent=1) + '\n')
@@ -285,8 +288,11 @@ def cmd_build(a) -> int:
         'files': {'glb': {'path': target.relative_to(staging).as_posix(), 'sha256': sha256(target)}},
         'utc': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
     })
-    if materials:
-        entry['materials_from'] = [staging_path(m, staging) for m in materials]
+    # every materials.json the check read, the set's own one too
+    if indexes:
+        entry['materials_from'] = [staging_path(m, staging) for m in indexes]
+    else:
+        entry.pop('materials_from', None)
     if a.notes:
         entry['notes'] = a.notes
     sys.path.insert(0, str(REPO / 'scripts/content'))

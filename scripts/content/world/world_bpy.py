@@ -15,6 +15,7 @@ declared with ctx.allow_open, in glTF centimetres, for chunk_glb.check; meta.jso
 """
 import importlib.util
 import json
+import struct
 from pathlib import Path
 
 import bpy
@@ -54,13 +55,19 @@ class Context:
         self.allowed = []     # [{'edit', 'reason', 'edges': [[a, b], ...]}]
 
     def allow_open(self, faces, reason):
-        """Declare that the edges of these bmesh faces may be open in the result: the outline of faces the edit
-        removes, or the free sides of what it builds (the sides of a stair, a beam standing on its own).
-        Positions are taken now, so call it while the faces are valid and placed."""
-        edges = []
+        """Declare that the outline of these bmesh faces may be open in the result: the outline of faces the edit
+        removes, or the free sides of what it builds (the sides of a stair, a beam standing on its own). Only the
+        outline is declared: an edge two faces of the set share, by exact position as the check welds them, stays
+        checked, so a hole inside the new geometry is still caught. Positions are taken now, so call it while the
+        faces are valid and placed."""
+        count, ends = {}, {}
         for f in faces:
             for e in f.edges:
-                edges.append([to_gltf(e.verts[0].co), to_gltf(e.verts[1].co)])
+                a, b = (tuple(struct.unpack('3f', struct.pack('3f', *to_gltf(v.co)))) for v in e.verts)
+                key = (a, b) if a <= b else (b, a)
+                count[key] = count.get(key, 0) + 1
+                ends[key] = [a, b]
+        edges = [ends[k] for k, n in count.items() if n == 1]
         self.allowed.append({'edit': self.edit, 'reason': reason, 'edges': edges})
 
 

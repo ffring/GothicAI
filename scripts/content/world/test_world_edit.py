@@ -180,7 +180,7 @@ def edit_args(*names):
 
 @blender
 @pytest.mark.parametrize('name, reason', [('move_border', 'border vertex'), ('delete_face', 'new open edge'),
-                                          ('unknown_material', 'unknown material')])
+                                          ('strip_with_gap', 'new open edge'), ('unknown_material', 'unknown material')])
 def test_build_refuses(tmp_path, capsys, name, reason):
     base = world(tmp_path)
     code, staging, registry = build(tmp_path, base, '--set', 'test-1', '--chunk', 'TESTWORLD/0_0', *edit_args(name))
@@ -247,3 +247,16 @@ def test_rebuild_roof_holes_is_the_same_geometry(tmp_path):
     # the exact boolean orders the cut roof's vertices differently from run to run: compare the triangles
     assert chunk_glb.same_geometry(tmp_path / 'out.glb', chunk, full=True) == []
     assert world_edit.sha256(chunk) == entry['files']['glb']['sha256']
+
+
+@blender
+@pytest.mark.parametrize('record_id, hole', [('harbour-stairs-newworld-1-1', 'delete_largest_stair'),
+                                             ('harbour-roof-holes-newworld-0-1', 'delete_hole_walls')])
+def test_a_hole_in_the_new_geometry_is_caught(tmp_path, capsys, record_id, hole):
+    entry, _ = published(record_id)
+    args = ['build', 'test-hole', '--set', 'test-hole', '--chunk', entry['replaces'][0], '--from', record_id,
+            '--edit', str(EDITS / f'{hole}.py'), '--dry-run', '--work', str(tmp_path)]
+    for m in entry.get('materials_from', []):
+        args += ['--materials', str(world_edit.STAGING / m)]
+    assert world_edit.main(args) == 1
+    assert 'FAIL: new open edge' in capsys.readouterr().out
