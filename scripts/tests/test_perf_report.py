@@ -23,7 +23,7 @@ def test_remote_perf_uses_setup_cache_unless_caller_overrides(monkeypatch, cache
         monkeypatch.setenv("OPENGOTHIC_BASE_CACHE", cache)
     harness = r'''
 set -euo pipefail
-for name in PERF_VID_RES PERF_WINDOW PERF_REPEAT PERF_WAIT PERF_ARGS PERF_ENV PERF_COMMIT PERF_DIRTY; do
+for name in PERF_VID_RES PERF_INI PERF_WINDOW PERF_REPEAT PERF_WAIT PERF_ARGS PERF_ENV PERF_COMMIT PERF_DIRTY; do
   printf -v "$name" '%s' fixture
 done
 TASK=/remote/task

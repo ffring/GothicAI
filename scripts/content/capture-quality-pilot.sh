@@ -92,13 +92,21 @@ from pathlib import Path
 import re
 import sys
 source, target = map(Path, sys.argv[1:])
+if target.is_symlink():
+    target.unlink()
 target.mkdir(exist_ok=True)
+for entry in target.iterdir():
+    if entry.is_symlink():
+        entry.unlink()
 for entry in source.iterdir():
     if entry.name.lower() != 'system' and not (target / entry.name).exists():
         (target / entry.name).symlink_to(entry)
 system = next(entry for entry in source.iterdir() if entry.name.lower() == 'system')
 local_system = target / system.name
 local_system.mkdir(exist_ok=True)
+for entry in local_system.iterdir():
+    if entry.is_symlink():
+        entry.unlink()
 for entry in system.iterdir():
     if entry.name.lower() != 'systempack.ini' and not (local_system / entry.name).exists():
         (local_system / entry.name).symlink_to(entry)
