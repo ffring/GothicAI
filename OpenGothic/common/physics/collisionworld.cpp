@@ -1588,16 +1588,6 @@ void CollisionWorld::CollisionBody::setVelocity(const Tempest::Vec3& linear, con
   owner->impl->system.GetBodyInterface().SetLinearAndAngularVelocity(id,toMeters(linear),JPH::Vec3(angular.x,angular.y,angular.z));
   }
 
-void CollisionWorld::CollisionBody::setPenetrationSlop(float meters) {
-  JPH::BodyLockWrite lock(owner->impl->system.GetBodyLockInterface(),id);
-  if(lock.Succeeded())
-    lock.GetBody().SetMaxPenetrationSlop(meters);
-  }
-
-void CollisionWorld::CollisionBody::setMaxAngularVelocity(float radiansPerSecond) {
-  owner->impl->system.GetBodyInterface().SetMaxAngularVelocity(id,radiansPerSecond);
-  }
-
 void CollisionWorld::addBody(CollisionBody& body, const Tempest::Matrix4x4& matrix, float friction,
                              bool movable, bool sensor, float mass, bool startSleeping) {
   const auto transform = toTransform(matrix);

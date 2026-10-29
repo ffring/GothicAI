@@ -65,8 +65,6 @@ class CollisionWorld final {
         bool                addImpulseAtPoint(const Tempest::Vec3& impulseNs, const Tempest::Vec3& pointCm,
                                               Npc* culprit = nullptr);
         void                setVelocity(const Tempest::Vec3& velocityCm, const Tempest::Vec3& angularRadians);
-        void                setPenetrationSlop(float meters);
-        void                setMaxAngularVelocity(float radiansPerSecond);
         void                setBuoyancyShape(JPH::ShapeRefC shape); // unpadded envelope; native collision stays unchanged
         // Target submerged-volume fraction, independent of native push mass.
         // Zero uses physical density; a target above one makes the body sink.

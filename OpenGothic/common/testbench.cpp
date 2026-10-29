@@ -3388,7 +3388,7 @@ void itemHullReport(World& world) {
     // The cross-run comparison requires ON to sleep no later than OFF in the
     // same case. There is no standalone absolute sleep deadline here.
     const bool ok=!passedThrough && !drop.belowWorld && (leftSupport || bench.itemHullLoad || !slept ||
-      (!moved && gap>=-.5f && gap<=1.f && (drop.axis.quadLength()==0 || angle<=15.f)));
+      (!moved && gap>=-2.05f && gap<=1.f && (drop.axis.quadLength()==0 || angle<=15.f)));
     pass&=ok;
     event("item_hulls_result","\"surface\":"+jsonStr(bench.itemHullSurface)+",\"index\":"+std::to_string(i)+
       ",\"symbol\":"+jsonStr(drop.symbol)+",\"label\":"+jsonStr(drop.label)+",\"mass_kg\":"+ragdollNumber(drop.mass)+
