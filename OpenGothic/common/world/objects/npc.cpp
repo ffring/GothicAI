@@ -192,6 +192,7 @@ struct Npc::MeleeShadow final {
     const Npc* target = nullptr;
     std::string who = "null";
     uint64_t sample = 0;
+    float startDistanceCm = 0;
     Vec3 targetStart, forward, nearestOffset;
     float initialGapCm = 0, minClearanceCm = std::numeric_limits<float>::max(), retreatCm = 0;
     float previewAdvanceCm = 0, previewContactMs = 0, previewCpuMs = 0, previewApproachCm = std::numeric_limits<float>::infinity();
@@ -1856,6 +1857,7 @@ void Npc::syncMeleeShadowSwing() {
   if(TestBench::bodyTracing() && currentTarget!=nullptr) {
     shadow.diagnostic.target = currentTarget;
     shadow.diagnostic.who = meleeShadowWho(currentTarget);
+    shadow.diagnostic.startDistanceCm = fightDistanceTo(*currentTarget).length();
     }
   if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget,60.f)) {
     auto& magnet = shadow.magnet;
@@ -2368,6 +2370,7 @@ void Npc::finishMeleeShadowSwing(bool remove, bool discard) {
     const double activeBegin = double(shadow.start)+double(window.beginMs)/shadow.speed;
     const double activeEnd = double(shadow.start)+double(window.endMs)/shadow.speed;
     diagnostic = "{\"target\":" + value.who +
+                 ",\"start_distance_cm\":" + number(value.startDistanceCm) +
                  ",\"active_begin_ms\":" + number(activeBegin) +
                  ",\"active_end_ms\":" + number(activeEnd) +
                  ",\"sample_time_ms\":" + number(value.sample) +
@@ -3709,10 +3712,18 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 
   const auto ws = weaponState();
   const auto bs = bodyStateMasked();
+  const auto& flags = Gothic::physicsFlags();
+  const bool downTactics = !bodyOverride && flags.meleeDownTactics && flags.meleePosture && flags.meleePhysicsHits &&
+                          (ws==WeaponState::W1H || ws==WeaponState::W2H);
+  const bool targetKnockdown = downTactics && currentTarget->meleeKnockdown;
+  // Discard the remaining native combo, but let the attack already in flight finish below.
+  if(targetKnockdown)
+    fghAlgo.onTargetKnockdown();
   const bool magnetHeading = visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window && meleeShadow->physicsHits &&
                              meleeShadow->magnet.eligible;
 
-  if(bs==BS_HIT && (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
+  if((bs==BS_HIT || (targetKnockdown && visual.pose().isAttackAnim())) &&
+     (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
     traceCombatGate("melee_hit_lock");
     //NOTE: 'storm' attack has BS_RUN state and not meant to be auto-rotated
     if(!magnetHeading)
@@ -3721,7 +3732,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     return true;
     }
 
-  if(!bodyOverride && !fghAlgo.hasInstructions()) {
+  if(!bodyOverride && !targetKnockdown && !fghAlgo.hasInstructions()) {
     traceCombatGate("no_instructions");
     return false;
     }
@@ -3743,6 +3754,38 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     if(!magnetHeading)
       implTurnToFai(*currentTarget,dt);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
+    return true;
+    }
+
+  if(targetKnockdown) {
+    const bool rising = currentTarget->meleeRiseTick!=0;
+    // Use the same root-transformed distance as isInFinishRange, bounded by its script limit.
+    const float finishRange = std::min(fghAlgo.attackFinishDistance(owner.script()),ws==WeaponState::W1H ? 165.f : 170.f);
+    const bool inRange = rising ? fghAlgo.isInWRange(*this,*currentTarget,owner.script()) :
+                                 fghAlgo.qDistTo(*this,*currentTarget)<=finishRange*finishRange;
+    const auto action = FightAlgo::resolveDownTactics(downTactics,currentTarget->meleeKnockdown,rising,inRange,
+                                                     fghAlgo.isInFocusAngle(*this,*currentTarget,5.f));
+    if(action==FightAlgo::MV_MOVE) {
+      implTurnToFai(*currentTarget,dt);
+      setAnim(AnimationSolver::Move);
+      go2.set(currentTarget,GT_Enemy);
+      go2.nativeCombatTarget = currentTarget;
+      mvAlgo.tick(dt,MoveAlgo::FaiMove);
+      go2.clear();
+      wayPath.clear();
+      }
+    else {
+      visual.stopWalkAnim(*this);
+      if(!visual.pose().isStanding())
+        setAnim(Anim::Idle);
+      implTurnToFai(*currentTarget,dt);
+      if(action==FightAlgo::MV_ATTACK && visual.pose().isStanding()) {
+        const auto hit = owner.physic()->ray(collosionCenter(),currentTarget->collosionCenter());
+        if(!hit.hasCol && doAttack(Anim::Attack,BS_HIT))
+          implFaiWait(visual.pose().atkTotalTime()+1);
+        }
+      mvAlgo.tick(dt,MoveAlgo::FaiMove);
+      }
     return true;
     }
 
