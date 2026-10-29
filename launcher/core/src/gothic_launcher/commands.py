@@ -299,6 +299,22 @@ def game(config: Config, layout: Layout, ports: Ports, save: str | None = None, 
     return Proc("game", argv, layout.game_home, env, restart=False, stamp=True)
 
 
+def preparation(
+    game_bin: Path, game_dir: Path, cwd: Path, env: dict[str, str] | None = None
+) -> Proc | None:
+    """Prepare content with the converter shipped beside the selected game executable."""
+    inherited = child_env(env or {})
+    if inherited.get("OPENGOTHIC_BASE") or inherited.get("OPENGOTHIC_BASE_FINGERPRINT"):
+        return None
+    converter = game_bin.parent / "content-convert"
+    if not converter.is_file() or not os.access(converter, os.X_OK):
+        raise LaunchError(
+            f"content-convert is missing or not executable: {converter}; "
+            "rebuild the engine with scripts/build-engine.sh"
+        )
+    return Proc("prepare", [str(converter), "resolve", str(game_dir)], cwd, env or {}, restart=False)
+
+
 def latest_save(game_home: Path) -> str | None:
     """Slot of the newest save the game wrote (quick save is slot 0)."""
     saves = [p for p in game_home.glob("save_slot_*.sav") if SAVE_RE.fullmatch(p.name)]
