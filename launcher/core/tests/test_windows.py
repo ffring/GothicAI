@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import ctypes
 import errno
+import hashlib
 import json
 import os
 import signal
@@ -20,12 +21,13 @@ from pathlib import Path
 
 import pytest
 
-from gothic_launcher import checks, cli, commands, state, winproc
+from gothic_launcher import base, checks, cli, commands, state, winproc
 from gothic_launcher import supervisor as sv
-from gothic_launcher.commands import Layout, Ports, Proc, child_env, game, services
+from gothic_launcher.commands import LaunchError, Layout, Ports, Proc, child_env, game, services
 from gothic_launcher.settings import Config
 from gothic_launcher.state import AlreadyRunning, SessionFile
 from gothic_launcher.supervisor import Event, Supervisor
+from tests.test_checks import _ready_base
 
 windows = pytest.mark.skipif(sys.platform != "win32", reason="real Windows job objects and locks")
 FAKE = str(Path(__file__).with_name("fake_service.py"))
@@ -283,6 +285,50 @@ def test_windows_paths(tmp_path, monkeypatch):
     assert commands.storygraph_env(layout) == {}  # the services take the explicit one as it is
 
 
+def test_windows_preparation_runs_the_exe_converter_beside_the_game(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("OPENGOTHIC_BASE", raising=False)
+    monkeypatch.delenv("OPENGOTHIC_BASE_FINGERPRINT", raising=False)
+    build = tmp_path / "Мои игры" / "opengothic"
+    build.mkdir(parents=True)
+    game_bin = build / "Gothic2Notr.exe"
+    folder = tmp_path / "Gothic II"
+    (build / "content-convert").write_bytes(b"")  # the name of a Linux or macOS build
+    with pytest.raises(LaunchError) as error:
+        commands.preparation(game_bin, folder, tmp_path)
+    assert str(build / "content-convert.exe") in str(error.value)
+    assert "scripts/build-engine.ps1" in str(error.value)
+    converter = build / "content-convert.exe"
+    converter.write_bytes(b"")
+    converter.chmod(0o755)  # a POSIX host running this test checks the mode
+    proc = commands.preparation(game_bin, folder, tmp_path)
+    assert proc is not None and proc.argv == [str(converter), "resolve", str(folder)]
+
+
+def test_windows_launcher_hands_the_engines_base_cache_to_every_reader(tmp_path, monkeypatch, capsys):
+    """The engine keeps its base pointer under %LOCALAPPDATA%, the Python readers default to ~/.cache: `check`
+    finds the base the converter prepared there, and the children get the same folder."""
+    game_dir, _, _ = _ready_base(tmp_path, monkeypatch)  # its cache and pointer, moved below
+    monkeypatch.setattr(sys, "platform", "win32")
+    local = tmp_path / "Пользователь" / "AppData" / "Local"
+    cache = local / "gothic-ai" / "base"
+    cache.parent.mkdir(parents=True)
+    (tmp_path / "cache").rename(cache)
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.delenv("OPENGOTHIC_BASE_CACHE")
+    monkeypatch.setattr(cli.sys, "argv", ["gothic-launcher", "check", str(game_dir)])
+    with pytest.raises(SystemExit) as result:
+        cli.main()
+    assert result.value.code == 0
+    assert [item["id"] for item in json.loads(capsys.readouterr().out)] == ["base", "russian"]
+    assert child_env({})["OPENGOTHIC_BASE_CACHE"] == str(cache.resolve())
+    monkeypatch.setenv("OPENGOTHIC_BASE_CACHE", "D:/own cache")
+    assert commands.base_cache_env() == {}  # an explicit cache stays
+    monkeypatch.delenv("OPENGOTHIC_BASE_CACHE")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert commands.base_cache_env() == {}  # Linux and macOS keep the readers' own default
+
+
 def test_windows_children_run_python_in_utf8_mode(monkeypatch):
     monkeypatch.delenv("PYTHONUTF8", raising=False)
     monkeypatch.setattr(sys, "platform", "darwin")
@@ -441,7 +487,7 @@ def test_setup_sets_the_remote_profile_and_takes_the_key_hidden(setup_env, tmp_p
     assert s.game.dir == folder and config.secrets.inworld_api_key == "iw-test-key" and len(asked) == 1
     out = capsys.readouterr().out
     assert "iw-test-key" not in out
-    assert "Распознавание: было voxtral" in out and "Адрес сети боя: было tcp://gpu:47835" in out
+    assert "Распознавание: было voxtral" in out and "Адрес запасного сервиса боя: было tcp://gpu:47835" in out
     assert code == 2 and "Нет входа в ChatGPT" in out and "Игра ещё не собрана" in out
 
     again = Config.load(tmp_path / "config")
@@ -464,6 +510,19 @@ def test_preflight_names_the_windows_setup(setup_env, monkeypatch, capsys):
     assert cli.setup(setup_args(check=True)) == 2
     out = capsys.readouterr().out
     assert "Папка игры не выбрана" in out and "Setup-GothicAI.cmd" in out
+
+
+def test_preflight_wants_the_converter_beside_the_game(setup_env, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("OPENGOTHIC_BASE", raising=False)
+    build = tmp_path / "repo" / "OpenGothic" / "build" / "opengothic"
+    build.mkdir(parents=True)
+    (build / "Gothic2Notr.exe").write_bytes(b"")
+    cli.setup(setup_args(check=True))
+    assert "Игра ещё не собрана" in capsys.readouterr().out  # `up` would stop before the game
+    (build / "content-convert.exe").write_bytes(b"")
+    cli.setup(setup_args(check=True))
+    assert "Игра ещё не собрана" not in capsys.readouterr().out
 
 
 # --- Windows itself --------------------------------------------------------------------------------
@@ -548,6 +607,83 @@ async def test_the_supervisor_stops_and_restarts_whole_trees_on_windows(tmp_path
     for pid in (new_leader, new_child):
         assert await asyncio.to_thread(wait_gone, pid)
     assert (tmp_path / "launcher.json").read_text() == ""
+
+
+# the converter: diagnostics on stderr, nothing for the launcher on stdout
+PREPARING = (
+    "import os, sys, time; print('stdout is not read', flush=True); "
+    "print('base: importing installation', os.getpid(), file=sys.stderr, flush=True); time.sleep(600)"
+)
+
+
+@windows
+async def test_windows_preparation_reports_stderr_and_stopping_ends_its_job(tmp_path):
+    lines: list[str] = []
+    reported = asyncio.Event()
+
+    def record(e: Event) -> None:
+        if e.proc == "prepare" and e.kind == "status":
+            lines.append(e.detail)
+            reported.set()
+
+    prepare = Proc("prepare", [sys.executable, "-c", PREPARING], tmp_path, restart=False)
+    session = SessionFile(tmp_path / "launcher.json")
+    sup = Supervisor([], None, tmp_path / "logs", record, session=session, preparation=prepare)
+    run = asyncio.create_task(sup.run())
+    await asyncio.wait_for(reported.wait(), 30)
+    shim = sup.running["prepare"].process.pid  # a venv's python.exe runs the interpreter as its child
+    sup.stop()
+    assert await asyncio.wait_for(run, 30) == 0
+    [line] = lines
+    assert line.startswith("base: importing installation")
+    for pid in (shim, int(line.split()[-1])):
+        assert await asyncio.to_thread(wait_gone, pid)
+
+
+@windows
+async def test_windows_preparation_failure_keeps_the_converters_reason(tmp_path):
+    events: list[Event] = []
+    reason = "import sys; print('no ready base for C:/Игры/Gothic II', file=sys.stderr); sys.exit(3)"
+    prepare = Proc("prepare", [sys.executable, "-c", reason], tmp_path, restart=False)
+    session = SessionFile(tmp_path / "launcher.json")
+    sup = Supervisor([], None, tmp_path / "logs", events.append, session=session, preparation=prepare)
+    assert await asyncio.wait_for(sup.run(), 30) == 3
+    [failed] = [e for e in events if e.proc == "prepare" and e.kind == "failed"]
+    assert "exited with code 3" in failed.detail and "no ready base for C:/Игры/Gothic II" in failed.detail
+
+
+def _try_exclusive(path: Path) -> bool:
+    """What the engine's cleanup takes before it removes a cached base (BaseStore Lock::TryExclusive)."""
+    import msvcrt
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+    k.LockFileEx.restype = ctypes.c_int
+    k.LockFileEx.argtypes = (ctypes.c_void_p, *(ctypes.c_uint32,) * 4, ctypes.c_void_p)
+    with path.open("a+b") as file:
+        overlapped = ctypes.create_string_buffer(32)  # OVERLAPPED, offset 0
+        handle = msvcrt.get_osfhandle(file.fileno())
+        # LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY; closing the file lets go of it
+        return bool(k.LockFileEx(handle, 0x2 | 0x1, 0, 0xFFFFFFFF, 0xFFFFFFFF, ctypes.byref(overlapped)))
+
+
+@windows
+def test_a_base_read_here_holds_off_the_engines_cleanup(tmp_path):
+    cache = (tmp_path / "cache").resolve()
+    fingerprint = "a" * 64
+    directory = cache / fingerprint
+    directory.mkdir(parents=True)
+    manifest = json.dumps({"format": "gothic-base-files", "version": 1, "files": []}).encode()
+    (directory / "base-files.json").write_bytes(manifest)
+    binding = {"path": "base-files.json", "size": len(manifest), "sha256": hashlib.sha256(manifest).hexdigest()}
+    (directory / "base.json").write_text(json.dumps({
+        "format": "gothic-base", "version": 2, "fingerprint": fingerprint, "manifest": binding,
+    }))
+    lease = cache / f"{fingerprint}.use"
+    with base.Base(directory, cache, fingerprint):
+        assert not _try_exclusive(lease)
+        with base.Base(directory, cache, fingerprint):  # readers share it, as the game does
+            assert not _try_exclusive(lease)
+    assert _try_exclusive(lease)
 
 
 @windows

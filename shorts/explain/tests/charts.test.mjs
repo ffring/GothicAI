@@ -580,8 +580,13 @@ test('motion: переходы, входы и пути проходят схем
       texts: [{text: 'y', enter: 'pop'}], paths: [{points: [[0, 0], [100, 50], [200, 0]], color: '#fff', arrow: true}]},
   ]});
   assert.equal(plan.beats[0].texts[0].enter, 'rise');
-  assert.equal(plan.beats[1].enter.dur, 0.35);
+  assert.equal(plan.beats[1].enter.dur, 0.5, 'slide по умолчанию дольше: едет весь кадр');
   assert.equal(plan.beats[1].paths[0].curve, true);
+  const enter = (e) => Plan.parse({lang: 'ru', hook: {text: 'x', until: 1},
+    beats: [{id: 'a', kind: 'still', dur: 2}, {id: 'b', kind: 'still', dur: 2, enter: e}]}).beats[1].enter;
+  assert.deepEqual(enter({type: 'fade'}), {type: 'fade', dur: 0.35});
+  assert.deepEqual(enter({type: 'wipe'}), {type: 'wipe', dur: 0.5});
+  assert.deepEqual(enter({type: 'slide', dur: 0.3}), {type: 'slide', dur: 0.3}, 'явная длительность из плана не меняется');
   assert.throws(() => Plan.parse({lang: 'ru', hook: {text: 'x', until: 1},
     beats: [{id: 'a', kind: 'still', dur: 2, enter: {type: 'spin'}}]}));
 });

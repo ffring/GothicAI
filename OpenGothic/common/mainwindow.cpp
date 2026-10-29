@@ -10,6 +10,9 @@
 #include <Tempest/Application>
 #include <Tempest/Log>
 
+#include <cstdlib>
+#include <cstring>
+
 #include "ui/crosshair.h"
 #include "ui/dialogmenu.h"
 #include "ui/menuroot.h"
@@ -34,7 +37,9 @@
 using namespace Tempest;
 
 MainWindow::MainWindow(Device& device)
-  : Window(TestBench::isActive() ? Minimized : Maximized),device(device),swapchain(device,hwnd()),
+  : Window(TestBench::isActive() ?
+      (std::getenv("OPENGOTHIC_BENCH_VISIBLE")!=nullptr && std::strcmp(std::getenv("OPENGOTHIC_BENCH_VISIBLE"),"1")==0 ? Normal : Minimized) : Maximized),
+    device(device),swapchain(device,hwnd()),
     atlas(device),rootMenu(keycodec),inventory(keycodec),
     dialogs(inventory),document(keycodec),
     console(*this),
@@ -76,6 +81,10 @@ MainWindow::MainWindow(Device& device)
 
   Gothic::inst().onVideo       .bind(this,&MainWindow::onVideo);
 
+  if(CommandLine::inst().doIntro() && !Gothic::inst().isBenchmarkMode() &&
+     Gothic::settingsGetI("GAME","scaleVideos")>=0)
+    Resources::startVideoBase();
+
   Gothic::inst().onBenchmarkFinished.bind(this,&MainWindow::onBenchmarkFinished);
 
   if(!Gothic::inst().defaultSave().empty()){
@@ -88,6 +97,7 @@ MainWindow::MainWindow(Device& device)
     }
   else {
     rootMenu.processMusicTheme();
+    Log::i("Main menu ready: ",Gothic::inst().menuMain());
     }
 
   funcKey[2] = Shortcut(*this,Event::M_NoModifier,Event::K_F2);
@@ -310,6 +320,8 @@ void MainWindow::resizeEvent(SizeEvent&) {
   for(auto& i:fence)
     i.wait();
   swapchain.reset();
+  if(TestBench::isActive())
+    Log::i("[bench] drawable ",swapchain.w(),"x",swapchain.h());
   if(auto camera = Gothic::inst().camera())
     camera->setViewport(swapchain.w(),swapchain.h());
 
@@ -1029,7 +1041,7 @@ void MainWindow::tickCamera(uint64_t dt) {
       }
     else if(pl!=nullptr && !camera.isFree()) {
       auto spin = camera.spin();
-      if(pl->interactive()==nullptr && !pl->isDown())
+      if(pl->interactive()==nullptr && !pl->isDown() && !pl->isMeleeKnockedDown())
         spin.y = pl->rotation();
       if(pl->isDive() && !camera.isMarvin())
         spin.x = -pl->rotationY();
@@ -1068,6 +1080,8 @@ Camera::Mode MainWindow::solveCameraMode() const {
   if(auto pl = Gothic::inst().player()) {
     if(pl->isDead())
       return Camera::Death;
+    if(pl->isMeleeKnockedDown())
+      return Camera::Normal;
     if(pl->isDive())
       return Camera::Dive;
     if(pl->isSwim())
@@ -1196,9 +1210,10 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   update();
   }
 
-void MainWindow::onVideo(std::string_view fname) {
+void MainWindow::onVideo(std::string_view fname, bool explicitRequest) {
   // -nointro (autotests): no videos, Xardas's first dialog plays the addon's intro for over a minute
-  if(Gothic::inst().isBenchmarkMode() || !CommandLine::inst().doIntro())
+  if(!explicitRequest && (Gothic::inst().isBenchmarkMode() || !CommandLine::inst().doIntro() ||
+                         Gothic::settingsGetI("GAME","scaleVideos")<0))
     return;
   video.pushVideo(fname);
   }
@@ -1211,6 +1226,11 @@ void MainWindow::onStartLoading() {
 
 void MainWindow::onWorldLoaded() {
   dMouse = Point();
+  if(TestBench::isActive())
+    Log::i("[bench] drawable ",swapchain.w(),"x",swapchain.h());
+  if(TestBench::isActive())
+    if(auto* world = Gothic::inst().world())
+      Log::i("[bench] world ready: ",world->name());
 
   if(Gothic::inst().isBenchmarkMode()) {
     if(auto world = Gothic::inst().world()) {
@@ -1319,6 +1339,10 @@ void MainWindow::render(){
         }
       }
 
+    // Reuse only this frame slot; do not advance the simulation while its GPU work is pending.
+    auto& sync = fence[cmdId];
+    { FrameProfile::Scope timing(FrameProfile::Zone::FencePoll); sync.wait(); }
+
     /*
       Note: game update goes first
       once player position is updated, animation bones(cameraBone in particular) can be updated
@@ -1348,15 +1372,6 @@ void MainWindow::render(){
         }
       }
 
-    auto& sync = fence[cmdId];
-    const bool ready=[&] { FrameProfile::Scope timing(FrameProfile::Zone::FencePoll); return sync.wait(0); }();
-    if(!ready) {
-      // GPU rendering is not done, pass to next frame
-      std::this_thread::yield();
-      profile.flag(FrameProfile::Flag::FenceBusy);
-      profile.outcome(FrameProfile::Outcome::FenceBusy);
-      return;
-      }
     { FrameProfile::Scope timing(FrameProfile::Zone::Recycle); Resources::resetRecycled(cmdId); }
 
     {

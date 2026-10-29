@@ -5,11 +5,12 @@ Packs the prebuilt Windows release into one ZIP, with its build manifest and SHA
 .DESCRIPTION
 Runs after scripts\build-engine.ps1 and reads that build's outputs. The archive holds what a player runs,
 copied by whitelist into the repository's own layout, so the launcher finds everything where it looks:
-  Start-GothicAI.cmd, Setup-GothicAI.cmd, Diagnostics-GothicAI.cmd, START_HERE.ru.md, LICENSE
-  scripts\windows\                       the entry points' PowerShell and Russian messages
+  Start-GothicAI.cmd, Setup-GothicAI.cmd, Diagnostics-GothicAI.cmd, Prepare-GothicAI-Game.cmd,
+  Check-Microphone.cmd, START_HERE.ru.md, LICENSE
+  scripts\windows\                       the entry points' PowerShell and Python helpers, Russian messages
   launcher\core, server, asr-service, tts-service, libs\chatgpt-auth
                                          sources, pyproject.toml, uv.lock, .python-version (no tests)
-  OpenGothic\build\opengothic\           Gothic2Notr.exe and every DLL of that output folder
+  OpenGothic\build\opengothic\           Gothic2Notr.exe, content-convert.exe and every DLL of that folder
   OpenGothic\ai_bridge\storygraph\build\ storygraph.exe
   tools\uv\                              the pinned official uv.exe and its licenses
   licenses\                              the licenses of everything compiled in or shipped
@@ -20,8 +21,10 @@ The archive is refused when something private or build-only slipped in, when a b
 a DLL that a packed binary imports (dumpbin /dependents) is neither packed beside it nor part of Windows.
 
   scripts\windows\package.ps1 -UvZip <uv-x86_64-pc-windows-msvc.zip> -UvLicenses <folder> -OutDir <folder>
-                              -Name <archive base name> [-Commit <sha>] [-RunUrl <url>]
+                              -Name <archive base name> [-Repository <url>] [-Commit <sha>] [-RunUrl <url>]
                               [-VulkanSdkVersion <v>] [-UvVersion <v>]
+-Repository is the public source repository the archive names as its corresponding source (CI passes the
+one it runs in).
 #>
 [CmdletBinding()]
 param(
@@ -29,6 +32,7 @@ param(
     [Parameter(Mandatory = $true)] [string]$UvLicenses,
     [Parameter(Mandatory = $true)] [string]$OutDir,
     [Parameter(Mandatory = $true)] [string]$Name,
+    [string]$Repository = 'https://github.com/kaifaty/GothicAI',
     [string]$Commit = '',
     [string]$RunUrl = '',
     [string]$VulkanSdkVersion = '',
@@ -64,9 +68,11 @@ function Copy-FromRepo([string]$Relative) { Copy-Into (Join-Path $Root $Relative
 function Get-Relative([string]$Path, [string]$Base) { return $Path.Substring($Base.TrimEnd('\').Length + 1) }
 
 # the entry points and the player's guide
-foreach ($file in 'Start-GothicAI.cmd', 'Setup-GothicAI.cmd', 'Diagnostics-GothicAI.cmd', 'START_HERE.ru.md',
+foreach ($file in 'Start-GothicAI.cmd', 'Setup-GothicAI.cmd', 'Diagnostics-GothicAI.cmd',
+                  'Prepare-GothicAI-Game.cmd', 'Check-Microphone.cmd', 'START_HERE.ru.md',
                   'LICENSE', 'scripts\windows\common.ps1', 'scripts\windows\setup.ps1',
                   'scripts\windows\start.ps1', 'scripts\windows\diagnostics.ps1',
+                  'scripts\windows\microphone-check.ps1', 'scripts\windows\game_profile.py',
                   'scripts\windows\messages.ru.json') {
     Copy-FromRepo $file
 }
@@ -82,9 +88,11 @@ foreach ($project in $PythonProjects) {
         ForEach-Object { Copy-FromRepo (Get-Relative $_.FullName $Root) }
 }
 
-# the game: its executable and every DLL of its output folder (Tempest, the DirectX shader compiler...)
+# the game, its base and video converter, and every DLL of their output folder (Tempest, the DirectX
+# shader compiler...)
 $gameDir = Join-Path $Root $Game
 Copy-FromRepo "$Game\Gothic2Notr.exe"
+Copy-FromRepo "$Game\content-convert.exe"
 Get-ChildItem -LiteralPath $gameDir -Filter '*.dll' -File | ForEach-Object { Copy-FromRepo "$Game\$($_.Name)" }
 Copy-FromRepo "$Storygraph\storygraph.exe"
 Get-ChildItem -LiteralPath (Join-Path $Root $Storygraph) -Filter '*.dll' -File |
@@ -151,7 +159,7 @@ Add-License $vcNote 'Microsoft-CPP-Runtime.txt'
 Remove-Item -LiteralPath $vcNote
 $source = Join-Path $OutDir 'SOURCE.txt'
 [System.IO.File]::WriteAllLines($source, @(
-    "Built from https://github.com/ffring/GothicAI at commit $Commit.",
+    "Built from $Repository at commit $Commit.",
     'The complete corresponding source of every binary here, including Tempest.dll with OpenAL Soft',
     '(LGPL, OpenGothic\lib\Tempest\Engine\thirdparty\openal-soft\COPYING), is that commit of the repository;',
     'scripts\build-engine.ps1 rebuilds it.'
@@ -202,8 +210,9 @@ foreach ($binary in @($files | Where-Object { $_.Extension -in '.exe', '.dll' })
         imports = $imports
     }
 }
-if (-not ($binaries | Where-Object { $_.path -eq 'OpenGothic/build/opengothic/Gothic2Notr.exe' })) {
-    throw 'the game is not in the archive'
+foreach ($needed in 'OpenGothic/build/opengothic/Gothic2Notr.exe', 'OpenGothic/build/opengothic/content-convert.exe',
+                    'OpenGothic/ai_bridge/storygraph/build/storygraph.exe') {
+    if (-not ($binaries | Where-Object { $_.path -eq $needed })) { throw "$needed is not in the archive" }
 }
 
 # the archive, its manifest and their checksums
@@ -216,14 +225,15 @@ try {
 } finally {
     $check.Dispose()
 }
-foreach ($needed in 'Start-GothicAI.cmd', 'Setup-GothicAI.cmd', 'tools/uv/uv.exe',
-                    'OpenGothic/build/opengothic/Gothic2Notr.exe',
+foreach ($needed in 'Start-GothicAI.cmd', 'Setup-GothicAI.cmd', 'Prepare-GothicAI-Game.cmd', 'Check-Microphone.cmd',
+                    'scripts/windows/game_profile.py', 'scripts/windows/microphone-check.ps1', 'tools/uv/uv.exe',
+                    'OpenGothic/build/opengothic/Gothic2Notr.exe', 'OpenGothic/build/opengothic/content-convert.exe',
                     'OpenGothic/ai_bridge/storygraph/build/storygraph.exe', 'server/uv.lock') {
     if ($entries -notcontains "$Name/$needed") { throw "the archive lacks $Name/$needed" }
 }
 $manifest = [ordered]@{
     name = $Name
-    repository = 'https://github.com/ffring/GothicAI'
+    repository = $Repository
     commit = $Commit
     run = $RunUrl
     built_utc = (Get-Date).ToUniversalTime().ToString('o')

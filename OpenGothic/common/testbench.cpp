@@ -627,6 +627,9 @@ struct Bench {
   std::string recName;
   uint64_t    recFrame  = 0;
   uint64_t    recStart  = 0;
+  std::string perfSegment;
+  uint64_t    perfFrame = 0;
+  bool        perfArmed = false;
   std::unique_ptr<VideoPipe> video;
   uint32_t    videoW    = 0;
   uint32_t    videoH    = 0;
@@ -682,7 +685,8 @@ struct Bench {
   struct LivingPhysics { uint64_t time=0;uint64_t dt=0;float milliseconds=0;size_t bodies=0; };
   std::vector<LivingPhysics> livingPhysics;
   bool livingOverflow=false;
-  bool meleeFixture=false,meleeMeasuring=false;
+  bool meleeFixture=false,meleeMeasuring=false,meleeSteady=false,meleeBrawl=false;
+  uint32_t meleeAttackStarts=0;
   std::string meleeMode,meleePelvis;
   uint64_t meleeMotionFrom=0;
   std::vector<Npc*> meleeShadowActors;
@@ -2180,6 +2184,7 @@ void writeHeader() {
   std::fprintf(bench.csv,",f_on,f_bend,f_yaw,f_twist,f_head,f_hits,f_str,f_ht");
   std::fprintf(bench.csv,",hp_player,hp_subject");
   std::fprintf(bench.csv,",ai_on,ai_want,ai_sigma,ai_errx,ai_erry,ai_lead,ai_pv,ai_ps");
+  std::fprintf(bench.csv,",mr_w,mr_dev,mr_hits");
   if(ragdollTrace)
     std::fprintf(bench.csv,",ph_ms,ph_bodies,ph_rays,rd_mode,rd_weight,rd_sleep");
   if(bench.questTrace)
@@ -2441,6 +2446,7 @@ void ragdollSessionArchive(const std::vector<std::string>& args, World& world, N
     ",\"feature_enabled\":"+(Gothic::settingsGetI("GAME","ragdoll")!=0 ? "true" : "false")+
     ",\"dead\":"+(npc->isDead() ? "true" : "false")+
     ",\"unconscious\":"+(npc->isUnconscious() ? "true" : "false")+
+    ",\"melee_knockdown\":"+(npc->isMeleeKnockedDown() ? "true" : "false")+
     ",\"recovering\":"+(npc->isRagdollBlending() ? "true" : "false")+
     ",\"hp\":"+std::to_string(npc->attribute(ATR_HITPOINTS))+
     ",\"inventory\":"+ragdollInventory(*npc,world)+
@@ -7401,6 +7407,22 @@ void writeRow(Npc& pl) {
   const auto& ai = ArcherAi::subjectProbe;
   std::fprintf(bench.csv,",%d,%d,%.3f,%.3f,%.3f,%.0f,%.2f,%.2f",int(ai.valid && ai.active),int(ai.want),ai.sigma,ai.err.x,ai.err.y,
                ai.lead,ai.pv,ai.ps);
+  {
+    // the watched npc's motor reaction to a blow: its weight, how far the shown body leaves the animation (cm)
+    const Npc&     s      = subjectOf(pl);
+    const Ragdoll* living = s.livingBody();
+    float          weight = 0, dev = 0;
+    if(living!=nullptr && living->reactionWeight()>0.f) {
+      weight = living->reactionWeight();
+      for(const auto b:living->reactionBones()) {
+        Vec3 shown, anim;
+        s.renderedBone(b).project(shown);
+        s.animationBone(b).project(anim);
+        dev = std::max(dev,(shown-anim).length());
+        }
+      }
+    std::fprintf(bench.csv,",%.3f,%.2f,%u",weight,dev,unsigned(s.meleeReactionProbe().applied));
+  }
   if(ragdollTrace)
     writeRagdoll(pl);
   if(bench.questTrace && bench.questNpc!=nullptr)
@@ -11817,22 +11839,24 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const int count=int(num(a,2,-1)),substeps=int(num(a,5,0));
     const auto& mode=a[3];const auto& pelvis=a[4];
     if(enabled==nullptr || std::string_view(enabled)!="fixture" ||
-       (count!=0 && count!=1 && count!=2 && count!=4 && count!=10) ||
-       (mode!="base" && mode!="full" && mode!="chain" && mode!="blade") ||
+       (count!=0 && count!=1 && count!=2 && count!=4 && count!=6 && count!=10) ||
+       (mode!="base" && mode!="full" && mode!="chain" && mode!="blade" && mode!="game") ||
        (pelvis!="kinematic" && pelvis!="dynamic") || (substeps!=1 && substeps!=2) ||
        (count==0 && mode!="base")) {
-      arenaAbort("melee setup requires fixture flag, count 0/1/2/4/10, mode base/full/chain/blade, pelvis kinematic/dynamic, substeps 1/2");return;
+      arenaAbort("melee setup requires fixture flag, count 0/1/2/4/6/10, mode base/full/chain/blade/game, pelvis kinematic/dynamic, substeps 1/2");return;
       }
     if(!chooseRagdollArena(w,pl)) {arenaAbort("melee fixture needs an empty supported arena");return;}
     exec("clear 2500",w,pl,ctrl);
-    Gothic::settingsSetI("GAME","living_bodies",0);
+    // "game" keeps the ordinary living bodies the fighters have in play
+    if(mode!="game")
+      Gothic::settingsSetI("GAME","living_bodies",0);
     w.physic()->configureMeleeBench(substeps);
     bench.meleeMode=mode;bench.meleePelvis=pelvis;
     const auto symbol=w.script().findSymbolIndex("BDT_1013_BANDIT_L");
     const auto sword=w.script().findSymbolIndex("ItMw_1h_Common_01");
     if(symbol==size_t(-1) || sword==size_t(-1)) {arenaAbort("melee fixture symbols missing");return;}
     const auto bodyMode=mode=="full" ? Npc::MeleeBenchMode::Full : mode=="chain" ? Npc::MeleeBenchMode::Chain :
-                        mode=="blade" ? Npc::MeleeBenchMode::Blade : Npc::MeleeBenchMode::Base;
+                        mode=="blade" ? Npc::MeleeBenchMode::Blade : mode=="game" ? Npc::MeleeBenchMode::Off : Npc::MeleeBenchMode::Base;
     for(int i=0;i<count;++i) {
       auto* npc=w.addNpc(symbol,bench.ragdollArenaPlaces[size_t(i)+5]);
       if(!npc) {arenaAbort("melee NPC insertion failed");return;}
@@ -11859,6 +11883,51 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     bench.meleeFixture=true;bench.meleeMotionFrom=w.tickCount();
     event("melee_physics_setup","\"actors\":"+std::to_string(count)+",\"mode\":"+jsonStr(mode)+
       ",\"pelvis\":"+jsonStr(pelvis)+",\"substeps\":"+std::to_string(substeps)+",\"animation_cycle_ms\":12000");
+    }
+  else if(c=="melee-physics" && a.size()==2 && a[1]=="steady") {
+    if(!bench.meleeFixture || bench.meleeMode!="base") {
+      arenaAbort("steady melee measurement requires the base fixture");return;
+      }
+    // Keep four walkers, three idle actors and three attackers throughout the
+    // comparison; long frames must not change the mix by delaying a phase.
+    bench.meleeSteady=true;
+    }
+  else if(c=="melee-physics" && a.size()==2 && a[1]=="brawl") {
+    if(!bench.meleeFixture || (bench.meleeMode!="base" && bench.meleeMode!="game") || bench.crew.size()!=6) {
+      arenaAbort("melee brawl requires the six-actor base or game fixture");return;
+      }
+    const auto attack=w.script().findSymbolIndex("ZS_ATTACK");
+    const auto tactic=w.script().findSymbol("FAI_HUMAN_MASTER");
+    const auto reason=w.script().findSymbol("AIV_ATTACKREASON");
+    const auto kill=w.script().findSymbol("AR_KILL");
+    if(attack==size_t(-1) || !tactic || !reason || !kill || reason->get_int()<0 ||
+       size_t(reason->get_int())>=zenkit::INpc::aivar_count) {
+      arenaAbort("melee brawl script symbols are absent");return;
+      }
+    for(size_t i=0;i<bench.crew.size();++i) {
+      auto& npc=*bench.crew[i];
+      const float angle=float(i)*float(M_PI)/3.f;
+      Vec3 position=bench.ragdollArenaTarget+Vec3(std::cos(angle)*220.f,0,std::sin(angle)*220.f);
+      const auto floor=w.physic()->landRay(position+Vec3(0,300,0),600.f);
+      if(!floor.hasCol || floor.n.y<.98f) {arenaAbort("melee brawl actor has no level ground");return;}
+      position.y=floor.v.y;
+      npc.clearAiQueue();npc.clearState(true);npc.clearGoTo();npc.stopWalking();
+      auto& h=npc.handle();
+      h.flags=zenkit::NpcFlag(uint32_t(h.flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
+      h.attribute[ATR_HITPOINTSMAX]=100000;h.attribute[ATR_HITPOINTS]=100000;
+      h.attribute[ATR_STRENGTH]=60;h.hitchance[TALENT_1H]=60;npc.setTalentSkill(TALENT_1H,2);
+      h.guild=i%2==0 ? GIL_BDT : GIL_PAL;h.fight_tactic=tactic->get_int();
+      h.aivar[size_t(reason->get_int())]=kill->get_int();
+      npc.setPosition(position);npc.updateTransform();
+      }
+    for(size_t i=0;i<bench.crew.size();++i) {
+      auto& npc=*bench.crew[i];auto* target=bench.crew[(i+3)%bench.crew.size()];
+      npc.setDirection(target->position()-npc.position());npc.updateTransform();
+      npc.setExternalControl(false);npc.setTarget(target);
+      npc.aiPush(AiQueue::aiStartState(ScriptFn(attack),0,target,nullptr,""));
+      }
+    bench.meleeBrawl=true;
+    event("melee_physics_brawl","\"actors\":6,\"hp_each\":100000,\"radius_cm\":220");
     }
   else if(c=="living" && a.size()==2 && (a[1]=="on" || a[1]=="off")) {
     Gothic::settingsSetI("GAME","living_bodies",a[1]=="on");bench.livingPhase=a[1];
@@ -11946,22 +12015,28 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
       }
     event("melee_physics_precondition",livingCountFields(counts,w)+",\"expected_parts\":"+std::to_string(expected)+
       ",\"rigs\":"+std::to_string(rigs)+",\"motor_dynamic_parts\":"+std::to_string(dynamicParts));
-    if(!bench.meleeFixture || counts.models!=bench.crew.size() || counts.alive!=bench.crew.size() ||
-       counts.parts!=expected || counts.duplicates!=0 || !motorsReady ||
-       rigs!=(bench.meleeMode=="base" ? 0 : bench.crew.size()) ||
+    const bool fixtureBodies=bench.meleeBrawl ?
+      std::all_of(bench.crew.begin(),bench.crew.end(),[](const Npc* npc) {return npc->attribute(ATR_HITPOINTS)>0;}) :
+      counts.alive==bench.crew.size() && counts.parts==expected && motorsReady &&
+      rigs==(bench.meleeMode=="base" ? 0 : bench.crew.size());
+    if(!bench.meleeFixture || counts.models!=bench.crew.size() || !fixtureBodies || counts.duplicates!=0 ||
        !AppCadence::normalClock() || !AppCadence::arm(bench.meleeMode!="base")) {
       arenaAbort("melee measurement precondition failed");return;
       }
+    bench.meleeAttackStarts=0;
     AppCadence::counts(true,uint32_t(counts.models),0,uint32_t(counts.parts),0,0);
     w.physic()->measureMeleeBench(outDir+"/melee-physics.csv");bench.meleeMeasuring=true;
-    event("melee_physics_measure_before",livingCountFields(counts,w));
+    event("melee_physics_measure_before",livingCountFields(counts,w)+
+      ",\"steady_mix\":"+(bench.meleeSteady ? "true" : "false")+",\"brawl\":"+(bench.meleeBrawl ? "true" : "false"));
     }
   else if(c=="melee-physics" && a.size()==2 && a[1]=="report") {
     if(!bench.meleeMeasuring || !AppCadence::done()) {arenaAbort("melee measurement window is incomplete");return;}
     bench.meleeMeasuring=false;w.physic()->reportMeleeBench();const auto counts=livingCounts();
     AppCadence::counts(false,uint32_t(counts.models),0,uint32_t(counts.parts),0,0);
-    event("melee_physics_measure_after",livingCountFields(counts,w));
-    if(counts.alive!=bench.crew.size() || counts.duplicates!=0)
+    event("melee_physics_measure_after",livingCountFields(counts,w)+
+      ",\"attack_starts\":"+std::to_string(bench.meleeAttackStarts));
+    if((!bench.meleeBrawl && counts.alive!=bench.crew.size()) || counts.duplicates!=0 ||
+       (bench.meleeBrawl && std::any_of(bench.crew.begin(),bench.crew.end(),[](const Npc* npc) {return npc->attribute(ATR_HITPOINTS)<=0;})))
       arenaAbort("melee actors changed during measurement");
     }
   else if(c=="living" && a.size()==3 && a[1]=="measure") {
@@ -12181,8 +12256,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     const std::string state=a.size()>2 ? a[2] : "";
     const float timeout=num(a,3,30000);
     if(npc==nullptr || a.size()<3 || a.size()>4 || !std::isfinite(timeout) || timeout<=0 ||
-       (state!="sleep" && state!="recovery" && state!="getup")) {
-      say("waitragdoll failed: expected <npc> sleep|recovery|getup [timeout ms]");
+       (state!="sleep" && state!="recovery" && state!="getup" && state!="knockdown")) {
+      say("waitragdoll failed: expected <npc> sleep|recovery|getup|knockdown [timeout ms]");
       event("ragdoll_error","\"command\":"+jsonStr(line));
       return;
       }
@@ -12399,6 +12474,44 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     npc->addRagdollImpulse(impulse);
     say("push "+symName(w,npc)+" impulse="+ragdollVector(impulse));
     event("ragdoll_push","\"actor\":"+jsonStr(TestBench::who(npc))+",\"impulse_ns\":"+ragdollVector(impulse));
+    }
+  else if(c=="world") {
+    if(a.size()<2 || a.size()>3 || !Resources::hasWorld(a[1])) {
+      arenaAbort("world expects an indexed ZEN and an optional waypoint");
+      return;
+      }
+    say("world change requested: "+a[1]);
+    w.triggerChangeWorld(a[1],a.size()==3 ? std::string_view(a[2]) : std::string_view{});
+    // Yield until the next native tick schedules loading; tick() then waits for its completion.
+    bench.waitUntil = bench.time+1;
+    }
+  else if(c=="world-check") {
+    if(a.size()!=2 || !std::equal(w.name().begin(),w.name().end(),a[1].begin(),a[1].end(),[](char x,char y) {
+        return std::toupper(static_cast<unsigned char>(x))==std::toupper(static_cast<unsigned char>(y));
+        })) {
+      arenaAbort("world-check did not reach the requested world");
+      return;
+      }
+    say("world check passed: "+a[1]);
+    event("world_check","\"world\":"+jsonStr(w.name())+",\"pass\":true");
+    }
+  else if(c=="perf") {
+#if defined(OPENGOTHIC_ENABLE_FRAME_PROFILE) && OPENGOTHIC_ENABLE_FRAME_PROFILE && defined(OPENGOTHIC_ENABLE_APP_CADENCE)
+    if(a.size()==3 && a[1]=="sample" && a[2].size()<64 && AppCadence::normalClock()) {
+      if(!bench.perfArmed) {
+        if(!AppCadence::arm(false)) {arenaAbort("perf sample could not arm app cadence");return;}
+        bench.perfArmed=true;
+        }
+      bench.perfSegment=a[2];bench.perfFrame=0;
+      FrameProfile::setActors(bench.crew);
+      event("perf_segment","\"segment\":"+jsonStr(bench.perfSegment)+
+        ",\"camera_cm\":"+ragdollVector(bench.camPos)+",\"actors\":"+std::to_string(bench.crew.size()));
+      }
+    else if(a.size()==2 && a[1]=="stop")bench.perfSegment.clear();
+    else arenaAbort("perf expects sample <segment under 64 bytes> or stop, after cadence normal");
+#else
+    arenaAbort("perf requires OPENGOTHIC_ENABLE_FRAME_PROFILE=ON and OPENGOTHIC_ENABLE_APP_CADENCE=ON");
+#endif
     }
   else if(c=="wait") {
     bench.waitUntil = bench.time + uint64_t(num(a,1,1000));
@@ -14536,6 +14649,8 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="pos") {
     const Vec3 p = pl.position();
+    event("position","\"world_tick_ms\":"+std::to_string(w.tickCount())+
+          ",\"world_time_ms\":"+std::to_string(w.time().toInt())+",\"position_cm\":"+ragdollVector(p));
     char buf[256];
     std::snprintf(buf,sizeof(buf),"pos %.0f %.0f %.0f rot=%.1f bs=%u air=%d swim=%d slide=%d mob=%d guild=%u aligned=%d",p.x,p.y,p.z,pl.rotation(),
                   unsigned(pl.bodyStateMasked()),int(pl.isInAir()),int(pl.isSwim()),int(pl.isSlide()),int(pl.interactive()!=nullptr),
@@ -15130,11 +15245,12 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       n->aiPush(AiQueue::aiGoToPoint(*bench.wanderPoints[(bench.lcg>>8) % bench.wanderPoints.size()]));
       ++bench.wanderLegs;
       }
-  if(bench.meleeFixture) {
+  if(bench.meleeFixture && !bench.meleeBrawl) {
     size_t actor=0;
     for(auto& walker:bench.livingWalkers) {
       auto& npc=*walker.npc;
-      const int phase=int(((w.tickCount()-bench.meleeMotionFrom)/4000+actor++)%3);
+      const auto index=actor++;
+      const int phase=int(bench.meleeSteady ? index%3 : ((w.tickCount()-bench.meleeMotionFrom)/4000+index)%3);
       if(!npc.drawWeaponMelee()) continue;
       if(phase!=walker.meleePhase) {
         npc.clearAiQueue();npc.clearGoTo();npc.stopWalking();npc.setAnim(Npc::Anim::Idle);
@@ -15148,7 +15264,9 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
           }
         }
       else if(phase==2 && w.tickCount()>=walker.meleeAttackAt) {
-        npc.setAnim(Npc::Anim::Attack);walker.meleeAttackAt=w.tickCount()+1500;
+        const bool started=npc.setAnim(Npc::Anim::Attack);
+        if(bench.meleeMeasuring && started) ++bench.meleeAttackStarts;
+        walker.meleeAttackAt=w.tickCount()+1500;
         }
       }
     }
@@ -15236,9 +15354,10 @@ void run(World& w, Npc& pl, PlayerControl& ctrl) {
       const auto* body=npc->ragdollBody();
       const auto& quest=npc->ragdollQuestReturnState();
       const bool guardedReturn=quest.armed && quest.hazards!=0;
-      const bool ready=bench.waitRagdollState=="sleep" ? body!=nullptr && body->isSleeping() :
+      const bool ready=bench.waitRagdollState=="knockdown" ? npc->isMeleeKnockedDown() :
+                       bench.waitRagdollState=="sleep" ? body!=nullptr && body->isSleeping() :
                        bench.waitRagdollState=="recovery" ? npc->isRagdollBlending() :
-                       body==nullptr && !npc->isDown() && !npc->isRagdollBlending() &&
+                       body==nullptr && !npc->isDown() && !npc->isMeleeKnockedDown() && !npc->isRagdollBlending() &&
                        (!guardedReturn || (npc->isStanding() && !quest.armed));
       if(!ready && bench.time<bench.waitRagdollEnd)
         return;
@@ -16697,6 +16816,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   if(!bench.loaded)
     loadScenario();
 
+  if(!bench.perfSegment.empty())FrameProfile::sample(bench.perfSegment,bench.perfFrame);
+
   auto world  = Gothic::inst().world();
   auto player = Gothic::inst().player();
   KnownRoadsBench::tick(Gothic::inst().checkLoading()==Gothic::LoadState::Idle?world:nullptr);
@@ -17060,6 +17181,8 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   bench.hasPrev = true;
 
   updateCamera(*world,subjectOf(*player));
+
+  if(bench.perfArmed)FrameProfile::sample(bench.perfSegment,bench.perfFrame++);
 
   if(bench.ragdollCoverageActive) {
     auto sample=ragdollCoverageSample(*world);

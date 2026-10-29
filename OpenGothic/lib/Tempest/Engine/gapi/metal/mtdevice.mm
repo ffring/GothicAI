@@ -204,6 +204,41 @@ void MtDevice::handleError(NS::Error *err) {
   throw DeviceLostException();
   }
 
+MTLFX::SpatialScaler& MtDevice::spatialScaler(MTL::Texture& src, MTL::Texture& dst) {
+  std::lock_guard<std::mutex> guard(scalerSync);
+  for(auto& s:scalers) {
+    if(s->inputWidth()==src.width() && s->inputHeight()==src.height() &&
+       s->outputWidth()==dst.width() && s->outputHeight()==dst.height() &&
+       s->colorTextureFormat()==src.pixelFormat() && s->outputTextureFormat()==dst.pixelFormat())
+      return *s;
+    }
+
+  auto pool = NsPtr<NS::AutoreleasePool>::init();
+  auto desc = NsPtr<MTLFX::SpatialScalerDescriptor>::init();
+  desc->setInputWidth (src.width());
+  desc->setInputHeight(src.height());
+  desc->setOutputWidth (dst.width());
+  desc->setOutputHeight(dst.height());
+  desc->setColorTextureFormat (src.pixelFormat());
+  desc->setOutputTextureFormat(dst.pixelFormat());
+  // input is tonemapped, display-referred color
+  desc->setColorProcessingMode(MTLFX::SpatialScalerColorProcessingModePerceptual);
+
+  auto scaler = NsPtr<MTLFX::SpatialScaler>(desc->newSpatialScaler(impl.get()));
+  if(scaler==nullptr)
+    throw std::system_error(Tempest::GraphicsErrc::UnsupportedExtension);
+  if((src.usage() & scaler->colorTextureUsage())!=scaler->colorTextureUsage() ||
+     (dst.usage() & scaler->outputTextureUsage())!=scaler->outputTextureUsage())
+    throw std::system_error(Tempest::GraphicsErrc::InvalidTexture);
+
+  // Command buffers do not retain references: keep recent scalers alive while frames may still use them.
+  // A resolution change waits for the device to go idle, so dropping the oldest is safe.
+  if(scalers.size()>=4)
+    scalers.erase(scalers.begin());
+  scalers.emplace_back(std::move(scaler));
+  return *scalers.back();
+  }
+
 void MtDevice::deductProps(AbstractGraphicsApi::Props& prop, MTL::Device& dev) {
   int32_t majorVersion = 0, minorVersion = 0;
   if([[NSProcessInfo processInfo] respondsToSelector:@selector(operatingSystemVersion)]) {
@@ -368,6 +403,8 @@ void MtDevice::deductProps(AbstractGraphicsApi::Props& prop, MTL::Device& dev) {
 
   prop.anisotropy    = true;
   prop.maxAnisotropy = 16;
+
+  prop.spatialUpscale = MTLFX::SpatialScalerDescriptor::supportsDevice(&dev);
 
 #ifdef __IOS__
   if(dev.supportsFeatureSet(MTL::FeatureSet_iOS_GPUFamily3_v2))

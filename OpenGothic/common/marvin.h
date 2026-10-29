@@ -65,6 +65,7 @@ class Marvin {
 
       // opengothic specific
       C_Census,
+      C_PlayVideo,
       C_ToggleGI,
       C_ToggleVsm,
       C_ToggleRtsm,
@@ -95,6 +96,9 @@ class Marvin {
       C_ToggleNpcCharacterVirtual,
       C_ToggleMonsterCharacterVirtual,
       C_ToggleMeleeBladeShadow,
+      C_ToggleMeleePhysicsHits,
+      C_ToggleMeleeReactions,
+      C_ToggleMeleePosture,
       };
 
     struct Cmd {

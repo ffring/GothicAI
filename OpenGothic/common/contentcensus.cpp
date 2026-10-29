@@ -269,6 +269,7 @@ bool ContentCensus::write() noexcept {
                                key.second.compare(0,12,"base/meshes/")==0 ? "basemesh" :
                                key.second.compare(0,12,"base/models/")==0 ? "basemodel" :
                                key.second.compare(0,11,"base/fonts/")==0 ? "basefont" :
+                               key.second.compare(0,12,"base/videos/")==0 ? "basevideo" :
                                key.second.compare(0,14,"base/programs/")==0 ? "baseprogram" :
                                key.second.compare(0,17,"base/outputunits/")==0 ? "baseoutputunits" :
                                key.second.compare(0,12,"base/worlds/")==0 ? "baseworld" :

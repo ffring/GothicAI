@@ -543,7 +543,7 @@ class StorageBudget:
 def runner_args(options, index, jump=False):
     task = options.task
     return SimpleNamespace(output=task / "recording-workers" / str(index) / ("jumps" if jump else "v3"),
-        runner=task / "build/opengothic/gothic-body-runner", assets=Path.home() / "gothic-ai/game",
+        runner=task / "build/opengothic/gothic-body-runner", assets=Path(os.environ.get("GOTHIC_DIR", Path.home() / "gothic-ai/game-settings")),
         save=task / "input/save.sav", cache=task / "recording-cache" / ("jumps" if jump else "v3"),
         links=task / "input" / ("jump-links.txt" if jump else "accepted-links.txt"),
         roads=task / "input/places.json", npc="BAU_954_MALETH", ini=None, seed=SEED,
@@ -1357,6 +1357,7 @@ def main():
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--max-bytes", type=int)
     options = parser.parse_args()
+    os.environ.update(module("ryzen_game").game_environment())
     if options.max_bytes is None:
         options.max_bytes = V5_MAX_BYTES if v5(options) else v3.MAX_BYTES
     if not options.task.is_absolute() or options.limit_ms != jumps.LIMIT_MS:

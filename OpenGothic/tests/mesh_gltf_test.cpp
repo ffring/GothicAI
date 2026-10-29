@@ -322,8 +322,7 @@ struct Fixture {
     setenv("OPENGOTHIC_TEXTURES","",1);
     setenv("OPENGOTHIC_CENSUS",(root/"census.json").c_str(),1);
     setenv("OPENGOTHIC_BASE",(root/"base").c_str(),1);
-    // The public importer requires an installation archive. Keep originals
-    // loose so the no-source-mount case still has no original MRM in its VFS.
+    // The public importer requires an installation archive; the game uses only the base.
     const std::byte marker {1};
     zenkit::Vfs vfs;
     vfs.mount(zenkit::VfsNode::file("FIXTURE.BIN",{&marker,1,false}),"/");
@@ -345,7 +344,7 @@ struct Fixture {
     json.EndObject(); json.EndObject();
     index(std::string_view(buffer.GetString(),buffer.GetSize()));
     }
-  void mount(bool mountOriginal = true) const {
+  void mount() const {
     const auto base=root/"base";
     for(const auto* kind:{"meshes","textures","zen","models"})
       std::filesystem::create_directories(base/kind);
@@ -384,9 +383,7 @@ struct Fixture {
     std::filesystem::create_directories(base/"sources");
     textFile(base/"sources/sources.json","{\"format\":\"gothic-sources\",\"version\":1,\"synthetic\":\"mesh-gltf fixture without remaining-family inputs\"}\n");
     BaseImport::writeBaseMetadata(base,BaseImport::identify(root));
-    if(mountOriginal)
-      Resources::mountWork(root/"_work");
-    Resources::loadVdfs({},false);
+    Resources::loadBase();
     }
   rapidjson::Document census() const {
     require(Resources::writeCensus(),"mesh census must be writable");
@@ -888,12 +885,9 @@ void multiModelGpuCases(const Fixture& fixture, Tempest::Device& device) {
     }
   }
 
-void resourcePaths(const Fixture& fixture, bool own, bool mountOriginal = true) {
+void resourcePaths(const Fixture& fixture, bool own) {
   Resources resources;
-  fixture.mount(mountOriginal);
-  if(!mountOriginal)
-    require(Resources::vdfsIndex().find("OWN_MESH.MRM")==nullptr,
-            "content replacement must work without its original mesh in the source VFS");
+  fixture.mount();
   const auto* proto = Resources::loadMesh("own_mesh.3ds");
   require(proto!=nullptr,"visual mesh must load");
   const auto* bounds = proto->bbox();
@@ -1755,7 +1749,6 @@ int main() {
     CommandLine commandLine(3,args);
     fixture.index();
     resourcePaths(fixture,true);
-    resourcePaths(fixture,true,false);
     converterCases(fixture);
     generatedBarrel(fixture);
     rejectionCases(fixture);

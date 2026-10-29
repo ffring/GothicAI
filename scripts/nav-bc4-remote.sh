@@ -10,6 +10,18 @@ fi
 stage="$1"
 case "$stage" in smoke|train|validate-main|validate-detour|validate-follow|validate-jump|validate-safety|diagnose-quick|diagnose-data|diagnose-memory|diagnose-familiar) ;; *) echo "Unknown phase: $stage" >&2; exit 2 ;; esac
 export GQ_OWNER=nav-bc4
+# Validate the shared settings before creating task directories or queue jobs.
+game_env=()
+for key in OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
+printf -v game_command '%q ' env ${game_env[@]+"${game_env[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")"
+game_settings="$(ssh -o ConnectTimeout=10 ryzen "$game_command")"
+eval "$game_settings"
+game_env=()
+for key in OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-bc4" "$HOME"')"
 archive=/mnt/shared/gothic-ai/nav-bc4
 ssh ryzen "bash -s -- '$task' '$archive' '$stage'" <<'INPUTS'
@@ -61,6 +73,8 @@ ssh ryzen "cat > '$task/phase.sh'" <<'PHASE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/source/scripts/ryzen_game.py")"
+eval "$game_settings"
 archive=/mnt/shared/gothic-ai/nav-bc4
 corpus=/mnt/shared/gothic-ai/nav-demos-v5/recordings
 stage="${1:?phase}"
@@ -124,6 +138,7 @@ INITIALIZE
   "$task/build/opengothic/gothic-navpolicy-contract" --memory "$archive/smoke/initial.navbc"
   "$python" -B -I - "$task" "$archive" "$corpus" <<'DRIVE'
 import json
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -134,7 +149,7 @@ task, archive, corpus = map(Path, sys.argv[1:])
 _, entries = data.load_training_manifest(task / "input/v5-compact.json", corpus)
 entries = [entry for entry in entries if entry["family"] == "point"][:2]
 args = SimpleNamespace(output=archive / "smoke/drive", cache=task / "smoke-cache",
-    runner=task / "build/opengothic/gothic-body-runner", assets=Path.home() / "gothic-ai/game",
+    runner=task / "build/opengothic/gothic-body-runner", assets=Path(os.environ["GOTHIC_DIR"]),
     save=task / "input/save.sav", links=task / "input/accepted-links.txt", roads=task / "input/places.json",
     weights=archive / "smoke/initial.navbc", familiar_map=task / "input/familiar.bin",
     ini=None, physics="cv", seed=17, watchdog_seconds=900)
@@ -200,7 +215,7 @@ try:
         os.environ["OPENGOTHIC_NAV_JOURNEY_MEMORY"] = override
         args = SimpleNamespace(output=archive / "diagnostics/smoke" / name,
             cache=task / "smoke-cache", runner=task / "build/opengothic/gothic-body-runner",
-            assets=Path.home() / "gothic-ai/game", save=task / "input/save.sav",
+            assets=Path(os.environ["GOTHIC_DIR"]), save=task / "input/save.sav",
             links=task / "input/accepted-links.txt", roads=task / "input/places.json",
             familiar_map=task / "input/familiar.bin", weights=weights, npc="BAU_954_MALETH",
             ini=None, physics="cv", seed=17, watchdog_seconds=900, lean=True,
@@ -256,7 +271,7 @@ elif [[ "$stage" == diagnose-memory || "$stage" == diagnose-familiar ]]; then
     output="$archive/diagnostics/detour/$name"
     "$python" -B -I scripts/nav_rl.py drive --detour-scenarios "$task/input/detour-val.jsonl" \
       --runner "$task/build/opengothic/gothic-body-runner" \
-      --assets "$HOME/gothic-ai/game" --save "$task/input/save.sav" \
+      --assets "$GOTHIC_DIR" --save "$task/input/save.sav" \
       --cache "$task/validation-detour-cache" --links "$task/input/accepted-links.txt" \
       --roads "$task/input/places.json" --familiar-map "$task/input/familiar.bin" \
       --weights "$weights" --output "$output" --physics cv --parallel 18 \
@@ -324,7 +339,7 @@ elif [[ "$stage" == validate-* ]]; then
     "$python" -B -I scripts/nav_rl.py drive \
       --manifest /mnt/shared/gothic-ai/nav-demos-v5/manifest.json --lean \
       --runner "$task/build/opengothic/gothic-body-runner" \
-      --assets "$HOME/gothic-ai/game" --save "$task/input/save.sav" \
+      --assets "$GOTHIC_DIR" --save "$task/input/save.sav" \
       --cache "$task/validation-main-cache" --links "$task/input/accepted-links.txt" \
       --roads "$task/input/places.json" \
       --familiar-map "$task/input/familiar.bin" --weights "$archive/bc4/policy.navbc" \
@@ -337,7 +352,7 @@ elif [[ "$stage" == validate-* ]]; then
     output="$archive/detour-validation/bc4"
     "$python" -B -I scripts/nav_rl.py drive --detour-scenarios "$task/input/detour-val.jsonl" \
       --runner "$task/build/opengothic/gothic-body-runner" \
-      --assets "$HOME/gothic-ai/game" --save "$task/input/save.sav" \
+      --assets "$GOTHIC_DIR" --save "$task/input/save.sav" \
       --cache "$task/validation-detour-cache" --links "$task/input/accepted-links.txt" \
       --roads "$task/input/places.json" --familiar-map "$task/input/familiar.bin" \
       --weights "$archive/bc4/policy.navbc" --output "$output" --physics cv --parallel 18 \
@@ -387,20 +402,20 @@ df -h "$HOME" /mnt/shared
 PHASE
 if [[ "$stage" == smoke ]]; then
   "$ROOT/scripts/gq" submit --class quick --threads 12 --cpu-quota 1200% --mem 12G --max 45m \
-    --name 'nav bc4 format and two train smoke episodes' -- bash "$task/phase.sh" smoke
+    --name 'nav bc4 format and two train smoke episodes' -- env "${game_env[@]}" bash "$task/phase.sh" smoke
 elif [[ "$stage" == train ]]; then
   "$ROOT/scripts/gq" submit --class batch --threads 6 --cpu-quota 600% --mem 10G --gpu-mem 4G --max 2h \
-    --name 'nav bc4 v5 training and recorded parity' -- bash "$task/phase.sh" train
+    --name 'nav bc4 v5 training and recorded parity' -- env "${game_env[@]}" bash "$task/phase.sh" train
 elif [[ "$stage" == diagnose-quick ]]; then
   "$ROOT/scripts/gq" submit --class quick --threads 12 --cpu-quota 1200% --mem 12G --max 45m \
-    --name 'nav bc4 diagnostic overrides and two train-free smoke episodes' -- bash "$task/phase.sh" diagnose-quick
+    --name 'nav bc4 diagnostic overrides and two train-free smoke episodes' -- env "${game_env[@]}" bash "$task/phase.sh" diagnose-quick
 elif [[ "$stage" == diagnose-data ]]; then
   "$ROOT/scripts/gq" submit --class batch --threads 6 --cpu-quota 600% --mem 4G --max 2h \
-    --name 'nav bc4 validation outcomes and corpus diagnostics' -- bash "$task/phase.sh" diagnose-data
+    --name 'nav bc4 validation outcomes and corpus diagnostics' -- env "${game_env[@]}" bash "$task/phase.sh" diagnose-data
 elif [[ "$stage" == diagnose-memory || "$stage" == diagnose-familiar ]]; then
   "$ROOT/scripts/gq" submit --class batch --threads 28 --cpu-quota 2800% --mem 20G --max 2h \
-    --name "nav bc4 $stage one-seed detour controls" -- bash "$task/phase.sh" "$stage"
+    --name "nav bc4 $stage one-seed detour controls" -- env "${game_env[@]}" bash "$task/phase.sh" "$stage"
 else
   "$ROOT/scripts/gq" submit --class batch --threads 28 --cpu-quota 2800% --mem 20G --max 2h \
-    --name "nav bc4 $stage three-seed lean validation" -- bash "$task/phase.sh" "$stage"
+    --name "nav bc4 $stage three-seed lean validation" -- env "${game_env[@]}" bash "$task/phase.sh" "$stage"
 fi

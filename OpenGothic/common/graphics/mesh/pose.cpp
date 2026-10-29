@@ -1292,6 +1292,15 @@ void Pose::setAnimSpeed(std::string_view name, float k) {
     speeds.emplace_back(std::string(name),k);
   }
 
+void Pose::setLayerSpeed(const Animation::Sequence* seq, float k, uint64_t now) {
+  for(auto& l:lay)
+    if(l.seq==seq && now>l.sAnim && k>0.f) {
+      const double played = double(layerTime(l,now)-l.sAnim);
+      l.sAnim = now-uint64_t(played/double(k));
+      l.speed = k;
+      }
+  }
+
 bool Pose::animRelative(std::string_view name, float at, size_t from, size_t to, Tempest::Matrix4x4& out) const {
   if(skeleton==nullptr || from>=skeleton->nodes.size() || to>=skeleton->nodes.size())
     return false;
@@ -1380,7 +1389,7 @@ bool Pose::updateFootIk(const FootIk::Input& in) {
   return true;
   }
 
-void Pose::setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir) {
+void Pose::setAnimRotate(const AnimationSolver &solver, const Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir) {
   const Animation::Sequence *sq = nullptr;
   if(dir==0) {
     if(rotation!=nullptr) {

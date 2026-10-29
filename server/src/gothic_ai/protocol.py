@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 # story_program), v24: choices in the director's dialogs (steps choice, clear_choices; debug choices, talk,
 # menu, menu_pick), v25: story_program.own (the scripts' program under the director's), v26: the director's
 # lines in the npc's voice (line_voice).
-PROTOCOL_VERSION = 52
+PROTOCOL_VERSION = 54
 NOISE_PROTOCOL = 36  # npc_event noise and npc_act investigate
 TRACE_PROTOCOL = 37  # visible physical traces and game time on noise events
 PACE_PROTOCOL = 38  # go_to_waypoint.pace: a guide keeps the hero's pace; start_activity.place
@@ -39,11 +39,42 @@ class _GameMessage(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
 
+class BodyNet(_GameMessage):
+    loaded: bool
+    checkpoint_sha256: str | None = None
+    error: str | None = None
+
+
 class Hello(_GameMessage):
     type: Literal["hello"]
     protocol: int
     client: str
     codepage: str
+    body_net: BodyNet | None = None
+
+
+class BodyPolicy(_GameMessage):
+    """Interval counters for an engine-owned combat policy (v54)."""
+
+    type: Literal["body_policy"]
+    session_epoch: int
+    world_epoch: int
+    entity_id: int
+    control_generation: int
+    goal_version: int
+    target_entity_id: int
+    t_game_ms: int
+    t_wall_ms: int
+    decisions: int
+    fallbacks: dict[str, int]
+    steps: int
+    p50_us: float
+    p99_us: float
+    final: bool
+    reason: str
+    selected_actions: dict[str, int] = Field(default_factory=dict)
+    accepted_actions: dict[str, int] = Field(default_factory=dict)
+    hidden_reset: int = 0
 
 
 class SvmLine(_GameMessage):
@@ -1232,6 +1263,7 @@ GameMessage = Annotated[
     | BeastEvent
     | NpcViews
     | BodyObservations
+    | BodyPolicy
     | BodyControlEvents,
     Field(discriminator="type"),
 ]
@@ -1330,6 +1362,7 @@ class BodyAcquireCmd(_BodyCommand):
     target_entity_id: BodyPositive | None = None
     await_boundary_ms: Annotated[int, Field(strict=True, ge=0, le=2000)] = 0
     acquire_request_id: BodyUInt = 0
+    policy: Literal["engine"] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1608,6 +1641,16 @@ class MemoryCmd(_Command):
     type: Literal["memory"] = "memory"
     branch: str
     seq: int
+
+
+class FeatToastCmd(_Command):
+    """A quiet toast for a deed recorded by the chronicler (v53)."""
+
+    type: Literal["feat_toast"] = "feat_toast"
+    feat: str
+    title: str
+    text: str
+    icon: str = ""
 
 
 DebugCommand = Literal[

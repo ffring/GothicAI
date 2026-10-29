@@ -24,9 +24,12 @@ if(PROJECT_IS_TOP_LEVEL)
   add_subdirectory(../../lib/dmusic dmusic EXCLUDE_FROM_ALL)
   include(../../cmake/BaseImport.cmake)
   if(MSVC)
-    # the importer's C sources read dmusic's _Atomic structs (see the game's CMakeLists.txt)
+    # the base C sources read dmusic's _Atomic structs (see the game's CMakeLists.txt)
+    target_compile_options(gothic-base-runtime PRIVATE $<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
     target_compile_options(gothic-base-import PRIVATE $<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
   endif()
+  # basestore.cpp, linked into the tool below, also resolves the video part
+  include(../../cmake/VideoImport.cmake)
 endif()
 
 set(STORYGRAPH_SOURCES
@@ -65,7 +68,7 @@ if(STORYGRAPH_TOOL)
   add_executable(storygraph main.cpp scan.cpp check.cpp check.h fuzz.cpp saveworld.cpp saveworld.h
                             effects.cpp effects.h execcheck.cpp execcheck.h snapshot.h
                             ../../common/basestore.cpp)
-  target_link_libraries(storygraph PRIVATE StoryGraph gothic-base-import)
+  target_link_libraries(storygraph PRIVATE StoryGraph gothic-base-import gothic-video-import)
   if(NOT MSVC)
     target_compile_options(storygraph PRIVATE -Wall -Wconversion -Werror)
   endif()

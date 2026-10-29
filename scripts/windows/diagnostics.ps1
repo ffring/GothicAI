@@ -86,9 +86,9 @@ Add-Line "Vulkan SDK: $(if ($vulkan) { $vulkan } else { 'missing' })"
 Add-Line "winget: $(if (Get-Command winget.exe -ErrorAction SilentlyContinue) { 'present' } else { 'missing' })"
 
 Add-Section 'Build outputs'
-$outputs = @('OpenGothic\build\opengothic\Gothic2Notr.exe', 'OpenGothic\build\opengothic\Tempest.dll',
-             'OpenGothic\build\opengothic\dxcompiler.dll', 'OpenGothic\build\opengothic\dxil.dll',
-             'OpenGothic\ai_bridge\storygraph\build\storygraph.exe')
+$outputs = @('OpenGothic\build\opengothic\Gothic2Notr.exe', 'OpenGothic\build\opengothic\content-convert.exe',
+             'OpenGothic\build\opengothic\Tempest.dll', 'OpenGothic\build\opengothic\dxcompiler.dll',
+             'OpenGothic\build\opengothic\dxil.dll', 'OpenGothic\ai_bridge\storygraph\build\storygraph.exe')
 foreach ($relative in $outputs) {
     $path = Join-Path $Root $relative
     if (Test-Path -LiteralPath $path) {
@@ -121,7 +121,7 @@ if ($sessions.Count -gt 0) {
 $gameHome = Join-Path $env:USERPROFILE '.local\share\gothic-ai\game'
 $saves = @(Get-ChildItem -LiteralPath $gameHome -Filter 'save_slot_*.sav' -ErrorAction SilentlyContinue)
 Add-Line "game home: $gameHome ($($saves.Count) saves; log.txt exists: $(Test-Path -LiteralPath (Join-Path $gameHome 'log.txt')))"
-$base = Join-Path $env:LOCALAPPDATA 'gothic-ai\base'
+$base = if ($env:OPENGOTHIC_BASE_CACHE) { $env:OPENGOTHIC_BASE_CACHE } else { Join-Path $env:LOCALAPPDATA 'gothic-ai\base' }
 Add-Line "imported base cache: $base (exists: $(Test-Path -LiteralPath $base))"
 
 $folder = Join-Path $env:LOCALAPPDATA 'GothicAI'

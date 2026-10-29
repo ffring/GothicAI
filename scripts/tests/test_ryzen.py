@@ -16,6 +16,7 @@ import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'ryzen.sh'
 BENCH_SCRIPT = SCRIPT.with_name('bench.sh')
+GAME_HELPER = SCRIPT.with_name('ryzen_game.py')
 
 
 def function(name):
@@ -43,9 +44,16 @@ class KilledGameRetryTests(unittest.TestCase):
         binaries = root / 'bin'
         (source / 'scripts').mkdir(parents=True)
         (source / 'server').mkdir()
-        (root / 'home/gothic-ai/game/Data').mkdir(parents=True)
+        shutil.copyfile(GAME_HELPER, source / 'scripts/ryzen_game.py')
+        settings = root / 'home/gothic-ai/game-settings/system'
+        settings.mkdir(parents=True)
+        for name in ('Gothic.ini', 'SystemPack.ini'):
+            (settings / name).touch()
+        (settings.parent.parent / 'game-base.json').write_text(json.dumps({'base': 'c' * 64, 'videos': ''}))
         binaries.mkdir()
         shutil.copyfile(SCRIPT.with_name('e2e.sh'), source / 'scripts/e2e.sh')
+        # Base preparation has its own tests; here the base is already ready.
+        (source / 'scripts/base-ensure.sh').write_text('exit 0\n')
         # Keep the production shell monitor, but replace its services and game.
         uv = binaries / 'uv'
         uv.write_text(f'#!{sys.executable}\n' + r'''
@@ -93,11 +101,12 @@ while True:
         for executable in binaries.iterdir():
             executable.chmod(0o755)
         harness = '\n'.join([
-            'set -euo pipefail', function('e2e_window_position'), function('remote_run'),
+            'set -euo pipefail', function('e2e_window_position'), function('game_settings'), function('remote_run'),
             'ROOT="$TEST_ROOT/source"',
             'toolchain() { :; }',
             'desktop() { RYZEN_SCREEN_SIZE=1920x1080; }',
             'require_prepared() { :; }',
+            'export RYZEN_STORYGRAPH_BIN=/usr/bin/true',
             'export RYZEN_GAME_BIN="$TEST_ROOT/bin/game"',
             'remote_run e2e "$TEST_ROOT/state" run',
         ])
@@ -755,8 +764,13 @@ class CacheTests(unittest.TestCase):
         self.bin.mkdir()
         (self.source / 'scripts').mkdir(parents=True)
         (self.source / 'server').mkdir()
+        shutil.copyfile(GAME_HELPER, self.source / 'scripts/ryzen_game.py')
         (self.source / 'OpenGothic/ai_bridge/storygraph').mkdir(parents=True)
-        (self.home / 'gothic-ai/game/Data').mkdir(parents=True)
+        settings = self.home / 'gothic-ai/game-settings/system'
+        settings.mkdir(parents=True)
+        for name in ('Gothic.ini', 'SystemPack.ini'):
+            (settings / name).touch()
+        (settings.parent.parent / 'game-base.json').write_text(json.dumps({'base': 'c' * 64, 'videos': ''}))
         (self.state / 'inputs/run').mkdir(parents=True)
         (self.source / 'scripts/e2e.sh').write_text('"$GAME_BIN" --test\n')
         self.env = dict(os.environ, HOME=str(self.home), TEST_ROOT=str(self.root),
@@ -780,9 +794,14 @@ if '--build' in args:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text('#!/usr/bin/env python3\nimport os, sys\nfrom pathlib import Path\n'
                       'Path(os.environ["TEST_GAME_PATH"]).write_text(str(Path(sys.argv[0]).resolve()))\n'
-                      'assert Path(sys.argv[0]).with_name("runtime.dat").read_text() == "runtime"\n')
+                      'if sys.argv[0].endswith("Gothic2Notr"):\n'
+                      '    assert Path(sys.argv[0]).with_name("runtime.dat").read_text() == "runtime"\n')
     output.chmod(0o755)
     output.with_name('runtime.dat').write_text('runtime')
+    if target == 'Gothic2Notr':
+        converter = output.with_name('content-convert')
+        converter.write_text('#!/bin/sh\nexit 0\n')
+        converter.chmod(0o755)
 else:
     build = Path(args[args.index('-B') + 1])
     build.mkdir(parents=True, exist_ok=True)
@@ -821,6 +840,10 @@ Path(os.environ['TEST_GAME_PATH']).write_text(str(Path(sys.argv[0]).resolve()))
 assert Path(sys.argv[0]).with_name('runtime.dat').read_text() == 'runtime'
 ''')
         binary.chmod(0o755)
+        if kind == 'engine':
+            converter = entry / 'content-convert'
+            converter.write_text('#!/bin/sh\nexit 0\n')
+            converter.chmod(0o755)
         (entry / 'runtime.dat').write_text(marker)
         timestamp = time.time() - age
         os.utime(entry, (timestamp, timestamp))
@@ -828,11 +851,28 @@ assert Path(sys.argv[0]).with_name('runtime.dat').read_text() == 'runtime'
 
     def test_cache_hit_runs_cached_game_without_a_worktree_build(self):
         cached = self.entry(self.engine_digest)
-        self.entry(self.story_digest, 'storygraph')
-        result = self.shell(r'''
+        storygraph = self.entry(self.story_digest, 'storygraph') / 'storygraph'
+        storygraph.write_text(f'#!{sys.executable}\n' + r'''
+import os
+from pathlib import Path
+import sys
+assert sys.argv[1:] == [os.environ['GOTHIC_DIR'], '--ou-messages']
+fingerprint = os.environ['OPENGOTHIC_BASE_FINGERPRINT']
+(Path(os.environ['TEST_ROOT']) / 'selected-base').write_text(fingerprint)
+''')
+        selected = self.root / 'selected-base'
+        (self.source / 'scripts/e2e.sh').write_text(
+            'test "$(cat "$TEST_ROOT/selected-base")" = "$OPENGOTHIC_BASE_FINGERPRINT"\n'
+            '"$GAME_BIN" --test\n')
+        # The pre-server selection must work with both a missing and a stale selection.
+        for previous in (None, 'd' * 64):
+            if previous is not None:
+                selected.write_text(previous)
+            result = self.shell(r'''
 remote_probe e2e "$TEST_ROOT/worktree" run stages
 remote_run e2e "$TEST_ROOT/worktree" run
 ''')
+            self.assertEqual(selected.read_text(), 'c' * 64)
         self.assertIn(f'engine from cache {self.engine_digest[:12]} (0s)', result.stdout)
         self.assertEqual((self.root / 'game-path').read_text(), str(cached / 'Gothic2Notr'))
         self.assertFalse((self.state / 'build').exists())
@@ -840,6 +880,159 @@ remote_run e2e "$TEST_ROOT/worktree" run
         self.assertFalse((self.root / 'cmake-calls.jsonl').exists())
         self.assertEqual((self.source / 'OpenGothic/ai_bridge/storygraph/build/storygraph').resolve(),
                          self.cache / 'storygraph' / self.story_digest / 'storygraph')
+
+    def test_game_settings_loads_fingerprints_without_installation(self):
+        result = self.shell(r'''
+game_settings
+python3 - <<'PY'
+import json
+import os
+print(json.dumps({key: os.environ[key] for key in
+    ('GOTHIC_DIR', 'OPENGOTHIC_BASE_FINGERPRINT', 'OPENGOTHIC_VIDEOS_FINGERPRINT')}))
+PY
+''')
+        self.assertEqual(json.loads(result.stdout), {
+            'GOTHIC_DIR': str(self.home / 'gothic-ai/game-settings'),
+            'OPENGOTHIC_BASE_FINGERPRINT': 'c' * 64,
+            'OPENGOTHIC_VIDEOS_FINGERPRINT': '',
+        })
+        self.assertFalse((self.home / 'gothic-ai' / 'game').exists())
+
+        stamp = r'''python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+Path(os.environ['TEST_ROOT'], 'received-env.json').write_text(json.dumps({key: os.environ[key] for key in
+    ('GOTHIC_DIR', 'OPENGOTHIC_BASE_FINGERPRINT', 'OPENGOTHIC_VIDEOS_FINGERPRINT')}))
+PY
+if [[ -n "${LOG_DIR:-}" ]]; then : >"$LOG_DIR/game.log"; fi
+'''
+        for filename in ('e2e.sh', 'bench.sh'):
+            (self.source / 'scripts' / filename).write_text(stamp)
+        self.env['GOTHIC_DIR'] = '/Volumes/x'
+        # Exercise the real Mac forwarding list, then enter a fresh remote environment.
+        forwarding = SCRIPT.read_text().split('BASE_ENV_ARGS=()\n', 1)[1].split('if [[ "$ACTION" != clean ]]', 1)[0]
+        for action in ('e2e', 'bench', 'pytest'):
+            with self.subTest(action=action):
+                entry = 'remote_bench' if action == 'bench' else f'remote_run {action}'
+                self.shell('BASE_ENV_ARGS=()\n' + forwarding + r'''
+unset GOTHIC_DIR
+for assignment in ${BASE_ENV_ARGS[@]+"${BASE_ENV_ARGS[@]}"}; do export "$assignment"; done
+require_prepared() { :; }
+build_storygraph() { export RYZEN_STORYGRAPH_BIN=/usr/bin/true; }
+export RYZEN_STORYGRAPH_BIN=/usr/bin/true RYZEN_GAME_BIN=/usr/bin/true
+ffmpeg() { :; }
+uv() { bash "$TEST_ROOT/source/scripts/bench.sh"; }
+''' + entry + ' "$TEST_ROOT/worktree" run smoke\n')
+                received = json.loads((self.root / 'received-env.json').read_text())
+                self.assertEqual(received, {
+                    'GOTHIC_DIR': str(self.home / 'gothic-ai/game-settings'),
+                    'OPENGOTHIC_BASE_FINGERPRINT': 'c' * 64,
+                    'OPENGOTHIC_VIDEOS_FINGERPRINT': '',
+                })
+
+    def test_game_settings_rejects_bad_setup_and_preserves_caller_overrides(self):
+        import runpy
+
+        environment = runpy.run_path(str(GAME_HELPER))["game_environment"]
+        overrides = {
+            "GOTHIC_DIR": "/custom/settings",
+            "OPENGOTHIC_BASE": "/custom/base",
+            "OPENGOTHIC_BASE_FINGERPRINT": "e" * 64,
+            "OPENGOTHIC_VIDEOS_FINGERPRINT": "",
+            "OPENGOTHIC_BASE_CACHE": "/custom/cache",
+            "OPENGOTHIC_BASE_STORE": "",
+        }
+        self.assertEqual(environment(self.home, overrides), overrides)
+        self.assertEqual(environment(self.home, overrides, assets="/custom/assets")["GOTHIC_DIR"],
+                         "/custom/assets")
+        self.assertEqual(environment(self.home, {"OPENGOTHIC_BASE_FINGERPRINT": ""})[
+            "OPENGOTHIC_BASE_FINGERPRINT"], "c" * 64)
+        manifest = self.home / "gothic-ai/game-base.json"
+        for contents in ('{}', '{"base": "invalid", "videos": ""}'):
+            manifest.write_text(contents)
+            with self.assertRaisesRegex(ValueError, "Run scripts/ryzen.sh setup first"):
+                environment(self.home, {})
+        manifest.unlink()
+        with self.assertRaisesRegex(ValueError, "Run scripts/ryzen.sh setup first"):
+            environment(self.home, {})
+        self.assertFalse(manifest.exists())
+        self.assertEqual(environment(self.home, overrides), overrides)
+
+    def test_pytest_requires_setup_and_uses_game_settings(self):
+        storygraph = self.bin / 'storygraph'
+        storygraph.write_text(f'#!{sys.executable}\n' + r'''
+import os
+from pathlib import Path
+import sys
+assert sys.argv[1:] == [os.environ['GOTHIC_DIR'], '--ou-messages']
+(Path(os.environ['TEST_ROOT']) / 'selected-base').write_text(os.environ['OPENGOTHIC_BASE_FINGERPRINT'])
+''')
+        storygraph.chmod(0o755)
+        self.env.pop('GOTHIC_DIR', None)
+        commands = r'''
+build_storygraph() { export RYZEN_STORYGRAPH_BIN="$TEST_ROOT/bin/storygraph"; }
+uv() {
+  test "$(cat "$TEST_ROOT/selected-base")" = "$OPENGOTHIC_BASE_FINGERPRINT"
+  printf '%s\n' "$GOTHIC_DIR" "$@" >"$TEST_ROOT/pytest-env"
+}
+remote_run pytest "$TEST_ROOT/worktree" run -rs tests/test_storygraph.py
+'''
+        self.shell(commands)
+        self.assertEqual((self.root / 'pytest-env').read_text().splitlines(), [
+            str(self.home / 'gothic-ai/game-settings'), 'run', 'pytest', '-rs', 'tests/test_storygraph.py',
+        ])
+        (self.root / 'pytest-env').unlink()
+        (self.home / 'gothic-ai/game-base.json').unlink()
+        shutil.rmtree(self.home / 'gothic-ai/game-settings')
+        with self.assertRaisesRegex(AssertionError, 'Run scripts/ryzen.sh setup first'):
+            self.shell(commands)
+        self.assertFalse((self.root / 'pytest-env').exists())
+        self.assertFalse((self.home / 'gothic-ai/game-base.json').exists())
+        self.assertFalse((self.home / 'gothic-ai/game-settings').exists())
+        self.assertFalse((self.home / 'gothic-ai' / 'game').exists())
+
+    def test_setup_removes_only_its_temporary_copy_on_failure_or_interrupt(self):
+        import hashlib
+
+        game = self.root / 'installation'
+        game.mkdir()
+        part = self.root / 'mac-base'
+        part.mkdir()
+        pointers = self.home / '.cache/gothic-ai/base/current'
+        pointers.mkdir(parents=True)
+        pointer = pointers / (hashlib.sha256(str(game).encode()).hexdigest() + '.json')
+        pointer.write_text(json.dumps({'version': 1, 'gothic': str(game),
+                                      'base': {'fingerprint': 'c' * 64, 'path': str(part)}}))
+        remote_cache = self.root / 'remote/.cache/gothic-ai/base'
+        foreign = remote_cache / '.setup-another-session'
+        foreign.mkdir(parents=True)
+        (foreign / 'keep').touch()
+        setup = SCRIPT.read_text().split('if [[ "$ACTION" == setup ]]; then\n', 1)[1]
+        setup = setup.split('\nfi\n\n# Codex worktrees', 1)[0]
+        harness = r'''
+set -euo pipefail
+ACTION=setup RYZEN_HOST=test
+toolchain() { :; }
+remote() { HOME="$TEST_ROOT/remote" "$@"; }
+verify_base_part() { [[ "$4" != full ]] || return 23; }
+rsync() {
+  case "$TEST_FAILURE" in
+    rsync) return 23 ;;
+    interrupt) kill -INT "$$" ;;
+    verification) return 0 ;;
+  esac
+}
+'''+setup
+        for failure, status in (('rsync', 23), ('verification', 23), ('interrupt', 130)):
+            with self.subTest(failure=failure):
+                result = subprocess.run(
+                    ['bash', '-c', harness], capture_output=True, text=True, timeout=5,
+                    env=dict(self.env, GOTHIC_DIR=str(game), TEST_FAILURE=failure),
+                )
+                self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                self.assertEqual(list(remote_cache.glob('.setup-*')), [foreign])
+                self.assertTrue((foreign / 'keep').exists())
 
     def test_e2e_ports_size_and_position_follow_the_assigned_slot(self):
         self.entry(self.engine_digest)
@@ -947,6 +1140,7 @@ build_storygraph "$TEST_ROOT/worktree" "'''+self.story_digest+r'''"
                             (self.cache / 'storygraph' / self.story_digest, 'storygraph')]:
             self.assertTrue(os.access(entry / name, os.X_OK))
         self.assertEqual((self.cache / self.engine_digest / 'runtime.dat').read_text(), 'runtime')
+        self.assertTrue(os.access(self.cache / self.engine_digest / 'content-convert', os.X_OK))
         self.assertTrue((self.state / 'build/opengothic/Gothic2Notr').exists())
         self.assertTrue((self.state / 'storygraph-build/storygraph').exists())
 
@@ -991,6 +1185,9 @@ remote_run e2e "$TEST_ROOT/worktree" run
             binary = source / 'Gothic2Notr'
             binary.write_bytes((name.encode() + b'\n') * 200000)
             binary.chmod(0o755)
+            converter = source / 'content-convert'
+            converter.write_text('#!/bin/sh\nexit 0\n')
+            converter.chmod(0o755)
             (source / 'runtime.dat').write_text(name)
         processes = []
         try:
@@ -1068,41 +1265,40 @@ remote() { "$@"; }
         self.assertTrue((engine / 'Gothic2Notr').exists())
         self.assertTrue((storygraph / 'storygraph').exists())
 
-    def test_storygraph_digest_tracks_dependencies_independently(self):
-        inputs = ['ai_bridge/storygraph/main.cpp', 'ai_bridge/textcodec.cpp',
-                  'ai_bridge/textcodec.h', 'lib/ZenKit/src/Archive.cc',
-                  'lib/rapidjson/include/rapidjson/document.h']
-        for relative in inputs + ['game/main.cpp']:
-            path = self.source / 'OpenGothic' / relative
+    def test_storygraph_digest_tracks_engine_and_converter_sources(self):
+        # storygraph links base and video import from the engine tree, so it
+        # shares the engine digest: OpenGothic plus scripts/convert.
+        inputs = ['OpenGothic/ai_bridge/storygraph/main.cpp', 'OpenGothic/ai_bridge/textcodec.cpp',
+                  'OpenGothic/lib/ZenKit/src/Archive.cc', 'OpenGothic/common/basestore.cpp',
+                  'OpenGothic/game/main.cpp', 'scripts/convert/main.cpp']
+        for relative in inputs:
+            path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(relative)
 
-        def digest(kind=''):
+        def digest(function):
             result = subprocess.run(
-                ['bash', '-c', definitions() + '\nROOT="$TEST_ROOT/source"\nsource_digest ' + kind],
+                ['bash', '-c', definitions() + '\nROOT="$TEST_ROOT/source"\n' + function],
                 env=self.env, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return result.stdout.strip()
 
-        original = digest('storygraph')
+        original = digest('storygraph_digest')
+        self.assertEqual(digest('source_digest'), original)
         for relative in inputs:
             with self.subTest(source=relative):
-                path = self.source / 'OpenGothic' / relative
+                path = self.source / relative
                 path.write_text(relative + ' changed')
-                self.assertNotEqual(digest('storygraph'), original)
+                self.assertNotEqual(digest('storygraph_digest'), original)
                 path.write_text(relative)
-        engine_before = digest()
-        (self.source / 'OpenGothic/game/main.cpp').write_text('engine-only edit')
-        self.assertEqual(digest('storygraph'), original)
-        self.assertNotEqual(digest(), engine_before)
-        engine_before = digest()
-        for relative in ['ai_bridge/storygraph/build/generated.cpp', 'build/generated.cpp',
-                         'lib/ZenKit/build/generated.cpp']:
-            path = self.source / 'OpenGothic' / relative
+        self.assertEqual(digest('storygraph_digest'), original)
+        for relative in ['OpenGothic/ai_bridge/storygraph/build/generated.cpp',
+                         'OpenGothic/build/generated.cpp', 'OpenGothic/lib/ZenKit/build/generated.cpp',
+                         'scripts/convert/build/generated.cpp', 'scripts/other/tool.py']:
+            path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('generated output')
-        self.assertEqual(digest('storygraph'), original)
-        self.assertEqual(digest(), engine_before)
+        self.assertEqual(digest('storygraph_digest'), original)
 
 
 class TunnelTests(unittest.TestCase):
@@ -1386,7 +1582,7 @@ printf '%s\n' "${ENV_ARGS[@]-}"
         self.assertIn('Missing OPENGOTHIC_CONTENT directory:', result.stderr)
         self.assertFalse((self.root / 'rsync.jsonl').exists())
 
-    def test_bench_routes_supplied_content_to_ryzen(self):
+    def test_bench_routes_content_and_remote_base_paths_to_ryzen(self):
         scripts = self.root / 'scripts'
         scripts.mkdir()
         shutil.copyfile(BENCH_SCRIPT, scripts / 'bench.sh')
@@ -1408,7 +1604,9 @@ out = Path(sys.argv[3])
         content.mkdir()
         for index, value in enumerate((None, '', str(content))):
             with self.subTest(content=value):
-                env = dict(self.env, BENCH_HOST='ryzen')
+                env = dict(self.env, BENCH_HOST='ryzen',
+                           OPENGOTHIC_BASE_CACHE='/home/ryzen/gothic-ai/p18d/cache',
+                           OPENGOTHIC_BASE_STORE='/home/ryzen/gothic-ai/p18d/store')
                 env.pop('KEEP', None)
                 if value is not None:
                     env['OPENGOTHIC_CONTENT'] = value

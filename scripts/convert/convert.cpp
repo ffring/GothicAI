@@ -42,12 +42,17 @@
 //   content-convert sources|verify-sources <gothic dir> <dir>
 //       sources.json: selected FNT/audio/BIK/music/DAT/OU inputs of the engine
 //       and server readers, their origin and SHA-256; no payload conversion.
+//   content-convert resolve-base|resolve <gothic dir>
+//       Select or import the base through BaseStore; resolve also prepares videos.
+//       Progress goes to stderr and the selected base path goes to stdout.
 //   content-convert --self-test
 //       Round trips of synthetic meshes, world data and presets; no game files.
 //
 // The output is Gothic content: it never goes into git.
 
 #include "baseimport.h"
+#include "basestoreimport.h"
+#include "videodata.h"
 #include "sha256.h"
 #include "asset/fromzenkit.h"
 #include "basemesh.h"
@@ -79,6 +84,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <chrono>
@@ -821,6 +827,49 @@ int main(int argc, char** argv) {
       return BaseImport::convertAudio(args[1],args[2],args[0]=="verify-audio");
     if(args.size()==3 && (args[0]=="music" || args[0]=="verify-music"))
       return BaseImport::convertMusic(args[1],args[2],args[0]=="verify-music");
+    if(args.size()==3 && (args[0]=="videos" || args[0]=="verify-videos"))
+      return VideoData::convert(args[1],args[2],args[0]=="verify-videos");
+    if(args.size()==2 && (args[0]=="resolve-base" || args[0]=="resolve" || args[0]=="resolve-videos")) {
+      // Importers also write detailed reports to cout. Keep stdout exclusively for the result path.
+      struct StdoutRedirect {
+        std::streambuf* original;
+        ~StdoutRedirect() { std::cout.rdbuf(original); }
+        } redirect{std::cout.rdbuf(std::cerr.rdbuf())};
+      std::ostream output(redirect.original);
+      const auto progress=[](std::string_view message) { std::cerr << message << '\n'; };
+      fs::path selected;
+      BaseStore::Selection base;
+      if(args[0]!="resolve-videos") {
+        BaseImport::Files archives;
+        const auto* explicitBase=std::getenv("OPENGOTHIC_BASE");
+        const auto* fingerprint=std::getenv("OPENGOTHIC_BASE_FINGERPRINT");
+        if((explicitBase && *explicitBase) || !fingerprint || !*fingerprint)
+          for(const auto& archive:BaseImport::runtimeArchives(args[1]))
+            if(!archive.mod) archives.emplace_back(archive.name,archive.size);
+        base=BaseStore::ensure(args[1],archives,progress);
+        if(base.publication.valid()) base.publication.get();
+        selected=base.path;
+        }
+      const auto* videoFingerprint=std::getenv("OPENGOTHIC_VIDEOS_FINGERPRINT");
+      const bool videosDisabled=args[0]=="resolve" && videoFingerprint && !*videoFingerprint;
+      if(videosDisabled)
+        std::cerr << "video base: disabled by OPENGOTHIC_VIDEOS_FINGERPRINT\n";
+      else if(args[0]!="resolve-base") {
+        try {
+          auto videos=BaseStore::ensureVideos(args[1],progress);
+          if(videos.publication.valid()) videos.publication.get();
+          if(args[0]=="resolve-videos") selected=videos.path;
+          else if(VideoData::readIndex(videos.path).empty())
+            std::cerr << "video base: warning: installation contains no videos\n";
+          }
+        catch(const std::exception& error) {
+          if(args[0]!="resolve") throw;
+          std::cerr << "video base: warning: " << error.what() << '\n';
+          }
+        }
+      output << selected.string() << std::endl;
+      return 0;
+      }
     if(args.size()==3 && (args[0]=="sources" || args[0]=="verify-sources"))
       return BaseImport::convertSources(args[1],args[2],args[0]=="verify-sources");
     if(args.size()==3 && (args[0]=="textures" || args[0]=="verify-textures"))
@@ -837,6 +886,8 @@ int main(int argc, char** argv) {
                  "       content-convert outputunits-file <OU.BIN|OU.DAT> <record.json>\n"
                  "       content-convert audio|verify-audio <gothic dir> <dir>\n"
                  "       content-convert music|verify-music <gothic dir> <dir>\n"
+                 "       content-convert videos|verify-videos <gothic dir> <dir>\n"
+                 "       content-convert resolve-base|resolve-videos|resolve <gothic dir>\n"
                  "       content-convert sources|verify-sources <gothic dir> <dir>\n"
                  "       content-convert base <gothic dir> <dir>\n"
                  "       content-convert --self-test\n";

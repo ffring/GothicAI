@@ -9,7 +9,7 @@ import sys
 
 KINDS = (
     "texture", "basetexture", "mesh", "basemesh", "basemodel", "model", "skeleton", "anim", "morph", "world", "worldmesh", "baseworld", "basezen",
-    "sound", "basesound", "speech", "basespeech", "music", "basemusic", "script", "baseprogram", "cutscene", "baseoutputunits", "font", "basefont", "video", "other",
+    "sound", "basesound", "speech", "basespeech", "music", "basemusic", "script", "baseprogram", "cutscene", "baseoutputunits", "font", "basefont", "video", "basevideo", "other",
 )
 
 
@@ -70,7 +70,7 @@ def summarize(documents):
                 accesses[key]["opens"] += row["opens"]
         for row in document["replacements"]:
             resource = _replacement_key(row)
-            if row["kind"] in ("basetexture", "basemesh", "basemodel", "basefont", "baseprogram", "baseoutputunits", "basesound", "basespeech", "basemusic", "baseworld", "basezen", "worldmesh"):
+            if row["kind"] in ("basetexture", "basemesh", "basemodel", "basefont", "baseprogram", "baseoutputunits", "basesound", "basespeech", "basemusic", "basevideo", "baseworld", "basezen", "worldmesh"):
                 base.add(resource)
                 original_kind = "world" if resource[0] in ("basezen", "worldmesh") else resource[0].removeprefix("base")
                 if resource[0] == "baseprogram":
@@ -119,7 +119,7 @@ def render_markdown(summary):
         "и объединяются между прогонами. Для сопоставления подмен текстуры "
         "NAME.TGA и NAME-C.TEX считаются одним ресурсом. "
         "Ресурс считается своим, только если ни один его оригинал не открывался ни в одном прогоне. "
-        "Сконвертированный оригинал учитывается отдельно как basetexture/basemesh/basemodel/basefont/baseprogram/baseoutputunits/basesound/basespeech/basemusic/baseworld/basezen (прежний меш мира — worldmesh) и не считается своим.",
+        "Сконвертированный оригинал учитывается отдельно как basetexture/basemesh/basemodel/basefont/baseprogram/baseoutputunits/basesound/basespeech/basemusic/basevideo/baseworld/basezen (прежний меш мира — worldmesh) и не считается своим.",
         "",
         "| Вид | Оригинальных файлов | Подменено своими | Из базы | Доля своих |",
         "|---|---:|---:|---:|---:|",

@@ -46,6 +46,7 @@ from .deals import deal_demo as deal_demo
 from .deals import deal_window as deal_window
 from .deals import haggle as haggle
 from .deals import xardas_money as xardas_money
+from .feats import feats as feats
 from .frame import frame as frame
 from .gate import gate_scenario as gate_scenario
 from .gate import gate_vouch_scenario as gate_vouch_scenario
@@ -63,6 +64,7 @@ from .load import load_rewind as load_rewind
 from .memprobe import memprobe_scenario as memprobe_scenario
 from .neural_load import neural_load_scenario as neural_load_scenario
 from .neural_soak import neural_soak_scenario as neural_soak_scenario
+from .neural_still import neural_still_scenario as neural_still_scenario
 from .npc_deeds import npc_deeds as npc_deeds
 from .npc_director import npc_director as npc_director
 from .npc_far import npc_far as npc_far

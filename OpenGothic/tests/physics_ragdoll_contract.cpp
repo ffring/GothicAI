@@ -23,6 +23,7 @@
 #include <zenkit/ModelHierarchy.hh>
 #include <zenkit/ModelScript.hh>
 #include <zenkit/Stream.hh>
+#include <zenkit/Vfs.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -2016,7 +2017,7 @@ void testPoseActualDriverSave() {
   const char* args[]={"gothic-ragdoll-contract","-g",game.c_str()};
   CommandLine commandLine(3,args);
   Resources resources;
-  Resources::loadVdfs({},false);
+  Resources::loadBase();
   auto ownScript=asset::fromZenKit(script);
   Animation animation(ownScript,"POSE_RETURN",false);
   Skeleton skeleton(asset::fromZenKit(source),&animation,"POSE_RETURN.MDS");

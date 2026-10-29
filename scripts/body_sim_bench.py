@@ -15,12 +15,14 @@ import json
 import os
 from pathlib import Path
 import resource
+import statistics
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from body_observe_suite import ObserverRunner  # noqa: E402
+from body_arena_env import preserve_melee_journals  # noqa: E402
 
 
 # Training mode of the RL collector: culls, frozen world, isolated arena randomness.
@@ -67,6 +69,47 @@ def damage_rows(output: Path) -> list[dict]:
     with (output/"events.jsonl").open() as stream:
         return [{key: row[key] for key in keys} for line in stream
                 if (row := json.loads(line)).get("kind") == "body_combat" and row.get("phase") == "damage"]
+
+
+def add_posture_metrics(episodes: list[dict], path: Path, *, enabled: bool) -> dict:
+    """Match journal rows by the configured duel seed and count subsequent defeats."""
+    groups = {}
+    for line in path.read_text().splitlines() if path.is_file() else ():
+        row = json.loads(line)
+        groups.setdefault(row["arena_seed"], []).append(row)
+    seeds = {episode["seed"] for episode in episodes}
+    if groups.keys()-seeds:
+        raise RuntimeError("posture journal contains an unknown duel seed")
+    for episode in episodes:
+        rows = groups.get(episode["seed"], [])
+        if enabled and not rows and any(d["damage_kind"] == "melee" and d["has_hit"] for d in episode["damage"]):
+            raise RuntimeError(f"posture journal is missing duel seed {episode['seed']}")
+        falls = [row for row in rows if row["event"] == "knockdown"]
+        defeats = [row for row in episode["damage"] if row["down"] or row["dead"]]
+        episode["knockdowns"] = len(falls)
+        episode["knockdown_defeats_within_3s"] = sum(
+            any(d["actor"] == fall["target"]["name"] and 0 <= d["t_game"]-fall["tick_ms"] <= 3000
+                for d in defeats) for fall in falls)
+    outcomes = Counter(episode["reason"] for episode in episodes)
+    knockdowns = sum(episode["knockdowns"] for episode in episodes)
+    defeats = sum(episode["knockdown_defeats_within_3s"] for episode in episodes)
+    rows = [row for group in groups.values() for row in group]
+    starts = [row for row in rows if row["event"] == "getup_start" and "wait_ms" in row]
+    durations = [row["getup_duration_ms"] for row in rows if row["event"] == "recover" and "getup_duration_ms" in row]
+    forced = sum(row["forced"] for row in starts)
+    result = {"duels": len(episodes), "wins": outcomes["opponent_down"], "losses": outcomes["primary_down"],
+              "timeouts": outcomes["time_limit"],
+              "mean_duration_s": sum(e.get("game_ms", e.get("elapsed_game_ms", 0)) for e in episodes)/1000/len(episodes),
+              "knockdowns": knockdowns, "knockdowns_per_duel": knockdowns/len(episodes),
+              "knockdown_defeats_within_3s": defeats,
+              "knockdown_defeat_fraction": defeats/knockdowns if knockdowns else 0,
+              "getup_starts": len(starts), "getup_completed": len(durations), "forced_getup_starts": forced,
+              "forced_getup_fraction": forced/knockdowns if knockdowns else None,
+              "forced_getup_start_fraction": forced/len(starts) if starts else None}
+    for name, values in (("getup_wait_ms", [row["wait_ms"] for row in starts]), ("getup_duration_ms", durations)):
+        result.update({name+"_median": statistics.median(values) if values else None,
+                       name+"_min": min(values) if values else None, name+"_max": max(values) if values else None})
+    return result
 
 
 def shadow_coverage(path: Path, episodes: list[dict]) -> dict:
@@ -121,7 +164,8 @@ def shadow_comparison(results: list[dict]) -> dict | None:
 
 
 def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: bool, watch: bool,
-                visibility: bool = True, off=(), env=None, extra=(), melee_shadow=None) -> dict:
+                visibility: bool = True, off=(), env=None, extra=(), melee_shadow=None, melee_physics_hits=None,
+                melee_posture=None) -> dict:
     output = args.output/name
     output.mkdir(parents=True)
     variant = argparse.Namespace(**vars(args))
@@ -130,6 +174,7 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
     variant.compact_replies = True
     variant.runner_extra_args = list(extra)
     variant.melee_shadow = melee_shadow
+    variant.melee_posture = melee_posture
     if melee_shadow is not None:
         # Both collectors copy this private INI; the archived reference stays unchanged.
         variant.reference = output/"reference"
@@ -140,6 +185,10 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
         if not config.has_section("GAME"):
             config.add_section("GAME")
         config.set("GAME", "melee_blade_shadow", str(melee_shadow))
+        if melee_physics_hits is not None:
+            config.set("GAME", "melee_physics_hits", str(melee_physics_hits))
+        if melee_posture is not None:
+            config.set("GAME", "melee_posture", str(melee_posture))
         with settings.open("w") as stream:
             config.write(stream)
     os.environ.pop("OPENGOTHIC_BODY_TRACE", None)
@@ -154,23 +203,28 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
     os.environ.pop("OPENGOTHIC_MELEE_BENCH", None)
     os.environ.update(env or {})
     cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
-    runner = ObserverRunner(variant)
+    runner = None if args.policy_only else ObserverRunner(variant)
     episodes = []
     try:
-        runner.request({"cmd": "status"})
-        for index in range(args.episodes):
+        if runner is not None:
+            runner.request({"cmd": "status"})
+        for index in range(0 if args.policy_only else args.episodes):
             folder = output/f"episode-{index}"
             folder.mkdir()
             begin = time.monotonic()
+            arena_config = {"scenario": "native_duel", "seed": args.seed+index,
+                            "side": index % 2, "distance_cm": 400, "timeout_ms": args.timeout_ms}
+            if args.weapon == "2h":
+                arena_config["weapon"] = args.weapon
             reset = runner.request({"cmd": "reset", "scenario": str(args.scenario), "output_dir": str(folder),
-                                    "mode": "lockstep", "arena": {"scenario": "native_duel", "seed": args.seed+index,
-                                                                  "side": index % 2, "distance_cm": 400,
-                                                                  "timeout_ms": args.timeout_ms}})
+                                    "mode": "lockstep", "arena": arena_config})
             if not watch:
                 runner.request({"cmd": "body_watch", "enabled": False}, allow_error=True)
             elif visibility:
                 runner.request({"cmd": "body_visibility_watch", "enabled": True}, allow_error=True)
             reset_s = time.monotonic()-begin
+            if melee_shadow is not None and index:
+                preserve_melee_journals(output/"run", output/f"episode-{index-1}", args.seed+index-1)
             native_reset_ms = reset.get("reset_wall_ms")
             warmup_ms = reset.get("simulated_ms")
             start = runner.request({"cmd": "arena_start", "provider": "native"})
@@ -192,12 +246,17 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
                 episodes[-1].update(seed=args.seed+index, side=index % 2, reason=arena["reason"],
                                     actors=[{key: actor[key] for key in ("hp", "hp_max", "received_damage", "outgoing_damage", "blocked_hits")}
                                             for actor in arena["actors"]], damage=damage_rows(folder))
+                preserve_melee_journals(output/"run", folder, args.seed+index)
             print(f"{name} ep{index}: reset {reset_s:.2f}s (runner {native_reset_ms} ms, warmup {warmup_ms} game ms) steps {steps} {wall*1000/max(1,steps):.2f} ms/tick "
                   f"speed {game/1000/max(wall,1e-9):.2f}x {arena.get('outcome')}", flush=True)
-        sample = runner.sample()
-        runner.request({"cmd": "close"})
+        sample = runner.sample() if runner is not None else {}
+        if runner is not None:
+            runner.request({"cmd": "close"})
+            if melee_shadow is not None and episodes:
+                preserve_melee_journals(output/"run", output/f"episode-{len(episodes)-1}", args.seed+len(episodes)-1)
     finally:
-        runner.terminate()
+        if runner is not None:
+            runner.terminate()
     cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
     runner_cpu_s = (cpu_after.ru_utime+cpu_after.ru_stime)-(cpu_before.ru_utime+cpu_before.ru_stime)
     ticks = sum(e["steps"] for e in episodes)
@@ -206,12 +265,25 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             "environment": dict(env or {}), "runner_peak_rss": sample.get("VmHWM"),
             "runner_cpu_s_including_resets": runner_cpu_s,
             "episodes": episodes, "ms_per_tick": wall*1000/max(1, ticks),
-            "reset_s_mean": sum(e["reset_s"] for e in episodes)/len(episodes),
+            "reset_s_mean": sum(e["reset_s"] for e in episodes)/len(episodes) if episodes else 0,
             "game_speed": sum(e["game_ms"] for e in episodes)/1000/max(wall, 1e-9)}
+    if args.weapon == "2h":
+        result["weapon"] = args.weapon
     if args.checkpoint is not None:
         result["policy"] = run_policy(variant, output)
-    if melee_shadow == 1:
-        result["shadow_coverage"] = {"native": shadow_coverage(output/"run/melee-blade-shadow.jsonl", episodes)}
+    if melee_posture is not None:
+        result["posture"] = {}
+        if episodes:
+            result["posture"]["native"] = add_posture_metrics(episodes, output/"run/melee-posture.jsonl",
+                                                             enabled=melee_posture == 1)
+        if "policy" in result:
+            result["posture"]["policy"] = add_posture_metrics(result["policy"]["episodes"],
+                                                               output/"policy/worker-00/run/melee-posture.jsonl",
+                                                               enabled=melee_posture == 1)
+    if melee_shadow == 1 and name=="shadow-on":
+        result["shadow_coverage"] = {}
+        if episodes:
+            result["shadow_coverage"]["native"] = shadow_coverage(output/"run/melee-blade-shadow.jsonl", episodes)
         if "policy" in result:
             result["shadow_coverage"]["policy"] = shadow_coverage(
                 output/"policy/worker-00/run/melee-blade-shadow.jsonl", result["policy"]["episodes"])
@@ -229,7 +301,14 @@ def main() -> int:
     parser.add_argument("--variants", default="gate,lean,pool-lean,pool-gate")
     parser.add_argument("--checkpoint", type=Path,
                         help="also measure the existing deterministic P30 collector, one duel runner at a time")
+    parser.add_argument("--weapon", choices=("1h", "2h"), default="1h")
+    parser.add_argument("--policy-only", action="store_true",
+                        help="run only the checkpoint series (one series per queue job)")
     args = parser.parse_args()
+    if args.checkpoint is not None and args.weapon == "2h":
+        parser.error("--checkpoint requires --weapon 1h: P30 was trained only with one-handed weapons")
+    if args.policy_only and args.checkpoint is None:
+        parser.error("--policy-only requires --checkpoint")
     for name in ("runner", "assets", "save", "reference", "scenario", "output", "checkpoint"):
         value = getattr(args, name)
         if value is not None:
@@ -254,9 +333,19 @@ def main() -> int:
              "melee-blade-motors": dict(serial=True, trace=False, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
                                         env={**FROZEN_ENV, "OPENGOTHIC_MELEE_BENCH": "blade-motors"}),
              "shadow-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
-                                env=FROZEN_ENV, melee_shadow=0),
+                                env=FROZEN_ENV, melee_shadow=0, melee_physics_hits=0),
              "shadow-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
-                               env=FROZEN_ENV, melee_shadow=1)}
+                               env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=0),
+             "hits-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                              env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=0),
+             "hits-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                             env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1),
+             "posture-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                                 env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1, melee_posture=0),
+             "posture-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                                env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1, melee_posture=1),
+             "vanilla": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                             env=FROZEN_ENV, melee_shadow=0, melee_physics_hits=0, melee_posture=0)}
     results = [run_variant(args, name, **table[name]) for name in args.variants.split(",")]
     comparison = shadow_comparison(results)
     (args.output/"bench.json").write_text(json.dumps({"schema_version": 1, "kind": "body_sim_bench", "quality_credit": False,
@@ -271,6 +360,15 @@ def main() -> int:
             print(f"   policy: {policy['decisions_per_s']:.2f} decisions/s incl. resets, "
                   f"{policy['rollout_decisions_per_s']:.2f} rollout decisions/s, "
                   f"{policy['ms_per_tick']:.2f} ms/tick, fallbacks {policy['fallbacks']}", flush=True)
+        for provider, summary in result.get("posture", {}).items():
+            print(f"   posture {provider}: {summary['wins']}/{summary['losses']}/{summary['timeouts']} W/L/T, "
+                  f"{summary['mean_duration_s']:.3f} s, {summary['knockdowns_per_duel']:.3f} KD/duel, "
+                  f"{summary['knockdown_defeats_within_3s']}/{summary['knockdowns']} defeats within 3 s", flush=True)
+            print(f"   get-up {provider}: {summary['getup_starts']} starts, {summary['getup_completed']} completed, "
+                  f"wait median {summary['getup_wait_ms_median']} ms [{summary['getup_wait_ms_min']}, {summary['getup_wait_ms_max']}], "
+                  f"transition median {summary['getup_duration_ms_median']} ms "
+                  f"[{summary['getup_duration_ms_min']}, {summary['getup_duration_ms_max']}], "
+                  f"forced {summary['forced_getup_starts']}/{summary['knockdowns']} knockdowns", flush=True)
     coverage_failed = False
     for result in results:
         for name, row in result.get("shadow_coverage", {}).items():

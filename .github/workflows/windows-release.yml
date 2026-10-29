@@ -1,13 +1,20 @@
-# The prebuilt Windows x64 archive for players: this fork's game with its AI bridge and the story graph
-# converter, compiled with MSVC, the AI services' sources and locks, the pinned uv and the entry points.
-# Run by hand only. One job on a standard GitHub-hosted runner, no caches and no workflow artifacts: the
-# archive leaves the runner only as an asset of a new DRAFT prerelease, made as the very last step, after
-# the build, the tests and the package checks passed. The maintainer checks the assets (ZIP CRC, x64,
-# checksums, imports, file list) and then publishes the draft as a prerelease.
+# The prebuilt Windows x64 archive for players: this fork's game with its AI bridge, the base and video
+# converter and the story graph converter, compiled with MSVC, the AI services' sources and locks, the
+# pinned uv and the entry points. Run by hand only. One job on a standard GitHub-hosted runner, no caches
+# and no workflow artifacts. By default the run only validates: build, tests, converter and launcher checks
+# and the package checks, and the archive stays on the runner. With draft_release the archive leaves it as
+# an asset of a new DRAFT prerelease, made as the very last step, after everything else passed. The
+# maintainer checks the assets (ZIP CRC, x64, checksums, imports, file list) and then publishes the draft
+# as a prerelease.
 name: Windows release
 
 on:
   workflow_dispatch:
+    inputs:
+      draft_release:
+        description: Also make a draft prerelease with the archive (off validates only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -86,10 +93,15 @@ jobs:
           uv run --locked pytest -q -rs tests
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+      - name: Base-game profile tests on Windows (synthetic archives, no game files)
+        run: |
+          uv run --locked --project launcher/core pytest -q -rs scripts/tests/test_windows_game_profile.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: The services and the chosen providers import on Windows
         run: |
           $checks = @(
-            @('server', 'import gothic_ai.cli, gothic_ai.llm.siwc, gothic_ai.llm.openai_responses, gothic_ai.voice, gothic_ai.gates, gothic_ai.dialogue'),
+            @('server', 'import gothic_ai.cli, gothic_ai.gamedata.ou, gothic_ai.llm.siwc, gothic_ai.llm.openai_responses, gothic_ai.voice, gothic_ai.gates, gothic_ai.dialogue'),
             @('asr-service', 'import gothic_asr.cli, gothic_asr.providers.chatgpt'),
             @('tts-service', 'import gothic_tts.cli, gothic_tts.providers.inworld, gothic_tts.originals')
           )
@@ -113,12 +125,29 @@ jobs:
           if (-not (Test-Path (Join-Path $root 'Bin/glslangValidator.exe'))) { throw "no Vulkan SDK in $root" }
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=$root"
 
-      - name: Build this fork's game (AI bridge) and storygraph with MSVC
+      - name: Build this fork's game (AI bridge), content-convert and storygraph with MSVC
         run: |
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-engine.ps1 -BuildType $env:BUILD_TYPE
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-      - name: The launcher finds the built game and converter
+      - name: The converter passes its self-test and refuses a folder without Gothic II
+        env:
+          OPENGOTHIC_BASE_CACHE: ${{ runner.temp }}\base-cache  # a throwaway cache, nothing in AppData
+        run: |
+          $convert = Join-Path $env:GITHUB_WORKSPACE 'OpenGothic\build\opengothic\content-convert.exe'
+          & $convert --self-test
+          if ($LASTEXITCODE) { throw "content-convert --self-test failed with exit code $LASTEXITCODE" }
+          $empty = Join-Path $env:RUNNER_TEMP 'no-game'
+          New-Item -ItemType Directory -Force -Path $empty | Out-Null
+          $out = & $convert resolve $empty 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -eq 0) { throw 'content-convert resolve accepted a folder without Gothic II' }
+          if ($out -notmatch 'no ready base for') { throw "content-convert resolve: unexpected failure (exit code $code)" }
+          # the expected failure passed: the runner would otherwise end the step with it
+          exit 0
+
+      - name: The launcher finds the built game and converters
         env:
           USERPROFILE: ${{ runner.temp }}\profile  # a throwaway profile: no settings, keys or sign-in
         run: |
@@ -130,8 +159,16 @@ jobs:
           $code = $LASTEXITCODE
           Write-Host $out
           if ($code -ne 2) { throw "setup --check: expected 2 (no game folder or sign-in here), got $code" }
-          if ($out -match 'не собран|не найден uv') { throw 'the launcher does not see the built game or storygraph' }
-          # the expected 2 passed: the runner would otherwise end the step with it
+          if ($out -match 'не собран|не найден uv') { throw 'the launcher does not see the built game, content-convert or storygraph' }
+          $empty = Join-Path $env:RUNNER_TEMP 'no-game'
+          New-Item -ItemType Directory -Force -Path $empty | Out-Null
+          $json = uv run --locked --project launcher/core gothic-launcher check $empty
+          $code = $LASTEXITCODE
+          Write-Host $json
+          if ($code -ne 1) { throw "check: expected 1 for a folder without Gothic II, got $code" }
+          $items = @($json | ConvertFrom-Json)
+          if ($items.Count -ne 1 -or $items[0].id -ne 'folder' -or $items[0].ok) { throw 'check: unexpected answer' }
+          # the expected codes passed: the runner would otherwise end the step with them
           exit 0
 
       - name: Package
@@ -140,13 +177,14 @@ jobs:
           $dist = Join-Path $env:RUNNER_TEMP 'dist'
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/package.ps1 `
             -UvZip $env:UV_ZIP -UvLicenses $env:UV_LICENSES -OutDir $dist -Name $name `
-            -Commit '${{ github.sha }}' -RunUrl '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' `
+            -Repository '${{ github.server_url }}/${{ github.repository }}' -Commit '${{ github.sha }}' -RunUrl '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' `
             -VulkanSdkVersion $env:VULKAN_SDK_VERSION -UvVersion $env:UV_VERSION
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Add-Content $env:GITHUB_ENV "PACKAGE_NAME=$name"
           Add-Content $env:GITHUB_ENV "PACKAGE_DIR=$dist"
 
       - name: Draft prerelease with the archive, its manifest and SHA256SUMS
+        if: ${{ inputs.draft_release }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

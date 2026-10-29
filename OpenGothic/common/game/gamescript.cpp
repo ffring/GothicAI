@@ -462,31 +462,7 @@ void GameScript::loadDialogOU() {
   const std::array<std::string,2> names = {prefix + ".BIN", prefix + ".DAT"};
 
   for(auto& OU:names) {
-    if(Resources::hasFile(OU)) {
-      Resources::loadBaseOutputUnits(OU,vmLang,"vfs_find_request",dialogs);
-      return;
-      }
-
-    const size_t segment = OU.find_last_of("\\/");
-    if(segment!=std::string::npos && Resources::hasFile(OU.substr(segment+1))) {
-      Resources::loadBaseOutputUnits(OU,vmLang,"vfs_find_basename",dialogs);
-      return;
-      }
-
-    char16_t str16[256] = {};
-    for(size_t i=0; i<OU.size() && i<255; ++i)
-      str16[i] = char16_t(OU[i]);
-
-    auto gcutscene = CommandLine::inst().cutscenePath();
-    auto full      = FileUtil::caseInsensitiveSegment(gcutscene,str16,Dir::FT_File);
-    const char* branch = "host_ordinary";
-    if(!FileUtil::exists(std::u16string(full)) && vmLang>=0) {
-      gcutscene = CommandLine::inst().cutscenePath(ScriptLang(vmLang));
-      full      = FileUtil::caseInsensitiveSegment(gcutscene,str16,Dir::FT_File);
-      branch = "host_localized";
-      }
-
-    if(FileUtil::exists(std::u16string(full)) && Resources::loadBaseOutputUnits(OU,vmLang,branch,dialogs,full))
+    if(Resources::loadBaseOutputUnits(OU,vmLang,dialogs))
       return;
     }
   Log::e("none of Zen-files for OU could be loaded");

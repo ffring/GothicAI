@@ -21,6 +21,9 @@ from pathlib import Path
 
 MAX_FRAMES = 14
 WIDTH = 180  # of one frame in a strip
+# a beat's transition without `dur`, as src/parts/timing.ts: what travels across the frame takes longer
+TRANSITION_DUR = {"fade": 0.35, "flash": 0.35, "zoom": 0.35, "slide": 0.5, "wipe": 0.5}
+FOLLOW = 0.06  # MOTION.follow: a tag's box after its pin, a text's words after their band
 PAD_BEFORE = 0.1
 PAD_AFTER = 0.15
 
@@ -41,13 +44,13 @@ def events(plan: dict) -> list[tuple[float, float, str, str]]:
         bid = beat["id"]
         enter = beat.get("enter")
         if enter:
-            out.append((t, enter.get("dur", 0.35), bid, f"enter-{enter['type']}"))
+            out.append((t, enter.get("dur", TRANSITION_DUR[enter["type"]]), bid, f"enter-{enter['type']}"))
         elif t > 0:
             out.append((t, 0.0, bid, "cut"))
         for i, x in enumerate(beat.get("texts", [])):
-            out.append((t + x.get("at", 0), 0.35, bid, f"text{i}-{x.get('enter', 'rise')}"))
+            out.append((t + x.get("at", 0), 0.35 + FOLLOW, bid, f"text{i}-{x.get('enter', 'rise')}"))
         for i, x in enumerate(beat.get("tags", [])):
-            out.append((t + x.get("at", 0), 0.35, bid, f"tag{i}-{x.get('enter', 'rise')}"))
+            out.append((t + x.get("at", 0), 0.35 + FOLLOW, bid, f"tag{i}-{x.get('enter', 'rise')}"))
         for kind in ("strokes", "fans", "paths"):
             for i, x in enumerate(beat.get(kind, [])):
                 out.append((t + x.get("at", 0), x.get("dur", 0.6), bid, f"{kind[:-1]}{i}"))

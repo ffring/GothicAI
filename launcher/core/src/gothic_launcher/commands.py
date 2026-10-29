@@ -9,15 +9,18 @@ argv, so they stay out of logs and `ps`.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import socket
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import base
 from .settings import CONFIG_DIR, Config
 
 GAME_HOME = Path.home() / ".local" / "share" / "gothic-ai" / "game"
@@ -42,6 +45,16 @@ def local_app_data() -> Path:
     return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
 
 
+def base_cache_env() -> dict[str, str]:
+    """Windows: the engine's own base cache, %LOCALAPPDATA%\\gothic-ai\\base (common/basestore.cpp), named
+    for this launcher and everything it starts; the Python base readers would look in ~/.cache. Resolved,
+    so the game, the converter and the services get the folder's physical path also in a shell whose
+    AppData a packaged app redirects. An explicit OPENGOTHIC_BASE_CACHE takes precedence."""
+    if sys.platform != "win32" or "OPENGOTHIC_BASE_CACHE" in os.environ:
+        return {}
+    return {"OPENGOTHIC_BASE_CACHE": str((local_app_data() / "gothic-ai" / "base").resolve())}
+
+
 # sharper textures of the characters, made from the game's own by scripts/hd-textures.sh (never in git)
 HD_TEXTURES = default_hd_textures()
 FRACTURE_CACHE = Path.home() / ".local" / "share" / "gothic-ai" / "fracture"
@@ -55,7 +68,7 @@ UV_CANDIDATES_WINDOWS = (
     "~/.cargo/bin/uv.exe",
     "%LOCALAPPDATA%/Microsoft/WinGet/Links/uv.exe",
 )
-MANAGED_ENV = ("OPENAI_API_KEY", "INWORLD_API_KEY")
+MANAGED_ENV = ("OPENAI_API_KEY", "INWORLD_API_KEY", "OPENGOTHIC_BODY_NET")
 FOREIGN_ENV = ("VIRTUAL_ENV",)  # the launcher's own venv: `uv run` of a service would warn and ignore it
 SAVE_RE = re.compile(r"save_slot_(\d+)\.sav")
 
@@ -85,6 +98,7 @@ class Layout:
     hd_textures: Path | None = None  # the game loads them instead of its own (OPENGOTHIC_TEXTURES)
     fracture_cache: Path | None = None  # pre-cut breakable meshes (OPENGOTHIC_FRACTURE)
     play_content: Path | None = None  # the personal Linux install's content (OPENGOTHIC_CONTENT)
+    game_env: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -151,17 +165,32 @@ def find_layout(config: Config) -> Layout:
     if not os.access(game_bin, os.X_OK):
         problems.append(f"the game is not built: no {game_bin} (see README, «Сборка и запуск»)")
     game_dir = config.settings.game.dir
+    game_env = {}
     if game_dir is None:
         problems.append("game folder is not set: gothic-launcher config set game.dir '/path/to/Gothic II'")
         game_dir = Path()
-    elif not _has_child(game_dir, "data"):
-        problems.append(f"{game_dir} has no Data folder: is it Gothic II?")
+    else:
+        if sys.platform == "linux" and game_dir == Path.home() / "gothic-ai/game-settings":
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(repo / "scripts/ryzen_game.py"), "--json", f"--assets={game_dir}"],
+                    capture_output=True, text=True, check=True,
+                )
+                game_env = json.loads(result.stdout)
+            except subprocess.CalledProcessError as error:
+                raise LaunchError(error.stderr.strip()) from error
+        try:
+            with base.resolve(game_dir):
+                pass
+        except RuntimeError as error:
+            if not _has_child(game_dir, "data") and not game_env.get("OPENGOTHIC_BASE_FINGERPRINT"):
+                problems.append(f"select an installed Gothic II folder once: {error}")
     if problems:
         raise LaunchError("\n".join(problems))
     hd = HD_TEXTURES if HD_TEXTURES.is_dir() else None
     fracture = FRACTURE_CACHE if FRACTURE_CACHE.is_dir() else None
     content = PLAY_CONTENT if sys.platform == "linux" else None
-    return Layout(repo, uv, game_bin, game_dir, paths.game_home or GAME_HOME, hd, fracture, content)
+    return Layout(repo, uv, game_bin, game_dir, paths.game_home or GAME_HOME, hd, fracture, content, game_env)
 
 
 def texture_env(layout: Layout) -> dict[str, str]:
@@ -236,6 +265,11 @@ def default_game_bin(repo: Path) -> Path:
     return bundled if sys.platform == "darwin" and os.access(bundled, os.X_OK) else build / "Gothic2Notr"
 
 
+def content_converter(game_bin: Path) -> Path:
+    """The base and video converter (scripts/convert) the engine build puts beside the game."""
+    return game_bin.parent / ("content-convert.exe" if sys.platform == "win32" else "content-convert")
+
+
 def storygraph_tool(repo: Path) -> Path:
     """The story graph converter of the repository's build (the services look there by themselves)."""
     name = "storygraph.exe" if sys.platform == "win32" else "storygraph"
@@ -261,7 +295,7 @@ def services(config: Config, layout: Layout, ports: Ports, cwd: Path) -> list[Pr
     ]  # fmt: skip
     server_args += _opt("--model", s.llm.model) + _opt("--base-url", s.llm.base_url)
     server_args += _opt("--decider-url", s.llm.decider_url) + _opt("--quick-url", s.llm.quick_url)
-    server_args += _opt("--body-url", s.llm.body_url)  # the neural body pilot is on when the address is set
+    server_args += ["--body-policy", s.llm.body_policy] + _opt("--body-url", s.llm.body_url)
     server_args += [] if s.llm.quick else ["--no-quick"]  # on by default, next to the decider
     openai_key = {"OPENAI_API_KEY": keys.openai_api_key} if keys.openai_api_key else {}
 
@@ -313,6 +347,7 @@ def game(config: Config, layout: Layout, ports: Ports, save: str | None = None, 
     if s.dev_mode:
         argv.append("-devmode")
     env = {
+        **layout.game_env,
         "GOTHIC_AI_URL": f"ws://127.0.0.1:{ports.server}",
         **texture_env(layout),
         **fracture_env(layout),
@@ -320,7 +355,30 @@ def game(config: Config, layout: Layout, ports: Ports, save: str | None = None, 
     }
     if s.chat_scale is not None:
         env["GOTHIC_AI_CHAT_SCALE"] = f"{s.chat_scale:g}"
+    if config.settings.llm.body_net is not None:
+        env["OPENGOTHIC_BODY_NET"] = str(config.settings.llm.body_net)
     return Proc("game", argv, layout.game_home, env, restart=False, stamp=True)
+
+
+def preparation(
+    game_bin: Path, game_dir: Path, cwd: Path, env: dict[str, str] | None = None
+) -> Proc | None:
+    """Prepare content with the converter shipped beside the selected game executable."""
+    inherited = child_env(env or {})
+    if inherited.get("OPENGOTHIC_BASE"):
+        return None
+    # Services read the game's current pointer before the engine starts. Resolve
+    # the prepared Ryzen fingerprints to publish it, without an installation import.
+    ryzen_settings = str(Path.home() / "gothic-ai/game-settings")
+    if inherited.get("OPENGOTHIC_BASE_FINGERPRINT") and inherited.get("GOTHIC_DIR") != ryzen_settings:
+        return None
+    converter = content_converter(game_bin)
+    if not converter.is_file() or not os.access(converter, os.X_OK):
+        build = "scripts/build-engine.ps1" if sys.platform == "win32" else "scripts/build-engine.sh"
+        raise LaunchError(
+            f"content-convert is missing or not executable: {converter}; rebuild the engine with {build}"
+        )
+    return Proc("prepare", [str(converter), "resolve", str(game_dir)], cwd, env or {}, restart=False)
 
 
 def latest_save(game_home: Path) -> str | None:

@@ -8,6 +8,7 @@
 #include "worldwind.h"
 #include "gothic.h"
 #include "arrowtrace.h"
+#include "frameprofile.h"
 #include <Tempest/Log>
 #include "graphics/mesh/skeleton.h"
 #include "graphics/mesh/protomesh.h"
@@ -2273,13 +2274,16 @@ void DynamicWorld::tick(uint64_t dt) {
   npcList   ->tickAabbs();
   bulletList->tick(dt);
   world     ->tick(dt);
-  for(auto* obj:movableVobs->bodies)
-    if(movableVobs->enabled || obj->className=="fence" || obj->pose->broken) {
-      if(obj->pendingBreak) breakMovableVob(*obj);
-      syncMovableVob(*obj);
-      cleanupFragments(*obj);
-      syncFragments(*obj);
-      }
+  {
+    FrameProfile::Scope timing(FrameProfile::Zone::Destruction);
+    for(auto* obj:movableVobs->bodies)
+      if(movableVobs->enabled || obj->className=="fence" || obj->pose->broken) {
+        if(obj->pendingBreak) breakMovableVob(*obj);
+        syncMovableVob(*obj);
+        cleanupFragments(*obj);
+        syncFragments(*obj);
+        }
+    }
   // NPC walking runs before native body integration. Finish only the motion
   // of an already accepted moving support against the integrated world.
   // onMove may thaw a frozen entry, so collect pointers before updating them.
@@ -2316,12 +2320,18 @@ void DynamicWorld::removeMeleeBlade(const Npc* owner) { world->removeMeleeBlade(
 void DynamicWorld::updateShadowBody(Npc* owner,const std::vector<MeleeBodyCapsule>& capsules) { world->updateShadowBody(owner,capsules); }
 void DynamicWorld::removeShadowBody(const Npc* owner) { world->removeShadowBody(owner); }
 void DynamicWorld::updateShadowBlade(const Npc* owner,uint64_t swingId,const std::vector<MeleeBladeSegment>& segments,
-                                     uint64_t timeMs,double activeBeginMs,double activeEndMs) {
-  world->updateShadowBlade(owner,swingId,segments,timeMs,activeBeginMs,activeEndMs);
+                                     uint64_t timeMs,double activeBeginMs,double activeEndMs,float walkableCos,
+                                     Tempest::Vec3 forward) {
+  world->updateShadowBlade(owner,swingId,segments,timeMs,activeBeginMs,activeEndMs,walkableCos,forward);
   }
 std::vector<MeleeBladeContact> DynamicWorld::takeShadowBladeContacts(const Npc* owner) { return world->takeShadowBladeContacts(owner); }
 void DynamicWorld::removeShadowBlade(const Npc* owner) { world->removeShadowBlade(owner); }
 void DynamicWorld::flushShadowBlades() { world->flushShadowBlades(); }
+float DynamicWorld::meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                                    const Tempest::Vec3& direction, float maxAdvanceCm) const {
+  return world->meleeBladeAdvance(blades,target,direction,maxAdvanceCm);
+  }
+void DynamicWorld::accountMeleeReachTime(float milliseconds) { world->accountMeleeReachTime(milliseconds); }
 void DynamicWorld::measureMeleeBench(std::string path) { world->measureMeleeBench(std::move(path)); }
 void DynamicWorld::reportMeleeBench() { world->reportMeleeBench(); }
 

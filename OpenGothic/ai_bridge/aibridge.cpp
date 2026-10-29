@@ -23,6 +23,7 @@
 #include "game/gamescript.h"
 #include "game/bodyobservations.h"
 #include "game/bodycontroller.h"
+#include "game/bodyenginepolicy.h"
 #include "game/inventory.h"
 #include "game/herodeed.h"
 #include "game/serialize.h"
@@ -37,6 +38,7 @@
 #include "world/worldsound.h"
 #include "npcchests.h"
 #include "gothic.h"
+#include "frameprofile.h"
 
 #include "beasts.h"
 #include "chatoverlay.h"
@@ -75,7 +77,7 @@ using namespace Tempest;
 
 namespace {
 
-constexpr int         ProtocolVersion = 52;
+constexpr int         ProtocolVersion = 54;
 constexpr const char* SaveEntry       = "ai_bridge/session";  // own entry in save games
 constexpr const char* DefaultUrl      = "ws://127.0.0.1:47817";
 constexpr float       IntroCm         = 3000;  // -nointro: those this near the hero at the start
@@ -514,14 +516,17 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
   BodyController::pumpWatchdogs();
   finishBodyReset(Gothic::inst().world());
   std::vector<Inbound> queue;
+  World* world = nullptr;
   {
-    std::lock_guard<std::mutex> guard(sync);
-    queue.swap(inbound);
-  }
-
-  World* world = Gothic::inst().world();
-  for(auto& in:queue)
-    processInbound(world,in);
+    FrameProfile::Scope timing(FrameProfile::Zone::AiBridge);
+    {
+      std::lock_guard<std::mutex> guard(sync);
+      queue.swap(inbound);
+      }
+    world = Gothic::inst().world();
+    for(auto& in:queue)
+      processInbound(world,in);
+    }
 
   if(world!=nullptr) {
     ctrl.tick(*world);
@@ -547,6 +552,8 @@ void AiBridge::Impl::onTick(uint64_t /*dt*/) {
         envelope.Parse(events.c_str(),events.size());
         if(envelope.HasMember("events") && !envelope["events"].Empty())
           send(std::move(events));
+        for(auto& report:BodyController::drainPolicyJson())
+          send(std::move(report));
         }
       }
     tickVoices(*world);
@@ -576,6 +583,7 @@ void AiBridge::Impl::processInbound(World* world, Inbound& in) {
              .integer("protocol",ProtocolVersion)
              .str("client","opengothic-ai-bridge")
              .str("codepage","cp1251")
+             .raw("body_net",BodyEnginePolicy::netStatusJson())
              .finish());
       session.reason = "connect";
       sendSession();
@@ -1071,6 +1079,13 @@ void AiBridge::Impl::handle(World* world, const std::string& text) {
     }
   else if(type=="chat_status") {
     onChatStatus(*world,doc);
+    }
+  else if(type=="feat_toast") {
+    // a feat of the hero (v53): a quiet toast, nothing answers it
+    ensureChat();
+    chat->showFeat(TextCodec::fromUtf8(JsonRead::str(doc,"title")),
+                   TextCodec::fromUtf8(JsonRead::str(doc,"text")),
+                   std::string(JsonRead::str(doc,"icon")));
     }
   else if(type=="transcript") {
     onTranscript(doc);

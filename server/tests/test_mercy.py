@@ -14,7 +14,7 @@ from gothic_ai.dialogue import DialogueManager
 from gothic_ai.game import GameError
 from gothic_ai.llm import FakeBackend, FakeStep, Message, ToolCall, ToolResult
 from gothic_ai.memory import MemoryStore
-from gothic_ai.mercy import PARDON, PEE_DISTANCE_CM, PEE_HOLD_MS, VICTOR, YIELDING, Mercy
+from gothic_ai.mercy import ACCEPT_QUIET_S, PARDON, PEE_DISTANCE_CM, PEE_HOLD_MS, VICTOR, YIELDING, Mercy
 from gothic_ai.orders import Fight, Orders, Standing
 from gothic_ai.parley import Parley
 from gothic_ai.persona import PersonaProvider
@@ -185,6 +185,8 @@ async def test_opportunity_uses_conversational_model_once_and_sets_native_outcom
     assert rig.llm.calls and not quick.calls
     assert "surrender" in {t.name for t in rig.llm.calls[0][2]}
     assert "Сейчас бой:" in rig.llm.calls[0][1][-1].content
+    assert all("Твою реплику уже произносят вслух." not in message.content
+               for call in rig.llm.calls for message in call[1] if isinstance(message, Message))
     assert len(rig.chronicle.facts("mercy_offer")) == 1
     [fact] = rig.chronicle.facts("surrender")
     assert fact["status"] == "pending" and fact["until"] == 4320
@@ -401,6 +403,9 @@ async def test_acceptance_without_hold_calms_allied_attackers_and_only_recipient
     assert rig.fake.npc_items.get(FRIEND, {}).get(GOLD, 0) == 0
     assert all(row["npc"] == NPC for row in rig.fake.story
                if any(op.get("do") == "give" for op in row.get("effects", [])))
+    # a native important dialog (a gate guard's FIRSTWARN) would swallow the words that follow
+    quiet = {"do": "refuse_talk", "seconds": ACCEPT_QUIET_S}
+    assert {row["npc"] for row in rig.fake.story if quiet in row.get("effects", [])} == {NPC, FRIEND}
     if guild == 9:
         assert FRIEND in rig.parley.truce(NPC)["members"]
 
@@ -715,7 +720,7 @@ async def test_accept_surrender_survives_deadline_and_resumes_on_calm_failure_or
 
 
 @pytest.mark.parametrize(("text", "quick"), [
-    ("", False), ("Ладно, живи", False), ("This conversational text stays silent.", True),
+    ("", False), ("Ладно, живи", False), ("", True), ("This conversational text stays silent.", True),
 ])
 async def test_accept_surrender_words_only_skip_spoken_conversational_text(rig, monkeypatch, text, quick):
     if quick:

@@ -138,10 +138,17 @@ ACK_HINT = (
     "(«Есть!», «Иду!», «Стою.»)."
 )
 SOUND_SAID = "\nТы уже сказал вслух: «{}» — ответ продолжает это, не повторяй его."
+PARALLEL_ACT_HINT = (
+    "Твою реплику уже произносят вслух. Не пиши текст: если нужно действие, сразу вызови инструмент; "
+    "если делать ничего не нужно, ответь пустым сообщением."
+)
 PREWARM_DELAY_S = 0.1  # notes come in bursts: the quick model's cache is filled once they are in
 TALK_WARM_S = 300.0  # an npc the hero spoke to this recently is kept warm in the quick model's cache
 PREWARM_CM = 800.0  # a new npc the hero looks at this close is warmed before he speaks
 PREWARM_SLOTS = 3  # the quick model's concurrent prompt-cache slots
+# a server slot past those, when the quick server has one, holds only the surrender classifier's prompt:
+# switching a slot from an npc's prompt makes llama.cpp copy its state to RAM first, up to 2 s
+CLASSIFIER_SLOT = PREWARM_SLOTS
 SVM_REPLY_S = 2.0  # from svm_line arrival to the first complete sentence; late lines stay silent
 SVM_WORDS_MAX = 12
 SVM_QUIET_S = 3.0
@@ -778,8 +785,10 @@ class DialogueManager:
         self._quick_slots: dict[str, int] = {}
         self._quick_used: dict[str, int] = {}
         self._quick_clock = itertools.count()
-        self._quick_busy = [0] * PREWARM_SLOTS
-        self._quick_locks = [asyncio.Lock() for _ in range(PREWARM_SLOTS)]
+        self._quick_busy = [0] * (CLASSIFIER_SLOT + 1)
+        self._quick_locks = [asyncio.Lock() for _ in range(CLASSIFIER_SLOT + 1)]
+        self._classifier_slot: int | None = None  # CLASSIFIER_SLOT once the quick server is known to have it
+        self._slot_check: asyncio.Task[None] | None = None
         self._quick_free = asyncio.Event()
         self._surrender_probes = 0
         self._nearby: dict[str, tuple[str, float]] = {}  # human npc -> name, distance to the hero in cm
@@ -821,6 +830,7 @@ class DialogueManager:
         match msg:
             case Hello():
                 self._svm_mode()
+                self._check_slots()
             case SvmLine():
                 self._start_svm(msg)
             case Session():
@@ -1320,13 +1330,29 @@ class DialogueManager:
             async for event in events:
                 yield event
 
+    def _check_slots(self) -> None:
+        count = getattr(self.quick, "slot_count", None)
+        if count is None or (self._slot_check is not None and not self._slot_check.done()):
+            return  # each hello asks again: the quick server may have been restarted with other slots
+
+        async def check() -> None:
+            slots = await count()
+            self._classifier_slot = CLASSIFIER_SLOT if slots is not None and slots > CLASSIFIER_SLOT else None
+            log.info("quick model: %s slots, surrender classifier %s", slots,
+                     "on its own slot" if self._classifier_slot is not None else "borrows an npc slot")
+
+        task = self._slot_check = asyncio.create_task(check())
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+
     async def _surrendering(
         self, conv: Conversation, request: list[Item], *, opponent: str | None = None,
     ) -> bool:
-        """Classify outside the persona on an idle slot other than the speaking NPC's.
+        """Classify outside the persona on its own slot, or else an idle slot other than the speaker's.
 
-        Cancel warming and SVM generation before selecting an idle foreign LRU slot. Never
-        touch the speaker's prefix or another foreground request; no spare slot means no hold.
+        Cancel warming and SVM generation first. Without CLASSIFIER_SLOT on the server, select an idle
+        foreign LRU slot: never touch the speaker's prefix or another foreground request; no spare slot
+        means no hold.
         """
         entered, wall = time.monotonic(), time.time()
         attempt: dict[str, Any] = {
@@ -1348,48 +1374,44 @@ class DialogueManager:
                 if background:
                     await asyncio.gather(*background, return_exceptions=True)
                 attempt["cancel_ms"] = round((time.monotonic() - entered) * 1000, 1)
-                own = self._quick_slots.get(conv.npc)
-                slots = [s for s in range(PREWARM_SLOTS)
-                         if s != own and not self._quick_busy[s] and not self._quick_locks[s].locked()]
-                if not slots:
-                    attempt["outcome"] = "no_slot"
-                    return False
-                owners = {s: n for n, s in self._quick_slots.items()}
-                slot = min(slots, key=lambda s: self._quick_used.get(owners.get(s), -1))
+                if self._classifier_slot is not None:
+                    slot = self._classifier_slot
+                else:
+                    own = self._quick_slots.get(conv.npc)
+                    slots = [s for s in range(PREWARM_SLOTS)
+                             if s != own and not self._quick_busy[s] and not self._quick_locks[s].locked()]
+                    if not slots:
+                        attempt["outcome"] = "no_slot"
+                        return False
+                    owners = {s: n for n, s in self._quick_slots.items()}
+                    slot = min(slots, key=lambda s: self._quick_used.get(owners.get(s), -1))
+                    if old := owners.get(slot):
+                        del self._quick_slots[old]
+                        self._quick_used.pop(old, None)
+                        self._prewarm_history.pop(old, None)
+                        self._prewarms.pop(old, None)
                 attempt["slot"] = slot
-                if old := owners.get(slot):
-                    del self._quick_slots[old]
-                    self._quick_used.pop(old, None)
-                    self._prewarm_history.pop(old, None)
-                    self._prewarms.pop(old, None)
                 phrase = next(m.content for m in reversed(request)
                               if isinstance(m, Message) and m.role == "user")
                 context = self.surrender_context(conv.npc) if opponent is None else opponent
                 text_in = (f"Перед этим противник сказал: «{context}»\n" if context else "")
                 text_in += f"Реплика игрока: «{phrase}»"
-                text = ""
-                self._quick_busy[slot] += 1
-                token = QUICK_SLOT.set(slot)
-                locked = time.monotonic()
+                # its own task, its slot held until the request really ends: httpx may swallow a cancel
+                # that lands while it connects, and the deadline must not wait for the answer (2026-10-28)
+                classify = asyncio.create_task(self._classify(slot, text_in, conv.talked_at, attempt))
                 try:
-                    async with self._quick_locks[slot]:
-                        attempt["lock_wait_ms"] = round((time.monotonic() - locked) * 1000, 1)
-                        attempt["request_ms"] = round((time.monotonic() - conv.talked_at) * 1000, 1)
-                        async with aclosing(self.quick.stream(
-                            instructions=SURRENDER_CLASSIFIER, messages=[Message("user", text_in)],
-                            tools=[], temperature=0, max_tokens=4, grammar='root ::= "да" | "нет"',
-                        )) as events:
-                            async for event in events:
-                                if isinstance(event, TextDelta):
-                                    attempt.setdefault("first_token_ms", round(
-                                        (time.monotonic() - conv.talked_at) * 1000, 1,
-                                    ))
-                                    text += event.text
-                finally:
-                    attempt["timings"] = dict(getattr(self.quick, "timings", {}).get(slot, {}))
-                    QUICK_SLOT.reset(token)
-                    self._quick_busy[slot] -= 1
-                    self._quick_free.set()
+                    text = await asyncio.shield(classify)
+                except asyncio.CancelledError:
+                    classify.cancel()
+                    self._background.add(classify)
+
+                    def abandoned(done: asyncio.Task[str]) -> None:
+                        self._background.discard(done)
+                        if not done.cancelled() and (error := done.exception()) is not None:
+                            log.info("%s: late surrender probe: %s", conv.npc, error)
+
+                    classify.add_done_callback(abandoned)
+                    raise
                 answer = text.strip().lower()
                 attempt.update(answer=answer, outcome="yes" if answer == "да" else "no")
                 return answer == "да"
@@ -1403,6 +1425,30 @@ class DialogueManager:
             log.info("%s: surrender probe %s", conv.npc, json.dumps(attempt, ensure_ascii=False))
             if self.trace is not None:
                 self.trace.write(attempt)
+
+    async def _classify(self, slot: int, text_in: str, talked_at: float, attempt: dict[str, Any]) -> str:
+        text = ""
+        self._quick_busy[slot] += 1
+        QUICK_SLOT.set(slot)  # this task's own context
+        locked = time.monotonic()
+        try:
+            async with self._quick_locks[slot]:
+                attempt["lock_wait_ms"] = round((time.monotonic() - locked) * 1000, 1)
+                attempt["request_ms"] = round((time.monotonic() - talked_at) * 1000, 1)
+                async with aclosing(self.quick.stream(
+                    instructions=SURRENDER_CLASSIFIER, messages=[Message("user", text_in)],
+                    tools=[], temperature=0, max_tokens=4, grammar='root ::= "да" | "нет"',
+                )) as events:
+                    async for event in events:
+                        if isinstance(event, TextDelta):
+                            first = round((time.monotonic() - talked_at) * 1000, 1)
+                            attempt.setdefault("first_token_ms", first)
+                            text += event.text
+        finally:
+            attempt["timings"] = dict(getattr(self.quick, "timings", {}).get(slot, {}))
+            self._quick_busy[slot] -= 1
+            self._quick_free.set()
+        return text
 
     def _yield_to(self, npc: str) -> None:
         """Prioritize this NPC over other warming and SVM requests; its own warm is cancelled
@@ -2550,7 +2596,7 @@ class DialogueManager:
                         while self.audible(conv.npc):  # noqa: ASYNC110 - playback ends by clock, not event
                             await asyncio.sleep(0.05)
                 else:
-                    # Gemma said nothing: voice this already completed response, without asking Sol again.
+                    # Gemma said nothing: voice Sol's buffer, or ask once for speech without tools.
                     speak = True
                     st.silent = False
                     trace.event("quick_fallback", step=trace.steps.index(st))
@@ -2562,6 +2608,15 @@ class DialogueManager:
                         )
                         await self._feed_lines(conv, state, pieces)
                         await self._say_rest(conv, state)
+                    else:
+                        request = [
+                            replace(item, content=item.content.removesuffix("\n" + PARALLEL_ACT_HINT))
+                            if isinstance(item, Message) and item.role == "developer" else item
+                            for item in request
+                        ]
+                        spoken = trace.step(request, "none")
+                        spoken.started_s = round(time.time() - trace.started, 3)
+                        await self._step(conv, state, request, "none", spoken)
                 quick_line = None
             if state.relevant is not None and not state.relevant() and not (speak and state.text.strip()):
                 raise StaleTurn  # the incident is over: nothing said yet, or only late acts are left
@@ -2650,6 +2705,8 @@ class DialogueManager:
                 f"\nТы уже сказал вслух: «{said}». Новых слов не нужно: реши, что ты делаешь, и сделай это "
                 "инструментами, если нужно."
             )
+        else:
+            situation_text += "\n" + PARALLEL_ACT_HINT
         request: list[Item] = [*conv.history, Message("developer", situation_text), trigger]
         try:
             return await self._steps(conv, state, request, trace, speak=False, quick_line=quick_line)

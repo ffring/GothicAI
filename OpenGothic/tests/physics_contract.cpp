@@ -9,6 +9,9 @@
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/bounds.h"
 #include "game/serialize.h"
+#include "game/damagecalculator.h"
+#include "game/meleeimpact.h"
+#include "world/objects/npc.h"
 #include "gothic.h"
 
 #include <Tempest/MemReader>
@@ -3913,6 +3916,60 @@ namespace {
     }
 
   void testContracts() {
+    {
+      using MeleeImpact::Weapon;
+      const auto fist=MeleeImpact::impulse(Weapon::Fist,{600,800,0},90);
+      requireNear(fist.x,9.f,.0001f,"fist impulse must convert world cm/s into N s");
+      requireNear(fist.y,12.f,.0001f,"impulse must follow the contact velocity direction");
+      requireNear(MeleeImpact::impulse(Weapon::OneHand,{1000,0,0},0).length(),12.5f,.0001f,
+                  "one-hand impulse must use 2.5 kg and the glancing edge factor");
+      requireNear(MeleeImpact::impulse(Weapon::TwoHand,{1000,0,0},30).length(),30.f,.0001f,
+                  "two-hand impulse must use 4 kg and the sine of the blade angle");
+      const auto capped=MeleeImpact::impulse(Weapon::TwoHand,{-6000,0,8000},90);
+      requireNear(capped.length(),60.f,.0001f,"melee impulse magnitude must be capped at 60 N s");
+      requireNear(capped.x,-36.f,.0001f,"the impulse cap must retain contact direction");
+      requireNear(MeleeImpact::impulse(Weapon::Fist,{},90).length(),0.f,.0001f,
+                  "a motionless blade must not add an impulse");
+
+      MeleeImpact::Posture posture;
+      require(!posture.hit(30,75,1000),"a quarter-threshold impulse must not knock down");
+      requireNear(posture.value,25.f,.0001f,"posture must accumulate in units of body-mass-scaled impulse");
+      posture.tick(2500,1500);
+      requireNear(posture.value,25.f,.0001f,"posture must retain the full 1500 ms recovery delay");
+      posture.tick(2750,500);
+      requireNear(posture.value,17.5f,.0001f,"recovery must count only time after the hit grace period");
+      posture.tick(3750,1000);
+      requireNear(posture.value,0.f,.0001f,"posture recovery must stop at zero");
+      require(!posture.hit(60,75,4000),"a full capped impulse must add only half the 75 kg knockdown threshold");
+      requireNear(posture.value,50.f,.0001f,"a 75 kg body must require 120 N s for knockdown");
+      require(!posture.hit(59,75,4000),"posture just below 100 must not knock down");
+      require(posture.hit(1,75,4000),"posture must knock down exactly at 100");
+      requireNear(posture.value,100.f,.0001f,"posture must stop at 100");
+      posture.recover(5000);
+      requireNear(posture.value,0.f,.0001f,"getting up must reset posture");
+      require(!posture.hit(60,75,5000),"getting up must protect against another knockdown");
+      require(!posture.hit(60,75,5000),"successive hits during immunity must not knock down");
+      requireNear(posture.value,60.f,.0001f,"post-rise immunity must cap accumulating posture at 60");
+      require(!posture.hit(60,75,8999),"post-rise immunity must cover the first 3999 ms");
+      require(posture.hit(48,75,9000),"post-rise immunity must expire at 4000 ms");
+      posture.reset();
+      require(!posture.hit(60,150,10000),"a doubled body mass must double the knockdown impulse");
+      requireNear(posture.value,25.f,.0001f,"a 150 kg body must require 240 N s for knockdown");
+      require(!posture.hit(60,150,10000),"two full capped impulses must not knock down a 150 kg body");
+      require(!posture.hit(60,150,10000),"three full capped impulses must not knock down a 150 kg body");
+      require(posture.hit(60,150,10000),"four full capped impulses must knock down a 150 kg body");
+      requireNear(MeleeImpact::skillThresholdScale(60,60,60),1.248f,.0001f,
+                  "two 60% masters of strength 60 must need 1.248 times the base knockdown impulse");
+      require(MeleeImpact::skillThresholdScale(100,100,30)<MeleeImpact::skillThresholdScale(60,60,30),
+              "a trained strong attacker must knock down sooner");
+      require(MeleeImpact::skillThresholdScale(30,40,100)>MeleeImpact::skillThresholdScale(30,40,10),
+              "a trained defender must stand longer");
+      requireNear(MeleeImpact::skillThresholdScale(0,0,0),1.2f*.8f/.58f,.0001f,"an untrained weak attacker keeps a floor of 0.58");
+      requireNear(MeleeImpact::skillThresholdScale(200,500,200),1.2f*1.2f/1.4f,.0001f,"skill inputs must be clamped");
+      MeleeImpact::Posture skilled;
+      require(!skilled.hit(60,75,20000,1.248f),"a full capped impulse must fill 40% of a 60% masters' threshold");
+      requireNear(skilled.value,100.f*60.f/(120.f*1.248f),.0001f,"the skill scale must multiply the body-mass threshold");
+      }
     CollisionWorld world;
     auto ground = world.addCollisionBody(new JPH::BoxShape(JPH::Vec3(20,.5f,20)),at(0,-50,0),
                                          .75f,DynamicWorld::C_Landscape);
@@ -4016,6 +4073,116 @@ namespace {
               "mesh hit must retain its sector beyond 32 segments");
       }
 
+    {
+      std::vector<HitZones::Posed> first{{{0,80,0},{0,140,0},10.f,HitZones::Body,0}};
+      std::vector<HitZones::Posed> second{{{60,90,0},{60,150,0},12.f,HitZones::Body,0}};
+      requireNear(HitZones::horizontalBodyGap(first,second),38.f,.0001f,
+                  "torso gap must subtract both posed capsule radii");
+      requireNear(HitZones::horizontalBodyGap(first,second,{20,0,0}),18.f,.0001f,
+                  "a bounded forward feed must retain the eighteen-centimetre torso clearance");
+      requireNear(HitZones::horizontalBodyGap(first,second,{45,0,0}),-7.f,.0001f,
+                  "overlapping torso capsules must report negative clearance");
+      first.push_back({{60,80,0},{60,140,0},100.f,HitZones::Head,1});
+      second.push_back({{0,90,0},{0,150,0},100.f,HitZones::Limb,1});
+      requireNear(HitZones::horizontalBodyGap(first,second),38.f,.0001f,
+                  "head and limb contacts must not replace the torso safety gap");
+      first={{{-10,80,-10},{10,140,10},2.f,HitZones::Body,0}};
+      second={{{-10,400,10},{10,460,-10},3.f,HitZones::Body,0}};
+      requireNear(HitZones::horizontalBodyGap(first,second),-5.f,.0001f,
+                  "crossed torso axes must overlap in the horizontal projection despite different heights");
+      requireNear(HitZones::horizontalBodyGap(first,second,{-1,0,0}),-5.f,.0001f,
+                  "a retreat can begin on a flat projected-axis overlap without worsening the clearance");
+      require(HitZones::horizontalBodyGap(first,second,{-25,0,0})>-5.f,
+              "continued retreat must be able to leave the projected-axis overlap plateau");
+      }
+
+    require(Npc::skipMeleeAlly(false,false,true,false,true),
+            "an incidental same-guild contact must skip NPC damage even with hostile attitude");
+    require(Npc::skipMeleeAlly(false,false,false,true,true),
+            "an incidental party contact must skip NPC damage even with hostile attitude");
+    require(Npc::skipMeleeAlly(false,false,false,false,false),
+            "an incidental nonhostile contact must skip NPC damage");
+    require(!Npc::skipMeleeAlly(false,false,false,false,true),
+            "an incidental enemy contact must receive NPC damage");
+    require(!Npc::skipMeleeAlly(true,false,true,true,false),
+            "the hero must damage incidental allies");
+    require(!Npc::skipMeleeAlly(false,true,false,false,false),
+            "the selected neutral or angry target must receive NPC damage");
+    require(!Npc::skipMeleeAlly(false,true,true,false,false),
+            "the selected same-guild target must receive NPC damage");
+    require(!Npc::skipMeleeAlly(false,true,false,true,false),
+            "the selected party target must receive NPC damage");
+
+    require(Npc::canAccumulateMeleePosture(true,false,false,false),"an enabled live human hit must accumulate posture");
+    require(!Npc::canAccumulateMeleePosture(false,false,false,false),"posture OFF must retain the old hit path");
+    require(!Npc::canAccumulateMeleePosture(true,true,false,false),"a blocked hit must leave posture unchanged");
+    require(!Npc::canAccumulateMeleePosture(true,false,true,false),"a knockdown must not accumulate another knockdown");
+    require(!Npc::canAccumulateMeleePosture(true,false,false,true),"death or unconsciousness must retain the old path");
+
+    // The actual melee damage multiplier is bounded before cleave attenuation.
+    requireNear(DamageCalculator::meleeMultiplier(0,1000,0,0,0),.5f,.0001f,"slow grip contacts must respect the lower damage bound");
+    requireNear(DamageCalculator::meleeMultiplier(10000,1000,1,90,0),1.5f,.0001f,"fast tip contacts must respect the upper damage bound");
+    const auto full=DamageCalculator::meleeMultiplier(1000,1000,1,90,0);
+    requireNear(DamageCalculator::meleeMultiplier(1000,1000,1,90,1),full*.6f,.0001f,"second target must receive 0.6 of the physical multiplier");
+    requireNear(DamageCalculator::meleeMultiplier(1000,1000,1,90,2),full*.36f,.0001f,"third target must receive 0.36 of the physical multiplier");
+
+    {
+      CollisionWorld reach;
+      const std::vector<MeleeBladeSegment> blade{{{0,100,0},{100,100,0},{0,0,1},2.f}};
+      const std::vector<MeleeBodyCapsule> target{{{130,90,0},{130,110,0},6.f,0,1}};
+      requireNear(reach.meleeBladeAdvance(blade,target,{1,0,0},40),22.f,.02f,
+                  "blade reach must retain the capsule contact distance");
+      require(!std::isfinite(reach.meleeBladeAdvance(blade,target,{1,0,0},20)),
+              "blade reach must reject a target beyond the allowed advance");
+      require(!std::isfinite(reach.meleeBladeAdvance({{{0,100,30},{100,100,30},{0,0,1},2.f}},target,{1,0,0},60)),
+              "blade reach must reject a lateral miss despite sufficient forward projection");
+      require(!std::isfinite(reach.meleeBladeAdvance({{{0,150,0},{100,150,0},{0,0,1},2.f}},target,{1,0,0},60)),
+              "blade reach must reject a height miss despite sufficient forward projection");
+      const std::vector<MeleeBodyCapsule> behind{{{-30,90,0},{-30,110,0},6.f,0,1}};
+      require(!std::isfinite(reach.meleeBladeAdvance(blade,behind,{1,0,0},40)),
+              "a blade beyond a close target cannot correct by moving forward");
+      requireNear(reach.meleeBladeAdvance(blade,behind,{-1,0,0},40),22.f,.02f,
+                  "backward magnet must retain the signed capsule contact distance");
+      auto targets=target;
+      targets.insert(targets.begin(),{{160,90,0},{160,110,0},6.f,1,1});
+      requireNear(reach.meleeBladeAdvance(blade,targets,{1,0,0},80),22.f,.02f,
+                  "blade reach must choose the nearest actual capsule contact");
+      requireNear(reach.meleeBladeAdvance(blade,{{{100,90,0},{100,110,0},6.f,0,1}},{1,0,0},60),0.f,.0001f,
+                  "a blade already touching its target needs no advance");
+      }
+
+    {
+      CollisionWorld shadow;
+      int attackerId=0,firstId=0,secondId=0,missId=0;
+      auto* attacker=reinterpret_cast<Npc*>(&attackerId);
+      auto* first=reinterpret_cast<Npc*>(&firstId);
+      auto* second=reinterpret_cast<Npc*>(&secondId);
+      auto* miss=reinterpret_cast<Npc*>(&missId);
+      auto ground=shadow.addCollisionBody(new JPH::BoxShape({2,.01f,2}),at(0,-1,0),.7f,DynamicWorld::C_Landscape);
+      shadow.updateShadowBody(first,{{{-30,0,0},{-30,20,0},1.f,0,1}});
+      shadow.updateShadowBody(second,{{{30,0,0},{30,20,0},1.f,0,1}});
+      shadow.updateShadowBody(miss,{{{0,0,50},{0,20,50},1.f,0,1}});
+      const MeleeBladeSegment before{{-100,1,0},{-100,20,0},{1,0,0},2.f};
+      const MeleeBladeSegment after{{100,1,0},{100,20,0},{1,0,0},2.f};
+      shadow.updateShadowBlade(attacker,1,{before},0,0,100);
+      shadow.updateShadowBlade(attacker,1,{after},100,0,100);
+      shadow.flushShadowBlades();
+      const auto hits=shadow.takeShadowBladeContacts(attacker);
+      std::vector<Npc*> bodies;
+      size_t floors=0;
+      for(const auto& hit:hits) {
+        if(hit.world) {
+          require(!hit.stopsSwing && hit.normal.y>.99f,"walkable ground must not arrest the swing");
+          ++floors;
+          }
+        else bodies.push_back(hit.npc);
+        }
+      require(floors==1 && bodies==std::vector<Npc*>{first,second},"blade must hit both crossed bodies in order, miss the offset body and continue through ground");
+      shadow.updateShadowBlade(attacker,1,{before},150,0,200);
+      shadow.flushShadowBlades();
+      require(shadow.takeShadowBladeContacts(attacker).empty(),"floor and targets must not repeat during a swing");
+      }
+
     // Clip both ends of a published pose interval, including a whole window
     // between two inactive poses. A target outside that overlap stays untouched.
     for(const auto window: {std::pair(0.,240.),std::pair(240.,260.),std::pair(235.,245.)}) {
@@ -4036,6 +4203,8 @@ namespace {
       require(contacts.size()==1 && contacts[0].npc==inside,
               "shadow sweep must cover exactly the overlap with its active window");
       requireNear(contacts[0].speedCmS,1000.f,.1f,"clipping must retain the published pose velocity");
+      requireNear(contacts[0].velocityCmS.x,1000.f,.1f,"clipping must retain signed world contact velocity");
+      requireNear(contacts[0].velocityCmS.y,0.f,.001f,"contact velocity must retain the world vertical component");
       }
 
     // The 8 ms no-step frame already consumes its pose. The following 9 ms
@@ -4055,6 +4224,7 @@ namespace {
       const auto contacts=shadow.takeShadowBladeContacts(attacker);
       require(contacts.size()==1,"constant-speed shadow probe must cross its thin target");
       requireNear(contacts[0].speedCmS,100.f,.01f,"contact speed must use published pose time, not the Jolt step");
+      requireNear(contacts[0].velocityCmS.x,100.f,.01f,"world contact velocity must use published pose time");
       // The frame budget caps a 50 ms interval at two native steps. Each query
       // still advances its proportional share of animation time.
       shadow.updateShadowBody(target,{{{5,95,0},{5,105,0},.01f,1,1}});
@@ -4153,7 +4323,7 @@ namespace {
       shadow.updateShadowBlade(attacker,1,{after},17,0,100);
       shadow.tick(17);
       const auto contacts=shadow.takeShadowBladeContacts(attacker);
-      require(contacts.size()==2 && contacts[0].npc==nearTarget && contacts[1].world,
+      require(contacts.size()==2 && contacts[0].npc==nearTarget && contacts[1].world && contacts[1].stopsSwing,
               "shadow contacts must be ordered and the first wall must hide the later target");
       requireNear(contacts[1].point.x,-.1f,.02f,"shadow world contact must retain the wall surface point");
       shadow.updateShadowBlade(attacker,1,{before},34,0,100);
@@ -4161,6 +4331,17 @@ namespace {
       require(shadow.takeShadowBladeContacts(attacker).empty(),
               "a world contact must stop the entire shadow swing across later physics steps");
       require(shadow.bodyCount()==2,"shadow stepping must not add a sensor body");
+
+      // The same sweep going back from the attacker's facing (a wind-up): the wall is
+      // passed, the target behind it is reached.
+      shadow.updateShadowBlade(attacker,2,{before},51,0,200,.7f,{-1,0,0});
+      shadow.tick(17);
+      shadow.updateShadowBlade(attacker,2,{after},68,0,200,.7f,{-1,0,0});
+      shadow.tick(17);
+      const auto windup=shadow.takeShadowBladeContacts(attacker);
+      require(windup.size()==3 && windup[0].npc==nearTarget && windup[1].world && !windup[1].stopsSwing &&
+              windup[1].windup && windup[2].npc==farTarget,
+              "a wall met by a blade going back must be passed and not hide the later target");
       }
     }
   }

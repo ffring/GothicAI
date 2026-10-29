@@ -51,8 +51,13 @@ struct MeleeBladeContact final {
   size_t bone = size_t(-1);
   uint8_t zone = 0;
   Tempest::Vec3 point;
+  Tempest::Vec3 normal;
+  Tempest::Vec3 velocityCmS;
+  asset::MaterialGroup material = asset::MaterialGroup::STONE;
   float bladeFraction = 0, speedCmS = 0, surfaceAngleDeg = 0;
   bool world = false;
+  bool stopsSwing = false;
+  bool windup = false;     // a wall met by a blade going back or up (wind-up, follow-through): passed
   uint64_t step = 0;
   };
 
@@ -484,12 +489,18 @@ class DynamicWorld final {
     void updateShadowBody(Npc* owner, const std::vector<MeleeBodyCapsule>& capsules);
     void removeShadowBody(const Npc* owner);
     // Pose time and the half-open active window use absolute game milliseconds.
+    // forward: the attacker's facing; a wall met by a blade going back or up (the wind-up,
+    // the follow-through) does not stop the swing. Zero: every wall stops it.
     void updateShadowBlade(const Npc* owner, uint64_t swingId,
                            const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
-                           double activeBeginMs, double activeEndMs);
+                           double activeBeginMs, double activeEndMs, float walkableCos = .7f,
+                           Tempest::Vec3 forward = {});
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void flushShadowBlades();
+    float meleeBladeAdvance(const std::vector<MeleeBladeSegment>& blades, const std::vector<MeleeBodyCapsule>& target,
+                            const Tempest::Vec3& direction, float maxAdvanceCm) const;
+    void accountMeleeReachTime(float milliseconds);
     struct RagdollSupport {
       size_t        bone = 0;
       uint32_t      partBodyId = uint32_t(-1), supportBodyId = uint32_t(-1);

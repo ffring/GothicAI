@@ -112,6 +112,8 @@ class Pose final {
     bool               animRelative(std::string_view name, float at, size_t from, size_t to, Tempest::Matrix4x4& out) const;
     // The animation of that name plays k times as fast, from its next start on (1: as it is)
     void               setAnimSpeed(std::string_view name, float k);
+    // the playing layer of seq goes on k times as fast from now, without a jump
+    void               setLayerSpeed(const Animation::Sequence* seq, float k, uint64_t now);
     BowDraw&           bowDrawIk() { return bowDraw; }
     AimWalk&           aimWalk() { return walk; }
     bool               updateAimWalk(const AimWalk::Input& in);
@@ -128,7 +130,7 @@ class Pose final {
     bool               isRagdollBlending() const { return physicalReturning; }
     void               saveRagdollRecovery(Serialize& fout) const;
     void               loadRagdollRecovery(Serialize& fin);
-    void               setAnimRotate(const AnimationSolver &solver, Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir);
+    void               setAnimRotate(const AnimationSolver &solver, const Npc &npc, WeaponState fightMode, AnimationSolver::TurnType turn, int dir);
     auto               setAnimItem(const AnimationSolver &solver, Npc &npc, std::string_view scheme, int state) -> const Animation::Sequence*;
     bool               stopItemStateAnim(const AnimationSolver &solver, uint64_t tickCount);
 

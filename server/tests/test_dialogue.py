@@ -1947,6 +1947,7 @@ async def test_a_line_in_a_fight_is_the_quick_models_and_the_turns_model_only_ac
     brief, full = _situation_of(quick_messages), _situation_of(messages)
     assert dialogue_module.QUICK_HINT in brief and "Цели для намерения" not in brief
     assert "Цели для намерения" in full and "Ты уже сказал вслух: «Это он! Держи его!»" in full
+    assert "Твою реплику уже произносят вслух." not in full
     history = dialogue.conversations[XARDAS].history
     assert history[-1].content.startswith("[Ты напал") or history[-2].content == "Это он! Держи его!"
     assert any(m.role == "assistant" and m.content == "Это он! Держи его!" for m in history)
@@ -1989,6 +1990,7 @@ async def test_out_of_a_fight_the_quick_model_only_says_the_first_words():
     _, messages, _ = llm.calls[0]
     situation = _situation_of(messages)
     assert "Ты уже сказал вслух: «Тьфу!»" in situation and dialogue_module.REACT_HINT not in situation
+    assert all("Твою реплику уже произносят вслух." not in _situation_of(call[1]) for call in llm.calls)
     assert [m.content for m in dialogue.conversations[XARDAS].history][:2] == ["Ты старый дурак", "Не спеши."]
 
 
@@ -2050,15 +2052,23 @@ async def test_sol_overlaps_first_words_only_for_a_hero_combat_phrase(combat, mo
 
     situation = _situation_of(llm.calls[0][1])
     assert ("Ты уже сказал вслух: «Стой!»" in situation) is not combat
+    instruction = (
+        "Твою реплику уже произносят вслух. Не пиши текст: если нужно действие, сразу вызови инструмент; "
+        "если делать ничего не нужно, ответь пустым сообщением."
+    )
+    assert (instruction in situation) is combat
+    assert not combat or situation.endswith(instruction)
     assert fake.said == (["Стой!"] if combat else ["Стой!", "Сам справлюсь!"])
 
 
 @pytest.mark.parametrize("failed", [False, True])
-async def test_empty_parallel_first_words_voice_the_buffered_sol_response_once(failed, tmp_path):
+@pytest.mark.parametrize("silent", [False, True])
+async def test_empty_parallel_first_words_voice_sol_once(failed, silent, tmp_path):
     from gothic_ai.trace import find_turn
 
     fake = FakeGame()
-    llm = FakeBackend("[angry] Сам справлюсь!", delay=0)
+    reply = "[angry] Сам справлюсь!"
+    llm = FakeBackend(script=[FakeStep("" if silent else reply), FakeStep(reply)], delay=0)
     writer = TraceWriter(tmp_path)
     async with connected(fake) as link:
         dialogue = DialogueManager(link, llm, PersonaProvider(None),
@@ -2068,7 +2078,11 @@ async def test_empty_parallel_first_words_voice_the_buffered_sol_response_once(f
         dialogue.open(XARDAS, "Ксардас", warm=False)
         await dialogue.say_as_player(XARDAS, "Хватит!")
         await _until(lambda: fake.said == ["Сам справлюсь!"])
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == (2 if silent else 1)
+    assert "Твою реплику уже произносят вслух." in _situation_of(llm.calls[0][1])
+    if silent:
+        assert llm.tool_choices[-1] == "none"
+        assert "Твою реплику уже произносят вслух." not in _situation_of(llm.calls[-1][1])
     assert dialogue.conversations[XARDAS].history[-1].content == "Сам справлюсь!"
     turn, _ = find_turn(writer.path(), None)
     assert turn["status"] == "completed"
@@ -2794,3 +2808,66 @@ async def test_surrender_recognition_live_gemma():
     }, ensure_ascii=False))
     assert false_yes == 0, observed
     assert correct_yes == positives, observed
+
+
+async def test_surrender_probe_keeps_to_the_classifier_slot_when_the_server_has_one():
+    quick = FakeBackend("да", delay=0)
+    quick.slot_count = AsyncMock(return_value=dialogue_module.CLASSIFIER_SLOT + 1)
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    dialogue._check_slots()
+    await dialogue._slot_check
+    for npc in (LOBART, HILDA, XARDAS):
+        dialogue._quick_slot(npc)
+        dialogue._prewarm_history[npc] = [Message("assistant", npc)]
+    slots = dict(dialogue._quick_slots)
+    for slot in range(dialogue_module.PREWARM_SLOTS):
+        dialogue._quick_busy[slot] = 1  # every npc slot busy: the classifier needs none of them
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    conv.talked_at = time.monotonic()
+    assert await dialogue._surrendering(conv, [Message("user", "Пощади!")])
+    assert await dialogue._surrendering(conv, [Message("user", "Пощади!")])
+    assert quick.slot_ids == [dialogue_module.CLASSIFIER_SLOT] * 2
+    assert dialogue._quick_slots == slots and set(dialogue._prewarm_history) == {LOBART, HILDA, XARDAS}
+
+
+@pytest.mark.parametrize("count", [None, dialogue_module.CLASSIFIER_SLOT])
+async def test_surrender_probe_borrows_an_npc_slot_without_a_classifier_slot(count):
+    quick = FakeBackend("да", delay=0)
+    quick.slot_count = AsyncMock(return_value=count)
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick)
+    dialogue._check_slots()
+    await dialogue._slot_check
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    conv.talked_at = time.monotonic()
+    assert await dialogue._surrendering(conv, [Message("user", "Пощади!")])
+    assert quick.slot_ids[0] in range(dialogue_module.PREWARM_SLOTS)
+
+
+async def test_surrender_probe_keeps_its_deadline_when_the_request_swallows_the_cancel(monkeypatch):
+    quick = FakeBackend("да", delay=0)
+    rows = []
+    dialogue = DialogueManager(GameLink(SimpleNamespace(send=AsyncMock())), FakeBackend(),
+                               PersonaProvider(None), quick=quick, trace=SimpleNamespace(write=rows.append))
+    answered = asyncio.Event()
+
+    async def deaf(**options):  # httpx swallows a cancel that lands while it connects
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.3)
+        answered.set()
+        yield TextDelta("да")
+
+    monkeypatch.setattr(quick, "stream", deaf)
+    conv = dialogue.open(LOBART, "Лобарт", warm=False)
+    conv.talked_at = time.monotonic() - 1.8
+    started = time.monotonic()
+    assert not await dialogue._surrendering(conv, [Message("user", "Пощади!")])
+    assert time.monotonic() - started < 0.25 and not answered.is_set()
+    assert rows[-1]["outcome"] == "late"
+    slot = rows[-1]["slot"]
+    assert dialogue._quick_busy[slot] == 1  # held until the request really ends
+    await asyncio.wait_for(answered.wait(), 1)
+    await _until(lambda: dialogue._quick_busy[slot] == 0)

@@ -61,6 +61,9 @@ class Gothic final {
       bool npcCharacterVirtual = false;
       bool monsterCharacterVirtual = false;
       bool meleeBladeShadow = true;
+      bool meleePhysicsHits = true;
+      bool meleeReactions = true;
+      bool meleePosture = true;
 
       bool allowsMonsterCharacterVirtual(bool down, bool flying) const {
         return monsterCharacterVirtual && !down && !flying;
@@ -205,7 +208,7 @@ class Gothic final {
 
     Tempest::Signal<void(std::string_view,int,int,int,const GthFont&)>  onPrintScreen;
     Tempest::Signal<void(std::string_view)>                             onPrint;
-    Tempest::Signal<void(std::string_view)>                             onVideo;
+    Tempest::Signal<void(std::string_view, bool)>                       onVideo;
 
     Tempest::Signal<void(const ChapterScreen::Show&)>                   onIntroChapter;
     Tempest::Signal<void(const DocumentMenu::Show&)>                    onShowDocument;

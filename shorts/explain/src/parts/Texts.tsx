@@ -2,10 +2,11 @@ import React from 'react';
 import {AbsoluteFill, useCurrentFrame, useVideoConfig} from 'remotion';
 import type {TextT} from '../schema';
 import {COLOR, FONT, OUTLINE, SAFE, WIDE_SAFE} from '../theme';
-import {shown} from './anim';
-import {enterTransform} from './motion';
+import {rise, shown} from './anim';
+import {enterTransform, MOTION} from './motion';
 
-// short texts on screen (not captions): a dark band under each, inside the safe area
+// short texts on screen (not captions): a dark band under each, inside the safe area. The band arrives first and
+// its words settle into it `MOTION.follow` later
 export const Texts: React.FC<{texts: TextT[]}> = ({texts}) => {
   const {fps, width, height} = useVideoConfig();
   const wide = width > height;
@@ -49,7 +50,10 @@ export const Texts: React.FC<{texts: TextT[]}> = ({texts}) => {
                 ...(wide ? {maxWidth: '100%', boxSizing: 'border-box', overflowWrap: 'anywhere'} as const : {}),
               }}
             >
-              {x.text}
+              <span style={{display: 'inline-block', opacity: shown(t, x.at + MOTION.follow),
+                transform: `translateY(${rise(t, x.at + MOTION.follow, 6)}px)`}}>
+                {x.text}
+              </span>
             </span>
           </div>
         );

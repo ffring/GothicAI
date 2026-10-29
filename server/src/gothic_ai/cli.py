@@ -16,6 +16,7 @@ import tomllib
 from array import array
 from contextlib import nullcontext
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from . import (
@@ -59,6 +60,8 @@ from .dialogue import REACT_HINT, SVM_HINT, DialogueManager
 from .director import Director
 from .errands import Errands
 from .executor import Intent
+from .feat_art import Artist
+from .feats import Feats
 from .game import GameError, GameLink, GameServer
 from .gamedata import storygraph
 from .gamedata.ou import load_npc_lines
@@ -125,6 +128,7 @@ from .scenarios.crime_director import crime_director as crime_director_scenario
 from .scenarios.crime_law import crime_law as crime_law_scenario
 from .scenarios.crime_talk import crime_talk as crime_talk_scenario
 from .scenarios.crimes import crimes as crimes_scenario
+from .scenarios.feats import ScenarioArtist
 from .showrunner import Showrunner
 from .sightings import Sightings
 from .social import Rumors
@@ -182,6 +186,7 @@ HELP = """commands (npc defaults to the last attached one):
   crimes            the current branch's crimes, witnesses, encounter reactions and communities
   lines             the director's plot lines, their state and remaining budget
   pitch             an occasion here and now, subject to the director's budget
+  feats             the chronicler's feats on the current save branch
   claims            quests of the scripts the hero said were done: believed, lies, found out
   know [npc] [query]  what the npc knows of the world now (M6), and what recall finds for the query
   see [npc]         what the npc perceives now: in Russian for its words, in English for its body
@@ -253,6 +258,7 @@ class ServerState:
         self.occasions: Occasions | None = None
         self.questlog: QuestLog | None = None
         self.showrunner: Showrunner | None = None
+        self.feats: Feats | None = None
         self.vanilla: VanillaQuests | None = None
         self.gates: Gates | None = None
         self.trust: Trust | None = None
@@ -452,6 +458,13 @@ class Console:
                 else:
                     fact = await showrunner.pitch()
                     print(json.dumps(fact, ensure_ascii=False) if fact else "(no occasion now)")
+            case "feats":
+                if self.state.chronicle is not None:
+                    for feat in self.state.chronicle.facts("feat"):
+                        print(
+                            f"{feat['id']}: {feat['title']}; {feat['text']}; "
+                            f"evidence={feat['evidence']}"
+                        )
             case "graph" if self.state.story is not None:
                 await self.graph(rest)
             case "quest" if len(rest) >= 5 and self.state.quests is not None:
@@ -693,7 +706,11 @@ def _story_graph(args: argparse.Namespace, game_dir: Path | None) -> storygraph.
     """The scripts' story graph (storygraph's JSON): a given file, or made from the game's scripts."""
     path = Path(args.story_graph) if args.story_graph else None
     if path is None and game_dir is not None:
-        path = storygraph.ensure(game_dir, DEFAULT_MEMORY_DB.parent / "story.json")
+        try:
+            path = storygraph.ensure(game_dir, DEFAULT_MEMORY_DB.parent / "story.json")
+        except RuntimeError as error:
+            log.warning("story graph unavailable: %s", error)
+            return None
     if path is None or not path.exists():
         log.warning(
             "no story graph, so no director and no npc knowledge "
@@ -728,11 +745,13 @@ def _start_showrunner(args: argparse.Namespace, showrunner: Showrunner) -> async
 
 
 def _start_bodypilot(args: argparse.Namespace, link: GameLink, talk: TalkDesk) -> BodyPilot | None:
-    if not args.neural_body or not args.body_url:
+    policy = getattr(args, "body_policy", "engine")
+    if not args.neural_body or (policy == "service" and not args.body_url):
         return None
     return BodyPilot(
         link,
         args.body_url,
+        body_policy=policy,
         max_fights=args.neural_body_max,
         companion=talk.orders.companion,
         unavailable=lambda npc: npc.upper() in talk.attached,
@@ -799,11 +818,15 @@ async def serve(args: argparse.Namespace) -> int:
         "neural-talk",
         "neural-load",
         "neural-soak",
-    } and not soak_control and (not args.body_url or not args.neural_body):
-        log.error("scenario %s requires GOTHIC_BODY_URL (or --body-url) and --neural-body", args.scenario)
+        "neural-still",
+    } and not soak_control and (
+        not args.neural_body or (args.body_policy == "service" and not args.body_url)
+    ):
+        log.error("scenario %s requires --neural-body and, for service policy, GOTHIC_BODY_URL "
+                  "(or --body-url)", args.scenario)
         return 2
-    if args.scenario == "neural-soak" and args.llm != "fake":
-        log.error("scenario neural-soak requires --llm fake")
+    if args.scenario in {"neural-soak", "feats"} and args.llm != "fake":
+        log.error("scenario %s requires --llm fake", args.scenario)
         return 2
     done = asyncio.Event()
     exit_code = 0
@@ -831,7 +854,10 @@ async def serve(args: argparse.Namespace) -> int:
     log.info("voice: %s", "off" if asr is None else f"{args.voice_file or 'microphone'} -> {args.asr_url}")
     log.info("npc voices: %s", "off" if tts is None else args.tts_url)
     log.info("npc planner: %s", "off" if decider is None else args.decider_url)
-    log.info("neural body: %s", args.body_url if args.neural_body and args.body_url else "off")
+    log.info(
+        "neural body: policy=%s service=%s",
+        args.body_policy if args.neural_body else "off", args.body_url,
+    )
     log.info("lines in a fight: %s", quick_at or "the conversational model")
     log.info("wolves hear the hero: %s", "off" if not args.beasts else f"tone by {quick_at or 'the rules'}")
     graph = (
@@ -952,6 +978,20 @@ async def serve(args: argparse.Namespace) -> int:
         state.talk.view_of = state.incidents.view_of = perception.english
         # what really happened, the director's quests and the hero's lies about them (story graph, stage 4)
         state.chronicle = Chronicle(link, memory)
+        feat_image_root = None
+        if not args.no_feats and args.scenario in {None, "feats"}:
+            artist = None
+            if not args.no_feat_images:
+                if args.scenario == "feats":
+                    feat_image_root = TemporaryDirectory(prefix="feat-images-")
+                    artist = ScenarioArtist(Path(feat_image_root.name), codex="scenario")
+                else:
+                    artist = Artist()
+            state.feats = Feats(
+                link, state.chronicle, llm, journal=journal,
+                gather_s=1 if args.scenario == "feats" else 20,
+                artist=artist, image_wait_s=30 if args.scenario == "feats" else 150,
+            )
         if not args.no_crimes:
             state.crimes = Crimes(
                 link,
@@ -1444,6 +1484,10 @@ async def serve(args: argparse.Namespace) -> int:
                 errand_clock.cancel()
             for task in directing:
                 task.cancel()
+            if state.feats is not None:
+                await state.feats.close()
+            if feat_image_root is not None:
+                feat_image_root.cleanup()
             if state.questlog is not None:
                 await state.questlog.close()
             if state.book is not None:
@@ -1516,6 +1560,13 @@ async def serve(args: argparse.Namespace) -> int:
                 assert state.guide is not None
                 results = await scenarios.bandit_bounty(
                     link, state.dialogue, state.talk, state.deals, state.bounty, state.guide
+                )
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "neural-still":
+                results = await scenarios.neural_still_scenario(
+                    link, bodypilot, Path(args.memory_db).parent
                 )
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario %s: %d checks, %d failed", args.scenario, len(results), len(bad))
@@ -2075,6 +2126,12 @@ async def serve(args: argparse.Namespace) -> int:
                 results = await scenarios.death_load(link, state.director)
                 bad = {k: v for k, v in results.items() if not v.startswith("done")}
                 log.info("scenario death_load: %d checks, %d failed", len(results), len(bad))
+                exit_code = 1 if bad else 0
+            elif args.scenario == "feats":
+                assert state.feats is not None
+                results = await scenarios.feats(link, state.feats, journal)
+                bad = {k: v for k, v in results.items() if not v.startswith("done")}
+                log.info("scenario feats: %d checks, %d failed", len(results), len(bad))
                 exit_code = 1 if bad else 0
             elif args.scenario == "repair":
                 assert state.director is not None and state.story is not None
@@ -3025,6 +3082,7 @@ def main() -> None:
             "neural-companion",
             "neural-group",
             "neural-talk",
+            "neural-still",
             "bandit_parley",
             "bandit_hold",
             "bandit_bounty",
@@ -3078,6 +3136,7 @@ def main() -> None:
             "wrath",
             "repair",
             "death_load",
+            "feats",
             "authored",
             "occasions",
             "questlog",
@@ -3163,15 +3222,21 @@ def main() -> None:
         help="gothic-decider service for npc decisions outside conversations (without it the planner is off)",
     )
     p.add_argument(
+        "--body-policy",
+        choices=("engine", "service"),
+        default=os.environ.get("GOTHIC_BODY_POLICY", "engine"),
+        help="combat policy location (GOTHIC_BODY_POLICY; default: engine)",
+    )
+    p.add_argument(
         "--body-url",
         default=os.environ.get("GOTHIC_BODY_URL"),
-        help="body policy service at tcp://host:47835 (GOTHIC_BODY_URL; without it the pilot is off)",
+        help="backup body policy service at tcp://host:47835 (GOTHIC_BODY_URL)",
     )
     p.add_argument(
         "--neural-body",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="let the body policy fight the hero or companions with eligible npcs (requires --body-url)",
+        help="let the body policy fight the hero or companions with eligible npcs (default: on)",
     )
     p.add_argument(
         "--neural-body-max",
@@ -3219,6 +3284,16 @@ def main() -> None:
         "--no-showrunner",
         action="store_true",
         help="disable the director's new plot lines (enabled by default outside scenarios)",
+    )
+    p.add_argument(
+        "--no-feats",
+        action="store_true",
+        help="disable the chronicler's feats (enabled by default outside scenarios and in feats)",
+    )
+    p.add_argument(
+        "--no-feat-images",
+        action="store_true",
+        help="disable generated feat pictures; use category icons for toasts",
     )
     p.add_argument(
         "--no-knowledge", action="store_true", help="npc's do not know the world from the scripts (M6)"
