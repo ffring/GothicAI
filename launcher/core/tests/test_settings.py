@@ -1,6 +1,7 @@
 import stat
 import sys
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -83,7 +84,7 @@ def test_import_from_env(tmp_path):
     assert skipped == ["GOTHIC_GPU_SSH"]
     assert config.settings.voice.voxtral_url == "http://gpu:47830"
     assert config.settings.llm.body_policy == "service"
-    assert str(config.settings.llm.body_net) == "/nets/p30.bodynet"
+    assert config.settings.llm.body_net == Path("/nets/p30.bodynet")
     assert config.settings.tts.provider == "voxcpm" and config.secrets.inworld_api_key == "iw"
     assert config.secrets.openai_api_key is None  # empty values are not settings
 
