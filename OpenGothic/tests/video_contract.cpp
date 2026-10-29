@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cerrno>
@@ -24,6 +25,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 #include <sys/wait.h>
 #include <sys/file.h>
@@ -587,6 +589,100 @@ void concurrentFirstPublications(const fs::path& gothic,const fs::path& part,con
   std::cout << "video concurrent publication: two caches, empty shared store, both publishers succeeded\n";
   }
 
+void gameSelection(const fs::path& game, const fs::path& mainBase, const fs::path& root,
+                   const fs::path& part, const VideoData::Identity& identity) {
+  const auto cache=root/"cache", store=root/"game-store";
+  const auto destination=cache/"videos"/identity.fingerprint;
+  require(VideoData::identifyFromBase(mainBase).json==VideoData::identify(game).json,
+          "native source census and original video selection identities differ");
+  size_t imports=0, mainSelections=0;
+  const auto observe=[&](std::string_view message) {
+    if(message=="video base: importing installation") ++imports;
+    if(message.starts_with("base: ")) ++mainSelections;
+    };
+  const auto checkPointer=[&] {
+    const auto pointer=cache/"current"/(BaseImport::sha256(fs::weakly_canonical(game).generic_string())+".json");
+    std::ifstream input(pointer,std::ios::binary);
+    const std::string bytes{std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
+    require(bytes.find("\"videos\"")!=std::string::npos && bytes.find("\"base\"")==std::string::npos,
+            "game video selection rewrote the main base pointer");
+    require(imports==0 && mainSelections==0,"game video selection imported or selected the main base again");
+    };
+  fs::remove_all(cache/"current");
+  {
+    auto selected=BaseStore::resolveVideos(game,mainBase,observe);
+    require(selected.path==destination,"game video selection without a pointer missed the prepared cache");
+    checkPointer();
+    }
+  {
+    Environment storeEnvironment("OPENGOTHIC_BASE_STORE",store);
+    fs::create_directories(store/"base/videos");
+    fs::rename(destination,store/"base/videos"/identity.fingerprint);
+    fs::remove_all(cache/"current");
+    {
+      auto selected=BaseStore::resolveVideos(game,mainBase,observe);
+      require(selected.path==destination && hashes(destination)==hashes(part),
+              "game video selection without a pointer did not copy the prepared store part");
+      checkPointer();
+      }
+    fs::remove_all(destination);
+    fs::remove_all(store);
+    fs::remove_all(cache/"current");
+    std::string reason;
+    try { (void)BaseStore::resolveVideos(game,mainBase,observe); }
+    catch(const std::exception& error) { reason=error.what(); }
+    require(reason.find("no ready video base")!=std::string::npos && imports==0 && mainSelections==0,
+            "game video cache/store miss must explain the skip without importing: "+reason);
+    for(const auto& directory:{cache/"videos",store/"base/videos"})
+      for(const auto& entry:fs::directory_iterator(directory))
+        require(!entry.is_directory(),"game video cache/store miss created an import directory");
+    }
+  // Restore the converter-prepared part without another corpus conversion.
+  fs::create_directories(destination);
+  for(const auto& entry:fs::directory_iterator(part))
+    if(entry.is_regular_file()) fs::create_hard_link(entry.path(),destination/entry.path().filename());
+  fs::remove_all(cache/"current");
+  const int held=::open((cache/".lock").c_str(),O_CREAT|O_RDWR|O_CLOEXEC,0600);
+  require(held>=0 && flock(held,LOCK_EX)==0,"cannot hold the main base cache lock");
+  std::cout.flush(); std::cerr.flush();
+  const auto child=fork(); require(child>=0,"game video cancellation fork failed");
+  if(child==0) {
+    close(held);
+    alarm(2);
+    const auto cancelled=std::make_shared<std::atomic_bool>(false);
+    std::atomic_bool identifying=false, resume=false;
+    std::atomic<size_t> mainEvents=0;
+    std::thread worker([&] {
+      try {
+        auto selected=BaseStore::resolveVideos(game,mainBase,[&](std::string_view message) {
+          if(message=="video base: identifying installation") {
+            identifying.store(true);
+            while(!resume.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+          if(message.starts_with("base: ")) ++mainEvents;
+          },cancelled);
+        }
+      catch(const std::exception&) {}
+      });
+    const auto deadline=Clock::now()+std::chrono::milliseconds(500);
+    while(!identifying.load() && Clock::now()<deadline) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // The previous implementation enters the uninterruptible main cache lock after this event.
+    const auto started=Clock::now();
+    cancelled->store(true);
+    resume.store(true);
+    worker.join();
+    const auto seconds=std::chrono::duration<double>(Clock::now()-started).count();
+    std::cout << "game video cancellation with held main cache lock: " << seconds << " s" << std::endl;
+    _exit(identifying.load() && mainEvents.load()==0 && seconds<=1 ? 0 : 1);
+    }
+  int status=0;
+  const bool completed=waitpid(child,&status,0)==child;
+  close(held);
+  require(completed && WIFEXITED(status) && WEXITSTATUS(status)==0,
+          "game video cancellation waited for the held main base cache lock (limit 1 s)");
+  std::cout << "game video selection: native identity, cache/store without pointers, no-import miss and cancelled main-lock independence verified\n";
+  }
+
 void snapshotSelection(const fs::path& gothic, const fs::path& root, const fs::path& part,
                        const VideoData::Identity& identity) {
   const auto game=root/"game", cache=root/"cache";
@@ -636,8 +732,9 @@ void snapshotSelection(const fs::path& gothic, const fs::path& root, const fs::p
   const auto mainIdentity=BaseImport::identify(game);
   const auto mainBase=cache/mainIdentity.fingerprint;
   fs::create_directories(mainBase/"sources");
-  { std::ofstream source(mainBase/"sources/sources.json"); source << "{\"format\":\"gothic-sources\",\"version\":1}\n"; }
+  require(BaseImport::convertSources(game,mainBase/"sources",false)==0,"cannot prepare native source census fixture");
   BaseImport::writeBaseMetadata(mainBase,mainIdentity);
+  gameSelection(game,mainBase,root,part,identity);
   BaseImport::Files mounted;
   for(const auto& archive:BaseImport::runtimeArchives(game))
     if(!archive.mod) mounted.emplace_back(archive.name,archive.size);

@@ -509,7 +509,8 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   return finish("import");
   }
 
-BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const BaseImport::Progress& log,
+BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const fs::path& mainBase,
+                                             const BaseImport::Progress& log,
                                              std::shared_ptr<std::atomic_bool> cancelled, const Import& import,
                                              const IdentifyVideos& identify) {
   const auto start=std::chrono::steady_clock::now();
@@ -563,18 +564,15 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
   std::string rejection;
   if(reused && !videoMatches(pointed,identity,cancelled.get(),rejection)) reused=false;
   checkVideoCancelled(cancelled.get());
-  if(!installed && !reused)
+  if(!installed && !reused && (identify || mainBase.empty()))
     throw std::runtime_error("no ready video base for "+gothic.string()+": "+
                              (rejection.empty() ? "missing from video base" : rejection));
   if(!reused) {
     log("video base: identifying installation");
     if(identify) identity=identify();
     else {
-      BaseImport::Files mounted;
-      for(const auto& archive:BaseImport::runtimeArchives(gothic))
-        if(!archive.mod) mounted.emplace_back(archive.name,archive.size);
-      auto base=resolve(gothic,mounted,log);
-      identity=VideoData::identifyFromBase(base.path,cancelled.get());
+      if(mainBase.empty()) throw std::runtime_error("video selection requires a selected main base");
+      identity=VideoData::identifyFromBase(mainBase,cancelled.get());
       }
     log("video base: identified installation ("+std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now()-start).count())+" ms)");

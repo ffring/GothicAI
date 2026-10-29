@@ -292,10 +292,11 @@ void Resources::startVideoBase() {
   inst->videoBase=std::make_shared<VideoBase>();
   const auto state=inst->videoBase;
   const auto gothic=std::filesystem::path(CommandLine::inst().rootPath());
-  inst->videoWorker=std::thread([state,gothic] {
+  const auto mainBase=inst->automaticBase.path;
+  inst->videoWorker=std::thread([state,gothic,mainBase] {
     preparingVideo=true;
     try {
-      auto selection=BaseStore::resolveVideos(gothic,[](std::string_view message) {
+      auto selection=BaseStore::resolveVideos(gothic,mainBase,[](std::string_view message) {
         // Background selection diagnostics do not use the application's log callback.
         std::fprintf(stderr,"%.*s\n",int(message.size()),message.data());
         },state->cancelled);

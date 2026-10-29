@@ -9,7 +9,7 @@ BaseStore::Selection BaseStore::ensure(const std::filesystem::path& gothic,
 BaseStore::Selection BaseStore::ensureVideos(const std::filesystem::path& gothic,
                                             const BaseImport::Progress& log,
                                             std::shared_ptr<std::atomic_bool> cancelled, size_t workers) {
-  return resolveVideos(gothic,log,cancelled,
+  return resolveVideos(gothic,{},log,cancelled,
     [&](const auto& out) { VideoData::build(gothic,out,log,cancelled.get(),workers); },
     [&] { return VideoData::identify(gothic,cancelled.get()); });
   }

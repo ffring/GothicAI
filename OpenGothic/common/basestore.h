@@ -38,7 +38,9 @@ Selection resolve(const std::filesystem::path& gothic, const BaseImport::Files& 
 // select this part; OPENGOTHIC_VIDEOS_FINGERPRINT selects a ready part without an installation.
 // An explicitly empty video fingerprint disables selection; unset retains automatic selection.
 // Its cache and store are below the normal cache/store roots.
-Selection resolveVideos(const std::filesystem::path& gothic, const BaseImport::Progress& log,
+// The game supplies the already selected main base; importer hooks do not use it.
+Selection resolveVideos(const std::filesystem::path& gothic, const std::filesystem::path& mainBase,
+                        const BaseImport::Progress& log,
                         std::shared_ptr<std::atomic_bool> cancelled={}, const Import& import={},
                         const IdentifyVideos& identify={});
 }
