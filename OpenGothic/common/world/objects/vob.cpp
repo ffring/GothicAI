@@ -20,6 +20,7 @@
 #include "world/triggers/touchdamage.h"
 #include "world/triggers/cscamera.h"
 #include "world/voblight.h"
+#include "world/voblayer.h"
 #include "world/world.h"
 #include "game/serialize.h"
 
@@ -31,7 +32,7 @@ Vob::Vob(World& owner)
 
 Vob::Vob(Vob* parent, World& owner, const asset::VirtualObject& vob, Flags flags)
   : world(owner), vobType(vob.type), vobObjectID(vob.id),
-    layerObject(!vob.layer_key.empty()), parent(parent) {
+    layerObject(VobLayer::isAdded(vob)), parent(parent) {
   pos   = Tempest::Matrix4x4(vob.rotation.columns[0].x, vob.rotation.columns[1].x, vob.rotation.columns[2].x, vob.position.x,
                              vob.rotation.columns[0].y, vob.rotation.columns[1].y, vob.rotation.columns[2].y, vob.position.y,
                              vob.rotation.columns[0].z, vob.rotation.columns[1].z, vob.rotation.columns[2].z, vob.position.z,
@@ -43,32 +44,6 @@ Vob::Vob(Vob* parent, World& owner, const asset::VirtualObject& vob, Flags flags
     m.inverse();
     m.mul(local);
     local = m;
-    }
-
-  if(vob.layer_transform || vob.layer_base_parent || (parent!=nullptr && parent->layerPose)) {
-    const auto& p = vob.layer_transform ? vob.layer_base_position : vob.position;
-    const auto& r = vob.layer_transform ? vob.layer_base_rotation : vob.rotation;
-    layerPose = std::make_unique<LayerPose>();
-    layerPose->pos = Matrix4x4(r.columns[0].x, r.columns[1].x, r.columns[2].x, p.x,
-                              r.columns[0].y, r.columns[1].y, r.columns[2].y, p.y,
-                              r.columns[0].z, r.columns[1].z, r.columns[2].z, p.z,
-                              0, 0, 0, 1);
-    layerPose->local = layerPose->pos;
-    if(vob.layer_base_parent || parent!=nullptr) {
-      auto m = Matrix4x4::mkIdentity();
-      if(vob.layer_base_parent) {
-        const auto& original=*vob.layer_base_parent;
-        for(unsigned c=0;c<4;++c)
-          for(unsigned r=0;r<4;++r)
-            m.set(c,r,original[c][r]);
-        }
-      else {
-        m = parent->layerPose ? parent->layerPose->pos : parent->transform();
-        }
-      m.inverse();
-      m.mul(layerPose->local);
-      layerPose->local = m;
-      }
     }
 
   for(auto& i:vob.children) {
@@ -336,9 +311,7 @@ void Vob::loadVobTree(Serialize& fin) {
 
 void Vob::save(Serialize& fout) const {
   fout.setEntry("worlds/",fout.worldName(),"/mobsi/",vobObjectID,"/data");
-  // A save remains usable without the content layer: its base-ID records keep
-  // the original base placement rather than baking in an authored layer move.
-  fout.write(uint8_t(vobType),layerPose ? layerPose->pos : pos,layerPose ? layerPose->local : local);
+  fout.write(uint8_t(vobType),pos,local);
   }
 
 void Vob::load(Serialize& fin) {
@@ -346,14 +319,7 @@ void Vob::load(Serialize& fin) {
     return;
   auto type = uint8_t(vobType);
   uint8_t savValue;
-  Matrix4x4 savedPos,savedLocal;
-  fin.read(savValue,savedPos,savedLocal);
-  // Preserve the active layer's authored move even in an older save. Derived
-  // vob state remains readable from the same entry after these transforms.
-  if(!layerPose) {
-    pos = savedPos;
-    local = savedLocal;
-    }
+  fin.read(savValue,pos,local);
   hasPhysicsPos = false;
 
   if(fin.version() > 41) {

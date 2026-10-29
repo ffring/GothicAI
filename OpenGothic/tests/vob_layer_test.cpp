@@ -1,4 +1,5 @@
 #include "worlddata.h"
+#include "world/voblayer.h"
 #include "basemesh.h"
 #include "commandline.h"
 #include "resources.h"
@@ -101,7 +102,11 @@ struct Fixture {
   void clearLayers() const {
     fs::remove_all(layers); fs::create_directories(layers);
     }
-  WorldData::Data read() const { return WorldData::read(world,content/"worlds/TEST"); }
+  WorldData::Data read() const {
+    auto data=WorldData::read(world,content/"worlds/TEST");
+    VobLayer::apply(data,world,content/"worlds/TEST");
+    return data;
+    }
   };
 
 std::string mesh(const std::string& key, const std::string& visual="BASE.3DS", const std::string& collision="none") {
@@ -135,7 +140,7 @@ void validLayers(const Fixture& f) {
            mesh("own-ghost","VOB_LAYER_TEST_CUBE","none")+
            R"(,{"key":"lamp","kind":"light","position":[1,2,3],"rotation":[[1,0,0],[0,1,0],[0,0,1]],"range":450,"color":[255,128,0]}],"remove":[19],"move":[{"id":7,"position":[11,22,33],"yaw_deg":0}]})");
   textFile(f.layers/"20-move.json",R"({"format":1,"move":[{"id":7,"position":[44,55,66],"rotation":[[0,0,1],[0,1,0],[-1,0,0]]},{"id":43,"position":[10,20,30],"yaw_deg":90}]})");
-  const auto checked=WorldData::checkVobLayer(f.world,f.layers/"10-add.json",f.content);
+  const auto checked=VobLayer::check(f.world,f.layers/"10-add.json",f.content);
   require(checked.errors.empty() && checked.added==3 && checked.removed==1 && checked.moved==1,"offline checker valid layer counts");
   const auto data=f.read();
   require(data.vobs.size()==5 && WorldData::vobCount(data.vobs)==6,"add three roots and remove one base root");
@@ -145,10 +150,9 @@ void validLayers(const Fixture& f) {
   require(find(data,43)->position.x==10,"move can target nested base id");
   require(data.vobs[2]->cd_static && data.vobs[2]->cd_dynamic &&
           !data.vobs[3]->cd_static && !data.vobs[3]->cd_dynamic,"mesh/none world and player collision flags");
-  auto movable=*data.vobs[2];
-  movable.visual=std::make_shared<asset::VisualMesh>();
-  movable.visual->type=asset::VisualType::MESH; movable.visual->name="BARREL_01.3DS";
-  require(MovableVobs::classify(movable)==nullptr,"layer props never become dynamic movable vobs");
+  data.vobs[2]->visual->name="NW_HARBOUR_BARREL_01.3DS";
+  require(MovableVobs::classifyVisual(data.vobs[2]->visual->name)!=nullptr &&
+          MovableVobs::classify(*data.vobs[2])==nullptr,"layer props never become dynamic movable vobs");
   require(data.vobs[2]->visual_name=="BASE.3DS" && data.vobs[3]->visual_name=="VOB_LAYER_TEST_CUBE.3DS","base and own visuals use runtime loadable names");
   require(std::abs(data.vobs[2]->rotation.columns[0].x)<.0001f &&
           std::abs(std::abs(data.vobs[2]->rotation.columns[0].z)-1.f)<.0001f,"yaw rotates about the vertical axis");
@@ -180,7 +184,7 @@ void rejectedLayers(const Fixture& f) {
     const auto file=f.layers/("10-"+name+".json");
     textFile(file,transaction);
     textFile(f.layers/"20-valid.json","{\"format\":1,\"add\":["+mesh("after-error")+"]}");
-    const auto checked=WorldData::checkVobLayer(f.world,file,f.content);
+    const auto checked=VobLayer::check(f.world,file,f.content);
     require(!checked.errors.empty(),name+": offline validation must reject");
     require(checked.errors.front().find(file.string())!=std::string::npos,name+": error must identify file");
     if(name=="missing-id" || name=="missing-move-id")
@@ -198,6 +202,59 @@ void rejectedLayers(const Fixture& f) {
     if(name=="schema")
       require(subprocess({GOTHIC_CONTENT_CONVERT,"check-vob-layer",f.world.string(),file.string(),f.content.string()})!=0,"converter CLI rejects schema errors");
     }
+  }
+
+void saveBoundPolicy(const Fixture& f) {
+  const char* classes[]={
+    "zCVob","zCVobLevelCompo","oCItem","oCNpc","zCMoverController","zCVobScreenFX","zCVobStair",
+    "zCPFXController","zCVobAnimate","zCVobLensFlare","zCVobLight","zCVobSpot","zCVobStartpoint",
+    "zCMessageFilter","zCCodeMaster","zCTriggerWorldStart","zCCSCamera","zCCamTrj_KeyFrame","oCTouchDamage",
+    "zCTriggerUntouch","zCEarthquake","oCMOB","oCMobInter","oCMobBed","oCMobFire","oCMobLadder",
+    "oCMobSwitch","oCMobWheel","oCMobContainer","oCMobDoor","zCTrigger","zCTriggerList","oCTriggerScript",
+    "oCTriggerChangeLevel","oCCSTrigger","zCMover","zCVobSound","zCVobSoundDaytime","oCZoneMusic",
+    "oCZoneMusicDefault","zCZoneZFog","zCZoneZFogDefault","zCZoneVobFarPlane","zCZoneVobFarPlaneDefault"
+    };
+  // zCVob is forbidden only when the shared movable-body classifier selects it.
+  // Every other tag is protected, including static-looking save-bound classes.
+  Tempest::Log::setOutputCallback([](Tempest::Log::Mode,const char*) {});
+  size_t cases=0;
+  for(int tag=-1;tag<int(std::size(classes));++tag) {
+    const std::string className=tag==-1 ? "UNKNOWN" : classes[size_t(tag)];
+    for(bool descendant:{false,true}) for(bool move:{false,true}) {
+      f.clearLayers();
+      auto data=Fixture::original();
+      auto target=std::make_shared<asset::VirtualObject>(*data.vobs[1]);
+      target->id=900;
+      auto bound=target;
+      if(descendant) {
+        bound=std::make_shared<asset::VirtualObject>(*target);
+        bound->id=901; target->children.push_back(bound);
+        }
+      bound->type=asset::VirtualObjectType(tag);
+      if(tag==0) {
+        bound->visual=std::make_shared<asset::VisualMesh>();
+        bound->visual->type=asset::VisualType::MESH;
+        bound->visual->name="NW_HARBOUR_BARREL_01.3DS";
+        require(MovableVobs::classify(*bound)!=nullptr,"policy fixture must match movable physics");
+        }
+      data.vobs.push_back(target);
+      const auto file=f.layers/"10-protected.json";
+      const auto operation=move ? R"("move":[{"id":900,"position":[999,0,0],"yaw_deg":0}])" : R"("remove":[900])";
+      textFile(file,"{\"format\":1,\"add\":["+mesh("rolled-back")+"],"+operation+"}");
+      textFile(f.layers/"20-valid.json","{\"format\":1,\"add\":["+mesh("after-policy-error")+"]}");
+      const auto result=VobLayer::apply(data,f.world,f.content/"worlds/TEST");
+      require(!result.errors.empty(),className+": remove/move must reject save-bound objects");
+      std::string errors;
+      for(const auto& error:result.errors) errors+=error;
+      require(errors.find(file.string())!=std::string::npos && errors.find(std::to_string(bound->id))!=std::string::npos &&
+              errors.find(className)!=std::string::npos,className+": policy error identifies filename, protected id and class");
+      require(data.vobs.size()==5 && find(data,900)==target.get() && target->position.x==19 &&
+              result.added==1,className+": rejected file rolls back additions and mutation; following file applies");
+      ++cases;
+      }
+    }
+  Tempest::Log::setOutputCallback({});
+  require(cases==180,"all 44 class tags, unknown and both operations/subtree guards are checked");
   }
 
 void runtimeMesh(const Fixture& f) {
@@ -246,38 +303,6 @@ struct WorldDataContract {
     Serialize input(reader);
     world.load(input);
     }
-  static void promotedChildSave(const Fixture& fixture,World& world) {
-    WorldData::Data original;
-    original.name="PARENT"; original.source={"PARENT.ZEN",1,1};
-    original.waynet=std::make_shared<asset::WayNet>();
-    auto parent=std::make_shared<asset::VirtualObject>();
-    parent->type=asset::VirtualObjectType::zCVobLevelCompo;
-    parent->id=100001; parent->position={100,0,0};
-    auto child=std::make_shared<asset::VirtualObject>();
-    child->type=asset::VirtualObjectType::zCVobLevelCompo;
-    child->id=100002; child->position={130,0,0};
-    parent->children.push_back(child); original.vobs.push_back(parent);
-    const auto base=fixture.root/"parent-base/worlds/PARENT";
-    const auto content=fixture.root/"parent-content/worlds/PARENT";
-    WorldData::write(original,base);
-    textFile(content/"vobs.d/remove.json",R"({"format":1,"remove":[100001]})");
-    const auto layer=WorldData::read(base,content);
-    require(layer.vobs.size()==1 && layer.vobs[0]->layer_base_parent,"promoted child retains its original parent pose");
-    Vob promoted(nullptr,world,*layer.vobs[0],Vob::None);
-    std::vector<uint8_t> bytes;
-    Tempest::MemWriter writer(bytes);
-    { Serialize output(writer); output.setContext(&world); promoted.saveVobTree(output); }
-    Vob restored(nullptr,world,*parent,Vob::None);
-    {
-      Tempest::MemReader reader(bytes);
-      Serialize input(reader); input.setContext(&world);
-      restored.loadVobTree(input);
-    }
-    require(restored.child.size()==1 && restored.child[0]->position()==Tempest::Vec3(130,0,0),"promoted-child save restores the base world pose");
-    auto translated=Tempest::Matrix4x4::mkIdentity(); translated.translate(200,0,0);
-    restored.setLocalTransform(translated);
-    require(restored.child[0]->position()==Tempest::Vec3(230,0,0),"promoted-child save restores the original parent-local relation");
-    }
   static void saves(const Fixture& fixture) {
     const auto* gameDir=std::getenv("GOTHIC_DIR");
     require(gameDir && *gameDir,"save interchange needs prepared GOTHIC_DIR");
@@ -301,21 +326,20 @@ struct WorldDataContract {
       GameMusic music;
       if(phase==0) {
         const auto data=WorldData::read(Resources::baseDir()/"worlds/NEWWORLD");
-        bool foundMesh=false,foundLight=false;
+        bool foundRemoved=false,foundMoved=false;
         for(const auto& vob:data.vobs) {
-          if(!foundMesh && vob->type==asset::VirtualObjectType::zCVob && vob->children.empty()) {
-            removed=vob->id; foundMesh=true;
-            }
-          if(!foundLight && vob->type==asset::VirtualObjectType::zCVobLight) {
-            moved=vob->id; originalPosition={vob->position.x,vob->position.y,vob->position.z}; foundLight=true;
+          if(vob->type!=asset::VirtualObjectType::zCVob || !vob->children.empty() || MovableVobs::classify(*vob)!=nullptr)
+            continue;
+          if(!foundRemoved) { removed=vob->id; foundRemoved=true; }
+          else if(!foundMoved) {
+            moved=vob->id; originalPosition={vob->position.x,vob->position.y,vob->position.z}; foundMoved=true;
             }
           }
-        require(foundMesh && foundLight,"real base must contain a removable static mesh and movable light");
+        require(foundRemoved && foundMoved,"real base must contain two static leaf vobs outside movable physics");
         }
       gothic.setGame(std::make_unique<GameSession>("NEWWORLD.ZEN"));
       auto& world=*gothic.world();
       if(phase==0) {
-        promotedChildSave(fixture,world);
         baseRoots=world.wobj.rootVobs.size();
         baseline=save(world);
         require(!baseline.empty(),"save without layer writes an archive");
@@ -349,6 +373,8 @@ struct WorldDataContract {
 
 int main() {
   try {
+    require(std::string_view(GOTHIC_BASE_FORMAT_SHA256)=="ebeeae0437d4372d7f04fdf7b6915f56b80d00e24c5e8922486e0928e293e5f3",
+            "vob layers must retain the existing base format SHA-256");
     Fixture fixture;
     setenv("OPENGOTHIC_CONTENT",fixture.content.c_str(),1);
     unsetenv("OPENGOTHIC_VOB_LAYERS");
@@ -357,6 +383,7 @@ int main() {
     noLayers(fixture);
     validLayers(fixture);
     rejectedLayers(fixture);
+    saveBoundPolicy(fixture);
     WorldDataContract::saves(fixture);
     runtimeMesh(fixture);
     std::cout << "{\"test\":\"vob_layer\",\"passed\":true,\"assertions\":" << assertions << "}\n";

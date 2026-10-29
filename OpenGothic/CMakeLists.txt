@@ -480,7 +480,8 @@ if(NOT ANDROID AND NOT IOS)
   target_include_directories(gothic-vob-layer-test SYSTEM BEFORE PRIVATE ${PROJECT_SOURCE_DIR}/lib/rapidjson/include)
   target_compile_definitions(gothic-vob-layer-test PRIVATE
     GOTHIC_VOB_FIXTURE_SCRIPT="${PROJECT_SOURCE_DIR}/../scripts/vob_layer_fixture.py"
-    GOTHIC_CONTENT_CONVERT="$<TARGET_FILE:content-convert>")
+    GOTHIC_CONTENT_CONVERT="$<TARGET_FILE:content-convert>"
+    GOTHIC_BASE_FORMAT_SHA256="${BASE_FORMAT_SHA256}")
   add_dependencies(gothic-vob-layer-test content-convert)
   if(NOT MSVC)
     target_compile_options(gothic-vob-layer-test PRIVATE -Wall -Wconversion -Werror)

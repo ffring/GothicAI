@@ -269,12 +269,6 @@ struct VirtualObject : Object {
   ~VirtualObject() override = default;
   VirtualObjectType type = VirtualObjectType::UNKNOWN;
   uint32_t id = 0;
-  // Content layer metadata is runtime-only; base world records stay unchanged.
-  std::string layer_key;
-  bool layer_transform = false;
-  zenkit::Vec3 layer_base_position = zenkit::Vec3 {0};
-  zenkit::Mat3 layer_base_rotation = zenkit::Mat3::identity();
-  std::shared_ptr<const zenkit::Mat4> layer_base_parent;
   zenkit::AxisAlignedBoundingBox bbox = zenkit::AxisAlignedBoundingBox::zero();
   zenkit::Vec3 position = zenkit::Vec3 {0};
   zenkit::Mat3 rotation = zenkit::Mat3::identity();

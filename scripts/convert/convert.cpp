@@ -66,6 +66,7 @@
 #include "musicnative.h"
 #include "worldchunks.h"
 #include "worlddata.h"
+#include "world/voblayer.h"
 #include "gothicglb.h"
 
 #include <zenkit/Archive.hh>
@@ -806,7 +807,7 @@ int main(int argc, char** argv) {
     if(args.size()==1 && args[0]=="--self-test")
       return selfTest();
     if((args.size()==3 || args.size()==4) && args[0]=="check-vob-layer") {
-      const auto result=WorldData::checkVobLayer(args[1],args[2],args.size()==4 ? fs::path(args[3]) : fs::path());
+      const auto result=VobLayer::check(args[1],args[2],args.size()==4 ? fs::path(args[3]) : fs::path());
       for(const auto& error:result.errors)
         std::cerr << error << '\n';
       if(!result.errors.empty()) return 1;

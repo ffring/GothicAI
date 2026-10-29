@@ -1,6 +1,7 @@
 #include "worldbase.h"
 
 #include "worldchunks.h"
+#include "world/voblayer.h"
 
 #include <rapidjson/document.h>
 #include <algorithm>
@@ -56,6 +57,7 @@ WorldBaseResult tryWorldData(WorldData::Data& world, asset::WorldMesh& worldMesh
       throw std::runtime_error("world data source differs from world.json");
     if(!data.waynet)
       throw std::runtime_error("world waynet missing");
+    VobLayer::apply(data,dir,overrideDir);
     auto mesh = readWorldChunks(dir,overrideDir);
     mesh.name = data.name;
     mesh.bbox = data.bbox;

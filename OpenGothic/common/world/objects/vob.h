@@ -71,10 +71,6 @@ class Vob {
     Tempest::Matrix4x4                pos, local, physicsPos;
     bool                              hasPhysicsPos = false;
     bool                              layerObject = false;
-    struct LayerPose {
-      Tempest::Matrix4x4 pos, local;
-      };
-    std::unique_ptr<LayerPose>         layerPose;
     Vob*                              parent = nullptr;
 
     void          recalculateTransform();

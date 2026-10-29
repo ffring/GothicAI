@@ -1,4 +1,5 @@
 #include "movablevobs.h"
+#include "voblayer.h"
 
 #include <algorithm>
 #include <cctype>
@@ -60,7 +61,7 @@ const std::vector<MovableVobs::Rule>& rules() {
 
 const MovableVobs::Rule* MovableVobs::classify(const asset::VirtualObject& vob) {
   // Layer meshes request either static mesh collision or no collision.
-  if(!vob.layer_key.empty())
+  if(VobLayer::isAdded(vob))
     return nullptr;
   if(vob.type!=asset::VirtualObjectType::zCVob || !vob.show_visual || vob.visual==nullptr)
     return nullptr;
