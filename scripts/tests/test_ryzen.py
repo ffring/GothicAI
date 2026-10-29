@@ -885,18 +885,36 @@ PY
         })
         self.assertFalse((self.home / 'gothic-ai/game').exists())
 
-    def test_pytest_keeps_installation_without_game_settings_setup(self):
+    def test_pytest_requires_setup_and_uses_game_settings(self):
+        storygraph = self.bin / 'storygraph'
+        storygraph.write_text(f'#!{sys.executable}\n' + r'''
+import os
+from pathlib import Path
+import sys
+assert sys.argv[1:] == [os.environ['GOTHIC_DIR'], '--ou-messages']
+(Path(os.environ['TEST_ROOT']) / 'selected-base').write_text(os.environ['OPENGOTHIC_BASE_FINGERPRINT'])
+''')
+        storygraph.chmod(0o755)
+        self.env.pop('GOTHIC_DIR', None)
+        commands = r'''
+build_storygraph() { export RYZEN_STORYGRAPH_BIN="$TEST_ROOT/bin/storygraph"; }
+uv() {
+  test "$(cat "$TEST_ROOT/selected-base")" = "$OPENGOTHIC_BASE_FINGERPRINT"
+  printf '%s\n' "$GOTHIC_DIR" "$@" >"$TEST_ROOT/pytest-env"
+}
+remote_run pytest "$TEST_ROOT/worktree" run -rs tests/test_storygraph.py
+'''
+        self.shell(commands)
+        self.assertEqual((self.root / 'pytest-env').read_text().splitlines(), [
+            str(self.home / 'gothic-ai/game-settings'), 'run', 'pytest', '-rs', 'tests/test_storygraph.py',
+        ])
+        self.assertFalse((self.home / 'gothic-ai/game').exists())
+        (self.root / 'pytest-env').unlink()
         (self.home / 'gothic-ai/game-base.json').unlink()
         shutil.rmtree(self.home / 'gothic-ai/game-settings')
-        self.env.pop('GOTHIC_DIR', None)
-        self.shell(r'''
-build_storygraph() { :; }
-uv() { printf '%s\n' "$GOTHIC_DIR" "$@" >"$TEST_ROOT/pytest-env"; }
-remote_run pytest "$TEST_ROOT/worktree" run -rs tests/test_storygraph.py
-''')
-        self.assertEqual((self.root / 'pytest-env').read_text().splitlines(), [
-            str(self.home / 'gothic-ai/game'), 'run', 'pytest', '-rs', 'tests/test_storygraph.py',
-        ])
+        with self.assertRaisesRegex(AssertionError, 'Run scripts/ryzen.sh setup first'):
+            self.shell(commands)
+        self.assertFalse((self.root / 'pytest-env').exists())
         self.assertFalse((self.home / 'gothic-ai/game-base.json').exists())
         self.assertFalse((self.home / 'gothic-ai/game-settings').exists())
 

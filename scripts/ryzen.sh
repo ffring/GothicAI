@@ -593,9 +593,11 @@ remote_run() {
   local started=$SECONDS rc digest
   [[ "${RYZEN_JOBS:-12}" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; return 2; }
   if [[ "$action" == pytest ]]; then
-    export GOTHIC_DIR="$HOME/gothic-ai/game"
+    game_settings
     digest="$(storygraph_digest)"
     build_storygraph "$state" "$digest"
+    # Select the base and refresh its pointer before the server tests read it.
+    "$RYZEN_STORYGRAPH_BIN" "$GOTHIC_DIR" --ou-messages >/dev/null
     cd "$ROOT/server"
     uv run pytest "$@" && rc=0 || rc=$?
     echo "Ryzen: pytest $((SECONDS - started))s, exit $rc"
