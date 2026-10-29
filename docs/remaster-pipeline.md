@@ -178,7 +178,7 @@
 | 10 | `harbour-rigging` | набор | `ROPE_01`, `HARBOUR_ROPEWALL_01`, `_02`, `HARBOUR_CANON_01`, `HARBOUR_CANONHOLE`, `HARBOUR_WOODCRATE_01`, `_02` | снасти, пушки, ящики порта | `city-3` | не начат |
 | 11 | `greenery` | общий материал | `IVY_BORDER_01`, `IVY_FULL_01`, `FLAG_01` | плющ на стенах, флаги | `city-3` | не начат |
 | 12 | предметы рынка | наборы моделей | 21 визуал рынка, ящики, бочка, сундук, стол, лавка | рынок, порт, дома | модели Blender | модели построены до конвейера; бочка включена, набор barrel-wear-metal0 |
-| 13 | `harbour-roof-holes` | правка мира | провалы `ROOF_01` насквозь (кусок `NEWWORLD/0_-1`, `scripts/content/world/roof_holes.py`), материалы `OWN_ROOF_HOLE_SHADE`, `OWN_ROOF_HOLE_WALL` | хижина порта B037 (пилот) | нарисованные провалы `roofs-8` | включён, набор roofholes-2 |
+| 13 | `harbour-roof-holes` | правка мира | провалы `ROOF_01` насквозь (кусок `NEWWORLD/0_-1`, `scripts/content/world/roof_holes.py`), материалы `OWN_ROOF_HOLE_SHADE`, `OWN_ROOF_HOLE_WALL` | хижина порта B037 (пилот) | нарисованные провалы `roofs-8` | включён |
 
 «Статус» — ворота пользователя по ассету одной фразой: последние принятые ворота, затем ворота, отправленные на правки. Его считает `remaster.py queue` из `asset.json`; `remaster.py decide` печатает новую фразу, и её вписывают в той же правке. Тест `test_queue_table_matches_the_gates` сверяет таблицу с воротами, а строка без папки ассета должна говорить «не начат». Чего не хватает до следующего этапа, включая рецензентов, показывает `remaster.py check <ассет> --stage <этап>`.
 
