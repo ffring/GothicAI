@@ -1302,7 +1302,8 @@ void Pose::setLayerSpeed(const Animation::Sequence* seq, float k, uint64_t now) 
   }
 
 bool Pose::animRelative(std::string_view name, float at, size_t from, size_t to, Tempest::Matrix4x4& out) const {
-  if(skeleton==nullptr || from>=skeleton->nodes.size() || to>=skeleton->nodes.size())
+  // from==size_t(-1) gives the model frame: the chain then includes the root's own sample
+  if(skeleton==nullptr || (from>=skeleton->nodes.size() && from!=size_t(-1)) || to>=skeleton->nodes.size())
     return false;
   const Animation::Sequence* seq = nullptr;
   for(auto& i:lay)

@@ -312,6 +312,8 @@ class Npc final {
     bool      blockFist();
     bool      finishingMove();
     bool      isMeleeDownStrike(Anim anim, WeaponState ws) const;
+    // Frames of the finishing chop's stroke down: from the top the blade's tip falls from to where it rests at its lowest.
+    static std::optional<std::pair<uint32_t,uint32_t>> meleeFinishStroke(const std::vector<float>& tipHeight);
     static bool isFinishSequence(const Animation::Sequence& seq);
     void      swingSword();
     bool      swingSwordL();
