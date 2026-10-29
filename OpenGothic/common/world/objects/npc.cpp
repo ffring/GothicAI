@@ -7146,7 +7146,9 @@ bool Npc::isFinishSequence(const Animation::Sequence& seq) {
   }
 
 bool Npc::isMeleeDownStrike(Anim anim, WeaponState ws) const {
-  if(!Gothic::physicsFlags().meleePhysicsHits || currentTarget==nullptr || !currentTarget->meleeKnockdown)
+  // lying, not yet rising: one who gets up is met by the ordinary blows at his height
+  if(!Gothic::physicsFlags().meleePhysicsHits || currentTarget==nullptr || !currentTarget->meleeKnockdown ||
+     currentTarget->meleeRiseTick!=0)
     return false;
   if(ws!=WeaponState::W1H && ws!=WeaponState::W2H)
     return false;
