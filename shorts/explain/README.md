@@ -453,7 +453,13 @@ Neither example supplies recorded telemetry.
 Motion check: `python3 scripts/strips.py "$W/render/draft.mp4" "$W/plan.json" "$W/render/strips"` writes a strip
 of consecutive frames for every planned movement (entries, transitions, cuts, lines, zooms, freezes) and a
 `report.md` with the jumps nobody planned: a snap (a change in one frame while the frames around it hold) and a
-one-frame flash. The draft may be a `--scale 0.5` render; only ffmpeg runs.
+one-frame flash. It also checks the motion language of the plan: a duration the plan sets off the series' set
+(0.2 / 0.35 / 0.5 / 0.6 s; a line longer than 0.6 s, a linear zoom shorter than its beat, a carry outside
+0.35-0.6 s), two things of one beat entering less than 0.08 s apart, a thing entering under its beat's own
+transition; and lists every stretch where the picture holds still longer than `--still` (3 s by default):
+nothing outside the caption band changes by 0.03 of 255 per frame (a card or a freeze changes by 0.000-0.001,
+a hero idling in footage by 0.05-0.1). The draft may be a `--scale 0.5` render; only ffmpeg runs. Its tests
+are `shorts/tests/test_strips.py`.
 Schema and geometry checks: `node --test tests/charts.test.mjs` (Node 22.18+ for native TypeScript
 stripping), including rejection of wide-only cards in tall and interpolation of `cone.path`.
 
@@ -461,6 +467,11 @@ Remotion is under the [Remotion License](https://www.remotion.pro/license): free
 up to three people. The versions are pinned in `package.json`.
 
 ## План и журнал
+
+- 2026-10-29: `strips.py` checks the motion language of the plan (durations off the set, two entrances at once,
+  an entrance under a transition) and lists holds longer than `--still`, the last of the review of third-party
+  motion skills (motion-art-direction, motion-video-kit's frozen-time). On the combat-AI video it found the
+  cards that hold 8-11 s unchanged under the voice; the bow short's longest hold is 2.8 s.
 
 - 2026-10-29: `carry`, a thing carried across a cut (the shared actor of motion-video-kit and onetake): a tag
   line or a point of the beat before flies along an arc into the next beat, its duration by travel.
