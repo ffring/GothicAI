@@ -924,6 +924,7 @@ class Npc final {
     void cacheMeleeShadowWindows(const Animation::Sequence* sequence, float length, bool normalY) const;
     MeleeReach sampleMeleeReach(const Npc& target, Pose& sampled, const Pose::CombatLayer& attack, float yawDelta) const;
     void consumeMeleeContacts();
+    void meleeHitStop(Npc& target, const MeleeBladeContact& hit, float multiplier, bool blocked);
     void stopMeleeSwing();
     void noteMeleeStep(const Tempest::Vec3& root, const Tempest::Vec3& offered, const Tempest::Vec3& moved, uint64_t dt);
     auto meleeStep(uint64_t dt) -> Tempest::Vec3;
