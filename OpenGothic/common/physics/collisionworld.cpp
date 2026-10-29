@@ -528,7 +528,8 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
     uint64_t swing = 0;
     bool blocked = false, groundRecorded = false;
     float walkableCos = .7f;
-    double poseTimeMs = 0, targetTimeMs = 0, activeBeginMs = 0, activeEndMs = 0, strikeBeginMs = 0;
+    double poseTimeMs = 0, targetTimeMs = 0, activeBeginMs = 0, activeEndMs = 0;
+    Tempest::Vec3 forward;
     std::vector<MeleeBladeSegment> pose, target;
     std::vector<Npc*> hit;
     std::vector<MeleeBladeContact> contacts;
@@ -2234,7 +2235,7 @@ void CollisionWorld::removeShadowBody(const Npc* owner) {
 void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
                                       const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
                                       double activeBeginMs, double activeEndMs, float walkableCos,
-                                      double strikeBeginMs) {
+                                      Tempest::Vec3 forward) {
   if(owner==nullptr || segments.empty()) throw std::runtime_error("Melee shadow blade requires an owner and geometry");
   for(const auto& segment:segments) {
     const auto from=toMeters(segment.from),to=toMeters(segment.to),edge=toMeters(segment.edgeNormal);
@@ -2269,7 +2270,7 @@ void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
   it->targetTimeMs=double(timeMs);
   it->activeBeginMs=activeBeginMs;
   it->activeEndMs=activeEndMs;
-  it->strikeBeginMs=strikeBeginMs;
+  it->forward=forward;
   it->walkableCos=walkableCos;
   impl->hasShadowBlades.store(true,std::memory_order_release);
   }
@@ -2447,11 +2448,12 @@ void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
             contact.normal={normal.GetX(),normal.GetY(),normal.GetZ()};
             contact.stopsSwing=normal.GetY()<blade.walkableCos || layer==DynamicWorld::C_Item ||
                                layer==DynamicWorld::C_Fragment || layer==DynamicWorld::C_MovableVob;
-            // the wind-up passes a wall, the blow stops at it: before the blow begins, or while
-            // the blade still rises (an axe lifted over the head into a beam or a sign board)
-            const double at=blade.poseTimeMs+duration*(first+(last-first)*contacts.back().time);
-            const bool rising=contact.velocityCmS.y>.5f*contact.speedCmS;
-            if(contact.stopsSwing && (at<blade.strikeBeginMs || rising)) {
+            // The blow stops at a wall; the wind-up and the follow-through pass it, as the
+            // original passes every wall: a blade going back from the facing, or lifted.
+            const auto& v=contact.velocityCmS;
+            const bool back=v.x*blade.forward.x+v.z*blade.forward.z<0.f;
+            const bool lifted=v.y>.5f*contact.speedCmS;
+            if(contact.stopsSwing && blade.forward.quadLength()>0.f && (back || lifted)) {
               contact.stopsSwing=false;
               contact.windup=true;
               }

@@ -177,11 +177,12 @@ class CollisionWorld final {
     void updateShadowBody(Npc* owner, const std::vector<MeleeBodyCapsule>& capsules);
     void removeShadowBody(const Npc* owner);
     // Pose time and the half-open active window use absolute game milliseconds.
-    // A wall touched before strikeBeginMs (the wind-up) does not stop the swing.
+    // forward: the attacker's facing; a wall met by a blade going back or up (the wind-up,
+    // the follow-through) does not stop the swing. Zero: every wall stops it.
     void updateShadowBlade(const Npc* owner, uint64_t swingId,
                            const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
                            double activeBeginMs, double activeEndMs, float walkableCos = .7f,
-                           double strikeBeginMs = 0);
+                           Tempest::Vec3 forward = {});
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void flushShadowBlades();

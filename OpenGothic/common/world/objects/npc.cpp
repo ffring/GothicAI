@@ -152,9 +152,6 @@ struct Npc::MeleeShadow final {
     float beginMs = 0, optimalMs = 0, endMs = 0, peakCmS = 0, thresholdCmS = 0;
     bool left = false, normalY = true;
     float eventBoundaryMs = 0, reachCm = 0;
-    // the turn from the wind-up into the blow: the slowest blade inside the window before the
-    // optimal frame; a wall touched earlier is passed, as the original passes it
-    float strikeMs = 0;
     };
   struct Contact final {
     MeleeBladeContact hit;
@@ -1581,12 +1578,10 @@ void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, 
       last = last<hi ? last+1 : last;
       }
     const uint32_t end = seq->reverse ? std::max(last+1,opt+2) : last+1;
-    const uint32_t strike = uint32_t(std::min_element(speeds.begin()+first,speeds.begin()+opt+1)-speeds.begin());
     shadow.windows.push_back({seq,length,index,first,opt,last,float(first)*1000.f/data.fpsRate,
                               float(opt)*1000.f/data.fpsRate,float(end)*1000.f/data.fpsRate,
                               peak,threshold,useLeft,normalY,float(opt+(seq->reverse ? 1u : 0u))*1000.f/data.fpsRate,
-                              *std::max_element((useLeft ? leftReach : rightReach).begin()+first,(useLeft ? leftReach : rightReach).begin()+last+1),
-                              float(strike)*1000.f/data.fpsRate});
+                              *std::max_element((useLeft ? leftReach : rightReach).begin()+first,(useLeft ? leftReach : rightReach).begin()+last+1)});
     }
   }
 
@@ -2022,8 +2017,8 @@ void Npc::updateMeleeShadow() {
   if(shadow.stopped)
     return;
   const float walkableCos = std::cos(float(owner.script().guildVal().slide_angle[guild()])*float(M_PI)/180.f);
-  const double strikeBegin = double(shadow.start)+double(window.strikeMs)/shadow.speed;
-  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd,walkableCos,strikeBegin);
+  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd,walkableCos,
+                                    Vec3(std::cos(rotationRad()),0,std::sin(rotationRad())));
   if(Gothic::inst().doMeleeBladeDraw()) {
     const double now = double(owner.tickCount());
     meleeShadowDrawPose   = blade;
@@ -2410,7 +2405,6 @@ void Npc::finishMeleeShadowSwing(bool remove, bool discard) {
                   ",\"last_frame\":" + number(window.last) + ",\"begin_ms\":" + number(window.beginMs) +
                   ",\"optimal_ms\":" + number(window.optimalMs) + ",\"end_ms\":" + number(window.endMs) +
                   ",\"event_boundary_ms\":" + number(window.eventBoundaryMs) +
-                  ",\"strike_ms\":" + number(window.strikeMs) +
                   ",\"reverse\":" + (window.sequence->reverse ? "true" : "false") +
                   ",\"animation_speed\":" + number(shadow.speed) + ",\"peak_cm_s\":" + number(window.peakCmS) +
                   ",\"threshold_cm_s\":" + number(window.thresholdCmS) + "},\"legacy\":{\"target\":" +
