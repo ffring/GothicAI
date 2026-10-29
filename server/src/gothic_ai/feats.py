@@ -162,7 +162,7 @@ def hero_view(seq: int, fact: Fact) -> Fact | None:
 def _pattern(fact: Fact) -> tuple[str, Any]:
     kind = fact["fact"]
     key = {
-        "crime": "kind", "quest_outcome": "how", "surrender": "status", "claim": "truth",
+        "quest_outcome": "how", "surrender": "status", "claim": "truth",
         "died": "monster",
     }
     if kind == "broken":
