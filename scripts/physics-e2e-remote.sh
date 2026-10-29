@@ -38,7 +38,7 @@ REMOTE
     "$HOST:$REMOTE/source/server/"
   rsync -a --exclude=__pycache__/ "$ROOT/libs/chatgpt-auth/pyproject.toml" \
     "$ROOT/libs/chatgpt-auth/src" "$HOST:$REMOTE/source/libs/chatgpt-auth/"
-  rsync -a "$ROOT/scripts/e2e.sh" "$HOST:$REMOTE/source/scripts/"
+  rsync -a "$ROOT/scripts/e2e.sh" "$ROOT/scripts/base-ensure.sh" "$HOST:$REMOTE/source/scripts/"
   remote_script "$REMOTE" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
@@ -207,6 +207,9 @@ mkdir -p "$out"
 printf '%s\n' "$binary" > "$out/source-binary.txt"
 mkdir -p "$out/reference"
 cp "$binary" "$out/reference/Gothic2Notr"
+if [[ -x "$(dirname "$binary")/content-convert" ]]; then
+  cp "$(dirname "$binary")/content-convert" "$out/"
+fi
 binary="$out/reference/Gothic2Notr"
 cat > "$out/game-wrapper.sh" <<'WRAPPER'
 #!/usr/bin/env bash

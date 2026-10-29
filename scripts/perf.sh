@@ -64,7 +64,8 @@ if [[ "$REMOTE_RUN" == 0 ]]; then
     remote mkdir -p "$SOURCE/OpenGothic" "$SOURCE/scripts/bench" "$REMOTE_OUT"
     remote df -h "$REMOTE_HOME"
     rsync -a --delete --exclude='/build*/' --exclude='.git' "$ROOT/OpenGothic/" "$RYZEN_HOST:$SOURCE/OpenGothic/"
-    rsync -a "$ROOT/scripts/perf.sh" "$ROOT/scripts/perf_report.py" "$RYZEN_HOST:$SOURCE/scripts/"
+    rsync -a "$ROOT/scripts/perf.sh" "$ROOT/scripts/perf_report.py" "$ROOT/scripts/base-ensure.sh" "$RYZEN_HOST:$SOURCE/scripts/"
+    rsync -a --delete --exclude='/build*/' "$ROOT/scripts/convert/" "$RYZEN_HOST:$SOURCE/scripts/convert/"
     rsync -a "$ROOT"/scripts/bench/perf-*.bench "$RYZEN_HOST:$SOURCE/scripts/bench/"
     REMOTE_ENV=(PERF_REMOTE=1 "PERF_WINDOW=$PERF_WINDOW" "PERF_REPEAT=$PERF_REPEAT" "PERF_WAIT=$PERF_WAIT"
       "PERF_ARGS=$PERF_ARGS" "PERF_ENV=$PERF_ENV" "PERF_COMMIT=$PERF_COMMIT" "PERF_DIRTY=$PERF_DIRTY"
@@ -196,6 +197,8 @@ for key in settings:
             raise SystemExit(f'perf: {key} must be 0 or 1')
         ini.append(f'{key.lower()}={env[key]}')
 (leaf / 'run/Gothic.ini').write_text('\n'.join(ini) + '\n')
+subprocess.run(['bash', str(Path(scenario).parents[1] / 'base-ensure.sh'), env['GOTHIC_DIR']],
+               env=env, check=True)
 command = [env['GAME_BIN'], '-g', env['GOTHIC_DIR'], '-g2', '-window', '-devmode',
            '-nomenu', '-nointro', '-w', 'NEWWORLD.ZEN', *meta['game_args']]
 meta.update(place=place, repeat=int(repeat), command=command)

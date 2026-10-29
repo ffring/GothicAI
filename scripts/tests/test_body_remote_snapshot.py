@@ -168,6 +168,7 @@ def prepare(remote, task_name, suite):
         (source / directory).mkdir(parents=True)
     (source / "scripts" / suite).write_text(SUITE)
     (source / "scripts/snapshot_dependency.py").write_text('VERSION = "v1"\n')
+    shutil.copy2(SCRIPTS / "base-ensure.sh", source / "scripts/base-ensure.sh")
     (source / "scripts/body_trajectory_report.py").write_text(REPORT)
     (source / "OpenGothic/native.cpp").write_text("v1")
     for name in ("body-api.bench", "body-observe.bench", "body-melee.bench", "body-headless-senses.bench", "body-arena.bench"):
@@ -184,6 +185,13 @@ def prepare(remote, task_name, suite):
         path = build / "opengothic" / name
         path.write_text("v1")
         path.chmod(0o755)
+    executable(build / "opengothic/content-convert", '''import json
+import os
+from pathlib import Path
+import sys
+(Path(os.environ["FAKE_REMOTE"]) / "base-ensure-call.json").write_text(json.dumps({
+    "version": "v1", "args": sys.argv[1:], "queued": os.environ.get("FAKE_GQ_JOB")}))
+''')
     (build / "libOpenGothic.a").write_text("v1")
     return task
 
@@ -407,6 +415,8 @@ Path("log.txt").write_text("test runner\\n")
         stdout, stderr = process.communicate(timeout=5)
         assert process.returncode == 0, stdout + stderr + (out / "launcher.log").read_text()
         assert set(json.loads((out / "baseline-result.json").read_text()).values()) == {"v1"}
+        assert json.loads((remote["root"] / "base-ensure-call.json").read_text()) == {
+            "version": "v1", "args": ["resolve", str(task / "assets")], "queued": "1"}
         assert set(json.loads((out / "report-result.json").read_text()).values()) == {"v1"}
         manifest = json.loads((out / "manifest.json").read_text())
         assert manifest["scenario_sha256"] == manifest["config_sha256"] == hashlib.sha256(b"v1").hexdigest()

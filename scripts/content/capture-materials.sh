@@ -14,6 +14,8 @@ if [[ "${1:-}" == --remote ]]; then
   [[ "$RUN" =~ ^[a-zA-Z0-9_-]+$ ]] || { echo 'invalid capture run id' >&2; exit 2; }
   CAPTURE="$TASK/inputs/$RUN"
   export MATERIAL_CAPTURE_ROOT="$CAPTURE/runtime"
+  GAME_BIN="$MATERIAL_CAPTURE_ROOT/build/opengothic/Gothic2Notr" \
+    bash "$(dirname "$0")/base-ensure.sh" "$HOME/gothic-ai/game"
   OUT="$TASK/runs/$RUN"
   mkdir -p "$OUT"
   count=0
@@ -133,7 +135,7 @@ else:
 scenario.write_text('\n'.join(lines) + '\n')
 PY
 cp "$TOOLS/gpu-nvidia.py" "$TOOLS/discard-ffmpeg.sh" "$STAGING/tools/"
-cp "$ROOT/scripts/content/capture-materials.sh" "$STAGING/tools/"
+cp "$ROOT/scripts/content/capture-materials.sh" "$ROOT/scripts/base-ensure.sh" "$STAGING/tools/"
 cp "$SAVE" "$STAGING/save_slot_1.sav"
 TASK="$(ssh -T -o BatchMode=yes -o ConnectTimeout=10 "$HOST" 'printf "%s" "$HOME/gothic-ai/material-bakeoff"')"
 # Quoting is done by bash printf %q, never by interpolating a JSON string.
@@ -154,6 +156,7 @@ mkdir "$task/inputs/$run"
 runtime="$task/inputs/$run/runtime"
 mkdir -p "$runtime/build/opengothic" "$runtime/tools" "$runtime/hd-textures/textures" "$task/inputs/$run/content"
 cp -p "$bin" "$runtime/build/opengothic/Gothic2Notr"
+cp -p "$(dirname "$bin")/content-convert" "$runtime/build/opengothic/content-convert"
 printf '%s\n' "$digest" >"$runtime/build/source.sha256"
 SH
 RUNTIME="$TASK/inputs/$RUN/runtime"

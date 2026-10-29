@@ -73,6 +73,8 @@ if [[ "${1:-}" == --remote ]]; then
   [[ "$TASK" == "$HOME/gothic-ai/texture-intent" && "$RUN" =~ ^[a-zA-Z0-9_-]+$ && "$EXPECTED" =~ ^[0-9]+$ ]] || exit 2
   INPUT="$TASK/inputs/$RUN"
   export INTENT_CAPTURE_ROOT="$INPUT/runtime"
+  GAME_BIN="$INTENT_CAPTURE_ROOT/build/opengothic/Gothic2Notr" \
+    bash "$(dirname "$0")/base-ensure.sh" "$HOME/gothic-ai/game"
   OUT="$TASK/runs/$RUN"
   [[ ! -e "$OUT" ]] || { echo "capture output already exists: $OUT" >&2; exit 2; }
   mkdir -p "$OUT"
@@ -131,7 +133,7 @@ fi
 [[ -r "$SAVE" ]] || { echo "missing standard bench save: $SAVE" >&2; exit 2; }
 cp "$SAVE" "$STAGING/save_slot_1.sav"
 TOOLS="$ROOT/reports/render-features/2026-10-18/tools"
-cp "$ROOT/scripts/content/capture-intent.sh" "$STAGING/tools/"
+cp "$ROOT/scripts/content/capture-intent.sh" "$ROOT/scripts/base-ensure.sh" "$STAGING/tools/"
 cp "$TOOLS/gpu-nvidia.py" "$TOOLS/discard-ffmpeg.sh" "$STAGING/tools/"
 python3 - "$TOOLS/run-ryzen.sh" "$STAGING/tools/run-ryzen.sh" <<'PY'
 from pathlib import Path
@@ -183,6 +185,7 @@ mkdir "$task/inputs/$run"
 runtime="$task/inputs/$run/runtime"
 mkdir -p "$runtime/build/opengothic" "$runtime/tools" "$runtime/hd-textures/textures" "$task/inputs/$run/content"
 cp -p "$bin" "$runtime/build/opengothic/Gothic2Notr"
+cp -p "$(dirname "$bin")/content-convert" "$runtime/build/opengothic/content-convert"
 printf '%s\n' "$digest" >"$runtime/build/source.sha256"
 SH
 RUNTIME="$TASK/inputs/$RUN/runtime"

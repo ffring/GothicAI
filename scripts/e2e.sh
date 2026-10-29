@@ -739,6 +739,7 @@ if [[ "${GOTHIC_TTS_RECORD:-0}" == 1 ]]; then
     "TEMPEST_AUDIO_LOOPBACK=48000" "TEMPEST_WINDOW_SIZE=320x180"
     "OPENGOTHIC_BENCH_ENCODER=-c:v libx264 -preset ultrafast -crf 28")
 fi
+env "${GAME_ENV[@]}" GAME_BIN="$GAME_BIN" bash "$ROOT/scripts/base-ensure.sh" "$GOTHIC_DIR"
 (cd "$LOG_DIR" && exec env "${GAME_ENV[@]}" "$GAME_BIN" -g "$GOTHIC_DIR" "${START_ARGS[@]}" -devmode) >"$LOG_DIR/game.log" 2>&1 &
 GAME=$!
 printf '%s\n' "$GAME" >"$LOG_DIR/game.pid"

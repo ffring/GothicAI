@@ -32,6 +32,7 @@ def test_waiting_captures_do_not_share_runtime(tmp_path):
     script = repo / "scripts/content/capture-materials.sh"
     script.parent.mkdir(parents=True)
     shutil.copy2(SCRIPT, script)
+    shutil.copy2(SCRIPT.parents[1] / "base-ensure.sh", repo / "scripts/base-ensure.sh")
     engine_source = repo / "OpenGothic/source.cpp"
     engine_source.parent.mkdir()
     engine_source.write_bytes(b"fixture engine source")
@@ -100,6 +101,7 @@ raise SystemExit(subprocess.call(command))
         for variant in ("A", "B"):
             # B changes every previously shared input while A waits for admission.
             executable(binary, f"OPENGOTHIC_CONTENT engine-{variant}\n")
+            executable(binary.with_name("content-convert"), "#!/bin/sh\nexit 0\n")
             (tools / "gpu-nvidia.py").write_text(f"gpu-{variant}")
             (tools / "discard-ffmpeg.sh").write_text(f"ffmpeg-{variant}")
             save = tmp_path / f"save-{variant}.sav"
