@@ -1497,6 +1497,27 @@ void Npc::updateMeleeBenchBlade() {
     }
   }
 
+std::optional<std::pair<uint32_t,uint32_t>> Npc::meleeFinishStroke(const std::vector<float>& height) {
+  // the longest drop of the tip
+  uint32_t top = 0, from = 0, to = 0;
+  for(uint32_t frame=1;frame<height.size();++frame) {
+    if(height[frame]>height[top])
+      top = frame;
+    if(height[top]-height[frame]>height[from]-height[to])
+      from = top, to = frame;
+    }
+  // the stroke ends where the tip comes to rest at its lowest, not on the later settling,
+  // and starts at the top it falls from, not on a higher point before the swing round the side
+  while(to>from+1 && height[to-1]-height[to]<=2.f)
+    --to;
+  from = to;
+  while(from>0 && height[from-1]>=height[from]-1.f)
+    --from;
+  if(to<=from+1)
+    return std::nullopt;
+  return std::make_pair(from,to);
+  }
+
 void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, bool normalY) const {
   if(!meleeShadow)
     meleeShadow = std::make_unique<MeleeShadow>();
@@ -1556,13 +1577,29 @@ void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, 
   if(mode==WeaponState::Fist && left<pose.boneCount())
     sampleSpeeds(left,leftSpeed,leftReach);
   // The original's finishing move (T_1HSFINISH, T_2HSFINISH) has no optimal frame: it kills by
-  // script. As a chop at one lying, its blow is where the blade is fastest.
+  // script. As a chop at one lying, its blow is the stroke down: the longest drop of the blade's
+  // tip, from the top of the swing to the ground. The blade is fastest earlier, swung round the
+  // side over the head, and a window placed there closed with a short axe still above the body.
+  std::optional<std::pair<uint32_t,uint32_t>> stroke;
+  if(optimal.empty() && mode!=WeaponState::Fist && !seq->reverse) {
+    std::vector<float> height(data.numFrames,0);
+    for(uint32_t frame=0;frame<data.numFrames;++frame) {
+      Matrix4x4 matrix;
+      if(!pose.animRelative(seq->name,float(frame)/float(data.numFrames-1),size_t(-1),right,matrix))
+        throw std::runtime_error("Cannot sample melee shadow finishing stroke");
+      Vec3 tip(-length,0,0);
+      matrix.project(tip);
+      height[frame] = tip.y;
+      }
+    stroke = meleeFinishStroke(height);
+    }
   if(optimal.empty())
-    optimal.push_back(uint32_t(std::max_element(rightSpeed.begin(),rightSpeed.end())-rightSpeed.begin()));
+    optimal.push_back(stroke ? uint32_t(std::max_element(rightSpeed.begin()+stroke->first,rightSpeed.begin()+stroke->second+1)-rightSpeed.begin()) :
+                               uint32_t(std::max_element(rightSpeed.begin(),rightSpeed.end())-rightSpeed.begin()));
   for(uint32_t index=0;index<optimal.size();++index) {
     const auto opt = optimal[index];
-    const uint32_t lo = index==0 ? 0 : (optimal[index-1]+opt)/2+1;
-    const uint32_t hi = index+1==optimal.size() ? data.numFrames-1 : (opt+optimal[index+1])/2;
+    const uint32_t lo = stroke ? stroke->first : index==0 ? 0 : (optimal[index-1]+opt)/2+1;
+    const uint32_t hi = stroke ? stroke->second : index+1==optimal.size() ? data.numFrames-1 : (opt+optimal[index+1])/2;
     const float rpeak = *std::max_element(rightSpeed.begin()+lo,rightSpeed.begin()+hi+1);
     const float lpeak = *std::max_element(leftSpeed.begin()+lo,leftSpeed.begin()+hi+1);
     const bool useLeft = mode==WeaponState::Fist && lpeak>rpeak;
@@ -1574,6 +1611,10 @@ void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, 
       --first;
     while(last<hi && speeds[last+1]>=threshold)
       ++last;
+    if(stroke) {
+      first = stroke->first;
+      last = stroke->second;
+      }
     // A low-speed optimal frame still has its own adjacent sample interval.
     if(first==last) {
       first = first>lo ? first-1 : first;

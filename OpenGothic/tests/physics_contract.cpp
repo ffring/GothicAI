@@ -4119,6 +4119,20 @@ namespace {
     require(!Npc::canAccumulateMeleePosture(true,false,true,false),"a knockdown must not accumulate another knockdown");
     require(!Npc::canAccumulateMeleePosture(true,false,false,true),"death or unconsciousness must retain the old path");
 
+    {
+      // Tip heights of T_2HSFINISH and T_1HSFINISH at 30 fps, sampled in the game: the stroke down
+      // starts at the top it falls from (not the higher wind-up before the swing round the side)
+      // and ends where the tip rests at its lowest; the axe's old window closed 56 cm above the ground.
+      const std::vector<float> axe = {164,177,184,188,188,185,182,184,185,177,163,160,175,156,118,109,131,158,
+                                      183,193,193,184,168,146,122,99,78,56,38,25,20,19,19,18,19,19};
+      const std::vector<float> sword = {28,38,56,91,140,182,200,205,207,198,181,178,197,169,115,103,130,162,
+                                        189,198,196,185,164,136,109,86,62,39,21,8,3,3,2,3,3,4};
+      const auto axeStroke = Npc::meleeFinishStroke(axe), swordStroke = Npc::meleeFinishStroke(sword);
+      require(axeStroke && axeStroke->first==19 && axeStroke->second==30,"the axe's chop must be windowed on its stroke down");
+      require(swordStroke && swordStroke->first==19 && swordStroke->second==30,"a higher wind-up must not start the chop's stroke");
+      require(!Npc::meleeFinishStroke({50,50,50,50}),"a blade that never drops has no stroke");
+      }
+
     require(FightAlgo::resolveDownTactics(true,true,false,false,true)==FightAlgo::MV_MOVE,
             "a distant lying target must be approached");
     require(FightAlgo::resolveDownTactics(true,true,false,true,true)==FightAlgo::MV_ATTACK,
