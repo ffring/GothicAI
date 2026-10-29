@@ -751,6 +751,14 @@ async def test_the_answer_waits_for_the_askers_turn_under_way_and_keeps_catch_li
         w = World(link, fake, llm)
         for t in range(AT_8, AT_8 + 21, 5):
             w.seen.saw(hero_seen_by(HILDA, "Хильда", t))
+        turns: list[dict] = []
+        event_turn = w.dialogue.event_turn
+
+        def recorded(npc, cue, *args, **kw):
+            turns.append({"npc": npc, **kw})
+            return event_turn(npc, cue, *args, **kw)
+
+        w.dialogue.event_turn = recorded  # type: ignore[method-assign]
         conv = w.dialogue.open(LOBART, "Лобарт")
         await w.dialogue.say_as_player(LOBART, LIE)
         await _until(lambda: conv.reply is None or conv.reply.done(), 5)
@@ -766,6 +774,9 @@ async def test_the_answer_waits_for_the_askers_turn_under_way_and_keeps_catch_li
     assert reaction > next(i for i, cue in enumerate(cues) if "Малет кричит" in cue)
     assert "catch_lie" in [x.name for x in llm.calls[reaction][2]]
     assert "вызовом catch_lie" in cues[reaction]
+    # it must decide by a call: catch_lie, or set_intent if it believes him
+    assert {"npc": LOBART, "tools": ("catch_lie", "set_intent"), "kind": "witness", "act": True} in turns
+    assert not w.witnesses.asking(LOBART)  # the answer is in: group.py may give him answer turns again
     assert w.chronicle.facts("caught")[0]["witness"] == HILDA
 
 

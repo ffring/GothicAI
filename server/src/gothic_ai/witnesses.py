@@ -501,6 +501,10 @@ class Witnesses:
             return None
         return self._shown.get(npc, {}).get(sid)
 
+    def asking(self, npc: str) -> bool:
+        """It waits for the answer to its question (group.py gives it no answer turn meanwhile)."""
+        return npc.upper() in self._asking
+
     def any(self, npc: str) -> bool:
         """Whether a witness told it of seeing the hero (catch_lie is offered then)."""
         return any(t.about == HERO and (t.told or t.cover or self._deeds(t)) for t in self.testimonies(npc))
@@ -664,8 +668,8 @@ class Witnesses:
             f"[Ответ: {self._told(t)}. Улики — строки С1… в «Что тебе рассказали о герое другие». "
             "Противоречит ли это "
             f"словам героя «{t.said}» и что сказать ему — решай сам. Решишь, что он солгал, — уличи его "
-            "вызовом catch_lie (seen — строка С…): одно слово «соврал» его не уличает, без вызова ты это "
-            "не запомнишь.]"
+            "вызовом catch_lie (seen — строка С…), веришь ему — set_intent: одно слово «соврал» его не "
+            "уличает.]"
         )
         if t.about != HERO:
             cue = (
@@ -682,9 +686,8 @@ class Witnesses:
             tools = ("set_intent",) if t.gate_claim else (
                 "catch_lie" if t.about == HERO else "blame", "set_intent"
             )
-            self.dialogue.event_turn(
-                npc, cue, tools=tools, kind="witness"
-            )
+            # it must decide by a call: in 2026-10-29 live runs Lobart said «врёшь» and called nothing
+            self.dialogue.event_turn(npc, cue, tools=tools, kind="witness", act=True)
         else:
             self.dialogue.note(npc, cue.strip("[]"))
 
