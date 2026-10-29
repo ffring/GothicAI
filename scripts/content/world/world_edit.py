@@ -149,9 +149,9 @@ def run_blender(job: dict, work: Path, gui: bool = False) -> None:
 
 def describe_edits(scripts: list[str], allowed: dict, meta: dict) -> list[dict]:
     """The registry's list of edits: script, its SHA-256, PARAMETERS, data files with SHA-256, declared edges."""
-    declared = {}
+    declared: dict[str, set] = {}
     for e in allowed['edits']:
-        declared[e['edit']] = declared.get(e['edit'], 0) + len(e['edges'])
+        declared.setdefault(e['edit'], set()).update(chunk_glb.edge_keys_from_floats(e['edges']))
     out = []
     for script in scripts:
         row = {'script': script, 'sha256': sha256(REPO / script)}
@@ -160,7 +160,7 @@ def describe_edits(scripts: list[str], allowed: dict, meta: dict) -> list[dict]:
             row['parameters'] = meta_row['parameters']
         if meta_row.get('inputs'):
             row['inputs'] = [{'path': p, 'sha256': sha256(REPO / p)} for p in meta_row['inputs']]
-        row['open_edges_declared'] = declared.get(script, 0)
+        row['open_edges_declared'] = len(declared.get(script, ()))
         out.append(row)
     return out
 
