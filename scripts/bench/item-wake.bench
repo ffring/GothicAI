@@ -1,0 +1,31 @@
+# Native physical contacts with retired dry Items beyond CharacterVirtual range.
+# Run twice with ITEM_WAKE=0 and ITEM_WAKE=1; compare item_wake_checkpoint events.
+seed 73013
+cheat god
+set time 12 0
+movable on
+living on
+destruction on
+overlay off
+view full
+item-wake setup ragdoll
+wait 500
+item-wake begin
+wait 6000
+item-wake checkpoint
+item-wake setup debris
+wait 500
+item-wake begin
+wait 6000
+item-wake checkpoint
+item-wake setup item
+wait 500
+item-wake begin
+wait 6000
+item-wake checkpoint
+item-wake setup pile
+wait 500
+item-wake begin
+wait 12000
+item-wake checkpoint
+physics stats

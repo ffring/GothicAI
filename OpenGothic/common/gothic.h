@@ -57,6 +57,7 @@ class Gothic final {
       bool destruction   = false;
       bool buoyancy      = true;
       bool cloth         = true;
+      bool itemWake      = true;
       bool characterVirtual = false;
       bool npcCharacterVirtual = false;
       bool monsterCharacterVirtual = false;

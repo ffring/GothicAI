@@ -119,6 +119,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "destruction",         1);
   defaults->set("GAME", "buoyancy",            1);
   defaults->set("GAME", "cloth",               1);
+  defaults->set("GAME", "item_wake",           1);
   defaults->set("GAME", "character_virtual",   1);
   defaults->set("GAME", "npc_character_virtual",1);
   defaults->set("GAME", "monster_character_virtual",1);
@@ -887,6 +888,7 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","destruction")!=0,
     settingsGetI("GAME","buoyancy")!=0,
     settingsGetI("GAME","cloth")!=0,
+    settingsGetI("GAME","item_wake")!=0,
     settingsGetI("GAME","character_virtual")!=0,
     settingsGetI("GAME","npc_character_virtual")!=0,
     settingsGetI("GAME","monster_character_virtual")!=0,
@@ -911,6 +913,7 @@ void Gothic::setupSettings() {
     activeWorld->physic()->setDestructionEnabled(physicsFlagsCache.destruction);
     activeWorld->physic()->setBuoyancyEnabled(physicsFlagsCache.buoyancy);
     activeWorld->physic()->setClothEnabled(physicsFlagsCache.cloth);
+    activeWorld->physic()->setItemWakeEnabled(physicsFlagsCache.itemWake);
     }
 
   const float soundVolume = settingsSoundVolume();

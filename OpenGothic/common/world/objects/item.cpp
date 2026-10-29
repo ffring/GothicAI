@@ -230,6 +230,18 @@ void Item::setPhysicsDisable() {
   world.invalidateVobIndex();
   }
 
+bool Item::wakePhysics() {
+  const bool missing = !isDynamic();
+  if(missing) {
+    setPhysicsEnable(world);
+    if(!isDynamic())
+      return false;
+    physic.restorePhysics(transform(),true);
+    }
+  physic.retainForItemWake();
+  return missing;
+  }
+
 void Item::setPhysicsEnable(const MeshObjects::Mesh& view) {
   if(view.nodesCount()==0)
     return;
