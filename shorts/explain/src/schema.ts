@@ -75,6 +75,21 @@ const Fan = z.object({
   until: z.number().optional(),
 });
 
+// one thing carried across the cut into this beat (parts/Carry.tsx): a line of a tag of the beat before (or a point
+// of its picture with `text`) flies along an arc to `to`, the next thing in the chain lands where it lands. It
+// starts on the cut (`at` 0) and takes `dur`, by default as long as its travel asks (parts/timing.ts travelDur)
+const Carry = z.object({
+  from: z.union([Point, z.object({tag: z.number().int().nonnegative(), line: z.number().int().nonnegative().default(0)})]),
+  to: Point, // frame pixels of this beat: where the centre of the text lands
+  text: z.string().optional(), // what flies; default: the tag line's text as it stands at the cut
+  at: z.number().nonnegative().default(0),
+  dur: z.number().positive().optional(),
+  size: z.number().positive().optional(), // the font size on landing; it flies from the tag's 52
+  color: z.string().optional(), // default: the tag line's colour
+  arc: z.number().default(0.15), // the bend as a share of the distance; positive bows upward, 0 is straight
+  until: z.number().optional(),
+});
+
 const CurveKind = z.enum(['exe', 'opengothic']);
 
 const DiceChart = z.object({
@@ -321,6 +336,7 @@ const Beat = z.object({
   hp: Hp.optional(),
   hpBottom: Hp.optional(),
   chart: Chart.optional(),
+  carry: Carry.optional(),
 });
 
 const Word = z.object({text: z.string(), start: z.number(), end: z.number()});
@@ -349,6 +365,20 @@ export const Plan = z.object({
     .optional(),
 }).superRefine((plan, ctx) => {
   plan.beats.forEach((beat, bi) => {
+    const carry = beat.carry;
+    if (carry) {
+      const issue = (path: (string | number)[], message: string) =>
+        ctx.addIssue({code: z.ZodIssueCode.custom, path: ['beats', bi, 'carry', ...path], message});
+      const prev = plan.beats[bi - 1];
+      if (!prev) issue([], 'carry: нужен бит перед этим');
+      else if (!Array.isArray(carry.from)) {
+        const tag = prev.tags[carry.from.tag];
+        if (!tag) issue(['from', 'tag'], 'нет такой метки в бите перед этим');
+        else if (!tag.lines[carry.from.line]) issue(['from', 'line'], 'нет такой строки в метке');
+        else if (tag.lines[carry.from.line].at >= prev.dur) issue(['from', 'line'], 'строка метки не успевает появиться до склейки');
+        else if (tag.until !== undefined && tag.until < prev.dur) issue(['from', 'tag'], 'метка уходит до склейки');
+      } else if (carry.text === undefined) issue(['text'], 'carry из точки: нужен text');
+    }
     const chart = beat.chart;
     if (!chart) return;
     const issue = (path: (string | number)[], message: string) =>
@@ -426,6 +456,7 @@ export type TicksCard = z.infer<typeof TicksCard>;
 export type GridCard = z.infer<typeof GridCard>;
 export type FlowCard = z.infer<typeof FlowCard>;
 export type TagT = z.infer<typeof Tag>;
+export type CarryT = z.infer<typeof Carry>;
 export type StrokeT = z.infer<typeof Stroke>;
 export type FanT = z.infer<typeof Fan>;
 export type PathT = z.infer<typeof PathLine>;

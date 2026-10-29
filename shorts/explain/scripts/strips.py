@@ -24,6 +24,23 @@ WIDTH = 180  # of one frame in a strip
 # a beat's transition without `dur`, as src/parts/timing.ts: what travels across the frame takes longer
 TRANSITION_DUR = {"fade": 0.35, "flash": 0.35, "zoom": 0.35, "slide": 0.5, "wipe": 0.5}
 FOLLOW = 0.06  # MOTION.follow: a tag's box after its pin, a text's words after their band
+TAG_LINE_ABOVE_PIN = 72  # a one-line tag's text centre over its pin (parts/carryMath.ts), near enough for a strip
+
+
+def travel_dur(px: float) -> float:
+    """timing.ts travelDur: a carry's flight, longer the farther it goes."""
+    return min(0.6, max(0.35, 0.35 * math.sqrt(px / 300)))
+
+
+def carry_dur(beat: dict, prev: dict) -> float:
+    c = beat["carry"]
+    if "dur" in c:
+        return c["dur"]
+    src = c["from"]
+    if isinstance(src, dict):
+        tag = prev["tags"][src["tag"]]
+        src = (tag["x"], tag["y"] - TAG_LINE_ABOVE_PIN)
+    return travel_dur(math.dist(src, c["to"]))
 PAD_BEFORE = 0.1
 PAD_AFTER = 0.15
 
@@ -40,7 +57,7 @@ def events(plan: dict) -> list[tuple[float, float, str, str]]:
     """(start, duration, beat id, what) in seconds of the short, for every planned movement."""
     out = []
     t = 0.0
-    for beat in plan["beats"]:
+    for bi, beat in enumerate(plan["beats"]):
         bid = beat["id"]
         enter = beat.get("enter")
         if enter:
@@ -57,6 +74,8 @@ def events(plan: dict) -> list[tuple[float, float, str, str]]:
         if beat.get("zoom"):
             z = beat["zoom"]
             out.append((t + z["at"], z["dur"], bid, "zoom"))
+        if beat.get("carry") and bi > 0:
+            out.append((t + beat["carry"].get("at", 0), carry_dur(beat, plan["beats"][bi - 1]), bid, "carry"))
         if beat.get("freeze") is not None:
             out.append((t + beat["freeze"], 0.0, bid, "freeze"))
         t += beat["dur"]

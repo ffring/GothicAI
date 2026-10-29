@@ -14,6 +14,7 @@ import {
 import './fonts';
 import {BrandSting, STING_FRAMES} from './Brand';
 import {Captions} from './parts/Captions';
+import {Carry} from './parts/Carry';
 import {BarsView, DotsView, FormulaView, StatsView} from './parts/Cards';
 import {BigView, CellsView, LineView, TableView} from './parts/WideCards';
 import {ConeView, FlowView, GridView, RaysView, TicksView} from './parts/WideDiagrams';
@@ -96,8 +97,11 @@ const HalfLabel: React.FC<{text: string; top: number; color: string; left?: numb
   </div>
 );
 
-const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number; game: number; stem?: Plan['stem']}> = ({
+const BeatView: React.FC<{
+  beat: Beat; next?: Beat; start: number; spans: Spans; duck: number; game: number; stem?: Plan['stem'];
+}> = ({
   beat,
+  next,
   start,
   spans,
   duck,
@@ -178,7 +182,8 @@ const BeatView: React.FC<{beat: Beat; start: number; spans: Spans; duck: number;
           insetTop={beat.labels ? (wide ? 122 : 106) : 32} />
       )}
       <Sight strokes={beat.strokes} fans={beat.fans} paths={beat.paths} scope={beat.id.replace(/[^\w-]/g, '_')} />
-      <Tags tags={beat.tags} />
+      <Tags tags={beat.tags} carried={next?.carry && !Array.isArray(next.carry.from)
+        ? {...next.carry.from, at: beat.dur} : undefined} />
       <Texts texts={beat.texts} />
     </AbsoluteFill>
   );
@@ -245,8 +250,14 @@ export const Explainer: React.FC<Plan> = (plan) => {
           return (
             <Sequence key={beat.id} from={from} durationInFrames={Math.round((t + tail(next)) * fps) - from} name={beat.id}>
               <Moving beat={beat} next={next}>
-                <BeatView beat={beat} start={start} spans={spans} duck={plan.duck} game={plan.gameVolume} stem={plan.stem} />
+                <BeatView beat={beat} next={next} start={start} spans={spans} duck={plan.duck} game={plan.gameVolume} stem={plan.stem} />
               </Moving>
+              {beat.carry && i > 0 && (
+                // over the beat's own entrance, so it does not move with the frame coming in; out with the beat
+                <Moving beat={{...beat, enter: undefined}} next={next}>
+                  <Carry beat={beat} prev={plan.beats[i - 1]} />
+                </Moving>
+              )}
             </Sequence>
           );
         })}

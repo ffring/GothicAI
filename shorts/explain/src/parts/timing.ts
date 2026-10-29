@@ -17,3 +17,8 @@ export const TRANSITION_DUR = {
   slide: MOTION.frame,
   wipe: MOTION.frame,
 } as const;
+
+// a thing flying across the frame (a carry): longer the farther it goes, about +40% for twice the distance, from
+// `base` for a short hop (300 px) up to `slow` across the frame
+export const TRAVEL_PX = 300;
+export const travelDur = (px: number) => Math.min(MOTION.slow, Math.max(MOTION.base, MOTION.base * Math.sqrt(px / TRAVEL_PX)));
