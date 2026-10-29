@@ -808,19 +808,14 @@ DynamicWorld::DynamicWorld(World* owner, const asset::WorldMesh& worldMesh, cons
     world->setItemWakeCallback([owner](const Tempest::Vec3& min,const Tempest::Vec3& max,size_t budget) {
       const auto center=(min+max)*.5f;
       const float radius=(max-min).length()*.5f;
-      std::vector<::Item*> nearby;
+      size_t created=0;
       owner->detectItem(center,radius,[&](::Item& item) {
         const auto p=item.position();
-        if(p.x>=min.x && p.x<=max.x && p.y>=min.y && p.y<=max.y && p.z>=min.z && p.z<=max.z)
-          nearby.push_back(&item);
+        if(p.x<min.x || p.x>max.x || p.y<min.y || p.y>max.y || p.z<min.z || p.z>max.z)
+          return;
+        if(item.isDynamic() || created<budget)
+          created+=item.wakePhysics() ? 1 : 0;
         });
-      size_t created=0;
-      // Body creation invalidates the item query index. Finish detection first.
-      for(auto* item:nearby) {
-        if(!item->isDynamic() && created==budget)
-          continue;
-        created+=item->wakePhysics() ? 1 : 0;
-        }
       return created;
       });
     world->setItemHitCallback([owner](::Item& itm, asset::MaterialGroup mat, float impulse, float mass) {

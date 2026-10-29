@@ -5834,8 +5834,8 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
   for(unsigned i=0;i<count;++i) {
     const auto symbol=world.script().findSymbolIndex(names[i%4]);
     if(symbol==size_t(-1)) {arenaAbort("item wake native item instance unavailable");return;}
-    const auto offset=name=="pile" ? Vec3((float(i%10)-4.5f)*40.f,0,(float(i/10)-2.f)*50.f) :
-                                    Vec3((float(i%2)-.5f)*48.f,0,(float(i/2)-.5f)*48.f);
+    const auto offset=name=="pile" ? Vec3((float(i%5)-2.f)*120.f,0,(float(i/5)-4.5f)*40.f) :
+                                    Vec3(0,0,(float(i)-1.5f)*48.f);
     const auto at=bench.itemWakeCenter+offset;
     const auto floor=world.physic()->landRay(at+Vec3(0,100,0),300);
     if(!floor.hasCol || floor.n.y<.98f) {arenaAbort("item wake item lacks level native support");return;}
@@ -5853,16 +5853,23 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
     const auto displacement=Vec3(0,floor.v.y-native->collisionBounds[0].y+.05f,0);
     const auto resting=item->position()+displacement;
     item->setPosition(resting.x,resting.y,resting.z);
-    item->setPhysicsDisable();
     Bench::ItemWakeSample sample;sample.item=item;sample.name=names[i%4];sample.initial=resting;
     sample.collisionBounds[0]=native->collisionBounds[0]+displacement;
     sample.collisionBounds[1]=native->collisionBounds[1]+displacement;
     sample.boundsOrigin=resting;sample.floorY=floor.v.y;
+    for(size_t other=0;other<bench.itemWakeItems.size();++other) {
+      const auto* a=sample.collisionBounds;const auto* b=bench.itemWakeItems[other].collisionBounds;
+      if(a[0].x<b[1].x && b[0].x<a[1].x && a[0].y<b[1].y && b[0].y<a[1].y &&
+         a[0].z<b[1].z && b[0].z<a[1].z) {
+        arenaAbort("item wake initial native AABBs overlap: "+std::to_string(other)+" and "+std::to_string(i));return;
+        }
+      }
+    item->setPhysicsDisable();
     bench.itemWakeItems.push_back(sample);
     }
   event("item_wake_setup","\"case\":"+jsonStr(name)+",\"enabled\":"+
     (Gothic::settingsGetI("GAME","item_wake")?"true":"false")+
-    ",\"items\":"+std::to_string(count)+",\"hero_distance_cm\":"+
+    ",\"items\":"+std::to_string(count)+",\"initial_item_overlaps\":0,\"hero_distance_cm\":"+
     ragdollNumber((player.position()-bench.itemWakeCenter).length()));
   }
 

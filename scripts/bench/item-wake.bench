@@ -23,9 +23,12 @@ wait 500
 item-wake begin
 wait 6000
 item-wake checkpoint
+# 30 FPS capture with half-speed game time samples one 60 Hz physics step.
+slowmo 2
 item-wake setup pile
 wait 500
 item-wake begin
 wait 12000
 item-wake checkpoint
+slowmo 1
 physics stats
