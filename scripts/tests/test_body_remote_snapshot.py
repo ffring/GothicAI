@@ -159,6 +159,25 @@ sys.exit(subprocess.run(args[index + 4:], cwd=cwd, env=env).returncode)
     return {"root": tmp_path, "home": home, "env": env}
 
 
+@pytest.mark.parametrize("script,args,output", [
+    ("physics-e2e-remote.sh", ["run", "bullet", "missing-converter"], "runs"),
+    ("physics-e2e-front-diagnostic.sh", ["missing-converter"], "diagnostics"),
+])
+def test_physics_requires_converter_before_run_setup(remote, script, args, output):
+    binary = remote["home"] / "gothic-ai/physics-stage1/bullet/reference/opengothic/Gothic2Notr"
+    binary.parent.mkdir(parents=True)
+    executable(binary, "raise SystemExit('unexpected game launch')\n")
+    executable(remote["root"] / "bin/flock", "raise SystemExit(97)\n")
+    result = subprocess.run(["bash", str(SCRIPTS / script), *args],
+                            env=remote["env"], stdin=subprocess.DEVNULL,
+                            text=True, capture_output=True, timeout=5)
+    assert result.returncode == 1
+    assert f"Missing converter: {binary.with_name('content-convert')}" in result.stderr
+    assert "Rebuild the engine" in result.stderr
+    assert not (remote["home"] / "gothic-ai/physics-stage1/e2e" / output / "missing-converter").exists()
+    assert not (remote["home"] / "gothic-ai/body-simulation.lock").exists()
+
+
 def prepare(remote, task_name, suite):
     if task_name in ("body-arena", "body"):
         prepare(remote, "body-api", "body_api_suite.py")

@@ -12,6 +12,9 @@ ssh -o BatchMode=yes "$HOST" "bash -s -- $quoted_run" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 root="$HOME/gothic-ai/physics-stage1/e2e"
+binary="$HOME/gothic-ai/physics-stage1/bullet/reference/opengothic/Gothic2Notr"
+converter="$(dirname "$binary")/content-convert"
+[[ -x "$converter" ]] || { echo "Missing converter: $converter. Rebuild the engine before running physics e2e." >&2; exit 1; }
 out="$root/diagnostics/$1"
 base="$root/fixtures/eef46cfc3b5d3ca24c75033d3aefed80387407212cfbabb9047bba0b0dc290ff/source"
 [[ -d "$base" ]] || base="$root/source"
@@ -76,11 +79,9 @@ import socket
 with socket.socket() as probe:
     probe.bind(("0.0.0.0", 47927))
 PY
+cp "$binary" "$out/reference/Gothic2Notr"
+cp "$converter" "$out/"
 binary="$out/reference/Gothic2Notr"
-cp "$HOME/gothic-ai/physics-stage1/bullet/reference/opengothic/Gothic2Notr" "$binary"
-if [[ -x "$HOME/gothic-ai/physics-stage1/bullet/reference/opengothic/content-convert" ]]; then
-  cp "$HOME/gothic-ai/physics-stage1/bullet/reference/opengothic/content-convert" "$out/"
-fi
 sha256sum "$binary" > "$out/binary.sha256"
 sha256sum "$HOME/gothic-ai/body-baseline/reference/save_slot_1.sav" > "$out/save.sha256"
 sha256sum "$out/source/server/uv.lock" > "$out/server-lock.sha256"

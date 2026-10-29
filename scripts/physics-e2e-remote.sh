@@ -182,6 +182,8 @@ fi
 [[ -z "$7" ]] || binary="$7"
 out="$root/runs/$run"
 [[ -x "$binary" ]] || { echo "Build $binary first" >&2; exit 1; }
+converter="$(dirname "$binary")/content-convert"
+[[ -x "$converter" ]] || { echo "Missing converter: $converter. Rebuild the engine before running physics e2e." >&2; exit 1; }
 [[ ! -e "$out" ]] || { echo 'Choose a fresh run name' >&2; exit 1; }
 exec 9>"$HOME/gothic-ai/body-simulation.lock"
 flock -w "$lock_wait" 9 || { echo 'Another simulation owns the shared lock' >&2; exit 1; }
@@ -207,9 +209,7 @@ mkdir -p "$out"
 printf '%s\n' "$binary" > "$out/source-binary.txt"
 mkdir -p "$out/reference"
 cp "$binary" "$out/reference/Gothic2Notr"
-if [[ -x "$(dirname "$binary")/content-convert" ]]; then
-  cp "$(dirname "$binary")/content-convert" "$out/"
-fi
+cp "$converter" "$out/"
 binary="$out/reference/Gothic2Notr"
 cat > "$out/game-wrapper.sh" <<'WRAPPER'
 #!/usr/bin/env bash
