@@ -25,3 +25,4 @@ pos
 release forward
 wait 100
 shot vob-layer-contact
+wait 100
