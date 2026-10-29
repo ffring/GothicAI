@@ -68,6 +68,9 @@ HEARD_S = 3.0  # ...and once he has stopped, this long for it to be recognized (
 RESERVED_S = 5.0  # the addressee's seat waits this long for its turn (it may never come: he turned away)
 POLL_S = 0.05
 ANSWER = "answer"  # the turn of one another npc spoke to
+# a witness's answer to the one who asked it (witnesses.py): that one reacts on a turn of its own, with
+# catch_lie (2026-10-29: an answer turn, set_intent only, took Lobart's «соврал», and the catch never came)
+TESTIMONY = "testimony"
 ANSWER_CUE = (
     "[{name} обращается к тебе. Ответь тому, кто к тебе обращается, а не герою — коротко, как сказал бы ты.]"
 )
@@ -185,7 +188,7 @@ class GroupTalk:
                 heard = "тебе" if other == to else whom
                 self.dialogue.heard(other, e.name if e is not None else other, name, text, heard)
         self._spawn(self._heard(npc, name, text, whom, told))
-        if to is not None and called == to:
+        if to is not None and called == to and kind != TESTIMONY:
             self._give_word(npc, name, to)
 
     def participants(self) -> dict[str, Member]:
