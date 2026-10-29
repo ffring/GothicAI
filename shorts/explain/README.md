@@ -113,6 +113,16 @@ the original plan gains and ducking for Studio and drafts; they do not run the p
   or the publication's edge fades moves; `flash` is a hard cut with a white flash. `zoom` eases in and out
   (cubic) unless `ease: "linear"`, for a slow push across a whole beat. The footage of a beat followed by a
   transition must run `dur` past the beat's end;
+- `carry` on a beat (not the first) carries one thing across the cut into it, so the two beats share it instead
+  of swapping pictures: `from: {tag, line}` takes a line of a tag of the beat before (its text, colour and the
+  place `Tags` draws it on the cut, computed with `measureText`; the line leaves its box at the cut), or
+  `from: [x, y]` with `text` a point of that picture. It flies along an arc (`arc`, 0.15 of the distance,
+  upward; 0 is straight) to `to` (frame pixels of this beat), in-out, growing to `size`, starting `at` (0: on
+  the cut) and taking `dur`, by default as long as its travel asks: 0.35 s up to 300 px, about +40 % for twice
+  the distance, at most 0.6 s (`travelDur` in `timing.ts`). Onto a card its dark pill fades out on the way.
+  It is drawn over the beat's own entrance, so it does not move with a `slide` or `wipe` coming in, and stays
+  until `until` or the beat's end. Take `to` from a still of the card; whatever the carried thing causes (a
+  point, a marker, a counter) appears on its landing, at `at` plus its duration (the strips report gives it);
 - `split` keeps the same field names in either format: `src`/`from` are the first half, `srcBottom`/`fromBottom`
   the second; `labels` and `labelColors` follow that order. In `wide`, labels sit at the top of each half and
   a thin vertical line divides the pictures. Footage and stills cover their frame or half-frame;
@@ -451,6 +461,10 @@ Remotion is under the [Remotion License](https://www.remotion.pro/license): free
 up to three people. The versions are pinned in `package.json`.
 
 ## План и журнал
+
+- 2026-10-29: `carry`, a thing carried across a cut (the shared actor of motion-video-kit and onetake): a tag
+  line or a point of the beat before flies along an arc into the next beat, its duration by travel.
+  `parts/Carry.tsx` draws it, `parts/carryMath.ts` finds the tag line and the arc; `strips.py` gives it a strip.
 
 - 2026-10-29: follow-through and duration by travel, from the review of third-party motion skills
   (animation-principles, motion-video-kit, Disney rules): a tag's box follows its pin and a text's words follow
