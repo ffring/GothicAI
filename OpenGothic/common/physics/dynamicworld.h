@@ -57,7 +57,7 @@ struct MeleeBladeContact final {
   float bladeFraction = 0, speedCmS = 0, surfaceAngleDeg = 0;
   bool world = false;
   bool stopsSwing = false;
-  bool windup = false;     // a wall touched in the wind-up: passed, as the original passes it
+  bool windup = false;     // a wall touched in the wind-up (before the blow, or rising): passed
   uint64_t step = 0;
   };
 

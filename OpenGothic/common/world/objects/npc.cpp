@@ -2325,6 +2325,7 @@ void Npc::finishMeleeShadowSwing(bool remove, bool discard) {
     if(contact.world) {
       worldHit |= entry.result=="wall";
       world = "{\"point_cm\":" + point + ",\"normal\":" + meleeShadowPoint(contact.normal) +
+              ",\"velocity_cm_s\":" + meleeShadowPoint(contact.velocityCmS) +
               ",\"material\":" + std::to_string(int(contact.material)) +
               ",\"result\":" + TestBench::bodyJson(entry.result) + ",\"step\":" + std::to_string(contact.step) + "}";
       if(worldContacts.size()>1)

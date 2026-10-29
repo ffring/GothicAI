@@ -2447,9 +2447,11 @@ void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
             contact.normal={normal.GetX(),normal.GetY(),normal.GetZ()};
             contact.stopsSwing=normal.GetY()<blade.walkableCos || layer==DynamicWorld::C_Item ||
                                layer==DynamicWorld::C_Fragment || layer==DynamicWorld::C_MovableVob;
-            // the wind-up passes a wall, the blow stops at it
+            // the wind-up passes a wall, the blow stops at it: before the blow begins, or while
+            // the blade still rises (an axe lifted over the head into a beam or a sign board)
             const double at=blade.poseTimeMs+duration*(first+(last-first)*contacts.back().time);
-            if(contact.stopsSwing && at<blade.strikeBeginMs) {
+            const bool rising=contact.velocityCmS.y>.5f*contact.speedCmS;
+            if(contact.stopsSwing && (at<blade.strikeBeginMs || rising)) {
               contact.stopsSwing=false;
               contact.windup=true;
               }
