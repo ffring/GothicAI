@@ -962,6 +962,7 @@ ai status
 ai attach <npc>
 ai detach [npc]
 ai dialogs <npc>
+ai skip <npc>      # its important dialogs count as told: it does not stop the hero
 ```
 
 
