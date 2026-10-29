@@ -349,6 +349,7 @@
 | [`navigation.md`](navigation.md) | обучаемая навигация NPC; [популяционный стенд на CV и независимый набор 60 пар](../reports/navigation/2026-10-18-rl-env/README.md); [PPO-цикл и проверка нормали CV](../reports/navigation/2026-10-18-ppo/README.md) | сейчас + план, идёт |
 | [`npc-body-control-plan.md`](npc-body-control-plan.md) | боевое тело: план этапов 1–10 | сейчас + план |
 | `npc-body-*.md` (`api`, `arena`, `bc`, `combat-contract`, `headless-runner`, `observations`, `trajectories`) | боевое тело по этапам | справочники |
+| [Инструменты оценки баланса арены](npc-body-arena.md#как-работает-сейчас) | `body_sim_bench.py --weapon 1h\|2h --variants vanilla,posture-on`, `melee_balance_report.py`, `melee-balance-remote.sh`; [короткая матрица](../reports/melee-physics/2026-10-29-balance/README.md) | инструменты и проверка, без выводов о балансе |
 | [`npc-body-combat-gate.md`](npc-body-combat-gate.md), [`npc-body-stage8-stop-report.md`](npc-body-stage8-stop-report.md) | этап 8: журнал до допуска и остановка 14.10 | исторические: gate пройден 15.10, итог в плане |
 | [`npc-scheduler.md`](npc-scheduler.md) | планировщик решений NPC | проект от 11.10; шаги 1–3 сделаны, планировщик работает в `brain/` |
 | [`launcher.md`](launcher.md) | окно лаунчера Mac и Ryzen (Linux) | этапы L1–L3 сделаны; сборка и установка с Mac, трей GNOME, общий сеанс ядра через `gq`; П19б — подготовка перед запуском и `gothic-launcher prepare [DIR]` |

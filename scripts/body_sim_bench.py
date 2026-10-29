@@ -22,6 +22,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from body_observe_suite import ObserverRunner  # noqa: E402
+from body_arena_env import preserve_melee_journals  # noqa: E402
 
 
 # Training mode of the RL collector: culls, frozen world, isolated arena randomness.
@@ -202,18 +203,21 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
     os.environ.pop("OPENGOTHIC_MELEE_BENCH", None)
     os.environ.update(env or {})
     cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
-    runner = ObserverRunner(variant)
+    runner = None if args.policy_only else ObserverRunner(variant)
     episodes = []
     try:
-        runner.request({"cmd": "status"})
-        for index in range(args.episodes):
+        if runner is not None:
+            runner.request({"cmd": "status"})
+        for index in range(0 if args.policy_only else args.episodes):
             folder = output/f"episode-{index}"
             folder.mkdir()
             begin = time.monotonic()
+            arena_config = {"scenario": "native_duel", "seed": args.seed+index,
+                            "side": index % 2, "distance_cm": 400, "timeout_ms": args.timeout_ms}
+            if args.weapon == "2h":
+                arena_config["weapon"] = args.weapon
             reset = runner.request({"cmd": "reset", "scenario": str(args.scenario), "output_dir": str(folder),
-                                    "mode": "lockstep", "arena": {"scenario": "native_duel", "seed": args.seed+index,
-                                                                  "side": index % 2, "distance_cm": 400,
-                                                                  "timeout_ms": args.timeout_ms}})
+                                    "mode": "lockstep", "arena": arena_config})
             if not watch:
                 runner.request({"cmd": "body_watch", "enabled": False}, allow_error=True)
             elif visibility:
@@ -240,12 +244,15 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
                 episodes[-1].update(seed=args.seed+index, side=index % 2, reason=arena["reason"],
                                     actors=[{key: actor[key] for key in ("hp", "hp_max", "received_damage", "outgoing_damage", "blocked_hits")}
                                             for actor in arena["actors"]], damage=damage_rows(folder))
+                preserve_melee_journals(output/"run", folder, args.seed+index)
             print(f"{name} ep{index}: reset {reset_s:.2f}s (runner {native_reset_ms} ms, warmup {warmup_ms} game ms) steps {steps} {wall*1000/max(1,steps):.2f} ms/tick "
                   f"speed {game/1000/max(wall,1e-9):.2f}x {arena.get('outcome')}", flush=True)
-        sample = runner.sample()
-        runner.request({"cmd": "close"})
+        sample = runner.sample() if runner is not None else {}
+        if runner is not None:
+            runner.request({"cmd": "close"})
     finally:
-        runner.terminate()
+        if runner is not None:
+            runner.terminate()
     cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
     runner_cpu_s = (cpu_after.ru_utime+cpu_after.ru_stime)-(cpu_before.ru_utime+cpu_before.ru_stime)
     ticks = sum(e["steps"] for e in episodes)
@@ -254,13 +261,17 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             "environment": dict(env or {}), "runner_peak_rss": sample.get("VmHWM"),
             "runner_cpu_s_including_resets": runner_cpu_s,
             "episodes": episodes, "ms_per_tick": wall*1000/max(1, ticks),
-            "reset_s_mean": sum(e["reset_s"] for e in episodes)/len(episodes),
+            "reset_s_mean": sum(e["reset_s"] for e in episodes)/len(episodes) if episodes else 0,
             "game_speed": sum(e["game_ms"] for e in episodes)/1000/max(wall, 1e-9)}
+    if args.weapon == "2h":
+        result["weapon"] = args.weapon
     if args.checkpoint is not None:
         result["policy"] = run_policy(variant, output)
     if melee_posture is not None:
-        result["posture"] = {"native": add_posture_metrics(episodes, output/"run/melee-posture.jsonl",
-                                                            enabled=melee_posture == 1)}
+        result["posture"] = {}
+        if episodes:
+            result["posture"]["native"] = add_posture_metrics(episodes, output/"run/melee-posture.jsonl",
+                                                             enabled=melee_posture == 1)
         if "policy" in result:
             result["posture"]["policy"] = add_posture_metrics(result["policy"]["episodes"],
                                                                output/"policy/worker-00/run/melee-posture.jsonl",
@@ -284,7 +295,14 @@ def main() -> int:
     parser.add_argument("--variants", default="gate,lean,pool-lean,pool-gate")
     parser.add_argument("--checkpoint", type=Path,
                         help="also measure the existing deterministic P30 collector, one duel runner at a time")
+    parser.add_argument("--weapon", choices=("1h", "2h"), default="1h")
+    parser.add_argument("--policy-only", action="store_true",
+                        help="run only the checkpoint series (one series per queue job)")
     args = parser.parse_args()
+    if args.checkpoint is not None and args.weapon == "2h":
+        parser.error("--checkpoint requires --weapon 1h: P30 was trained only with one-handed weapons")
+    if args.policy_only and args.checkpoint is None:
+        parser.error("--policy-only requires --checkpoint")
     for name in ("runner", "assets", "save", "reference", "scenario", "output", "checkpoint"):
         value = getattr(args, name)
         if value is not None:
@@ -319,7 +337,9 @@ def main() -> int:
              "posture-off": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
                                  env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1, melee_posture=0),
              "posture-on": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
-                                env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1, melee_posture=1)}
+                                env=FROZEN_ENV, melee_shadow=1, melee_physics_hits=1, melee_posture=1),
+             "vanilla": dict(serial=True, trace=True, watch=True, visibility=False, extra=("--fork-reset", "--fork-prefix"),
+                             env=FROZEN_ENV, melee_shadow=0, melee_physics_hits=0, melee_posture=0)}
     results = [run_variant(args, name, **table[name]) for name in args.variants.split(",")]
     comparison = shadow_comparison(results)
     (args.output/"bench.json").write_text(json.dumps({"schema_version": 1, "kind": "body_sim_bench", "quality_credit": False,

@@ -178,7 +178,7 @@ class SharedBackend:
 def run_worker(process: int, options: dict, envs: list[int], tasks) -> dict:
     os.environ.update(TRAINING_ENV)
     import numpy
-    from body_arena_env import LEASE_KEYS, ArenaInfrastructureError
+    from body_arena_env import LEASE_KEYS, ArenaInfrastructureError, preserve_melee_journals
     from body_policy_suite import PolicyArenaRunner, PolicyEpisodeEnv
     from gothic_body.runtime import PolicyRuntime, TorchBackend, actor_identity
     from body_fast_features import pack_features as fast_pack_features
@@ -405,7 +405,9 @@ def run_worker(process: int, options: dict, envs: list[int], tasks) -> dict:
                 summaries.append(summary)
                 with (output/"episodes.jsonl").open("a") as stream_file:
                     stream_file.write(json.dumps(summary)+"\n")
-                if not options["keep_journals"]:
+                if options["keep_journals"]:
+                    preserve_melee_journals(output / "run", episode_dir, seed)
+                else:
                     shutil.rmtree(episode_dir, ignore_errors=True)
             runner.call({"cmd": "close"})
         finally:
