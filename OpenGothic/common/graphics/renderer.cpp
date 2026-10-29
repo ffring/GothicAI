@@ -143,8 +143,12 @@ void Renderer::setupSettings() {
   if(settings.moonSize<=1)
     settings.moonSize = 400;
 
-  settings.vidResIndex = Gothic::settingsGetF("INTERNAL","vidResIndex");
-  settings.aaEnabled   = (Gothic::options().aaPreset>0) && (settings.vidResIndex==0);
+  settings.vidResIndex    = Gothic::settingsGetF("INTERNAL","vidResIndex");
+  // MetalFX spatial upscaling of reduced internal resolution; Lanczos in the tonemapping pass otherwise
+  settings.spatialUpscale = Gothic::settingsGetI("INTERNAL","spatialUpscale")!=0 &&
+                            Resources::device().properties().spatialUpscale;
+  // CMAA2 runs at internal resolution, so it needs a same-size target: native or the upscaler input
+  settings.aaEnabled      = (Gothic::options().aaPreset>0) && (settings.vidResIndex==0 || settings.spatialUpscale);
 
   // direct lighting
   if(settings.rtsmEnabled)
@@ -387,6 +391,14 @@ void Renderer::resetViewport(Tempest::Size res, Tempest::Size fullRes) {
     cmaa2.deferredBlendItemListHeads = device.image2d(TextureFormat::R32U, (w + 1) / 2, (h + 1) / 2);
     cmaa2.controlBuffer              = device.ssbo(nullptr, 5 * sizeof(uint32_t));
     cmaa2.indirectBuffer             = device.ssbo(nullptr, sizeof(DispatchIndirectCommand) + sizeof(DrawIndirectCommand));
+    }
+
+  if(settings.spatialUpscale && res!=fullRes) {
+    upscale.input  = device.attachment(TextureFormat::RGBA8, w, h);
+    upscale.output = device.image2d(TextureFormat::RGBA8, uint32_t(fullRes.w), uint32_t(fullRes.h));
+    } else {
+    upscale.input  = Attachment();
+    upscale.output = StorageImage();
     }
 
   zbuffer = device.zbuffer(zBufferFormat,w,h);
@@ -750,13 +762,16 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
     drawFog(cmd, wview);
     }
 
+  auto& tonemapTarget = upscale.input.isEmpty() ? result : upscale.input;
   if(settings.aaEnabled) {
     cmd.setDebugMarker("CMAA2 & Tonemapping");
-    drawCMAA2(result, cmd, wview);
+    drawCMAA2(tonemapTarget, cmd, wview);
     } else {
     cmd.setDebugMarker("Tonemapping");
-    drawTonemapping(result, cmd, wview);
+    drawTonemapping(tonemapTarget, cmd, wview);
     }
+  if(!upscale.input.isEmpty())
+    drawUpscale(result, cmd);
   postTiming.finish();
 
   //drawRayQueryDbg(cmd, wview);
@@ -782,13 +797,14 @@ void Renderer::drawTonemapping(Attachment& result, Encoder<CommandBuffer>& cmd, 
   if(mul>0)
     p.mul = mul;
 
-  auto& pso = (settings.vidResIndex==0) ? shaders.tonemapping : shaders.tonemappingUpscale;
+  const bool native = (result.size()==sceneLinear.size());
+  auto& pso = native ? shaders.tonemapping : shaders.tonemappingUpscale;
   cmd.setFramebuffer({ {result, Tempest::Discard, Tempest::Preserve} });
   cmd.setBinding(0, wview.sceneGlobals().uboGlobal[SceneGlobals::V_Main]);
   // This Lanczos implementation pairs adjacent weights using bilinear sampling.
   // Keep nearest sampling at native resolution.
-  const auto sampler = settings.vidResIndex==0 ? Sampler::nearest(ClampMode::ClampToEdge) :
-                                               Sampler::bilinear(ClampMode::ClampToEdge);
+  const auto sampler = native ? Sampler::nearest(ClampMode::ClampToEdge) :
+                                Sampler::bilinear(ClampMode::ClampToEdge);
   cmd.setBinding(1, sceneLinear, sampler);
   cmd.setPushData(p);
   cmd.setPipeline(pso);
@@ -837,7 +853,8 @@ void Renderer::drawCMAA2(Tempest::Attachment& result, Tempest::Encoder<Tempest::
   if(mul>0)
     p.mul = mul;
 
-  auto& psoTone = (settings.vidResIndex==0) ? shaders.tonemapping : shaders.tonemappingUpscale;
+  // CMAA2 writes pixels in sceneLinear coordinates: result must have the same size
+  auto& psoTone = shaders.tonemapping;
   cmd.setFramebuffer({{result, Tempest::Discard, Tempest::Preserve}});
   cmd.setBinding(0, wview.sceneGlobals().uboGlobal[SceneGlobals::V_Main]);
   cmd.setBinding(1, sceneLinear, Sampler::nearest());
@@ -855,6 +872,17 @@ void Renderer::drawCMAA2(Tempest::Attachment& result, Tempest::Encoder<Tempest::
   cmd.setPushData(&p, sizeof(p));
   cmd.setPipeline(shaders.cmaa2DeferredColorApply2x2);
   cmd.drawIndirect(cmaa2.indirectBuffer, 3*sizeof(uint32_t));
+  }
+
+void Renderer::drawUpscale(Tempest::Attachment& result, Tempest::Encoder<Tempest::CommandBuffer>& cmd) {
+  cmd.setFramebuffer({});
+  cmd.setDebugMarker("Upscale");
+  cmd.upscale(upscale.input, upscale.output);
+
+  cmd.setFramebuffer({{result, Tempest::Discard, Tempest::Preserve}});
+  cmd.setBinding(0, upscale.output, Sampler::nearest());
+  cmd.setPipeline(shaders.copy);
+  cmd.draw(nullptr, 0, 3);
   }
 
 void Renderer::drawFog(Tempest::Encoder<Tempest::CommandBuffer>& cmd, const WorldView& wview) {
