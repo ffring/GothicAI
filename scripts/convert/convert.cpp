@@ -51,7 +51,7 @@
 // The output is Gothic content: it never goes into git.
 
 #include "baseimport.h"
-#include "basestore.h"
+#include "basestoreimport.h"
 #include "videodata.h"
 #include "sha256.h"
 #include "asset/fromzenkit.h"
@@ -846,7 +846,7 @@ int main(int argc, char** argv) {
         if((explicitBase && *explicitBase) || !fingerprint || !*fingerprint)
           for(const auto& archive:BaseImport::runtimeArchives(args[1]))
             if(!archive.mod) archives.emplace_back(archive.name,archive.size);
-        base=BaseStore::resolve(args[1],archives,progress);
+        base=BaseStore::ensure(args[1],archives,progress);
         if(base.publication.valid()) base.publication.get();
         selected=base.path;
         }
@@ -856,7 +856,7 @@ int main(int argc, char** argv) {
         std::cerr << "video base: disabled by OPENGOTHIC_VIDEOS_FINGERPRINT\n";
       else if(args[0]!="resolve-base") {
         try {
-          auto videos=BaseStore::resolveVideos(args[1],progress);
+          auto videos=BaseStore::ensureVideos(args[1],progress);
           if(videos.publication.valid()) videos.publication.get();
           if(args[0]=="resolve-videos") selected=videos.path;
           else if(VideoData::readIndex(videos.path).empty())

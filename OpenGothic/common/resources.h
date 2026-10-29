@@ -49,7 +49,7 @@ class Resources final {
     // Simulation resources: base geometry, skeletons and animation data,
     // without constructing a graphics or audio device.
     Resources();
-    explicit Resources(Tempest::Device& device, BaseImport::Progress progress = {});
+    explicit Resources(Tempest::Device& device);
     ~Resources();
 
     static void zenkitLog(zenkit::LogLevel level, const char* component, const char* message);
@@ -246,7 +246,6 @@ class Resources final {
     std::shared_ptr<VideoBase> videoBase;
     std::mutex videoStartSync;
     std::thread videoWorker;
-    BaseImport::Progress baseProgress;
     static std::filesystem::path baseDir();
     void indexBaseContent();
     static std::filesystem::path baseModelFile(std::string_view name);
