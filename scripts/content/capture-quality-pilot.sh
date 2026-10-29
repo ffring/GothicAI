@@ -108,6 +108,8 @@ if not count:
 PYGAME
     game="$task/game"
   fi
+  GAME_BIN="$HOME/$BUILD_TASK/build/opengothic/Gothic2Notr" \
+    bash "$(dirname "$0")/base-ensure.sh" "$game"
   rc=0
   (cd "$out/run" && timeout 240 "$HOME/$BUILD_TASK/build/opengothic/Gothic2Notr" \
     -g "$game" -g2 -window -devmode -save 1) >"$out/game.log" 2>&1 || rc=$?
@@ -128,11 +130,12 @@ if [[ "${1:-}" == --compose || "${1:-}" == --compose-2 || "${1:-}" == --compose-
 fi
 
 if [[ "${1:-}" == --prepare ]]; then
-  ssh -T "$HOST" "mkdir -p ~/$BUILD_TASK/source/OpenGothic ~/$TASK/scripts ~/$TASK/content/original/materials ~/$TASK/runs; df -h ~"
+  ssh -T "$HOST" "mkdir -p ~/$BUILD_TASK/source/OpenGothic ~/$BUILD_TASK/source/scripts ~/$TASK/scripts ~/$TASK/content/original/materials ~/$TASK/runs; df -h ~"
   rsync -a --delete --exclude=.git --exclude=build --exclude=__pycache__ \
     "$ROOT/OpenGothic/" "$HOST:$BUILD_TASK/source/OpenGothic/"
+  rsync -a --delete --exclude='/build*/' "$ROOT/scripts/convert/" "$HOST:$BUILD_TASK/source/scripts/convert/"
   rsync -a "$ROOT/scripts/content/capture-quality-pilot.sh" "$ROOT/scripts/content/capture-quality-pilot.py" \
-    "$ROOT/scripts/content/$SCENARIO" "$HOST:$TASK/scripts/"
+    "$ROOT/scripts/base-ensure.sh" "$ROOT/scripts/content/$SCENARIO" "$HOST:$TASK/scripts/"
   common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
   rsync -a "${SAVE:-$(dirname "$common")/save_slot_1.sav}" "$HOST:$TASK/save_slot_1.sav"
   GQ_OWNER="${TASK##*/}" "$ROOT/scripts/gq" --host "$HOST" run --class quick \
@@ -147,7 +150,7 @@ if [[ "${1:-}" == --scenario ]]; then
   common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
   rsync -a "${SAVE:-$(dirname "$common")/save_slot_1.sav}" "$HOST:$TASK/save_slot_1.sav"
   rsync -a "$ROOT/scripts/content/capture-quality-pilot.sh" "$ROOT/scripts/content/capture-quality-pilot.py" \
-    "$ROOT/scripts/content/$SCENARIO" "$HOST:$TASK/scripts/"
+    "$ROOT/scripts/base-ensure.sh" "$ROOT/scripts/content/$SCENARIO" "$HOST:$TASK/scripts/"
   exit 0
 fi
 
@@ -165,7 +168,7 @@ if [[ "${1:-}" == --capture ]]; then
     ssh -T "$HOST" "printf '{}\\n' >~/$TASK/content/original/materials/materials.json"
   fi
   rsync -a "$ROOT/scripts/content/capture-quality-pilot.sh" "$ROOT/scripts/content/capture-quality-pilot.py" \
-    "$ROOT/scripts/content/$SCENARIO" "$HOST:$TASK/scripts/"
+    "$ROOT/scripts/base-ensure.sh" "$ROOT/scripts/content/$SCENARIO" "$HOST:$TASK/scripts/"
   rc=0
   GQ_OWNER="${TASK##*/}" "$ROOT/scripts/gq" --host "$HOST" run --class quick \
     --threads 4 --mem 5G --gpu-mem 4G --display --display-exclusive \

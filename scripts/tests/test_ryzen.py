@@ -793,6 +793,10 @@ if '--build' in args:
                       '    assert Path(sys.argv[0]).with_name("runtime.dat").read_text() == "runtime"\n')
     output.chmod(0o755)
     output.with_name('runtime.dat').write_text('runtime')
+    if target == 'Gothic2Notr':
+        converter = output.with_name('content-convert')
+        converter.write_text('#!/bin/sh\nexit 0\n')
+        converter.chmod(0o755)
 else:
     build = Path(args[args.index('-B') + 1])
     build.mkdir(parents=True, exist_ok=True)
@@ -831,6 +835,10 @@ Path(os.environ['TEST_GAME_PATH']).write_text(str(Path(sys.argv[0]).resolve()))
 assert Path(sys.argv[0]).with_name('runtime.dat').read_text() == 'runtime'
 ''')
         binary.chmod(0o755)
+        if kind == 'engine':
+            converter = entry / 'content-convert'
+            converter.write_text('#!/bin/sh\nexit 0\n')
+            converter.chmod(0o755)
         (entry / 'runtime.dat').write_text(marker)
         timestamp = time.time() - age
         os.utime(entry, (timestamp, timestamp))
@@ -1066,6 +1074,7 @@ build_storygraph "$TEST_ROOT/worktree" "'''+self.story_digest+r'''"
                             (self.cache / 'storygraph' / self.story_digest, 'storygraph')]:
             self.assertTrue(os.access(entry / name, os.X_OK))
         self.assertEqual((self.cache / self.engine_digest / 'runtime.dat').read_text(), 'runtime')
+        self.assertTrue(os.access(self.cache / self.engine_digest / 'content-convert', os.X_OK))
         self.assertTrue((self.state / 'build/opengothic/Gothic2Notr').exists())
         self.assertTrue((self.state / 'storygraph-build/storygraph').exists())
 
@@ -1110,6 +1119,9 @@ remote_run e2e "$TEST_ROOT/worktree" run
             binary = source / 'Gothic2Notr'
             binary.write_bytes((name.encode() + b'\n') * 200000)
             binary.chmod(0o755)
+            converter = source / 'content-convert'
+            converter.write_text('#!/bin/sh\nexit 0\n')
+            converter.chmod(0o755)
             (source / 'runtime.dat').write_text(name)
         processes = []
         try:
