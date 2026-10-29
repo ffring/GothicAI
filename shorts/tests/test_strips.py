@@ -80,3 +80,21 @@ def test_slow_footage_is_not_still():
             f[k] = 80 + (i % 2)
         frames.append(bytes(f))
     assert strips.stills(frames, 30, strips.CAPTION_BAND["tall"], least=1) == []
+
+
+def test_hold_push_follows_timing_ts():
+    assert strips.hold_push({"kind": "card", "dur": 2}) == (0.0, 1.03)
+    assert strips.hold_push({"kind": "card", "dur": 10}) == (0.0, 1.05)
+    assert strips.hold_push({"kind": "footage", "dur": 5, "freeze": 1}) == (1, 1.04)
+    assert strips.hold_push({"kind": "footage", "dur": 8}) is None
+    assert strips.hold_push({"kind": "card", "dur": 6, "push": 0}) is None
+    assert strips.hold_push({"kind": "still", "dur": 6, "zoom": {"at": 0}}) is None
+    assert notes({"id": "a", "dur": 4, "push": 0.01}) == ["push"]
+
+
+def test_a_hold_names_its_beats_and_their_push():
+    p = plan({"id": "foot", "kind": "footage", "dur": 4}, {"id": "card", "kind": "card", "dur": 6},
+             {"id": "quiet", "kind": "card", "dur": 6, "push": 0})
+    assert strips.hold_beats(p, 5, 9) == ("card", "yes")
+    assert strips.hold_beats(p, 3, 6) == ("foot, card", "part")
+    assert strips.hold_beats(p, 11, 15) == ("quiet", "no")
