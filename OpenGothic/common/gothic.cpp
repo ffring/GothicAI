@@ -91,8 +91,10 @@ Gothic::Gothic() {
 
   baseIniFile.reset(new IniFile(nestedPath({u"system",u"Gothic.ini"},Dir::FT_File)));
   iniFile    .reset(new IniFile(u"Gothic.ini"));
+  // 75 % where MetalFX upscales it (as sharp as full resolution, +15-20 FPS on an M1 Pro), full resolution elsewhere
+  const int vidResDefault = (Resources::hasGraphicsDevice() && Resources::device().properties().spatialUpscale) ? 1 : 0;
   if(!iniFile->has("INTERNAL", "vidResIndex")) {
-    iniFile->set("INTERNAL", "vidResIndex", 0); // full-res
+    iniFile->set("INTERNAL", "vidResIndex", vidResDefault);
     }
   {
   defaults.reset(new IniFile());
@@ -145,7 +147,7 @@ Gothic::Gothic() {
   defaults->set("ENGINE",       "zEnvMappingEnabled", 1); // reflections
   defaults->set("ENGINE",       "zCloudShadowScale", Resources::hasGraphicsDevice() &&
                 Resources::device().properties().type==Tempest::DeviceType::Discrete); // ssao
-  defaults->set("INTERNAL",     "vidResIndex", 0); // full-res
+  defaults->set("INTERNAL",     "vidResIndex", vidResDefault);
   defaults->set("INTERNAL",     "halfResAoFog", 1); // SSAO and fog shadows at half resolution
   defaults->set("INTERNAL",     "spatialUpscale", 1); // MetalFX for reduced resolution, where supported
 
