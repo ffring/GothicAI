@@ -157,7 +157,7 @@ meta = dict(git_commit=os.environ.get('PERF_COMMIT'),
             backend='Metal' if platform.system() == 'Darwin' else 'Vulkan',
             host='ryzen' if os.environ.get('PERF_REMOTE') == '1' else platform.node(),
             repeats=int(os.environ['PERF_REPEAT']), places=sys.argv[2:],
-            vid_res=int(os.environ.get('PERF_VID_RES', '0')), ini=os.environ.get('PERF_INI', ''),
+            vid_res=(lambda v: v if v == 'game' else int(v))(os.environ.get('PERF_VID_RES', '0')), ini=os.environ.get('PERF_INI', ''),
             game_args=args, game_env=extra_env)
 (out / 'metadata.json').write_text(json.dumps(meta, indent=2) + '\n')
 PY
@@ -196,11 +196,12 @@ env.update(TEMPEST_BACKGROUND='0', TEMPEST_WINDOW_SIZE=meta['requested_window'],
            OPENGOTHIC_BENCH_VISIBLE='1',
            OPENGOTHIC_BENCH=scenario, OPENGOTHIC_BENCH_OUT=str(leaf),
            OPENGOTHIC_FRAME_PROFILE=str(leaf / 'frameprofile.csv'))
-# PERF_VID_RES picks the internal render resolution: 0 full, 1 = 75 %, 2 = 50 % of the drawable.
+# PERF_VID_RES picks the internal render resolution: 0 full, 1 = 75 %, 2 = 50 % of the drawable,
+# game = no key, the game's own default for this backend.
 vid_res = env.get('PERF_VID_RES', '0')
-if vid_res not in ('0', '1', '2'):
-    raise SystemExit('perf: PERF_VID_RES must be 0, 1 or 2')
-ini = {'ENGINE': {'zMaxFps': '0'}, 'INTERNAL': {'vidResIndex': vid_res},
+if vid_res not in ('0', '1', '2', 'game'):
+    raise SystemExit('perf: PERF_VID_RES must be 0, 1, 2 or game')
+ini = {'ENGINE': {'zMaxFps': '0'}, 'INTERNAL': {} if vid_res == 'game' else {'vidResIndex': vid_res},
        'SOUND': {'soundVolume': '1', 'musicVolume': '1', 'musicEnabled': '1', 'worldSounds': '1'},
        'GAME': {}}
 # The same initial GAME switches accepted by bench.sh, before world loading.
