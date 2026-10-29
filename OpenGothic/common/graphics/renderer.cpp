@@ -115,6 +115,9 @@ Renderer::~Renderer() {
 void Renderer::setupSettings() {
   settings.zEnvMappingEnabled = Gothic::settingsGetI("ENGINE","zEnvMappingEnabled")!=0;
   settings.zCloudShadowScale  = Gothic::settingsGetI("ENGINE","zCloudShadowScale") !=0;
+  // SSAO and the fog shadow mask cost ~15 ms a frame at 3456x1918 on an M1 Pro (docs/performance.md):
+  // both are traced at half resolution, the depth-aware blur brings SSAO back to full size
+  settings.halfResAoFog       = Gothic::settingsGetI("INTERNAL","halfResAoFog")!=0;
   settings.zFogRadial         = Gothic::settingsGetI("RENDERER_D3D","zFogRadial")!=0;
   {
     // wind
@@ -1964,10 +1967,11 @@ void Renderer::prepareSSAO(Encoder<CommandBuffer>& cmd, WorldView& wview) {
   push.projInv.inverse();
 
   auto& device = Resources::device();
-  if(ssao.ssaoBuf.size()!=zbuffer.size()) {
+  const auto aoSize = effectResolution();
+  if(ssao.ssaoBuf.size()!=aoSize || ssao.ssaoBlur.size()!=zbuffer.size()) {
     Resources::recycle(std::move(ssao.ssaoBuf));
     Resources::recycle(std::move(ssao.ssaoBlur));
-    ssao.ssaoBuf  = device.image2d(ssao.aoFormat, zbuffer.size());
+    ssao.ssaoBuf  = device.image2d(ssao.aoFormat, aoSize);
     ssao.ssaoBlur = device.image2d(ssao.aoFormat, zbuffer.size());
     }
 
@@ -1985,10 +1989,10 @@ void Renderer::prepareSSAO(Encoder<CommandBuffer>& cmd, WorldView& wview) {
 
   cmd.setBinding(0, ssao.ssaoBlur);
   cmd.setBinding(1, wview.sceneGlobals().uboGlobal[SceneGlobals::V_Main]);
-  cmd.setBinding(2, ssao.ssaoBuf);
+  cmd.setBinding(2, ssao.ssaoBuf, Sampler::bilinear(ClampMode::ClampToEdge));
   cmd.setBinding(3, zbuffer, Sampler::nearest(ClampMode::ClampToEdge));
   cmd.setPipeline(shaders.ssaoBlur);
-  cmd.dispatchThreads(ssao.ssaoBuf.size());
+  cmd.dispatchThreads(ssao.ssaoBlur.size());
   }
 
 void Renderer::prepareFog(Encoder<Tempest::CommandBuffer>& cmd, WorldView& wview) {
@@ -2027,7 +2031,7 @@ void Renderer::prepareFog(Encoder<Tempest::CommandBuffer>& cmd, WorldView& wview
     case VolumetricLQ:
       break;
     case VolumetricHQ: {
-      auto& occlusionLut = usesImage2d(sky.occlusionLut, TextureFormat::R32U, zbuffer.size());
+      auto& occlusionLut = usesImage2d(sky.occlusionLut, TextureFormat::R32U, effectResolution());
       if(settings.vsmEnabled && !settings.rtsmEnabled && !settings.pathTraceEnabled) {
         cmd.setFramebuffer({});
         cmd.setBinding(0, occlusionLut);
@@ -2081,7 +2085,7 @@ void Renderer::prepareEpipolar(Tempest::Encoder<Tempest::CommandBuffer>& cmd, Wo
 
   auto& epTrace      = usesImage2d(epipolar.epTrace,  TextureFormat::R16,  1024, 2*1024);
   auto& epipoles     = usesSsbo   (epipolar.epipoles, shaders.fogEpipolarVsm.sizeofBuffer(3, size_t(epipolar.epTrace.h())));
-  auto& occlusionLut = usesImage2d(sky.occlusionLut, TextureFormat::R32U, zbuffer.size());
+  auto& occlusionLut = usesImage2d(sky.occlusionLut, TextureFormat::R32U, effectResolution());
 
   cmd.setDebugMarker("Fog-epipolar");
   cmd.setFramebuffer({});
@@ -2824,6 +2828,12 @@ float Renderer::internalResolutionScale() const {
   if(settings.vidResIndex==1)
     return 0.75;
   return 0.5;
+  }
+
+Size Renderer::effectResolution() const {
+  if(!settings.halfResAoFog)
+    return zbuffer.size();
+  return Size((zbuffer.w()+1)/2, (zbuffer.h()+1)/2);
   }
 
 Size Renderer::internalResolution(Tempest::Size src) const {

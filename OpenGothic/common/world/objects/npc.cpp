@@ -84,6 +84,7 @@ void writeMeleeShadow(const std::string& row) {
   static uintmax_t bytes = 0;
   constexpr uintmax_t limit = 8*1024*1024;
   const char* path = "melee-blade-shadow.jsonl";
+  const auto entry = "{\"arena_seed\":" + (BodyArena::enabled() ? std::to_string(BodyArena::seed()) : "null") + ',' + row.substr(1);
   if(!out.is_open()) {
     std::error_code error;
     bytes = std::filesystem::file_size(path,error);
@@ -91,7 +92,7 @@ void writeMeleeShadow(const std::string& row) {
       bytes = 0;
     out.open(path,std::ios::app);
     }
-  if(bytes+row.size()+1>limit) {
+  if(bytes+entry.size()+1>limit) {
     out.close();
     std::error_code error;
     std::filesystem::remove("melee-blade-shadow.previous.jsonl",error);
@@ -100,9 +101,9 @@ void writeMeleeShadow(const std::string& row) {
     bytes = 0;
     }
   if(out) {
-    out << row << '\n';
+    out << entry << '\n';
     out.flush();
-    bytes += row.size()+1;
+    bytes += entry.size()+1;
     }
   }
 
@@ -4103,6 +4104,7 @@ std::string Npc::combatPoseLayers() const {
     if(result.size()>1)
       result += ",";
     result += "{\"name\":" + TestBench::bodyJson(seq.name) +
+              ",\"is_attack\":" + (seq.isAttackAnim() || isFinishSequence(seq) ? "true" : "false") +
               ",\"start\":" + std::to_string(layer.start) + ",\"clock\":" + std::to_string(layer.time) +
               ",\"speed\":" + std::to_string(layer.speed) + ",\"combination\":" + std::to_string(layer.combination) +
               ",\"body_state\":" + std::to_string(unsigned(layer.state)) +
@@ -4818,6 +4820,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const VisualFx* vfx, int32_t s
 
 void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32_t splId, bool isSpell, float meleeScale, const MeleeBladeContact* contact) {
   const int32_t traceHpBefore = attribute(ATR_HITPOINTS);
+  const bool traceKnockdownBefore = meleeKnockdown;
+  const auto traceAttackerAnimation = TestBench::bodyTracing() ? other.visual.pose().animNames() : std::string();
   const float postureBefore = meleePosture.value;
   float a  = angleDir(other.x-x,other.z-z);
   float da = a-angle;
@@ -4873,6 +4877,8 @@ void Npc::takeDamage(Npc& other, const Bullet* b, const CollideMask bMask, int32
                           ",\"hp_before\":" + std::to_string(traceHpBefore) + ",\"hp_after\":" +
                           std::to_string(attribute(ATR_HITPOINTS)) + ",\"net\":" + std::to_string(hitResult.value) +
                           ",\"has_hit\":" + (hitResult.hasHit ? "true" : "false") +
+                          ",\"melee_knockdown_before\":" + (traceKnockdownBefore ? "true" : "false") +
+                          ",\"attacker_animation\":" + TestBench::bodyJson(traceAttackerAnimation) +
                           ",\"down\":" + (isDown() ? "true" : "false") + ",\"dead\":" + (isDead() ? "true" : "false"));
     };
   if(TestBench::isActive()) {

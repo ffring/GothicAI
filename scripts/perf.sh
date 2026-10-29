@@ -46,7 +46,7 @@ for place in "${PLACES[@]}"; do
   case "$place" in market|harbour|forest|interior|combat) ;; *) fail "unknown place: $place (market harbour forest interior combat)" ;; esac
 done
 export PERF_WINDOW PERF_REPEAT PERF_WAIT
-export PERF_ARGS="${PERF_ARGS:-}" PERF_ENV="${PERF_ENV:-}" PERF_VID_RES="${PERF_VID_RES:-0}"
+export PERF_ARGS="${PERF_ARGS:-}" PERF_ENV="${PERF_ENV:-}" PERF_VID_RES="${PERF_VID_RES:-0}" PERF_INI="${PERF_INI:-}"
 if [[ "$REMOTE_RUN" == 0 ]]; then
   OUT="$ROOT/.bench/perf-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   export PERF_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
@@ -77,7 +77,7 @@ if [[ "$REMOTE_RUN" == 0 ]]; then
     rsync -a "$ROOT/scripts/perf.sh" "$ROOT/scripts/perf_report.py" "$ROOT/scripts/base-ensure.sh" "$ROOT/scripts/ryzen_game.py" "$RYZEN_HOST:$SOURCE/scripts/"
     rsync -a --delete --exclude='/build*/' "$ROOT/scripts/convert/" "$RYZEN_HOST:$SOURCE/scripts/convert/"
     rsync -a "$ROOT"/scripts/bench/perf-*.bench "$RYZEN_HOST:$SOURCE/scripts/bench/"
-    REMOTE_ENV=(PERF_REMOTE=1 "PERF_VID_RES=$PERF_VID_RES" "PERF_WINDOW=$PERF_WINDOW" "PERF_REPEAT=$PERF_REPEAT" "PERF_WAIT=$PERF_WAIT"
+    REMOTE_ENV=(PERF_REMOTE=1 "PERF_VID_RES=$PERF_VID_RES" "PERF_INI=$PERF_INI" "PERF_WINDOW=$PERF_WINDOW" "PERF_REPEAT=$PERF_REPEAT" "PERF_WAIT=$PERF_WAIT"
       "PERF_ARGS=$PERF_ARGS" "PERF_ENV=$PERF_ENV" "PERF_COMMIT=$PERF_COMMIT" "PERF_DIRTY=$PERF_DIRTY"
       ${GAME_ENV[@]+"${GAME_ENV[@]}"})
     if [[ "${NO_BUILD:-0}" != 1 ]]; then
@@ -157,7 +157,7 @@ meta = dict(git_commit=os.environ.get('PERF_COMMIT'),
             backend='Metal' if platform.system() == 'Darwin' else 'Vulkan',
             host='ryzen' if os.environ.get('PERF_REMOTE') == '1' else platform.node(),
             repeats=int(os.environ['PERF_REPEAT']), places=sys.argv[2:],
-            vid_res=int(os.environ.get('PERF_VID_RES', '0')),
+            vid_res=int(os.environ.get('PERF_VID_RES', '0')), ini=os.environ.get('PERF_INI', ''),
             game_args=args, game_env=extra_env)
 (out / 'metadata.json').write_text(json.dumps(meta, indent=2) + '\n')
 PY
@@ -180,6 +180,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shlex
 import subprocess
 import sys
 
@@ -199,19 +200,30 @@ env.update(TEMPEST_BACKGROUND='0', TEMPEST_WINDOW_SIZE=meta['requested_window'],
 vid_res = env.get('PERF_VID_RES', '0')
 if vid_res not in ('0', '1', '2'):
     raise SystemExit('perf: PERF_VID_RES must be 0, 1 or 2')
-ini = ['[ENGINE]', 'zMaxFps=0', '[INTERNAL]', f'vidResIndex={vid_res}',
-       '[SOUND]', 'soundVolume=1', 'musicVolume=1', 'musicEnabled=1', 'worldSounds=1']
+ini = {'ENGINE': {'zMaxFps': '0'}, 'INTERNAL': {'vidResIndex': vid_res},
+       'SOUND': {'soundVolume': '1', 'musicVolume': '1', 'musicEnabled': '1', 'worldSounds': '1'},
+       'GAME': {}}
 # The same initial GAME switches accepted by bench.sh, before world loading.
 settings = ('MOVABLE_VOBS', 'ARROW_STICKING', 'PHYSICS_NOISE', 'DESTRUCTION', 'BUOYANCY',
             'CLOTH', 'CHARACTER_VIRTUAL', 'NPC_CHARACTER_VIRTUAL', 'MONSTER_CHARACTER_VIRTUAL',
             'MELEE_PHYSICS_HITS', 'MELEE_POSTURE', 'MELEE_REACTIONS', 'MELEE_BLADE_SHADOW')
-ini.append('[GAME]')
 for key in settings:
     if key in env:
         if env[key] not in ('0', '1'):
             raise SystemExit(f'perf: {key} must be 0 or 1')
-        ini.append(f'{key.lower()}={env[key]}')
-(leaf / 'run/Gothic.ini').write_text('\n'.join(ini) + '\n')
+        ini['GAME'][key.lower()] = env[key]
+# PERF_INI='INTERNAL.halfResAoFog=0 ENGINE.zCloudShadowScale=1' sets any Gothic.ini key.
+for item in shlex.split(env.get('PERF_INI', '')):
+    name, sep, value = item.partition('=')
+    section, dot, key = name.partition('.')
+    if not sep or not dot or not section or not key:
+        raise SystemExit(f'perf: PERF_INI expects SECTION.key=value, got {item!r}')
+    ini.setdefault(section, {})[key] = value
+lines = []
+for section, values in ini.items():
+    lines.append(f'[{section}]')
+    lines += [f'{k}={v}' for k, v in values.items()]
+(leaf / 'run/Gothic.ini').write_text('\n'.join(lines) + '\n')
 subprocess.run(['bash', str(Path(scenario).parents[1] / 'base-ensure.sh'), env['GOTHIC_DIR']],
                env=env, check=True)
 command = [env['GAME_BIN'], '-g', env['GOTHIC_DIR'], '-g2', '-window', '-devmode',

@@ -1,5 +1,5 @@
 #include "baseimport.h"
-#include "basestore.h"
+#include "basestoreimport.h"
 #include "commandline.h"
 #include "programdata.h"
 #include "outputunits.h"
@@ -185,6 +185,16 @@ void snapshotSelection(const fs::path& root) {
   auto mounted=BaseImport::Files{{"FIXTURE.VDF",fs::file_size(game/"Data/FIXTURE.VDF")}};
   auto identity=BaseImport::identify(game,mounted);
   auto base=cache/identity.fingerprint;
+  size_t preparations=0;
+  std::string missingReason;
+  try {
+    (void)BaseStore::resolve(game,mounted,[&](std::string_view message) {
+      if(message=="base: identifying installation" || message=="base: importing installation") ++preparations;
+      });
+    }
+  catch(const std::exception& error) { missingReason=error.what(); }
+  require(missingReason.find("content-convert resolve")!=std::string::npos && preparations==0 && !fs::exists(base),
+          "ready-only selection with empty roots must fail before hashing or importing the installation");
   writeBaseFixture(base,identity);
   size_t identifies=0;
   const auto observe=[&](std::string_view message) {
@@ -304,8 +314,8 @@ void snapshotSelection(const fs::path& root) {
     std::string reason;
     try { (void)BaseStore::resolve(directory,{},observe); }
     catch(const std::exception& error) { reason=error.what(); }
-    require(reason.find(directory.string())!=std::string::npos && reason.find("OPENGOTHIC_BASE")!=std::string::npos,
-            "missing ready base must explain the game directory and explicit-base remedy: "+reason);
+    require(reason.find(directory.string())!=std::string::npos && reason.find("content-convert resolve")!=std::string::npos,
+            "missing ready base must explain the game directory and conversion command: "+reason);
     };
   missing(game);
   const auto empty=root/"no-pointer";
@@ -937,7 +947,10 @@ int main() {
     offlineResources(game,reference,temporary.path/"offline-resources",mounted);
     const char* args[]={"gothic-base-store-contract","-g",game};
     CommandLine commandLine(3,args);
-    zenkit::Logger::set(zenkit::LogLevel::ERROR,Resources::zenkitLog);
+    zenkit::Logger::set(zenkit::LogLevel::ERROR,[](zenkit::LogLevel level, const char* component, const char* message) {
+      Resources::zenkitLog(level,component,message);
+      BaseImport::onZenkitLog(level,component,message);
+      });
     // The real engine log callback must reject a class ZenKit otherwise skips.
     const auto unknownGame=temporary.path/"unknown-game";
     fs::create_directories(unknownGame/"Data");
@@ -975,7 +988,7 @@ int main() {
             "rejected ZEN must not be written or indexed");
     const auto unknownIdentity=BaseImport::identify(unknownGame);
     rejectUnknown([&] {
-      BaseStore::resolve(unknownGame,{{"UNKNOWN.VDF",fs::file_size(unknownGame/"Data/UNKNOWN.VDF")}},
+      BaseStore::ensure(unknownGame,{{"UNKNOWN.VDF",fs::file_size(unknownGame/"Data/UNKNOWN.VDF")}},
                          [](std::string_view) {});
       });
     require(!fs::exists(cache/unknownIdentity.fingerprint) && !fs::exists(store/"base"/unknownIdentity.fingerprint),
@@ -987,7 +1000,7 @@ int main() {
     const auto interrupted=fork(); require(interrupted>=0,"fork failed");
     if(interrupted==0) {
       try {
-        BaseStore::resolve(game,mounted,[&](std::string_view message) {
+        BaseStore::ensure(game,mounted,[&](std::string_view message) {
           if(message!="base: importing installation") return;
           for(const auto& entry:fs::directory_iterator(cache))
             if(entry.path().filename().string().starts_with(identity.fingerprint+".tmp-"))
@@ -1007,7 +1020,7 @@ int main() {
     const auto otherPartial=store/"base"/(std::string(64,'0')+".tmp-1");
     fs::create_directory(otherPartial);
     // Publication is optional for the game; this comparison needs it complete.
-    BaseStore::resolve(game,mounted,[](std::string_view) {}).publication.get();
+    BaseStore::ensure(game,mounted,[](std::string_view) {}).publication.get();
     equal(reference,base);
     equal(reference,store/"base"/identity.fingerprint);
     for(const auto& root:{cache,store/"base"})
@@ -1099,7 +1112,7 @@ int main() {
         if(::read(gate[0],&token,1)!=1) _exit(2);
         try {
           std::ofstream events(temporary.path/("child-"+std::to_string(i)+".log"));
-          auto selected=BaseStore::resolve(game,mounted,[&](std::string_view message) { events << message << '\n'; });
+          auto selected=BaseStore::ensure(game,mounted,[&](std::string_view message) { events << message << '\n'; });
           if(selected.publication.valid()) selected.publication.get();
           events.close();
           _exit(0);

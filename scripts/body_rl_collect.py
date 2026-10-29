@@ -178,7 +178,7 @@ class SharedBackend:
 def run_worker(process: int, options: dict, envs: list[int], tasks) -> dict:
     os.environ.update(TRAINING_ENV)
     import numpy
-    from body_arena_env import LEASE_KEYS, ArenaInfrastructureError
+    from body_arena_env import LEASE_KEYS, ArenaInfrastructureError, preserve_melee_journals
     from body_policy_suite import PolicyArenaRunner, PolicyEpisodeEnv
     from gothic_body.runtime import PolicyRuntime, TorchBackend, actor_identity
     from body_fast_features import pack_features as fast_pack_features
@@ -283,6 +283,9 @@ def run_worker(process: int, options: dict, envs: list[int], tasks) -> dict:
                     seats.append(Seat(rival, rivals[against], options["opponent_temperature"],
                                       random.Random(f"{options['sampling_seed']}:{seed}:opponent"), False))
                 reset_s = time.monotonic()-started
+                if options["keep_journals"] and summaries:
+                    previous = summaries[-1]
+                    preserve_melee_journals(output / "run", output / previous["name"], previous["seed"])
                 for seat in seats:
                     seat.runtime.begin_episode(initial["session_epoch"], initial["world_epoch"], initial_game_ms=initial["game_ms"])
                 by_entity = {seat.entity: seat for seat in seats}
@@ -405,9 +408,14 @@ def run_worker(process: int, options: dict, envs: list[int], tasks) -> dict:
                 summaries.append(summary)
                 with (output/"episodes.jsonl").open("a") as stream_file:
                     stream_file.write(json.dumps(summary)+"\n")
-                if not options["keep_journals"]:
+                if options["keep_journals"]:
+                    preserve_melee_journals(output / "run", episode_dir, seed)
+                else:
                     shutil.rmtree(episode_dir, ignore_errors=True)
             runner.call({"cmd": "close"})
+            if options["keep_journals"] and summaries:
+                previous = summaries[-1]
+                preserve_melee_journals(output / "run", output / previous["name"], previous["seed"])
         finally:
             runner.terminate()
         return {"worker": worker, "episodes": len(summaries)}
