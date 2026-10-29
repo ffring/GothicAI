@@ -57,6 +57,7 @@ class FightAlgo final {
     static Resolution resolve(PolicyAction action, const ResolverState& state);
     // Native normalization is diagnostic only; the executor retains native consume/skip semantics.
     static Action resolveNative(Action action, const ResolverState& state);
+    static Action resolveDownTactics(bool enabled, bool knockdown, bool rising, bool inRange, bool focus);
     static std::array<bool,12> actionMask(const ResolverState& state);
 
     Action nextFromQueue(Npc &npc, Npc &tg, GameScript& owner);

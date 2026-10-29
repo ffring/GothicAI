@@ -4119,6 +4119,21 @@ namespace {
     require(!Npc::canAccumulateMeleePosture(true,false,true,false),"a knockdown must not accumulate another knockdown");
     require(!Npc::canAccumulateMeleePosture(true,false,false,true),"death or unconsciousness must retain the old path");
 
+    require(FightAlgo::resolveDownTactics(true,true,false,false,true)==FightAlgo::MV_MOVE,
+            "a distant lying target must be approached");
+    require(FightAlgo::resolveDownTactics(true,true,false,true,true)==FightAlgo::MV_ATTACK,
+            "a lying target in finish range and focus must receive a down strike");
+    require(FightAlgo::resolveDownTactics(true,true,false,true,false)==FightAlgo::MV_TURN2HIT,
+            "a down strike must wait until the attacker faces its target");
+    require(FightAlgo::resolveDownTactics(true,true,true,true,true)==FightAlgo::MV_WAIT,
+            "a rising target in weapon range must be awaited without attacking");
+    require(FightAlgo::resolveDownTactics(true,true,true,false,true)==FightAlgo::MV_MOVE,
+            "a distant rising target must be approached without attacking");
+    require(FightAlgo::resolveDownTactics(true,false,false,true,true)==FightAlgo::MV_NULL,
+            "a standing target must retain native fight instructions");
+    require(FightAlgo::resolveDownTactics(false,true,false,true,true)==FightAlgo::MV_NULL,
+            "down tactics OFF must retain native fight instructions");
+
     // The actual melee damage multiplier is bounded before cleave attenuation.
     requireNear(DamageCalculator::meleeMultiplier(0,1000,0,0,0),.5f,.0001f,"slow grip contacts must respect the lower damage bound");
     requireNear(DamageCalculator::meleeMultiplier(10000,1000,1,90,0),1.5f,.0001f,"fast tip contacts must respect the upper damage bound");

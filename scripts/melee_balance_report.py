@@ -46,6 +46,36 @@ def finish(animation: str) -> bool:
     return any(name in animation for name in FINISH)
 
 
+def distance_distribution(samples: list[dict] | None) -> dict:
+    distances = [row["distance_cm"] for row in samples or [] if row["distance_cm"] is not None]
+    return {"count": len(distances) if samples is not None else None,
+            "median": statistics.median(distances) if distances else None,
+            "p10": percentile(distances, .1), "p90": percentile(distances, .9)}
+
+
+def swing_metrics(swings: list[dict] | None) -> dict:
+    overhead = [row for row in swings or [] if finish(row["animation"])]
+    samples = [{key: row[key] for key in ("game_time_ms", "distance_cm", "distance_method", "hit")}
+               for row in overhead] if swings is not None else None
+    return {"started": len(swings) if swings is not None else None,
+            "hits": sum(row["hit"] for row in swings) if swings is not None else None,
+            "overhead_started": len(overhead) if swings is not None else None,
+            "overhead_hits": sum(row["hit"] for row in overhead) if swings is not None else None,
+            "overhead_start_distance_cm": distance_distribution(samples), "overhead_samples": samples}
+
+
+def combine_swing_metrics(groups: list[dict]) -> dict:
+    combined = {}
+    for key in ("started", "hits", "overhead_started", "overhead_hits"):
+        values = [group[key] for group in groups]
+        combined[key] = sum(values) if all(value is not None for value in values) else None
+    samples = ([sample for group in groups for sample in group["overhead_samples"]]
+               if all(group["overhead_samples"] is not None for group in groups) else None)
+    combined["overhead_samples"] = samples
+    combined["overhead_start_distance_cm"] = distance_distribution(samples)
+    return combined
+
+
 def episode_metrics(folder: Path, episode: dict, shared: dict, variant: str) -> dict:
     unavailable = {}
 
@@ -230,6 +260,51 @@ def episode_metrics(folder: Path, episode: dict, shared: dict, variant: str) -> 
             missing("first_knocked_down_lost", "Duel has no winner (timeout or other termination)")
     else:
         missing("first_knocked_down_lost", "No knockdown in this duel")
+
+    # Use the blade window's creation time, not the later flush/contact time or
+    # the layer clock, which can be rebased while the finish clip is playing.
+    posture_changes = {role: [row for row in posture if roles(row.get("target")) == role and
+                             row.get("event") in ("knockdown", "getup_start", "recover", "cancel")]
+                       for role in ROLES}
+    classified = {role: [] for role in ROLES}
+    for row in blade:
+        role = roles(row.get("attacker"))
+        if role is None:
+            continue
+        diagnostic = row.get("diagnostic") or {}
+        target = diagnostic.get("target")
+        target_role = roles(target) or next(other for other in ROLES if other != role)
+        state = "standing"
+        for change in posture_changes[target_role]:
+            if change["tick_ms"] > row["game_time_ms"]:
+                break
+            state = {"knockdown": "lying", "getup_start": "rising",
+                     "recover": "standing", "cancel": "standing"}[change["event"]]
+        distance = diagnostic.get("start_distance_cm")
+        method = "fightDistanceTo" if distance is not None else None
+        if distance is None and isinstance(target, dict):
+            attacker_position = row.get("attacker", {}).get("position_cm")
+            target_position = target.get("position_cm")
+            if attacker_position is not None and target_position is not None:
+                distance = math.dist(attacker_position, target_position)
+                method = "root_positions"
+        hit = any(contact.get("result") == "hit" and roles(contact.get("target")) == target_role
+                  for contact in row.get("physical", {}).get("targets", []))
+        classified[role].append({"animation": row.get("animation", ""), "game_time_ms": row["game_time_ms"],
+                                 "target_posture": state, "distance_cm": distance, "distance_method": method, "hit": hit})
+    for role in ROLES:
+        own = result["fighters"][role]
+        available = bool(classified[role]) or own["swings_started"] == 0
+        own["overhead_swings"] = swing_metrics([row for row in classified[role] if finish(row["animation"])]
+                                              if available else None)
+        own["swings_by_target_posture"] = {
+            state: swing_metrics([row for row in classified[role] if row["target_posture"] == state]
+                                 if available and posture_available and result["knockdowns"] is not None else None)
+            for state in ("lying", "rising")}
+        if not available:
+            missing(f"fighters.{role}.overhead_swings", "No seed-matched blade journal for observed swings")
+        if not available or not posture_available or result["knockdowns"] is None:
+            missing(f"fighters.{role}.swings_by_target_posture", "Blade or posture telemetry unavailable")
     result["wall_stops"] = sum(row.get("decision", {}).get("outcome") == "wall" for row in blade)
     if variant == "vanilla":
         result["wall_stops"] = missing("wall_stops", "melee_blade_shadow and melee_physics_hits are disabled")
@@ -283,6 +358,10 @@ def aggregate(variant: str, provider: str, weapon: str, episodes: list[dict]) ->
                 ("prone_damage_fraction", own["prone_damage"], own["damage"]),
                 ("down_time_fraction", own["down_time_s"], seconds)):
             own[key] = divide(numerator, denominator, f"fighters.{role}.{key}")
+        own["overhead_swings"] = combine_swing_metrics([row["fighters"][role]["overhead_swings"] for row in episodes])
+        own["swings_by_target_posture"] = {
+            state: combine_swing_metrics([row["fighters"][role]["swings_by_target_posture"][state] for row in episodes])
+            for state in ("lying", "rising")}
         result["fighters"][role] = own
     combined = {key: total([result["fighters"][role][key] for role in ROLES], "combat."+key) for key in counts}
     combined["per_duel"] = {key: divide(combined[key], count, "combat.per_duel."+key) for key in counts}
@@ -292,6 +371,10 @@ def aggregate(variant: str, provider: str, weapon: str, episodes: list[dict]) ->
             ("prone_damage_fraction", combined["prone_damage"], combined["damage"])):
         combined[key] = divide(numerator, denominator, "combat."+key)
     result["combat"] = combined
+    combined["overhead_swings"] = combine_swing_metrics([result["fighters"][role]["overhead_swings"] for role in ROLES])
+    combined["swings_by_target_posture"] = {
+        state: combine_swing_metrics([result["fighters"][role]["swings_by_target_posture"][state] for role in ROLES])
+        for state in ("lying", "rising")}
     knockdowns = [row["knockdowns"] for row in episodes]
     histogram = {str(bucket) if bucket < 3 else "3+":
                  sum(min(value, 3) == bucket for value in knockdowns)/count
@@ -354,6 +437,18 @@ def markdown(series: list[dict]) -> str:
                          f"{fmt(row['fighters']['opponent'][key])} |")
         lines.append(f"| down_time_fraction | — | — | {fmt(row['fighters']['primary']['down_time_fraction'])} | "
                      f"{fmt(row['fighters']['opponent']['down_time_fraction'])} |")
+        lines.extend(["", "Blade windows classified by the target's posture at swing start:", "",
+                      "| Attacker | Target at start | Started / hit | Overhead started / hit | Overhead start distance median / p10 / p90 (cm) |",
+                      "|---|---|---:|---:|---|"])
+        for role, own in (("both", row["combat"]), *((role, row["fighters"][role]) for role in ROLES)):
+            groups = list(own["swings_by_target_posture"].items())+[("all (overhead only)", own["overhead_swings"])]
+            for state, group in groups:
+                distances = " / ".join(fmt(group["overhead_start_distance_cm"][key]) for key in ("median", "p10", "p90"))
+                lines.append(f"| {role} | {state} | {fmt(group['started'])} / {fmt(group['hits'])} | "
+                             f"{fmt(group['overhead_started'])} / {fmt(group['overhead_hits'])} | {distances} |")
+        methods = Counter(sample["distance_method"] or "unavailable" for sample in
+                          row["combat"]["overhead_swings"]["overhead_samples"] or [])
+        lines.append("Overhead distance samples: "+", ".join(f"{method}={count}" for method, count in sorted(methods.items()))+".")
         lines.extend(["", "| KD in duel | 0 | 1 | 2 | 3+ |", "|---|---:|---:|---:|---:|",
                       "| Duel fraction | "+" | ".join(fmt(row["knockdown_duel_fraction"][key]) for key in ("0", "1", "2", "3+"))+" |",
                       "", f"First knocked-down fighter lost: {fmt(row['first_knocked_down_lost_fraction'])} "
@@ -386,6 +481,10 @@ def main() -> int:
                   "damage": "Actual positive HP loss; damage events name victim as actor and attacker as target",
                   "blocks": "Successful blocks performed by this fighter, including repeated contacts if journaled",
                   "down_time": "Knockdown until recover/cancel or duel end, including the get-up transition",
+                  "swings_by_target_posture": "Unique blade windows classified at game_time_ms: lying from knockdown inclusive to getup_start exclusive; rising until recover/cancel exclusive; hits require a physical result=hit on the intended arena opponent",
+                  "overhead_swings": "Finish-animation blade windows for every target posture; independent of legacy animation-hook overhead_started/overhead_hits counts",
+                  "overhead_start_distance_cm": "fightDistanceTo at blade-window creation when recorded; older logs fall back to distance between captured root positions; sample method is retained, percentiles use all known distances",
+                  "overhead_samples": "Per-window game_time_ms, starting distance/method and hit; retained to compare hit rates by distance without rereading journals",
                   "first_knocked_down_lost_fraction": "Decisive duels with at least one knockdown; timeouts excluded",
                   "p90": "Linear interpolation at index (n-1)*0.9",
                   "aggregation": "Counts sum all supplied episodes; ratios divide summed counts/durations, not means of ratios",

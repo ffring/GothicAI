@@ -19,6 +19,16 @@
 FightAlgo::FightAlgo() {
   }
 
+FightAlgo::Action FightAlgo::resolveDownTactics(bool enabled, bool knockdown, bool rising, bool inRange, bool focus) {
+  if(!enabled || !knockdown)
+    return MV_NULL;
+  if(!inRange)
+    return MV_MOVE;
+  if(!focus)
+    return MV_TURN2HIT;
+  return rising ? MV_WAIT : MV_ATTACK;
+  }
+
 void FightAlgo::load(Serialize &fin) {
   fin.read(reinterpret_cast<int32_t&>(queueId));
   for(int i=0;i<MV_MAX;++i)
