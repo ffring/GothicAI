@@ -7,14 +7,14 @@ stage="${1:?Usage: nav-teacher-v3b-remote.sh build|measure|retry}"
 export GQ_OWNER=nav-teacher-v3b
 # Validate the shared settings before creating task directories or queue jobs.
 game_env=()
-for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+for key in OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
   [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
 done
 printf -v game_command '%q ' env ${game_env[@]+"${game_env[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")"
 game_settings="$(ssh -o ConnectTimeout=10 ryzen "$game_command")"
 eval "$game_settings"
 game_env=()
-for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+for key in OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
   [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
 done
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-teacher-v3b" "$HOME"')"

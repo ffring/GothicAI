@@ -59,6 +59,7 @@ index.parent.mkdir(parents=True)
 index.write_text('{}')
 ''')
     executable(fake_bin / "ssh", python + '''
+import os
 import subprocess
 import sys
 args = sys.argv[1:]
@@ -66,7 +67,9 @@ while args[0].startswith('-'):
     option = args.pop(0)
     if option == '-o': args.pop(0)
 args.pop(0)  # host
-raise SystemExit(subprocess.call(['bash', '-c', args[0]]))
+remote_env = dict(os.environ)
+remote_env.pop('GOTHIC_DIR', None)
+raise SystemExit(subprocess.call(['bash', '-c', args[0]], env=remote_env))
 ''')
     executable(fake_bin / "rsync", python + '''
 from pathlib import Path
@@ -95,7 +98,9 @@ deadline = time.monotonic() + 15
 while not (state / 'release').exists():
     if time.monotonic() > deadline: raise SystemExit('fake queue admission timed out')
     time.sleep(0.02)
-raise SystemExit(subprocess.call(command))
+remote_env = dict(os.environ)
+remote_env.pop('GOTHIC_DIR', None)
+raise SystemExit(subprocess.call(command, env=remote_env))
 ''')
     tools = repo / "reports/render-features/2026-10-18/tools"
     tools.mkdir(parents=True)
@@ -136,8 +141,12 @@ printf '0\n' >"$D/exit.txt"
 printf 'fake screenshot\n' >"$D/city.png"
 printf 'materials: 1 entries from fixture\n[bench] goto NW_CITY_MERCHANT_SHOP01_FRONT_03\n[bench] shot city\n' >"$D/game.log"
 '''.replace("VARIANT", variant))
-            env = dict(os.environ, HOME=str(home), PATH=f"{fake_bin}:{os.environ['PATH']}",
-                       SAVE=str(save), CAPTURE_TEST_STATE=str(tmp_path))
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith("OPENGOTHIC_BASE") and key != "OPENGOTHIC_VIDEOS_FINGERPRINT"}
+            env.update(HOME=str(home), PATH=f"{fake_bin}:{os.environ['PATH']}",
+                       SAVE=str(save), CAPTURE_TEST_STATE=str(tmp_path), GOTHIC_DIR="/Volumes/x")
+            if variant == "A":
+                env.update(OPENGOTHIC_BASE_FINGERPRINT="c" * 64, OPENGOTHIC_VIDEOS_FINGERPRINT="d" * 64)
             processes.append(subprocess.Popen(
                 ["bash", str(script), "--content-root", str(tmp_path / "content"), "--output", str(output)],
                 env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -156,6 +165,7 @@ printf 'materials: 1 entries from fixture\n[bench] goto NW_CITY_MERCHANT_SHOP01_
     requests = [json.loads(path.read_text()) for path in queue.glob("*.json")]
     assert len(requests) == 2
     assert len({request[-1] for request in requests}) == 2
+    assert all("GOTHIC_DIR=/Volumes/x" not in request for request in requests)
     captures = sorted(output.glob("*/captures/material-a/inputs.json"))
     assert len(captures) == 2
     seen = set()
@@ -170,8 +180,8 @@ printf 'materials: 1 entries from fixture\n[bench] goto NW_CITY_MERCHANT_SHOP01_
             "discard-ffmpeg.sh": f"ffmpeg-{variant}",
             "runner": variant,
             "game": str(home / "gothic-ai/game-settings"),
-            "base": "a" * 64,
-            "videos": "b" * 64,
+            "base": ("c" if variant == "A" else "a") * 64,
+            "videos": ("d" if variant == "A" else "b") * 64,
         }
     assert seen == {"A", "B"}
 

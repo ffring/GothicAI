@@ -62,7 +62,7 @@ if [[ "$REMOTE_RUN" == 0 ]]; then
     }
     REMOTE_HOME="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" 'printf "%s" "$HOME"')"
     GAME_ENV=()
-    for name in GOTHIC_DIR OPENGOTHIC_BASE OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT OPENGOTHIC_BASE_CACHE OPENGOTHIC_BASE_STORE; do
+    for name in OPENGOTHIC_BASE OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT OPENGOTHIC_BASE_CACHE OPENGOTHIC_BASE_STORE; do
       if [[ -n "${!name+set}" ]]; then GAME_ENV+=("$name=${!name}"); fi
     done
     remote env ${GAME_ENV[@]+"${GAME_ENV[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")" --check

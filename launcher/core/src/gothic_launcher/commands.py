@@ -142,17 +142,15 @@ def find_layout(config: Config) -> Layout:
     if not os.access(game_bin, os.X_OK):
         problems.append(f"the game is not built: no {game_bin} (see README, «Сборка и запуск»)")
     game_dir = config.settings.game.dir
-    if os.environ.get("GOTHIC_DIR"):
-        game_dir = Path(os.environ["GOTHIC_DIR"]).expanduser()
     game_env = {}
     if game_dir is None:
         problems.append("game folder is not set: gothic-launcher config set game.dir '/path/to/Gothic II'")
         game_dir = Path()
     else:
-        if sys.platform == "linux" and config.settings.game.dir == Path.home() / "gothic-ai/game-settings":
+        if sys.platform == "linux" and game_dir == Path.home() / "gothic-ai/game-settings":
             try:
                 result = subprocess.run(
-                    [sys.executable, str(repo / "scripts/ryzen_game.py"), "--json"],
+                    [sys.executable, str(repo / "scripts/ryzen_game.py"), "--json", f"--assets={game_dir}"],
                     capture_output=True, text=True, check=True,
                 )
                 game_env = json.loads(result.stdout)

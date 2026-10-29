@@ -1043,8 +1043,6 @@ def main():
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--budget-seconds", type=float, default=6900)
     options = parser.parse_args()
-    if options.stage != "analyze":
-        os.environ.update(module("ryzen_game").game_environment())
     if not options.task.is_absolute() or not options.data.is_absolute():
         parser.error("--task and --data must be absolute")
     if not 1 <= options.parallel <= 3 or min(options.min_points, options.min_objects, options.min_object_places, options.per_region, options.limit_ms, options.budget_seconds) <= 0:

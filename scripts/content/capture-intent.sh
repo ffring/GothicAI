@@ -108,7 +108,7 @@ done
   echo 'need --scenario FILE --output OUTSIDE_GIT and a positive expected shot count' >&2; exit 2;
 }
 GAME_ENV=()
-for name in GOTHIC_DIR OPENGOTHIC_BASE OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT OPENGOTHIC_BASE_CACHE OPENGOTHIC_BASE_STORE; do
+for name in OPENGOTHIC_BASE OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT OPENGOTHIC_BASE_CACHE OPENGOTHIC_BASE_STORE; do
   [[ ! ${!name+x} ]] || GAME_ENV+=("$name=${!name}")
 done
 printf -v GAME_CHECK '%q ' env ${GAME_ENV[@]+"${GAME_ENV[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")" --check

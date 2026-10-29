@@ -259,8 +259,11 @@ def test_find_layout_lists_everything_missing(config, tmp_path, monkeypatch):
     bundled.parent.mkdir(parents=True)
     bundled.symlink_to("../../../Gothic2Notr")  # as scripts/make-dev-app.sh makes it
     monkeypatch.setattr(commands.sys, "platform", "darwin")
+    monkeypatch.setenv("GOTHIC_DIR", "/Volumes/x")
     layout = find_layout(config)
     assert layout.game_bin == bundled  # the game gets its own name and icon in the Dock
+    assert layout.game_dir == game_dir
+    assert game(config, layout, PORTS).argv[1:3] == ["-g", str(game_dir)]
     assert layout.play_content is None and content_env(layout) == {}
     monkeypatch.setattr(commands.sys, "platform", "linux")
     assert default_game_bin(repo) == binary  # Linux never chooses a stray macOS bundle
@@ -304,6 +307,7 @@ def test_ryzen_settings_load_shared_fingerprints_before_preparation(config, tmp_
         "GOTHIC_DIR", "OPENGOTHIC_BASE", "OPENGOTHIC_BASE_FINGERPRINT", "OPENGOTHIC_VIDEOS_FINGERPRINT"
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("GOTHIC_DIR", "/Volumes/x")
     with pytest.raises(LaunchError, match="Run scripts/ryzen.sh setup first"):
         find_layout(config)
     assert not settings.exists()
@@ -313,6 +317,9 @@ def test_ryzen_settings_load_shared_fingerprints_before_preparation(config, tmp_
     (home / "gothic-ai/game-base.json").write_text(json.dumps({"base": "a" * 64, "videos": "b" * 64}))
     layout = find_layout(config)
     selected = game(config, layout, PORTS, save="1")
+    assert layout.game_dir == settings
+    assert selected.argv[1:3] == ["-g", str(settings)]
+    assert selected.env["GOTHIC_DIR"] == str(settings)
     assert selected.argv[-2:] == ["-save", "1"]
     assert selected.cwd == layout.game_home
     assert selected.env["OPENGOTHIC_BASE_FINGERPRINT"] == "a" * 64

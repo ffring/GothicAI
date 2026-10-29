@@ -891,7 +891,7 @@ fi
 BASE_ENV_ARGS=()
 while IFS= read -r name; do
   case "$name" in
-    GOTHIC_DIR|OPENGOTHIC_BASE*|OPENGOTHIC_VIDEOS_FINGERPRINT) BASE_ENV_ARGS+=("$name=${!name}") ;;
+    OPENGOTHIC_BASE*|OPENGOTHIC_VIDEOS_FINGERPRINT) BASE_ENV_ARGS+=("$name=${!name}") ;;
   esac
 done < <(compgen -e)
 if [[ "$ACTION" != clean ]]; then
