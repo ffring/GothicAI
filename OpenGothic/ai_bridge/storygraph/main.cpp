@@ -23,7 +23,7 @@
 
 #include "bytecode.h"
 #include "baseimport.h"
-#include "basestore.h"
+#include "basestoreimport.h"
 #include "check.h"
 #include "execcheck.h"
 #include "gothicglb.h"
@@ -276,7 +276,7 @@ static int run(int argc, char** argv) {
   BaseImport::Files mounted;
   for(const auto& archive:BaseImport::runtimeArchives(gothic))
     if(!archive.mod) mounted.emplace_back(archive.name,archive.size);
-  auto base = BaseStore::resolve(gothic,mounted,[](std::string_view message) {
+  auto base = BaseStore::ensure(gothic,mounted,[](std::string_view message) {
     std::fprintf(stderr,"%.*s\n",int(message.size()),message.data());
     });
   if(importOutput!=nullptr)
