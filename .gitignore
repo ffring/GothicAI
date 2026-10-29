@@ -31,6 +31,7 @@ data/
 !/data/content/market-house.jsonl
 !/data/content/city-materials.csv
 !/data/content/world-edits.jsonl
+!/data/content/world/
 !/data/content/remaster/
 !OpenGothic/data/
 
