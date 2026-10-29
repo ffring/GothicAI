@@ -311,6 +311,8 @@ class Npc final {
     void      fistShoot();
     bool      blockFist();
     bool      finishingMove();
+    bool      isMeleeDownStrike(Anim anim, WeaponState ws) const;
+    static bool isFinishSequence(const Animation::Sequence& seq);
     void      swingSword();
     bool      swingSwordL();
     bool      swingSwordR();
@@ -953,6 +955,7 @@ class Npc final {
     bool                          tickMeleePosture(uint64_t dt);
     MeleeImpact::Posture           meleePosture;
     bool                          meleeKnockdown = false;
+    bool                          meleeDownStrike = false; // the chop from above at one lying is playing
     bool                          meleeGetupForced = false;
     uint64_t                      meleeFallTick = 0, meleeRiseTick = 0;
     uint64_t                      meleeSlowSince = 0;

@@ -57,6 +57,7 @@ struct MeleeBladeContact final {
   float bladeFraction = 0, speedCmS = 0, surfaceAngleDeg = 0;
   bool world = false;
   bool stopsSwing = false;
+  bool windup = false;     // a wall met by a blade going back or up (wind-up, follow-through): passed
   uint64_t step = 0;
   };
 
@@ -488,9 +489,12 @@ class DynamicWorld final {
     void updateShadowBody(Npc* owner, const std::vector<MeleeBodyCapsule>& capsules);
     void removeShadowBody(const Npc* owner);
     // Pose time and the half-open active window use absolute game milliseconds.
+    // forward: the attacker's facing; a wall met by a blade going back or up (the wind-up,
+    // the follow-through) does not stop the swing. Zero: every wall stops it.
     void updateShadowBlade(const Npc* owner, uint64_t swingId,
                            const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
-                           double activeBeginMs, double activeEndMs, float walkableCos = .7f);
+                           double activeBeginMs, double activeEndMs, float walkableCos = .7f,
+                           Tempest::Vec3 forward = {});
     std::vector<MeleeBladeContact> takeShadowBladeContacts(const Npc* owner);
     void removeShadowBlade(const Npc* owner);
     void flushShadowBlades();

@@ -1204,6 +1204,10 @@ Vec3 MdlVisual::mapWeaponBone() const {
   return {pos.at(3,0), pos.at(3,1), pos.at(3,2)};
   }
 
+void MdlVisual::setLayerSpeed(const Animation::Sequence* seq, float k, uint64_t now) {
+  skInst->setLayerSpeed(seq,k,now);
+  }
+
 void MdlVisual::setAnimSpeed(std::string_view name, float k) {
   skInst->setAnimSpeed(name,k);
   }
@@ -1283,6 +1287,13 @@ std::string MdlVisual::animInfo(std::string_view name) const {
                 double(d.fpsRate),double(ms),d.nodeIndex.size(),int(d.hasMoveTr),double(d.moveTr.x),double(d.moveTr.y),
                 double(d.moveTr.z),ms>0.f ? double(d.moveTr.length()/ms*1000.f) : 0.0,sq->next.c_str());
   std::string out = buf;
+  // the blow's frames (the attack windows)
+  for(const auto& e:d.events)
+    if(e.type==asset::MdsEventType::OPTIMAL_FRAME) {
+      out += "; optimal";
+      for(auto f:e.frames)
+        out += " " + std::to_string(f);
+      }
   if(skeleton==nullptr || d.nodeIndex.empty() || d.numFrames==0)
     return out;
   // the nodes it moves (not all: an upper body only animation)
