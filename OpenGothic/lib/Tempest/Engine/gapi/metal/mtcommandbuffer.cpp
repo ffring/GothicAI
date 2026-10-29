@@ -803,6 +803,21 @@ void MtCommandBuffer::setPipeline(AbstractGraphicsApi::Pipeline &p) {
   pushData.durty  = true;
   }
 
+void MtCommandBuffer::upscale(AbstractGraphicsApi::Texture& src, AbstractGraphicsApi::Texture& dst) {
+  T_SKIP_PASS();
+  // MetalFX encodes its own passes: no encoder may be open on the command buffer
+  setEncoder(E_None,nullptr);
+
+  auto& s      = reinterpret_cast<MtTexture&>(src);
+  auto& d      = reinterpret_cast<MtTexture&>(dst);
+  auto& scaler = device.spatialScaler(*s.impl, *d.impl);
+  scaler.setInputContentWidth (s.impl->width());
+  scaler.setInputContentHeight(s.impl->height());
+  scaler.setColorTexture (s.impl.get());
+  scaler.setOutputTexture(d.impl.get());
+  scaler.encodeToCommandBuffer(impl.get());
+  }
+
 void MtCommandBuffer::copy(AbstractGraphicsApi::Buffer& dest, size_t offset,
                            AbstractGraphicsApi::Texture& src, uint32_t width, uint32_t height, uint32_t mip) {
   setEncoder(E_Blit,nullptr);

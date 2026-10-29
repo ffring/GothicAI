@@ -147,6 +147,7 @@ Gothic::Gothic() {
                 Resources::device().properties().type==Tempest::DeviceType::Discrete); // ssao
   defaults->set("INTERNAL",     "vidResIndex", 0); // full-res
   defaults->set("INTERNAL",     "halfResAoFog", 1); // SSAO and fog shadows at half resolution
+  defaults->set("INTERNAL",     "spatialUpscale", 1); // MetalFX for reduced resolution, where supported
 
   defaults->set("VIDEO", "zVidBrightness", 0.5f);
   defaults->set("VIDEO", "zVidContrast",   0.5f);
