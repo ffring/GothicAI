@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {TRANSITION_DUR} from './parts/timing.ts';
 
 // The plan of a short (plan.json in the short's workspace). Times are seconds: `at`, `until` and keyframes from the
 // start of their beat, words and voice lines from the start of the short. A missing field fails the render.
@@ -305,8 +306,10 @@ const Beat = z.object({
   freeze: z.number().optional(), // footage stops here (seconds into the beat)
   zoom: z.object({at: z.number(), dur: z.number(), scale: z.number(), x: z.number(), y: z.number(),
     ease: z.enum(['inOut', 'linear']).default('inOut')}).optional(), // linear: a slow push across the beat
-  // how this beat comes in; the beat before it stays under it for `dur` (parts/motion.ts), so no time moves
-  enter: z.object({type: z.enum(['fade', 'slide', 'wipe', 'zoom', 'flash']), dur: z.number().positive().default(0.35)}).optional(),
+  // how this beat comes in; the beat before it stays under it for `dur` (parts/motion.ts), so no time moves.
+  // Without `dur`: 0.5 s for a slide or wipe (the whole frame travels), 0.35 s for the rest (parts/timing.ts)
+  enter: z.object({type: z.enum(['fade', 'slide', 'wipe', 'zoom', 'flash']), dur: z.number().positive().optional()})
+    .transform((e) => ({type: e.type, dur: e.dur ?? TRANSITION_DUR[e.type]})).optional(),
   game: z.number().default(1), // the beat's relative game level, also kept in the game stem
   texts: z.array(Text).default([]),
   tags: z.array(Tag).default([]),
