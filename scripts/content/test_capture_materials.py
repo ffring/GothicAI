@@ -33,13 +33,18 @@ def test_waiting_captures_do_not_share_runtime(tmp_path):
     script.parent.mkdir(parents=True)
     shutil.copy2(SCRIPT, script)
     shutil.copy2(SCRIPT.parents[1] / "base-ensure.sh", repo / "scripts/base-ensure.sh")
+    shutil.copy2(SCRIPT.parents[1] / "ryzen_game.py", repo / "scripts/ryzen_game.py")
     engine_source = repo / "OpenGothic/source.cpp"
     engine_source.parent.mkdir()
     engine_source.write_bytes(b"fixture engine source")
     digest = hashlib.sha256(b"source.cpp\0" + hashlib.sha256(engine_source.read_bytes()).digest()).hexdigest()
     home = tmp_path / "remote-home"
     binary = home / f"gothic-ai/engine-cache/{digest}/Gothic2Notr"
-    (home / "gothic-ai/game/Data").mkdir(parents=True)
+    settings = home / "gothic-ai/game-settings/system"
+    settings.mkdir(parents=True)
+    for name in ("Gothic.ini", "SystemPack.ini"):
+        (settings / name).write_text("fixture")
+    (home / "gothic-ai/game-base.json").write_text(json.dumps({"base": "a" * 64, "videos": "b" * 64}))
     queue = tmp_path / "queued"
     queue.mkdir()
     release = tmp_path / "release"
@@ -109,6 +114,8 @@ raise SystemExit(subprocess.call(command))
             (tools / "run-ryzen.sh").write_text('''#!/usr/bin/env bash
 set -euo pipefail
 R="$HOME/gothic-ai/render-features"
+# Fixture of the historical game argument, rewritten in the private copy.
+: -g "$HOME/legacy-install"
 D="$1/material-a"
 mkdir -p "$D"
 python3 - "$R" "$D/inputs.json" <<'PY'
@@ -119,6 +126,10 @@ root = Path(sys.argv[1])
 files = ('build/opengothic/Gothic2Notr', 'save_slot_1.sav', 'gpu-nvidia.py', 'discard-ffmpeg.sh')
 data = {name: (root / name).read_text() for name in files}
 data['runner'] = 'VARIANT'
+import os
+data['game'] = os.environ['GOTHIC_DIR']
+data['base'] = os.environ['OPENGOTHIC_BASE_FINGERPRINT']
+data['videos'] = os.environ['OPENGOTHIC_VIDEOS_FINGERPRINT']
 Path(sys.argv[2]).write_text(json.dumps(data))
 PY
 printf '0\n' >"$D/exit.txt"
@@ -158,5 +169,27 @@ printf 'materials: 1 entries from fixture\n[bench] goto NW_CITY_MERCHANT_SHOP01_
             "gpu-nvidia.py": f"gpu-{variant}",
             "discard-ffmpeg.sh": f"ffmpeg-{variant}",
             "runner": variant,
+            "game": str(home / "gothic-ai/game-settings"),
+            "base": "a" * 64,
+            "videos": "b" * 64,
         }
     assert seen == {"A", "B"}
+
+
+def test_remote_capture_requires_setup_before_creating_run(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    script = tools / SCRIPT.name
+    shutil.copy2(SCRIPT, script)
+    shutil.copy2(SCRIPT.parents[1] / "ryzen_game.py", tools / "ryzen_game.py")
+    home = tmp_path / "home"
+    home.mkdir()
+    task = home / "gothic-ai/material-bakeoff"
+    env = {key: value for key, value in os.environ.items()
+           if key != "GOTHIC_DIR" and not key.startswith("OPENGOTHIC_BASE")
+           and key != "OPENGOTHIC_VIDEOS_FINGERPRINT"}
+    result = subprocess.run(["bash", str(script), "--remote", str(task), "missing-setup"],
+                            env=dict(env, HOME=str(home)), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "Run scripts/ryzen.sh setup first" in result.stderr
+    assert not (home / "gothic-ai").exists()

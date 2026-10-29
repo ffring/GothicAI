@@ -12,6 +12,18 @@ if [[ -n "$expect_existing" && "$stage" != record-follow-below-gate ]]; then
   echo 'Existing corpus regression requires record-follow-below-gate' >&2; exit 2
 fi
 export GQ_OWNER=nav-demos-v4
+# Validate the shared settings before creating task directories or queue jobs.
+game_env=()
+for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
+printf -v game_command '%q ' env ${game_env[@]+"${game_env[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")"
+game_settings="$(ssh -o ConnectTimeout=10 ryzen "$game_command")"
+eval "$game_settings"
+game_env=()
+for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-demos-v4" "$HOME"')"
 ssh ryzen 'df -h "$HOME"'
 ssh ryzen "mkdir -p '$task/source' '$task/input'"
@@ -38,6 +50,8 @@ ssh ryzen "cat > '$task/phase.sh'" <<'PHASE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/source/scripts/ryzen_game.py")"
+eval "$game_settings"
 stage="${1:?phase}"
 expect_existing="${2:-}"
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
@@ -85,4 +99,4 @@ else
 fi
 PHASE
 "$ROOT/scripts/gq" submit --class batch --threads 12 --cpu-quota 1200% --mem 8G --max 2h \
-  --name "nav demos v4 $stage" -- bash "$task/phase.sh" "$stage" "$expect_existing"
+  --name "nav demos v4 $stage" -- env "${game_env[@]}" bash "$task/phase.sh" "$stage" "$expect_existing"

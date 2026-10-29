@@ -5,6 +5,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 stage="${1:?Usage: nav-teacher-v3-remote.sh build|bootstrap|prepare|campaign|evaluate|diagnose|retry|visible|oracle|oracle-resume}"
 case "$stage" in build|bootstrap|prepare|campaign|evaluate|diagnose|retry|visible|oracle|oracle-resume) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-teacher-v3
+# Validate the shared settings before creating task directories or queue jobs.
+game_env=()
+for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
+printf -v game_command '%q ' env ${game_env[@]+"${game_env[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")"
+game_settings="$(ssh -o ConnectTimeout=10 ryzen "$game_command")"
+eval "$game_settings"
+game_env=()
+for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-teacher-v3" "$HOME"')"
 ssh ryzen "mkdir -p '$task/source' '$task/input'"
 rsync -a --exclude=build --exclude='build-*' --exclude=__pycache__ \
@@ -20,6 +32,8 @@ ssh ryzen "cat > '$task/phase.sh'" <<'PHASE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/source/scripts/ryzen_game.py")"
+eval "$game_settings"
 stage="${1:?phase}"
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
 export PATH="$HOME/.local/bin:$VULKAN_SDK/bin:$PATH"
@@ -94,7 +108,7 @@ elif [[ "$stage" != build ]]; then
   selection=(--output "$data" --roads "$task/input/places.json"
     --training-pairs "$task/input/training-pairs.jsonl" --holdout "$task/input/holdout-cv.jsonl"
     --ppo-validation "$task/input/ppo-validation.jsonl")
-  runner=(--runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game"
+  runner=(--runner "$task/build/opengothic/gothic-body-runner" --assets "$GOTHIC_DIR"
     --save "$task/input/save.sav" --cache "$task/cache" --links "$task/input/accepted-links.txt"
     --roads "$task/input/places.json" --output "$data")
   "$task/.venv/bin/python" -I scripts/nav_teacher_v3.py candidates "${selection[@]}"
@@ -114,4 +128,4 @@ if [[ "$stage" == campaign || "$stage" == evaluate || "$stage" == diagnose || "$
   cpu_args=(--cpu-quota 1200%)
 fi
 "$ROOT/scripts/gq" submit --class batch --threads "$threads" --mem 8G --max 2h "${cpu_args[@]}" \
-  --name "nav teacher v3 $stage" -- bash "$task/phase.sh" "$stage"
+  --name "nav teacher v3 $stage" -- env "${game_env[@]}" bash "$task/phase.sh" "$stage"

@@ -1,6 +1,9 @@
 """Budget and exact historical-link coverage for the CV probe collector."""
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -119,3 +122,33 @@ def test_discovery_counts_new_directed_links_only():
     reverse = dict(old, start=old["end"], end=old["start"], id=3)
     climb = dict(old, type=2, id=4)
     assert jumps.novel_links([repeated, reverse, climb, climb], [old]) == [reverse, climb]
+
+
+def test_remote_launch_requires_setup_before_directories_or_queue(tmp_path, monkeypatch):
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    calls = tmp_path / "ssh-calls"
+    ssh = tools / "ssh"
+    ssh.write_text(f"#!{sys.executable}\n" + """import os
+from pathlib import Path
+import subprocess
+import sys
+with Path(os.environ["SSH_CALLS"]).open("a") as stream:
+    stream.write("ssh\\n")
+raise SystemExit(subprocess.run(["bash", "-c", sys.argv[-1]]).returncode)
+""")
+    ssh.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    for key in tuple(os.environ):
+        if key == "GOTHIC_DIR" or key.startswith("OPENGOTHIC_BASE") or key == "OPENGOTHIC_VIDEOS_FINGERPRINT":
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tools) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("SSH_CALLS", str(calls))
+    script = Path(__file__).resolve().parents[1] / "nav-jumps-remote.sh"
+    result = subprocess.run(["bash", str(script), "build"], capture_output=True, text=True)
+    assert result.returncode == 1
+    assert "Run scripts/ryzen.sh setup first" in result.stderr
+    assert calls.read_text().splitlines() == ["ssh"]
+    assert not (home / "gothic-ai").exists()

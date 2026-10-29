@@ -6,6 +6,11 @@ BUILD="$ROOT/OpenGothic/build-perf"
 
 fail() { echo "perf: $*" >&2; exit 2; }
 
+if [[ "${PERF_REMOTE:-0}" == 1 ]]; then
+  game_environment="$(python3 "$ROOT/scripts/ryzen_game.py")"
+  eval "$game_environment"
+fi
+
 build_game() {
   local out="$1"
   mkdir -p "$out"
@@ -44,7 +49,6 @@ export PERF_WINDOW PERF_REPEAT PERF_WAIT
 export PERF_ARGS="${PERF_ARGS:-}" PERF_ENV="${PERF_ENV:-}" PERF_VID_RES="${PERF_VID_RES:-0}"
 if [[ "$REMOTE_RUN" == 0 ]]; then
   OUT="$ROOT/.bench/perf-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-  mkdir -p "$OUT"
   export PERF_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
   export PERF_DIRTY="$(git -C "$ROOT" status --porcelain --untracked-files=normal | wc -l | tr -d ' ')"
   BENCH_HOST="${BENCH_HOST:-local}"
@@ -57,6 +61,12 @@ if [[ "$REMOTE_RUN" == 0 ]]; then
       ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" "$command"
     }
     REMOTE_HOME="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$RYZEN_HOST" 'printf "%s" "$HOME"')"
+    GAME_ENV=()
+    for name in GOTHIC_DIR OPENGOTHIC_BASE OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT OPENGOTHIC_BASE_CACHE OPENGOTHIC_BASE_STORE; do
+      if [[ -n "${!name+set}" ]]; then GAME_ENV+=("$name=${!name}"); fi
+    done
+    remote env ${GAME_ENV[@]+"${GAME_ENV[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")" --check
+    mkdir -p "$OUT"
     TASK="$REMOTE_HOME/gothic-ai/perf-stand"
     SOURCE="$TASK/source"
     REMOTE_OUT="$TASK/runs/${OUT##*/}"
@@ -64,13 +74,12 @@ if [[ "$REMOTE_RUN" == 0 ]]; then
     remote mkdir -p "$SOURCE/OpenGothic" "$SOURCE/scripts/bench" "$REMOTE_OUT"
     remote df -h "$REMOTE_HOME"
     rsync -a --delete --exclude='/build*/' --exclude='.git' "$ROOT/OpenGothic/" "$RYZEN_HOST:$SOURCE/OpenGothic/"
-    rsync -a "$ROOT/scripts/perf.sh" "$ROOT/scripts/perf_report.py" "$ROOT/scripts/base-ensure.sh" "$RYZEN_HOST:$SOURCE/scripts/"
+    rsync -a "$ROOT/scripts/perf.sh" "$ROOT/scripts/perf_report.py" "$ROOT/scripts/base-ensure.sh" "$ROOT/scripts/ryzen_game.py" "$RYZEN_HOST:$SOURCE/scripts/"
     rsync -a --delete --exclude='/build*/' "$ROOT/scripts/convert/" "$RYZEN_HOST:$SOURCE/scripts/convert/"
     rsync -a "$ROOT"/scripts/bench/perf-*.bench "$RYZEN_HOST:$SOURCE/scripts/bench/"
     REMOTE_ENV=(PERF_REMOTE=1 "PERF_VID_RES=$PERF_VID_RES" "PERF_WINDOW=$PERF_WINDOW" "PERF_REPEAT=$PERF_REPEAT" "PERF_WAIT=$PERF_WAIT"
       "PERF_ARGS=$PERF_ARGS" "PERF_ENV=$PERF_ENV" "PERF_COMMIT=$PERF_COMMIT" "PERF_DIRTY=$PERF_DIRTY"
-      "GOTHIC_DIR=$REMOTE_HOME/gothic-ai/game" "OPENGOTHIC_BASE_CACHE=$TASK/base-cache"
-      "OPENGOTHIC_BASE_STORE=/mnt/shared/gothic-ai/perf-stand" "OPENGOTHIC_BASE=")
+      "OPENGOTHIC_BASE_CACHE=$TASK/base-cache" ${GAME_ENV[@]+"${GAME_ENV[@]}"})
     if [[ "${NO_BUILD:-0}" != 1 ]]; then
       "$ROOT/scripts/gq" --host "$RYZEN_HOST" run --class quick --threads "${RYZEN_JOBS:-8}" --mem 12G \
         --max 30m --wait-max "${RYZEN_LOCK_WAIT:-3600}" --name 'build perf stand' \
@@ -96,6 +105,7 @@ if [[ "$REMOTE_RUN" == 0 ]]; then
   fi
 fi
 
+mkdir -p "$OUT"
 GAME_BIN="${GAME_BIN:-$BUILD/opengothic/Gothic2Notr}"
 GOTHIC_DIR="${GOTHIC_DIR:-/Volumes/DevSSD/Dev/games/Gothic II}"
 if [[ "${NO_BUILD:-0}" != 1 ]]; then build_game "$OUT/build"; fi
@@ -104,7 +114,7 @@ grep -qx 'CMAKE_BUILD_TYPE:STRING=RelWithDebInfo' "$BUILD/CMakeCache.txt" || fai
 for setting in OPENGOTHIC_ENABLE_FRAME_PROFILE OPENGOTHIC_ENABLE_APP_CADENCE; do
   grep -qx "$setting:BOOL=ON" "$BUILD/CMakeCache.txt" || fail "build-perf lacks $setting=ON; rerun without NO_BUILD=1"
 done
-[[ -d "$GOTHIC_DIR/Data" ]] || fail "missing game data: $GOTHIC_DIR/Data"
+[[ "$REMOTE_RUN" == 1 || -d "$GOTHIC_DIR/Data" || -n "${OPENGOTHIC_BASE:-}${OPENGOTHIC_BASE_FINGERPRINT:-}" ]] || fail "missing game data: $GOTHIC_DIR/Data"
 
 if [[ "$REMOTE_RUN" == 1 ]]; then
   export XDG_RUNTIME_DIR="/run/user/$(id -u)" ALSOFT_DRIVERS=null

@@ -134,7 +134,7 @@ def prepare(args: argparse.Namespace) -> int:
     log_dir = new_log_dir()
     sup = Supervisor(
         [], None, log_dir, print_event,
-        preparation=preparation(layout.game_bin, layout.game_dir, log_dir),
+        preparation=preparation(layout.game_bin, layout.game_dir, log_dir, layout.game_env),
     )
     return asyncio.run(_run(sup))
 

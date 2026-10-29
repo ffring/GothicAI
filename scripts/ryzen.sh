@@ -488,31 +488,9 @@ require_prepared() {
 }
 
 game_settings() {
-  local fingerprints
-  fingerprints="$(python3 - "$HOME/gothic-ai/game-base.json" <<'PY'
-import json
-from pathlib import Path
-import re
-import sys
-
-try:
-    parts = json.loads(Path(sys.argv[1]).read_text())
-    base, videos = parts['base'], parts['videos']
-    if not isinstance(base, str) or not re.fullmatch('[0-9a-f]{64}', base):
-        raise ValueError('invalid base fingerprint')
-    if not isinstance(videos, str) or (videos and not re.fullmatch('[0-9a-f]{64}', videos)):
-        raise ValueError('invalid video fingerprint')
-    print(base, videos)
-except (OSError, ValueError, KeyError, TypeError) as error:
-    raise SystemExit(f'Run scripts/ryzen.sh setup first: {error}')
-PY
-)" || return 1
-  read -r OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT <<<"$fingerprints"
-  export OPENGOTHIC_BASE_FINGERPRINT OPENGOTHIC_VIDEOS_FINGERPRINT
-  export GOTHIC_DIR="$HOME/gothic-ai/game-settings"
-  [[ -f "$GOTHIC_DIR/system/Gothic.ini" && -f "$GOTHIC_DIR/system/SystemPack.ini" ]] || {
-    echo 'Run scripts/ryzen.sh setup first: game settings are missing' >&2; return 1;
-  }
+  local environment
+  environment="$(python3 "$ROOT/scripts/ryzen_game.py")" || return 1
+  eval "$environment"
 }
 
 build_engine() {
@@ -691,8 +669,6 @@ if [[ "$ACTION" == bench ]]; then
   [[ -f "$BENCH_SCENARIO" ]] || { echo "No scenario: $1" >&2; exit 2; }
   BENCH_SCENARIO="$(cd "$(dirname "$BENCH_SCENARIO")" && pwd)/$(basename "$BENCH_SCENARIO")"
   LOG_DIR="$2"
-  mkdir -p "$LOG_DIR"
-  LOG_DIR="$(cd "$LOG_DIR" && pwd)"
   if [[ -z "${WORLD:-}" && -z "${SAVE:-}" ]]; then
     COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
     SAVE="$(dirname "$COMMON")/save_slot_1.sav"
@@ -909,6 +885,21 @@ REMOTE
   remote python3 -c 'import json, os, pathlib, sys; path = pathlib.Path.home() / "gothic-ai/game-base.json"; temporary = path.with_suffix(f".json.tmp-{os.getpid()}"); temporary.write_text(json.dumps(dict(zip(("base", "videos"), sys.argv[1:]))) + "\n"); os.replace(temporary, path)' "$base_fingerprint" "$videos_fingerprint"
   echo "Ryzen: game settings and ready fingerprints synchronized in $((SECONDS - started))s"
   exit
+fi
+
+# Validate prepared content before creating a run directory, lock or queue request.
+BASE_ENV_ARGS=()
+while IFS= read -r name; do
+  case "$name" in
+    GOTHIC_DIR|OPENGOTHIC_BASE*|OPENGOTHIC_VIDEOS_FINGERPRINT) BASE_ENV_ARGS+=("$name=${!name}") ;;
+  esac
+done < <(compgen -e)
+if [[ "$ACTION" != clean ]]; then
+  remote env "${BASE_ENV_ARGS[@]}" python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")" --check
+fi
+if [[ "$ACTION" == bench ]]; then
+  mkdir -p "$LOG_DIR"
+  LOG_DIR="$(cd "$LOG_DIR" && pwd)"
 fi
 
 # Codex worktrees are named .../worktrees/<name>/<repo>; ordinary worktrees use their basename.
@@ -1279,7 +1270,7 @@ else
   [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; exit 2; }
 fi
 if [[ "$ACTION" == pytest ]]; then GQ_ARGS+=(--wait-max "$LOCK_WAIT"); fi
-ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS")
+ENV_ARGS=("RYZEN_LOCK_WAIT=$LOCK_WAIT" "RYZEN_JOBS=$JOBS" "${BASE_ENV_ARGS[@]}")
 sync_content
 if [[ "$ACTION" == bench ]]; then
   [[ -z "$AI_PORT" ]] || ENV_ARGS+=("RYZEN_AI_TUNNEL=1")
@@ -1300,7 +1291,7 @@ PY
   # Preserve game options, translating paths into this run's output directory.
   while IFS= read -r name; do
     case "$name" in
-      GOTHIC_DIR|OPENGOTHIC_TEXTURES|OPENGOTHIC_FRACTURE|OPENGOTHIC_CONTENT) continue ;;
+      GOTHIC_DIR|OPENGOTHIC_BASE*|OPENGOTHIC_VIDEOS_FINGERPRINT|OPENGOTHIC_TEXTURES|OPENGOTHIC_FRACTURE|OPENGOTHIC_CONTENT) continue ;;
       OPENGOTHIC_*|GOTHIC_*|TEMPEST_*|WORLD|TIMEOUT|SOUND|MUSIC|MOVABLE_VOBS|ARROW_STICKING|PHYSICS_NOISE|DESTRUCTION|BUOYANCY|CLOTH|CHARACTER_VIRTUAL|NPC_CHARACTER_VIRTUAL|MONSTER_CHARACTER_VIRTUAL|MELEE_BLADE_SHADOW|MELEE_PHYSICS_HITS|MELEE_POSTURE|MELEE_REACTIONS)
         value="$(bench_path "${!name}")"
         ENV_ARGS+=("$name=$value") ;;

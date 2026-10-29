@@ -1,4 +1,6 @@
+import json
 import os
+import shutil
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -277,6 +279,52 @@ def test_platform_log_and_texture_paths(monkeypatch, platform):
     else:
         assert default_log_root() == home / "Library/Logs/GothicAI"
         assert default_hd_textures() == home / ".local/share/gothic-ai/hd-textures/textures"
+
+
+def test_ryzen_settings_load_shared_fingerprints_before_preparation(config, tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    repo = home / "repo"
+    (repo / "server").mkdir(parents=True)
+    (repo / "server/pyproject.toml").touch()
+    (repo / "scripts").mkdir()
+    source = Path(__file__).resolve().parents[3] / "scripts/ryzen_game.py"
+    shutil.copyfile(source, repo / "scripts/ryzen_game.py")
+    binary = repo / "Gothic2Notr"
+    binary.touch(mode=0o755)
+    converter = repo / "content-convert"
+    converter.touch(mode=0o755)
+    config.set("paths.repo", str(repo))
+    config.set("paths.uv", "/bin/sh")
+    config.set("paths.game_bin", str(binary))
+    settings = home / "gothic-ai/game-settings"
+    config.set("game.dir", str(settings))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(commands.sys, "platform", "linux")
+    for key in (
+        "GOTHIC_DIR", "OPENGOTHIC_BASE", "OPENGOTHIC_BASE_FINGERPRINT", "OPENGOTHIC_VIDEOS_FINGERPRINT"
+    ):
+        monkeypatch.delenv(key, raising=False)
+    with pytest.raises(LaunchError, match="Run scripts/ryzen.sh setup first"):
+        find_layout(config)
+    assert not settings.exists()
+    (settings / "system").mkdir(parents=True)
+    for name in ("Gothic.ini", "SystemPack.ini"):
+        (settings / "system" / name).touch()
+    (home / "gothic-ai/game-base.json").write_text(json.dumps({"base": "a" * 64, "videos": "b" * 64}))
+    layout = find_layout(config)
+    selected = game(config, layout, PORTS, save="1")
+    assert selected.argv[-2:] == ["-save", "1"]
+    assert selected.cwd == layout.game_home
+    assert selected.env["OPENGOTHIC_BASE_FINGERPRINT"] == "a" * 64
+    assert selected.env["OPENGOTHIC_VIDEOS_FINGERPRINT"] == "b" * 64
+    prepared = preparation(binary, settings, tmp_path, selected.env)
+    assert prepared.argv == [str(converter), "resolve", str(settings)]
+    assert prepared.env["OPENGOTHIC_BASE_FINGERPRINT"] == "a" * 64
+    assert not (home / ".cache/gothic-ai/base/current").exists()
+    monkeypatch.setenv("OPENGOTHIC_BASE_FINGERPRINT", "c" * 64)
+    assert find_layout(config).game_env["OPENGOTHIC_BASE_FINGERPRINT"] == "c" * 64
+    monkeypatch.setenv("OPENGOTHIC_BASE", "/explicit/base")
+    assert preparation(binary, settings, tmp_path, game(config, find_layout(config), PORTS).env) is None
 
 
 def test_linux_missing_credentials_is_a_short_cli_error(config, tmp_path, monkeypatch, capsys):

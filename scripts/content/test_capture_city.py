@@ -290,6 +290,13 @@ def test_remote_dispatch_checks_each_variant_against_its_index(tmp_path, set_nam
     tools = capture / "runtime/tools"
     tools.mkdir(parents=True)
     (tools / "capture-city.sh").write_text(SCRIPT.read_text())
+    for name in ("ryzen_game.py", "base-ensure.sh"):
+        (tools / name).write_text((SCRIPT.parents[1] / name).read_text())
+    settings = tmp_path / "gothic-ai/game-settings/system"
+    settings.mkdir(parents=True)
+    for name in ("Gothic.ini", "SystemPack.ini"):
+        (settings / name).write_text("fixture")
+    (tmp_path / "gothic-ai/game-base.json").write_text(json.dumps({"base": "a" * 64, "videos": ""}))
     (tools / "city.bench").write_text("goto MARKT\nshot market\n")
     for variant in variants:
         directory = capture / "content" / variant / "materials"
@@ -319,7 +326,7 @@ Path(os.environ['OPENGOTHIC_CENSUS']).write_text(json.dumps({
     'files': [original] if variant == 'before' else [], 'replacements': replacements}))
 PY
 ''')
-    result = subprocess.run(["bash", str(SCRIPT), "--remote", str(task), "fixture", set_name],
+    result = subprocess.run(["bash", str(tools / "capture-city.sh"), "--remote", str(task), "fixture", set_name],
                             capture_output=True, text=True, env={**os.environ, "HOME": str(tmp_path)})
     assert result.returncode == 0, result.stdout + result.stderr
     assert [line.split(":", 1)[0] for line in result.stdout.splitlines()] == list(variants)

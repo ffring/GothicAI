@@ -7,6 +7,18 @@ stage="${1:-build-chain}"
   echo 'Usage: nav-demos-v5-remote.sh [build-chain|record-chain]' >&2; exit 2;
 }
 export GQ_OWNER=nav-demos-v5
+# Validate the shared settings before creating task directories or queue jobs.
+game_env=()
+for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
+printf -v game_command '%q ' env ${game_env[@]+"${game_env[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")"
+game_settings="$(ssh -o ConnectTimeout=10 ryzen "$game_command")"
+eval "$game_settings"
+game_env=()
+for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-demos-v5" "$HOME"')"
 archive=/mnt/shared/gothic-ai/nav-demos-v5
 ssh ryzen "bash -s -- '$task' '$archive'" <<'INPUTS'
@@ -40,6 +52,8 @@ ssh ryzen "cat > '$task/phase.sh'" <<'PHASE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/source/scripts/ryzen_game.py")"
+eval "$game_settings"
 archive=/mnt/shared/gothic-ai/nav-demos-v5
 stage="${1:?phase}"
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
@@ -71,4 +85,4 @@ exec "$task/.venv/bin/python" -I scripts/nav_demos_v5_chain.py \
   --task "$task" --archive-root "$archive" --stage "$next_stage" --submit
 PHASE
 "$ROOT/scripts/gq" submit --class batch --threads 12 --cpu-quota 1200% --mem 8G --max 2h \
-  --name "nav demos v5 $stage" -- bash "$task/phase.sh" "$stage"
+  --name "nav demos v5 $stage" -- env "${game_env[@]}" bash "$task/phase.sh" "$stage"

@@ -5,6 +5,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 stage="${1:?Usage: nav-perception-remote.sh build|compare|evaluate|safety|water}"
 case "$stage" in build|compare|evaluate|safety|water) ;; *) echo "Unknown phase: $stage" >&2; exit 2;; esac
 export GQ_OWNER=nav-perception
+# Validate the shared settings before creating task directories or queue jobs.
+game_env=()
+for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
+printf -v game_command '%q ' env ${game_env[@]+"${game_env[@]}"} python3 -c "$(cat "$ROOT/scripts/ryzen_game.py")"
+game_settings="$(ssh -o ConnectTimeout=10 ryzen "$game_command")"
+eval "$game_settings"
+game_env=()
+for key in GOTHIC_DIR OPENGOTHIC_VIDEOS_FINGERPRINT ${!OPENGOTHIC_BASE@}; do
+  [[ -z "${!key+x}" ]] || game_env+=("$key=${!key}")
+done
 task="$(ssh -o ConnectTimeout=10 ryzen 'printf "%s/gothic-ai/nav-perception" "$HOME"')"
 ssh ryzen "mkdir -p '$task/source' '$task/input'"
 rsync -a --exclude=build --exclude='build-*' --exclude=__pycache__ \
@@ -16,6 +28,8 @@ ssh ryzen "cat > '$task/phase.sh'" <<'PHASE'
 #!/usr/bin/env bash
 set -euo pipefail
 task="$(cd "$(dirname "$0")" && pwd)"
+game_settings="$(python3 "$task/source/scripts/ryzen_game.py")"
+eval "$game_settings"
 stage="${1:?phase}"
 export VULKAN_SDK="$HOME/gothic-ai/body-baseline/toolchain/vulkan-1.4.341.0"
 export PATH="$HOME/.local/bin:$VULKAN_SDK/bin:$PATH"
@@ -52,7 +66,7 @@ water-new-mountainlake 42515 2918 -25361
 SHORES
   safety_status=0
   "$task/.venv/bin/python" -I scripts/nav_perception_safety.py --task "$task" \
-    --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
+    --runner "$task/build/opengothic/gothic-body-runner" --assets "$GOTHIC_DIR" \
     --save "$task/input/save.sav" --cache "$task/safety-cache" --roads "$task/input/places.json" \
     --links "$HOME/gothic-ai/nav-jumps/accepted-links-cv.txt" \
     --routes "$HOME/gothic-ai/nav-jumps/routes/routes.jsonl" \
@@ -74,7 +88,7 @@ elif [[ "$stage" == evaluate || "$stage" == safety ]]; then
   # Both independent measurements run even if one reports a failed criterion.
   safety_status=0
   "$task/.venv/bin/python" -I scripts/nav_perception_safety.py --task "$task" \
-    --runner "$task/build/opengothic/gothic-body-runner" --assets "$HOME/gothic-ai/game" \
+    --runner "$task/build/opengothic/gothic-body-runner" --assets "$GOTHIC_DIR" \
     --save "$task/input/save.sav" --cache "$task/safety-cache" --roads "$task/input/places.json" \
     --links "$HOME/gothic-ai/nav-jumps/accepted-links-cv.txt" \
     --routes "$HOME/gothic-ai/nav-jumps/routes/routes.jsonl" \
@@ -92,4 +106,4 @@ elif [[ "$stage" == evaluate || "$stage" == safety ]]; then
 fi
 PHASE
 "$ROOT/scripts/gq" submit --class batch --threads 12 --mem 8G --max 2h --cpu-quota 1200% \
-  --name "nav perception $stage" -- bash "$task/phase.sh" "$stage"
+  --name "nav perception $stage" -- env "${game_env[@]}" bash "$task/phase.sh" "$stage"

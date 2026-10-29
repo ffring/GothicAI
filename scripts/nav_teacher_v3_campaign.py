@@ -15,6 +15,7 @@ import importlib.util
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -219,7 +220,7 @@ def resume_metadata(directory, value, version, require_samples=True):
 def worker_args(options, version, index):
     task = options.task
     return SimpleNamespace(output=task / "workers" / f"v{version}-{index}",
-                           runner=task / "build/opengothic/gothic-body-runner", assets=task.parent / "game",
+                           runner=task / "build/opengothic/gothic-body-runner", assets=Path(os.environ.get("GOTHIC_DIR", Path.home() / "gothic-ai/game-settings")),
                            save=task / "input/save.sav", cache=task / "cache", links=task / "input/accepted-links.txt",
                            roads=task / "input/places.json", npc="BAU_954_MALETH", ini=None, seed=19102026,
                            physics="cv", watchdog_seconds=900, limit_ms=options.limit_ms,
@@ -1042,6 +1043,8 @@ def main():
     parser.add_argument("--limit-ms", type=int, default=240000)
     parser.add_argument("--budget-seconds", type=float, default=6900)
     options = parser.parse_args()
+    if options.stage != "analyze":
+        os.environ.update(module("ryzen_game").game_environment())
     if not options.task.is_absolute() or not options.data.is_absolute():
         parser.error("--task and --data must be absolute")
     if not 1 <= options.parallel <= 3 or min(options.min_points, options.min_objects, options.min_object_places, options.per_region, options.limit_ms, options.budget_seconds) <= 0:
