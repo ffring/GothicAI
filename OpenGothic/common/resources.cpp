@@ -111,8 +111,8 @@ Resources::Resources() {
   fBuff.reserve(8*1024*1024);
   }
 
-Resources::Resources(Tempest::Device &device, BaseImport::Progress progress)
-  : baseProgress(std::move(progress)), dev(&device), sound(std::make_unique<Tempest::SoundDevice>()) {
+Resources::Resources(Tempest::Device &device)
+  : dev(&device), sound(std::make_unique<Tempest::SoundDevice>()) {
   inst=this;
   initCensus();
 
@@ -196,7 +196,6 @@ Resources::Resources(Tempest::Device &device, BaseImport::Progress progress)
   }
 
 void Resources::zenkitLog(zenkit::LogLevel lvl, const char* cat, const char* message) {
-  BaseImport::onZenkitLog(lvl,cat,message);
   if(preparingVideo) return;
   switch (lvl) {
     case zenkit::LogLevel::ERROR:
@@ -228,7 +227,6 @@ void Resources::loadBase() {
     inst->automaticBase=BaseStore::resolve(gothic,archives,
                                          [](std::string_view message) {
       Log::i(message);
-      if(inst->baseProgress) inst->baseProgress(message);
       });
     inst->indexBaseContent();
     BaseImport::Files identityLoose;
@@ -273,7 +271,6 @@ void Resources::loadBase() {
       throw std::runtime_error("selected base archives differ from music base index: "+inst->baseMusic.dir.string());
     validateLoose(inst->baseMusic.looseFiles,"music");
     Log::i("base: ",inst->baseMusic.records.size()," music records from \"",inst->baseMusic.dir.string(),"\"");
-    inst->baseProgress={};
     }
   catch(const std::exception& e) { throw BaseStore::Error(e.what()); }
   }
@@ -298,11 +295,10 @@ void Resources::startVideoBase() {
   inst->videoWorker=std::thread([state,gothic] {
     preparingVideo=true;
     try {
-      const size_t workers=std::max<size_t>(1,std::min<size_t>(4,std::thread::hardware_concurrency()/2));
       auto selection=BaseStore::resolveVideos(gothic,[](std::string_view message) {
-        // Import diagnostics never use the application's log callback.
+        // Background selection diagnostics do not use the application's log callback.
         std::fprintf(stderr,"%.*s\n",int(message.size()),message.data());
-        },state->cancelled,workers);
+        },state->cancelled);
       std::map<std::string,std::filesystem::path> files;
       for(const auto& entry:VideoData::readIndex(selection.path)) files.emplace(entry.source.name,selection.path/entry.file);
       std::lock_guard<std::mutex> guard(state->sync);

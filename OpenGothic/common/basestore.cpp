@@ -180,7 +180,7 @@ class Current {
 
 std::runtime_error missingBase(const fs::path& gothic, const std::string& reason={}) {
   return std::runtime_error("no ready base for "+gothic.string()+
-    "; run once with the installation or set OPENGOTHIC_BASE"+(reason.empty() ? "" : ": "+reason));
+    "; start through the launcher or run content-convert resolve <game directory>"+(reason.empty() ? "" : ": "+reason));
   }
 
 VideoData::Identity readVideoIdentity(const fs::path& directory) {
@@ -339,7 +339,7 @@ void prune(const fs::path& cache, const fs::path& current, const std::atomic_boo
 
 void BaseStore::setPublication(bool enabled) { publicationEnabled=enabled; }
 
-BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mounted, const BaseImport::Progress& log) {
+BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport::Files& mounted, const BaseImport::Progress& log, const Import& import) {
   const auto start=std::chrono::steady_clock::now();
   const auto cache=cacheRoot();
   fs::create_directories(cache);
@@ -413,6 +413,17 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
   std::string rejection;
   if(reused && !BaseImport::matches(pointed,identity,false,&rejection)) reused=false;
   if(!installed && !reused) throw missingBase(gothic,rejection);
+  if(!reused && !import) {
+    const auto ready=[](const fs::path& root) {
+      std::error_code error;
+      for(const auto& entry:fs::directory_iterator(root,error))
+        if(fingerprintName(entry.path().filename().string()) && fs::is_regular_file(entry.path()/"base.json",error))
+          return true;
+      return false;
+      };
+    const auto store=storeRoot();
+    if(!ready(cache) && (store.empty() || !ready(store/"base"))) throw missingBase(gothic,rejection);
+    }
   if(!reused) identity=identify();
   const auto destination=reused ? pointed : cache/identity.fingerprint;
   auto store=storeRoot();
@@ -484,6 +495,7 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
       storeLock.reset();
       }
     }
+  if(!import) throw missingBase(gothic,rejection);
   // The current importer supports the installed Gothic II Data/*.vdf set. Never
   // label a base built from a different set (e.g. selected mods) with this identity.
   log("base: identifying installation");
@@ -491,14 +503,15 @@ BaseStore::Selection BaseStore::resolve(const fs::path& gothic, const BaseImport
     throw std::runtime_error("mounted archives differ from the supported installation import");
   Temporary temporary(destination);
   log("base: importing installation");
-  BaseImport::build(gothic,temporary.path,log);
+  import(temporary.path);
   storeLock.reset();
   publish(temporary.path,destination,identity);
   return finish("import");
   }
 
 BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const BaseImport::Progress& log,
-                                             std::shared_ptr<std::atomic_bool> cancelled, size_t workers) {
+                                             std::shared_ptr<std::atomic_bool> cancelled, const Import& import,
+                                             const IdentifyVideos& identify) {
   const auto start=std::chrono::steady_clock::now();
   const auto* fingerprint=std::getenv("OPENGOTHIC_VIDEOS_FINGERPRINT");
   if(fingerprint && !*fingerprint)
@@ -555,7 +568,14 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
                              (rejection.empty() ? "missing from video base" : rejection));
   if(!reused) {
     log("video base: identifying installation");
-    identity=VideoData::identify(gothic,cancelled.get());
+    if(identify) identity=identify();
+    else {
+      BaseImport::Files mounted;
+      for(const auto& archive:BaseImport::runtimeArchives(gothic))
+        if(!archive.mod) mounted.emplace_back(archive.name,archive.size);
+      auto base=resolve(gothic,mounted,log);
+      identity=VideoData::identifyFromBase(base.path,cancelled.get());
+      }
     log("video base: identified installation ("+std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now()-start).count())+" ms)");
     }
@@ -663,9 +683,10 @@ BaseStore::Selection BaseStore::resolveVideos(const fs::path& gothic, const Base
       }
     }
   checkVideoCancelled(cancelled.get());
+  if(!import) throw std::runtime_error("no ready video base for "+gothic.string()+"; run content-convert resolve <game directory>");
   Temporary temporary(destination,cancelled.get());
   log("video base: importing installation");
-  VideoData::build(gothic,temporary.path,log,cancelled.get(),workers);
+  import(temporary.path);
   storeLock.reset();
   storedLease.reset();
   publishVideo(temporary.path,destination,identity,cancelled.get());

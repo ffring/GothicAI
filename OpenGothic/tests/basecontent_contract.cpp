@@ -2953,7 +2953,7 @@ struct BaseContentContract {
         }
       catch(const BaseStore::Error& error) { missingIndexError=error.what(); }
       require(missingIndexError.find("missing or unreadable base file: "+(incomplete/kind/(kind+".json")).string())!=std::string::npos &&
-              missingIndexError.find("Unset OPENGOTHIC_BASE to import automatically")!=std::string::npos,
+              missingIndexError.find("content-convert resolve <game directory>")!=std::string::npos,
               "base without "+kind+"/"+kind+".json must fail with recovery instructions");
       }
     {
