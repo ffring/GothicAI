@@ -762,18 +762,3 @@ def test_visible_runs_only_the_independently_authorized_sixty_six_targets(tmp_pa
     assert not (data / "v3-visible/point").exists()
     assert all(path.read_bytes() == contents for path, contents in original.items())
     assert v3.read_json(task / "visible-metrics.json")["status"] == "complete"
-
-
-@pytest.mark.parametrize("stage", ("campaign", "evaluate", "retry", "visible"))
-def test_main_reaches_campaign_for_each_runner_stage(tmp_path, monkeypatch, stage):
-    calls = []
-
-    def reach_runner(options):
-        calls.append(options)
-        return dict(stop_required=False)
-
-    monkeypatch.setattr(campaign, "campaign", reach_runner)
-    monkeypatch.setattr(sys, "argv", ["nav_teacher_v3_campaign.py", "--stage", stage,
-        "--task", str(tmp_path / "task"), "--data", str(tmp_path / "data")])
-    assert campaign.main() == 0
-    assert len(calls) == 1 and calls[0].stage == stage

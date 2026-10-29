@@ -3,6 +3,7 @@ import csv
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -10,6 +11,26 @@ import pytest
 SPEC = importlib.util.spec_from_file_location("perf_report", Path(__file__).parents[1] / "perf_report.py")
 report = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(report)
+
+
+@pytest.mark.parametrize("cache", (None, "/custom/base-cache"))
+def test_remote_perf_uses_setup_cache_unless_caller_overrides(monkeypatch, cache):
+    source = (Path(__file__).parents[1] / "perf.sh").read_text()
+    collect = "GAME_ENV=()" + source.split("    GAME_ENV=()", 1)[1].split("    remote env", 1)[0]
+    remote = "REMOTE_ENV=(" + source.split("    REMOTE_ENV=(", 1)[1].split("\n    if [[", 1)[0]
+    monkeypatch.delenv("OPENGOTHIC_BASE_CACHE", raising=False)
+    if cache is not None:
+        monkeypatch.setenv("OPENGOTHIC_BASE_CACHE", cache)
+    harness = r'''
+set -euo pipefail
+for name in PERF_VID_RES PERF_WINDOW PERF_REPEAT PERF_WAIT PERF_ARGS PERF_ENV PERF_COMMIT PERF_DIRTY; do
+  printf -v "$name" '%s' fixture
+done
+TASK=/remote/task
+''' + collect + remote + '\nprintf "%s\\0" "${REMOTE_ENV[@]}"\n'
+    result = subprocess.run(["bash", "-c", harness], check=True, capture_output=True)
+    environment = dict(value.decode().split("=", 1) for value in result.stdout.split(b"\0") if value)
+    assert environment.get("OPENGOTHIC_BASE_CACHE") == cache
 
 
 def profile(directory, rows, gpu=False, extra_zone=False):

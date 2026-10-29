@@ -332,16 +332,20 @@ class Control:
             raise RequestError("Игра уже запущена")
         if mode not in ("menu", "continue", "new"):
             raise RequestError(f"unknown mode {mode!r}")
-        config = self._config()
-        if smoke:
-            from .cli import _smoke_settings
-
-            _smoke_settings(config)
-        if self.no_voice:
-            config.settings.voice.enabled = False
-        layout = find_layout(config)
         lock = SessionFile(self.state_file)
         left = lock.acquire()  # AlreadyRunning: a `gothic-launcher up` in a terminal holds it
+        try:
+            config = self._config()
+            if smoke:
+                from .cli import _smoke_settings
+
+                _smoke_settings(config)
+            if self.no_voice:
+                config.settings.voice.enabled = False
+            layout = find_layout(config)
+        except Exception:
+            lock.release()
+            raise
         save = latest_save(layout.game_home) if mode == "continue" else None
         ports = Ports.free()
         log_dir = self.session_log_dir or new_log_dir(self.log_root)

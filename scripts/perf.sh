@@ -79,7 +79,7 @@ if [[ "$REMOTE_RUN" == 0 ]]; then
     rsync -a "$ROOT"/scripts/bench/perf-*.bench "$RYZEN_HOST:$SOURCE/scripts/bench/"
     REMOTE_ENV=(PERF_REMOTE=1 "PERF_VID_RES=$PERF_VID_RES" "PERF_WINDOW=$PERF_WINDOW" "PERF_REPEAT=$PERF_REPEAT" "PERF_WAIT=$PERF_WAIT"
       "PERF_ARGS=$PERF_ARGS" "PERF_ENV=$PERF_ENV" "PERF_COMMIT=$PERF_COMMIT" "PERF_DIRTY=$PERF_DIRTY"
-      "OPENGOTHIC_BASE_CACHE=$TASK/base-cache" ${GAME_ENV[@]+"${GAME_ENV[@]}"})
+      ${GAME_ENV[@]+"${GAME_ENV[@]}"})
     if [[ "${NO_BUILD:-0}" != 1 ]]; then
       "$ROOT/scripts/gq" --host "$RYZEN_HOST" run --class quick --threads "${RYZEN_JOBS:-8}" --mem 12G \
         --max 30m --wait-max "${RYZEN_LOCK_WAIT:-3600}" --name 'build perf stand' \
