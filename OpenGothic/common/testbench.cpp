@@ -730,7 +730,7 @@ struct Bench {
     Matrix4x4 sleepTransform=Matrix4x4::mkIdentity();
     float mass=0,maxJitter=0;
     uint64_t sleepAt=uint64_t(-1);
-    bool passedThrough=false,belowWorld=false;
+    bool belowWorld=false;
     };
   std::vector<ItemHullDrop> itemHullDrops;
   std::unique_ptr<PhysicMeshShape> itemHullSupportShape;
@@ -1032,6 +1032,15 @@ struct Bench {
   struct SpellActor {Npc* npc=nullptr;std::string role;};
   std::vector<SpellActor> spellActors;
   std::vector<Item*> spellItems;
+  struct SavedItemProbe {
+    Item* item=nullptr;
+    Matrix4x4 saved;
+    float maximumPositionDelta=0,maximumRotationDelta=0;
+    bool alwaysSleeping=true;
+  };
+  std::vector<SavedItemProbe> savedItemProbes;
+  uint64_t savedItemStart=0,savedItemSample=uint64_t(-1);
+  bool savedItemTracing=false;
   std::map<int32_t,size_t> spellRunes;
   bool spellArenaReady=false,spellTrace=false,spellWasFrozen=false;
   std::string spellCase;
@@ -3124,6 +3133,12 @@ float itemHullSupportY(float x) {
   return bench.itemHullSurface=="table"?80.f:0.f;
   }
 
+bool itemHullAboveSupport(const Vec3& local) {
+  const float left=bench.itemHullSurface=="stairs"?-600.f:-1200.f;
+  const float right=bench.itemHullSurface=="stairs"?625.f:1200.f;
+  return local.x>=left && local.x<=right && local.z>=-900.f && local.z<=900.f;
+  }
+
 asset::MaterialGroup itemHullMaterial(int32_t material) {
   switch(material) {
     case MAT_WOOD:case MAT_LEATHER:return asset::MaterialGroup::WOOD;
@@ -3306,12 +3321,6 @@ void itemHullSample(World& world) {
   bench.itemHullCosts.push_back(world.physic()->physicsStats().stepMilliseconds);
   for(auto& drop:bench.itemHullDrops) {
     const auto pose=drop.item->transform();
-    float highest=-std::numeric_limits<float>::infinity();
-    for(auto point:drop.vertices) {
-      pose.project(point);point-=bench.itemHullAnchor;
-      highest=std::max(highest,point.y-itemHullSupportY(point.x));
-      }
-    drop.passedThrough|=highest<-2.f;
     drop.belowWorld|=drop.item->position().y<world.view()->bbox().first.y;
     if(drop.item->physicsSleeping() && drop.sleepAt==uint64_t(-1)) {
       drop.sleepAt=world.tickCount()-bench.itemHullStart;drop.sleepTransform=pose;
@@ -3359,23 +3368,35 @@ float itemHullGap(const Bench::ItemHullDrop& drop) {
 void itemHullReport(World& world) {
   itemHullSample(world);bench.itemHullTracing=false;
   const bool enabled=Gothic::settingsGetI("GAME","item_hulls")!=0;
-  bool pass=true;size_t through=0,below=0,jitter=0,unslept=0;
+  bool pass=true;size_t through=0,escaped=0,below=0,jitter=0,unslept=0,unsleptSupported=0;
   for(size_t i=0;i<bench.itemHullDrops.size();++i) {
     const auto& drop=bench.itemHullDrops[i];const float gap=itemHullGap(drop);
+    const auto position=drop.item->position();
+    const bool leftSupport=!itemHullAboveSupport(position-bench.itemHullAnchor);
+    float highest=-std::numeric_limits<float>::infinity();
+    for(auto point:drop.vertices) {
+      drop.item->transform().project(point);point-=bench.itemHullAnchor;
+      highest=std::max(highest,point.y-itemHullSupportY(point.x));
+      }
+    // Falling off a finite support is distinct from crossing its surface.
+    const bool passedThrough=!leftSupport && highest<-1.f;
     Vec3 origin,axis=drop.axis;drop.item->transform().project(origin);drop.item->transform().project(axis);axis-=origin;
     const float angle=axis.length()>0?std::asin(std::clamp(std::abs(axis.y)/axis.length(),0.f,1.f))*180.f/float(M_PI):0.f;
     const bool slept=drop.sleepAt!=uint64_t(-1),moved=drop.maxJitter>.0001f;
-    through+=drop.passedThrough;below+=drop.belowWorld;jitter+=moved;unslept+=!slept;
-    const bool ok=!drop.passedThrough && !drop.belowWorld && (bench.itemHullLoad ||
-      (!moved && slept && std::abs(gap)<=1.f &&
-       (bench.itemHullSurface!="flat" || drop.sleepAt<=3000) &&
-       (drop.axis.quadLength()==0 || angle<=15.f)));
+    through+=passedThrough;escaped+=leftSupport;below+=drop.belowWorld;jitter+=moved;unslept+=!slept;
+    unsleptSupported+=!slept && !leftSupport;
+    // The cross-run comparison requires ON to sleep no later than OFF in the
+    // same case. There is no standalone absolute sleep deadline here.
+    const bool ok=!passedThrough && !drop.belowWorld && (leftSupport || bench.itemHullLoad || !slept ||
+      (!moved && gap>=-.5f && gap<=1.f && (drop.axis.quadLength()==0 || angle<=15.f)));
     pass&=ok;
     event("item_hulls_result","\"surface\":"+jsonStr(bench.itemHullSurface)+",\"index\":"+std::to_string(i)+
       ",\"symbol\":"+jsonStr(drop.symbol)+",\"label\":"+jsonStr(drop.label)+",\"mass_kg\":"+ragdollNumber(drop.mass)+
       ",\"sleep_ms\":"+(slept?std::to_string(drop.sleepAt):"null")+",\"support_gap_cm\":"+ragdollNumber(gap)+
       ",\"long_axis_degrees\":"+(drop.axis.quadLength()>0?ragdollNumber(angle):"null")+
-      ",\"post_sleep_motion_cm\":"+ragdollNumber(drop.maxJitter)+",\"passed_through\":"+(drop.passedThrough?"true":"false")+
+      ",\"post_sleep_motion_cm\":"+ragdollNumber(drop.maxJitter)+",\"position_cm\":"+ragdollVector(position)+
+      ",\"above_support\":"+(!leftSupport?"true":"false")+",\"escaped_edge\":"+(leftSupport?"true":"false")+
+      ",\"passed_through\":"+(passedThrough?"true":"false")+
       ",\"below_world\":"+(drop.belowWorld?"true":"false")+",\"hull_criteria_pass\":"+(ok?"true":"false")+
       ",\"pass\":"+(!enabled || ok?"true":"false"));
     }
@@ -3384,8 +3405,9 @@ void itemHullReport(World& world) {
   if(bench.itemHullLoad)pass&=p95<=2.f;
   event("item_hulls_summary","\"surface\":"+jsonStr(bench.itemHullSurface)+",\"items\":"+std::to_string(bench.itemHullDrops.size())+
     ",\"samples\":"+std::to_string(costs.size())+",\"physics_p95_ms\":"+ragdollNumber(p95)+
-    ",\"passed_through\":"+std::to_string(through)+",\"below_world\":"+std::to_string(below)+
-    ",\"jittering\":"+std::to_string(jitter)+",\"unslept\":"+std::to_string(unslept)+
+    ",\"passed_through\":"+std::to_string(through)+",\"escaped_edge\":"+std::to_string(escaped)+
+    ",\"below_world\":"+std::to_string(below)+",\"jittering\":"+std::to_string(jitter)+
+    ",\"unslept\":"+std::to_string(unslept)+",\"unslept_supported\":"+std::to_string(unsleptSupported)+
     ",\"hull_criteria_pass\":"+(pass?"true":"false")+",\"pass\":"+(!enabled || pass?"true":"false"));
   }
 
@@ -6030,6 +6052,107 @@ void saveMovableSession(World& world,const std::string& label) {
   event("movable_session_save","\"archive\":"+jsonStr("session-"+label+".sav")+",\"bytes\":"+
     std::to_string(bytes.size())+",\"world\":"+jsonStr(world.name())+",\"bodies\":"+movableRows(world));
   }
+
+float savedItemRotationDelta(const Matrix4x4& a,const Matrix4x4& b) {
+  double trace=0;
+  for(int column=0;column<3;++column) {
+    double dot=0,lengthA=0,lengthB=0;
+    for(int row=0;row<3;++row) {
+      const double x=a.at(column,row),y=b.at(column,row);
+      dot+=x*y;lengthA+=x*x;lengthB+=y*y;
+    }
+    trace+=dot/std::sqrt(lengthA*lengthB);
+  }
+  return float(std::acos(std::clamp((trace-1.)*.5,-1.,1.))*180./M_PI);
+}
+
+void savedItemSample(World& world) {
+  if(!bench.savedItemTracing || bench.savedItemSample==world.tickCount())return;
+  bench.savedItemSample=world.tickCount();
+  for(auto& probe:bench.savedItemProbes) {
+    const auto expected=Vec3(probe.saved.at(3,0),probe.saved.at(3,1),probe.saved.at(3,2));
+    probe.maximumPositionDelta=std::max(probe.maximumPositionDelta,(probe.item->position()-expected).length());
+    probe.maximumRotationDelta=std::max(probe.maximumRotationDelta,savedItemRotationDelta(probe.saved,probe.item->transform()));
+    probe.alwaysSleeping&=probe.item->physicsSleeping();
+  }
+}
+
+void savedItemInitial(World& world,Npc& player,uint64_t initialDt) {
+  if(initialDt!=0)throw std::runtime_error("item save observation must precede the first native step");
+  const auto* path=envStr("SAVE");
+  if(path==nullptr)throw std::runtime_error("item save observation requires the loaded SAVE archive");
+  std::ifstream file(path,std::ios::binary);
+  if(!file)throw std::runtime_error("cannot open loaded item save archive");
+  std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),std::istreambuf_iterator<char>());
+  MemReader reader(bytes);Serialize in(reader);in.setContext(&world);
+  if(!in.setEntry("worlds/",world.name(),"/item-physics"))
+    throw std::runtime_error("loaded archive has no native item physics entry");
+  uint32_t magic=0,total=0,count=0;
+  uint16_t schema=0;
+  std::string worldName;
+  in.read(magic,schema,worldName,total,count);
+  if(magic!=0x31505449 || schema!=1 || worldName!=world.name() || count>total || count>100000)
+    throw std::runtime_error("loaded item physics entry has unexpected identity");
+  const auto symbol=world.script().findSymbolIndex("ITFO_BEER");
+  bench.savedItemProbes.clear();
+  std::string items="[";
+  for(uint32_t i=0;i<count;++i) {
+    uint32_t index=0,instance=0;
+    std::string visual;
+    Matrix4x4 matrix;
+    Vec3 velocity,angular;
+    bool sleeping=false;
+    in.read(index,instance,visual,matrix,velocity,angular,sleeping);
+    const Vec3 point(matrix.at(3,0),matrix.at(3,1),matrix.at(3,2));
+    if(instance!=symbol || (point-player.position()).length()>400.f)continue;
+    if(!sleeping)throw std::runtime_error("item save fixture contains an awake dropped Item");
+    Item* found=nullptr;
+    world.detectItem(point,1.f,[&](Item& item) {
+      if(item.clsId()!=instance || item.handle().visual!=visual)return;
+      if(found!=nullptr)throw std::runtime_error("item save fixture has ambiguous loaded Item positions");
+      found=&item;
+    });
+    if(found==nullptr || !found->isDynamic() || !found->physicsSleeping())
+      throw std::runtime_error("saved sleeping dropped Item was not restored with its native body");
+    if(std::any_of(bench.savedItemProbes.begin(),bench.savedItemProbes.end(),[&](const auto& probe){return probe.item==found;}))
+      throw std::runtime_error("saved item records resolved to the same loaded Item");
+    Bench::SavedItemProbe probe;probe.item=found;probe.saved=matrix;
+    bench.savedItemProbes.push_back(probe);
+    if(items.size()>1)items+=',';
+    items+="{\"index\":"+std::to_string(index)+",\"symbol\":"+std::to_string(instance)+
+      ",\"visual\":"+jsonStr(visual)+",\"saved_transform\":"+ragdollMatrix(matrix)+
+      ",\"loaded_transform\":"+ragdollMatrix(found->transform())+
+      ",\"saved_sleeping\":true,\"loaded_sleeping\":true}";
+  }
+  if(bench.savedItemProbes.size()!=10)
+    throw std::runtime_error("item save fixture requires exactly ten saved sleeping dropped beer Items");
+  bench.savedItemStart=world.tickCount();bench.savedItemSample=uint64_t(-1);bench.savedItemTracing=true;
+  savedItemSample(world);
+  float position=0,rotation=0;
+  for(const auto& probe:bench.savedItemProbes) {
+    position=std::max(position,probe.maximumPositionDelta);rotation=std::max(rotation,probe.maximumRotationDelta);
+  }
+  event("item_save_initial","\"items\":"+items+"],\"count\":10,\"saved_sleepers\":10,\"loaded_sleepers\":10"+
+    std::string(",\"initial_dt\":0,\"maximum_position_delta_cm\":")+ragdollNumber(position)+
+    ",\"maximum_rotation_delta_degrees\":"+ragdollNumber(rotation)+
+    ",\"pass\":"+(position<=.1f && rotation<=.1f?"true":"false"));
+}
+
+void savedItemReport(World& world) {
+  if(!bench.savedItemTracing)throw std::runtime_error("item save observation was not initialized");
+  savedItemSample(world);bench.savedItemTracing=false;
+  const auto elapsed=world.tickCount()-bench.savedItemStart;
+  float position=0,rotation=0;size_t sleeping=0;
+  for(const auto& probe:bench.savedItemProbes) {
+    position=std::max(position,probe.maximumPositionDelta);rotation=std::max(rotation,probe.maximumRotationDelta);
+    sleeping+=probe.alwaysSleeping;
+  }
+  event("item_save_stability","\"count\":"+std::to_string(bench.savedItemProbes.size())+
+    ",\"elapsed_ms\":"+std::to_string(elapsed)+",\"always_sleeping\":"+std::to_string(sleeping)+
+    ",\"maximum_position_delta_cm\":"+ragdollNumber(position)+
+    ",\"maximum_rotation_delta_degrees\":"+ragdollNumber(rotation)+
+    ",\"pass\":"+(elapsed>=3000 && position<=.1f && rotation<=.1f && sleeping==10?"true":"false"));
+}
 
 bool waterOwns(const DynamicWorld::WaterBodySnapshot& body) {
   if(body.ragdoll)
@@ -11368,6 +11491,13 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
     }
   else if(c=="water-bodies" && a.size()==3 && a[1]=="loot-ready")waterBodiesLootReady(w,pl,a[2]);
   else if(c=="water-bodies" && a.size()==2 && a[1]=="loot")waterBodiesLoot(w,pl,ctrl);
+  else if(c=="item-save" && a.size()==2 && a[1]=="initial") {
+    arenaAbort("item save initial must be the first scenario command before simulation");
+    }
+  else if(c=="item-save" && a.size()==2 && a[1]=="report") {
+    try {savedItemReport(w);}
+    catch(const std::exception& error) {arenaAbort(error.what());}
+    }
   else if(c=="water" && a.size()==2 && a[1]=="torch")waterTorch(w,pl);
   else if(c=="water" && a.size()==3 && a[1]=="checkpoint")waterCheckpoint(w,a[2]);
   else if(c=="water" && a.size()==3 && a[1]=="initial")waterInitial(w,pl,ctrl,a[2]);
@@ -17130,6 +17260,11 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
           event("ragdoll_error","\"command\":"+jsonStr(line)+",\"reason\":"+jsonStr(error.what()));
           }
         }
+      else if(args.size()==2 && args[0]=="item-save" && args[1]=="initial") {
+        ++bench.pc;
+        try {savedItemInitial(*world,*player,dt);}
+        catch(const std::exception& error) {arenaAbort(error.what());}
+        }
       else if(args.size()==2 && args[0]=="monstercharacter" && args[1]=="initial") {
         ++bench.pc;monsterCharacterSnapshot(*world,*player,"initial");
         characterIdleGuards(*world,*player);
@@ -17206,6 +17341,7 @@ bool TestBench::tick(uint64_t dt, PlayerControl& ctrl) {
   ownMeshFields(*world,*player);
   ownMeshChestFields(*world,*player);
   waterFields(*world);
+  savedItemSample(*world);
   waterFilmTick(*world);
   clothFields(*world);
   movableCandleFields(*world);

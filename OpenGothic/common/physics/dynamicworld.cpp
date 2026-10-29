@@ -1130,6 +1130,7 @@ DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, co
   const float mass=std::max(.05f,float(materialDensity(mat)*hull.volume*volumeScale(pos)));
   auto obj=std::make_unique<BodyData>();
   obj->body=world->addDynamicBody(hull.shape,pos,materialFriction(mat),mass);
+  obj->body->setPenetrationSlop(.004f);
   // The native hull also supplies submerged volume and water resistance.
   // Dynamic bodies already use LinearCast, including the smallest items.
   obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");

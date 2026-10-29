@@ -1882,6 +1882,7 @@ bool ContactConstraintManager::sSolvePositionConstraint(ContactConstraintBase &i
 {
 	ContactConstraint<Type1, Type2> &constraint = static_cast<ContactConstraint<Type1, Type2> &>(ioConstraint);
 	const CachedManifold &cached_manifold = inManifoldCache.FromHandle(constraint.mCachedManifoldHandle)->GetValue();
+	const float penetration_slop = min(inSettings.mPenetrationSlop, min(ioBody1.GetMaxPenetrationSlop(), ioBody2.GetMaxPenetrationSlop()));
 
 	// Get transforms
 	RMat44 transform1 = ioBody1.GetCenterOfMassTransform();
@@ -1903,7 +1904,7 @@ bool ContactConstraintManager::sSolvePositionConstraint(ContactConstraintBase &i
 		// Calculate separation along the normal (negative if interpenetrating)
 		// Allow a little penetration by default (PhysicsSettings::mPenetrationSlop) to avoid jittering between contact/no-contact which wipes out the contact cache and warm start impulses
 		// Clamp penetration to a max PhysicsSettings::mMaxPenetrationDistance so that we don't apply a huge impulse if we're penetrating a lot
-		float separation = max(Vec3(p2 - p1).Dot(ws_normal) + inSettings.mPenetrationSlop, -inSettings.mMaxPenetrationDistance);
+		float separation = max(Vec3(p2 - p1).Dot(ws_normal) + penetration_slop, -inSettings.mMaxPenetrationDistance);
 
 		// Only enforce constraint when separation < 0 (otherwise we're apart)
 		if (separation < 0.0f)

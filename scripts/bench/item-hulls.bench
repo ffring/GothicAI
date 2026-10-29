@@ -1,6 +1,8 @@
 # Numeric-only native Item physics: run ITEM_HULLS=1 and ITEM_HULLS=0 on a fresh NEWWORLD.
 # Each support is real collision geometry, checked with native landRay before insertion.
 # events.jsonl records census, each drop, all results and 50-item native physics p95.
+# Compare sleep_ms ON <= OFF for the same supported case; there is no absolute deadline.
+# Final pivots outside the support footprint count as escaped_edge, not passed_through.
 seed 73013
 cheat god
 set time 12 0
