@@ -528,7 +528,7 @@ struct CollisionWorld::Impl final : JPH::ContactListener, JPH::PhysicsStepListen
     uint64_t swing = 0;
     bool blocked = false, groundRecorded = false;
     float walkableCos = .7f;
-    double poseTimeMs = 0, targetTimeMs = 0, activeBeginMs = 0, activeEndMs = 0;
+    double poseTimeMs = 0, targetTimeMs = 0, activeBeginMs = 0, activeEndMs = 0, strikeBeginMs = 0;
     std::vector<MeleeBladeSegment> pose, target;
     std::vector<Npc*> hit;
     std::vector<MeleeBladeContact> contacts;
@@ -2233,7 +2233,8 @@ void CollisionWorld::removeShadowBody(const Npc* owner) {
 
 void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
                                       const std::vector<MeleeBladeSegment>& segments, uint64_t timeMs,
-                                      double activeBeginMs, double activeEndMs, float walkableCos) {
+                                      double activeBeginMs, double activeEndMs, float walkableCos,
+                                      double strikeBeginMs) {
   if(owner==nullptr || segments.empty()) throw std::runtime_error("Melee shadow blade requires an owner and geometry");
   for(const auto& segment:segments) {
     const auto from=toMeters(segment.from),to=toMeters(segment.to),edge=toMeters(segment.edgeNormal);
@@ -2268,6 +2269,7 @@ void CollisionWorld::updateShadowBlade(const Npc* owner, uint64_t swingId,
   it->targetTimeMs=double(timeMs);
   it->activeBeginMs=activeBeginMs;
   it->activeEndMs=activeEndMs;
+  it->strikeBeginMs=strikeBeginMs;
   it->walkableCos=walkableCos;
   impl->hasShadowBlades.store(true,std::memory_order_release);
   }
@@ -2445,6 +2447,12 @@ void CollisionWorld::stepShadowBlades(float fraction, bool bodiesLocked) {
             contact.normal={normal.GetX(),normal.GetY(),normal.GetZ()};
             contact.stopsSwing=normal.GetY()<blade.walkableCos || layer==DynamicWorld::C_Item ||
                                layer==DynamicWorld::C_Fragment || layer==DynamicWorld::C_MovableVob;
+            // the wind-up passes a wall, the blow stops at it
+            const double at=blade.poseTimeMs+duration*(first+(last-first)*contacts.back().time);
+            if(contact.stopsSwing && at<blade.strikeBeginMs) {
+              contact.stopsSwing=false;
+              contact.windup=true;
+              }
             auto* object=reinterpret_cast<CollisionBody*>(body.GetUserData());
             if(object!=nullptr)
               contact.material=object->mesh!=nullptr ? object->mesh->materialId(Physics::triangleData(*body.GetShape(),hit.mSubShapeID2)) : object->noiseSurface;

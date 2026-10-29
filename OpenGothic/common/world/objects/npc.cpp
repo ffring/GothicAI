@@ -152,6 +152,9 @@ struct Npc::MeleeShadow final {
     float beginMs = 0, optimalMs = 0, endMs = 0, peakCmS = 0, thresholdCmS = 0;
     bool left = false, normalY = true;
     float eventBoundaryMs = 0, reachCm = 0;
+    // the turn from the wind-up into the blow: the slowest blade inside the window before the
+    // optimal frame; a wall touched earlier is passed, as the original passes it
+    float strikeMs = 0;
     };
   struct Contact final {
     MeleeBladeContact hit;
@@ -1574,10 +1577,12 @@ void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, 
       last = last<hi ? last+1 : last;
       }
     const uint32_t end = seq->reverse ? std::max(last+1,opt+2) : last+1;
+    const uint32_t strike = uint32_t(std::min_element(speeds.begin()+first,speeds.begin()+opt+1)-speeds.begin());
     shadow.windows.push_back({seq,length,index,first,opt,last,float(first)*1000.f/data.fpsRate,
                               float(opt)*1000.f/data.fpsRate,float(end)*1000.f/data.fpsRate,
                               peak,threshold,useLeft,normalY,float(opt+(seq->reverse ? 1u : 0u))*1000.f/data.fpsRate,
-                              *std::max_element((useLeft ? leftReach : rightReach).begin()+first,(useLeft ? leftReach : rightReach).begin()+last+1)});
+                              *std::max_element((useLeft ? leftReach : rightReach).begin()+first,(useLeft ? leftReach : rightReach).begin()+last+1),
+                              float(strike)*1000.f/data.fpsRate});
     }
   }
 
@@ -1999,7 +2004,8 @@ void Npc::updateMeleeShadow() {
   if(shadow.stopped)
     return;
   const float walkableCos = std::cos(float(owner.script().guildVal().slide_angle[guild()])*float(M_PI)/180.f);
-  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd,walkableCos);
+  const double strikeBegin = double(shadow.start)+double(window.strikeMs)/shadow.speed;
+  owner.physic()->updateShadowBlade(this,shadow.id,blade,owner.tickCount(),activeBegin,activeEnd,walkableCos,strikeBegin);
   if(Gothic::inst().doMeleeBladeDraw()) {
     const double now = double(owner.tickCount());
     meleeShadowDrawPose   = blade;
@@ -2138,8 +2144,11 @@ void Npc::noteMeleeStep(const Vec3& root, const Vec3& offered, const Vec3& moved
 
 void Npc::stopMeleeSwing() {
   owner.physic()->removeShadowBlade(this);
+  // The weapon rebounds, the body stays: the blow is cut off and blends back into the fight
+  // stance, both hands on the grip. A stumble here (a hit taken) threw the body back and
+  // dropped a two-hander to one hand at every post.
   visual.interrupt();
-  setAnim(Anim::StumbleB);
+  setAnim(Anim::Idle);
   }
 
 void Npc::consumeMeleeContacts() {
@@ -2162,7 +2171,7 @@ void Npc::consumeMeleeContacts() {
       continue;
       }
     if(hit.world) {
-      entry.result = hit.stopsSwing ? "wall" : "ground";
+      entry.result = hit.stopsSwing ? "wall" : (hit.windup ? "windup" : "ground");
       if(!hit.stopsSwing)
         continue;
       swing.stopped = true;
@@ -2382,6 +2391,7 @@ void Npc::finishMeleeShadowSwing(bool remove, bool discard) {
                   ",\"last_frame\":" + number(window.last) + ",\"begin_ms\":" + number(window.beginMs) +
                   ",\"optimal_ms\":" + number(window.optimalMs) + ",\"end_ms\":" + number(window.endMs) +
                   ",\"event_boundary_ms\":" + number(window.eventBoundaryMs) +
+                  ",\"strike_ms\":" + number(window.strikeMs) +
                   ",\"reverse\":" + (window.sequence->reverse ? "true" : "false") +
                   ",\"animation_speed\":" + number(shadow.speed) + ",\"peak_cm_s\":" + number(window.peakCmS) +
                   ",\"threshold_cm_s\":" + number(window.thresholdCmS) + "},\"legacy\":{\"target\":" +
@@ -7087,6 +7097,12 @@ bool Npc::doAttack(Anim anim, BodyState bs) {
 
   const auto wlk = walkMode();
   visual.setAnimRotate(*this,0);
+  // A blow at one lying in a knockdown is the original's chop from above (T_1HSFINISH,
+  // T_2HSFINISH): the swings at standing height pass over a body on the ground. The blade
+  // decides the hit and the damage as for any blow; only the unconscious are finished off.
+  if(isMeleeDownStrike(anim,weaponSt))
+    if(visual.continueCombo(*this,Anim::AttackFinish,bs,weaponSt,wlk)!=nullptr)
+      return result(true);
   if(auto sq = visual.continueCombo(*this,anim,bs,weaponSt,wlk)) {
     (void)sq;
     // implAniWait(uint64_t(sq->atkTotalTime(visual.comboLength())+1));
@@ -7107,6 +7123,16 @@ bool Npc::blockFist() {
     return false;
   visual.setAnimRotate(*this,0);
   return setAnim(Anim::AttackBlock);
+  }
+
+bool Npc::isMeleeDownStrike(Anim anim, WeaponState ws) const {
+  if(!Gothic::physicsFlags().meleePhysicsHits || currentTarget==nullptr || !currentTarget->meleeKnockdown)
+    return false;
+  if(ws!=WeaponState::W1H && ws!=WeaponState::W2H)
+    return false;
+  if(anim!=Anim::Attack && anim!=Anim::AttackL && anim!=Anim::AttackR)
+    return false;
+  return fghAlgo.isInFinishRange(*this,*currentTarget,owner.script());
   }
 
 bool Npc::finishingMove() {

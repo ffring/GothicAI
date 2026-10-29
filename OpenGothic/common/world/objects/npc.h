@@ -311,6 +311,7 @@ class Npc final {
     void      fistShoot();
     bool      blockFist();
     bool      finishingMove();
+    bool      isMeleeDownStrike(Anim anim, WeaponState ws) const;
     void      swingSword();
     bool      swingSwordL();
     bool      swingSwordR();
