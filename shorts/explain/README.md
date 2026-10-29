@@ -103,9 +103,12 @@ the original plan gains and ducking for Studio and drafts; they do not run the p
   solid up to it, dashed past it, a cross on it) and `fans` (a sector opening from a point): lines of sight and the
   bow's focus from the bench's `sight` export; `paths` (a line drawing itself through several points, smoothed
   unless `curve: false`, `arrow` puts a head on its tip, `dash` makes it dashed): an arrow's flight, a route;
-- motion (`src/parts/motion.ts`, one set for the series): `texts` and `tags` come in with `enter`: `rise`
-  (default, a few pixels up), `pop` (a spring with a small overshoot) or `slide` (from the left). A beat's
-  `enter` (`fade`, `slide`, `wipe`, `zoom`, `flash`; `dur`, default 0.35 s) is its transition: the beat starts
+- motion (`src/parts/motion.ts`, one set for the series; its durations in `src/parts/timing.ts`): `texts` and
+  `tags` come in with `enter`: `rise` (default, a few pixels up), `pop` (a spring with a small overshoot) or
+  `slide` (from the left). Attached parts settle `MOTION.follow` (0.06 s) after their body: a tag's pin lands
+  first and its box opens from it, a text's band arrives first and its words settle into it. A beat's `enter`
+  (`fade`, `slide`, `wipe`, `zoom`, `flash`; `dur` defaults to 0.5 s for `slide` and `wipe`, where the whole
+  frame travels, and 0.35 s for the rest) is its transition: the beat starts
   at its own time and the one before stays under it for `dur`, silent, so no time of the voice, the captions
   or the publication's edge fades moves; `flash` is a hard cut with a white flash. `zoom` eases in and out
   (cubic) unless `ease: "linear"`, for a slow push across a whole beat. The footage of a beat followed by a
@@ -448,6 +451,13 @@ Remotion is under the [Remotion License](https://www.remotion.pro/license): free
 up to three people. The versions are pinned in `package.json`.
 
 ## План и журнал
+
+- 2026-10-29: follow-through and duration by travel, from the review of third-party motion skills
+  (animation-principles, motion-video-kit, Disney rules): a tag's box follows its pin and a text's words follow
+  their band by `MOTION.follow` (0.06 s); `slide` and `wipe` transitions default to 0.5 s instead of 0.35 s,
+  since the whole frame travels (an explicit `dur` in a plan is kept). The durations moved to
+  `src/parts/timing.ts`, shared by the schema; `scripts/strips.py` uses the same defaults. A plan that relied on
+  the old 0.35 s slide needs its footage to run 0.5 s past the beat or an explicit `dur: 0.35`.
 
 - 2026-10-25: added the motion set: `enter` for texts and tags (`rise`, `pop`, `slide`), beat transitions
   (`fade`, `slide`, `wipe`, `zoom`, `flash`) that keep every time of the plan, `paths` drawn through points with an
