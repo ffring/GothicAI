@@ -184,7 +184,11 @@ for name in "${series[@]}"; do inputs+=("/mnt/shared/gothic-ai/melee-balance/run
 }
 cd "$task_root"
 gq_job --class quick --threads 2 --mem 2G --max 20m --archive "$out" --name 'melee balance report' -- \
-  python3 "$task_root/source/scripts/melee_balance_report.py" "${inputs[@]}" --output "$out"
+  bash -c 'out="$1"; provenance="$2"; shift 2
+    mkdir -p "$out/provenance"
+    cp "$provenance/"* "$out/provenance/"
+    exec "$@"' bash "$out" "$task_root/provenance" \
+    python3 "$task_root/source/scripts/melee_balance_report.py" "${inputs[@]}" --output "$out"
 echo "Report: /mnt/shared/gothic-ai/melee-balance/runs/$run_name/report"
 REMOTE
 }

@@ -83,12 +83,16 @@ def episode_metrics(folder: Path, episode: dict, shared: dict, variant: str) -> 
 
     # A swing is one actual attack window, not a native decision, animation hook,
     # optimal-frame attempt or repeated snapshot. A combo's windows count separately.
+    # Snapshots can rebase a finish animation's clock when its pull-out speeds up;
+    # only accepted pose transitions establish new swings.
     starts = {role: {} for role in ROLES}
     layer_rows = [row for row in events if row.get("phase") == "phase_snapshot" or
                   row.get("phase") == "native_attempt" and row.get("accepted") is True]
     layer_schema = any("is_attack" in layer for row in layer_rows
                        for layer in row.get("layers_after", row.get("layers", [])))
     for row in layer_rows:
+        if row.get("phase") != "native_attempt" or row.get("pose_changed") is not True:
+            continue
         role = roles(row.get("actor"))
         if role is None:
             continue
@@ -231,6 +235,8 @@ def episode_metrics(folder: Path, episode: dict, shared: dict, variant: str) -> 
         result["wall_stops"] = missing("wall_stops", "melee_blade_shadow and melee_physics_hits are disabled")
     elif not blade:
         result["wall_stops"] = missing("wall_stops", "No seed-matched blade journal (missing/rotated journal or no swings)")
+    elif not all(row.get("decision", {}).get("physics_hits") is True for row in blade):
+        result["wall_stops"] = missing("wall_stops", "Physical hits are disabled or unrecorded; shadow wall contacts are not blade stops")
     elif not swings_available or any(sum(roles(row.get("attacker")) == role for row in blade) != len(starts[role]) for role in ROLES):
         result["wall_stops"] = missing("wall_stops", "Blade windows do not cover all observed attack starts (open terminal window or missing/rotated rows)")
     return result
@@ -375,7 +381,7 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     report = {"schema_version": 1, "kind": "melee_balance_report", "inputs": [str(path.resolve()) for path in args.folders],
               "definitions": {
-                  "swing": "Unique actor/attack-layer name/start/combo window observed in actual accepted hooks or snapshots",
+                  "swing": "Unique actor/attack-layer name/start/combo window from accepted pose-changing animation hooks; snapshot clock rebases are not new swings",
                   "miss": "Started swing with no damaging hit and no opponent block before episode end; includes interrupted/evaded/wall swings",
                   "damage": "Actual positive HP loss; damage events name victim as actor and attacker as target",
                   "blocks": "Successful blocks performed by this fighter, including repeated contacts if journaled",
