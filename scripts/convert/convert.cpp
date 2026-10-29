@@ -855,11 +855,17 @@ int main(int argc, char** argv) {
       if(videosDisabled)
         std::cerr << "video base: disabled by OPENGOTHIC_VIDEOS_FINGERPRINT\n";
       else if(args[0]!="resolve-base") {
-        auto videos=BaseStore::resolveVideos(args[1],progress);
-        if(videos.publication.valid()) videos.publication.get();
-        if(args[0]=="resolve-videos") selected=videos.path;
-        else if(VideoData::readIndex(videos.path).empty())
-          std::cerr << "video base: warning: installation contains no videos\n";
+        try {
+          auto videos=BaseStore::resolveVideos(args[1],progress);
+          if(videos.publication.valid()) videos.publication.get();
+          if(args[0]=="resolve-videos") selected=videos.path;
+          else if(VideoData::readIndex(videos.path).empty())
+            std::cerr << "video base: warning: installation contains no videos\n";
+          }
+        catch(const std::exception& error) {
+          if(args[0]!="resolve") throw;
+          std::cerr << "video base: warning: " << error.what() << '\n';
+          }
         }
       output << selected.string() << std::endl;
       return 0;
