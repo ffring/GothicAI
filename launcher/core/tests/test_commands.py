@@ -18,6 +18,7 @@ from gothic_launcher.commands import (
     find_layout,
     game,
     latest_save,
+    preparation,
     services,
 )
 from gothic_launcher.settings import Config
@@ -325,3 +326,46 @@ def test_smoke_overrides_never_spend_model_quota_or_change_saved_settings(config
 def test_free_ports_differ():
     ports = Ports.free()
     assert len({ports.server, ports.asr, ports.tts}) == 3
+
+
+def test_preparation_uses_the_converter_beside_the_selected_game(tmp_path, monkeypatch):
+    monkeypatch.delenv("OPENGOTHIC_BASE", raising=False)
+    monkeypatch.setenv("OPENGOTHIC_BASE_FINGERPRINT", "")
+    binary = tmp_path / "OpenGothic Dev.app/Contents/MacOS/Gothic2Notr"
+    binary.parent.mkdir(parents=True)
+    binary.symlink_to("/another/build/Gothic2Notr")
+    converter = binary.with_name("content-convert")
+    converter.write_text("#!/bin/sh\nexit 0\n")
+    converter.chmod(0o755)
+    game_dir = tmp_path / "Gothic II"
+    proc = preparation(binary, game_dir, tmp_path, {"OPENGOTHIC_BASE": ""})
+    assert proc is not None
+    assert proc.argv == [str(converter), "resolve", str(game_dir)]
+    assert proc.name == "prepare" and proc.cwd == tmp_path and not proc.restart
+
+
+@pytest.mark.parametrize("key", ["OPENGOTHIC_BASE", "OPENGOTHIC_BASE_FINGERPRINT"])
+@pytest.mark.parametrize("inherited", [True, False])
+def test_preparation_skips_explicit_game_bases(tmp_path, monkeypatch, key, inherited):
+    monkeypatch.delenv("OPENGOTHIC_BASE", raising=False)
+    monkeypatch.delenv("OPENGOTHIC_BASE_FINGERPRINT", raising=False)
+    env = {}
+    if inherited:
+        monkeypatch.setenv(key, "selected-base")
+    else:
+        env[key] = "selected-base"
+    assert preparation(tmp_path / "Gothic2Notr", tmp_path, tmp_path, env) is None
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_preparation_requires_an_executable_converter(tmp_path, monkeypatch, exists):
+    monkeypatch.delenv("OPENGOTHIC_BASE", raising=False)
+    monkeypatch.delenv("OPENGOTHIC_BASE_FINGERPRINT", raising=False)
+    converter = tmp_path / "content-convert"
+    if exists:
+        converter.write_text("#!/bin/sh\n")
+        converter.chmod(0o644)
+    with pytest.raises(LaunchError) as error:
+        preparation(tmp_path / "Gothic2Notr", tmp_path, tmp_path)
+    assert str(converter) in str(error.value)
+    assert "scripts/build-engine.sh" in str(error.value)

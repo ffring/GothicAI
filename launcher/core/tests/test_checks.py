@@ -102,7 +102,7 @@ def test_installation_without_base_promises_first_launch_import(tmp_path, monkey
     ou.write_bytes("Привет, герой!".encode("cp1251"))
     items = checks.game_folder(game)
     assert all(item.ok for item in items)
-    assert items[0].title == "Первый запуск соберёт базу игры"
+    assert items[0].title == "Лаунчер подготовит базу перед запуском (несколько минут)"
 
 
 def test_missing_installation_or_foreign_pointer_requests_one_time_installation(tmp_path, monkeypatch):

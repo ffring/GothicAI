@@ -115,7 +115,10 @@ def game_folder(folder: Path | None) -> list[Check]:
     archives = sorted(p.name for p in data.iterdir() if p.suffix.lower() == ".vdf")
     addon = [n for n in archives if "addon" in n.lower()]
     checks = [
-        Check("base", True, "Первый запуск соберёт базу игры", "Найдена установка Gothic II"),
+        Check(
+            "base", True,
+            "Лаунчер подготовит базу перед запуском (несколько минут)", "Найдена установка Gothic II",
+        ),
         Check("archives", bool(archives), "Архивы Gothic II", _names(archives) or "В Data нет архивов .vdf"),
         Check(
             "addon",
