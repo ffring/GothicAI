@@ -4642,9 +4642,14 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
   if(mode!=WeaponState::Fist && mode!=WeaponState::W1H && mode!=WeaponState::W2H)
     return;
   const auto impulse = meleeImpulse(attacker,contact);
+  // Weapon skill is the progression of knockdowns: trained hitters knock down sooner, trained fighters stand longer.
+  const int32_t attackSkill = mode==WeaponState::W1H ? attacker.hitChance(TALENT_1H) :
+                              mode==WeaponState::W2H ? attacker.hitChance(TALENT_2H) : 0;
+  const float skillScale = MeleeImpact::skillThresholdScale(attackSkill,attacker.attribute(ATR_STRENGTH),
+                                                            std::max(hitChance(TALENT_1H),hitChance(TALENT_2H)));
   bool knocked = false;
   if(canAccumulateMeleePosture(Gothic::physicsFlags().meleePosture,blocked,meleeKnockdown,isDown()) &&
-     meleePosture.hit(impulse.length(),physicsMass(),owner.tickCount())) {
+     meleePosture.hit(impulse.length(),physicsMass(),owner.tickCount(),skillScale)) {
     setInteraction(nullptr,true);
     attachToPoint(nullptr);
     updateRagdollQuestAnchor();
@@ -4686,6 +4691,7 @@ void Npc::applyMeleePosture(Npc& attacker, const MeleeBladeContact* contact, boo
   writeMeleePosture("{\"event\":\"hit\",\"tick_ms\":"+std::to_string(owner.tickCount())+
                    ",\"attacker\":"+meleeShadowWho(&attacker)+",\"target\":"+who+
                    ",\"impulse_ns\":"+std::to_string(impulse.length())+
+                   ",\"skill_threshold_scale\":"+std::to_string(skillScale)+
                    ",\"zone\":"+TestBench::bodyJson(contact ? HitZones::name(HitZones::Zone(contact->zone)) : std::string_view("body"))+
                    ",\"before\":"+std::to_string(before)+",\"after\":"+std::to_string(meleePosture.value)+
                    ",\"blocked\":"+(blocked ? "true" : "false")+",\"knockdown\":"+(knocked ? "true" : "false")+"}");
