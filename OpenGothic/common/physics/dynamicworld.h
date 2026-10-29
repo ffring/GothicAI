@@ -406,7 +406,7 @@ class DynamicWorld final {
     Item           addDynamicObj(const Tempest::Matrix4x4& pos, const Bounds& bbox, asset::MaterialGroup mat,
                                   const ProtoMesh* proto, std::string_view visual, bool hulls = true);
     struct ItemHull {
-      JPH::ShapeRefC shape;
+      JPH::ShapeRefC shape, originalShape;
       std::vector<Tempest::Vec3> vertices; // hull vertices in visual-local centimetres
       std::string fallbackReason;
       float volume = 0.f, boundsVolume = 0.f; // cubic metres, before object scale

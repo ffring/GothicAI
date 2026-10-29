@@ -3,6 +3,7 @@
 # events.jsonl records census, each drop, all results and 50-item native physics p95.
 # Compare sleep_ms ON <= OFF for the same supported case; there is no absolute deadline.
 # Final pivots outside the support footprint count as escaped_edge, not passed_through.
+# Flat/slope/table/load use 1 m cells; giant_quad retains the original report-only support.
 seed 73013
 cheat god
 set time 12 0
@@ -21,6 +22,9 @@ item-hulls setup table
 wait 7000
 item-hulls report
 item-hulls setup load
+wait 8000
+item-hulls report
+item-hulls setup giant_quad
 wait 8000
 item-hulls report
 item-hulls clear

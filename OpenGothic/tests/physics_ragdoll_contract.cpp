@@ -577,6 +577,16 @@ void testItemMassImpulseAndWake() {
   const auto& hull=world.itemHullShape(proto,"CONTRACT_ITEM.MRM");
   require(hull.shape!=nullptr && hull.fallbackReason.empty(),"four noncoplanar mesh points must build an item hull");
   near(hull.volume,.2f*.4f*.6f/6.f,.000001f,"item hull volume must be the tetrahedron volume rather than its bounds");
+  near(hull.originalShape->GetVolume(),hull.volume,.000001f,"item mass and water must retain the uninflated hull volume");
+  const auto originalBounds=hull.originalShape->GetLocalBounds();
+  const auto collisionBounds=hull.shape->GetLocalBounds();
+  const auto originalCenter=hull.originalShape->GetCenterOfMass(),collisionCenter=hull.shape->GetCenterOfMass();
+  for(int axis=0;axis<3;++axis) {
+    near(collisionBounds.mMin[axis]+collisionCenter[axis],originalBounds.mMin[axis]+originalCenter[axis]-.02f,.0001f,
+         "the Item collision shell must extend two centimetres below each source axis bound");
+    near(collisionBounds.mMax[axis]+collisionCenter[axis],originalBounds.mMax[axis]+originalCenter[axis]+.02f,.0001f,
+         "the Item collision shell must extend two centimetres above each source axis bound");
+    }
   require(&hull==&world.itemHullShape(proto,"CoNtRaCt_ItEm.MrM"),"item hull cache keys must be case insensitive");
   auto legacy=world.addDynamicObj(at(700,300,0),bounds,asset::MaterialGroup::WOOD,&proto,"CONTRACT_ITEM.MRM",false);
   near(legacy.mass(),.2f*.4f*.6f*700.f,.001f,"item_hulls=0 must preserve the previous bounds-volume material mass");
@@ -612,7 +622,7 @@ void testItemMassImpulseAndWake() {
     lowest=std::min(lowest,point.y);
     }
   std::printf("Small item hull: support gap %.9g cm\n",double(lowest));
-  require(lowest>=-2.05f && lowest<=1.f,"a sleeping item hull must stay within the global two centimetre slop and the existing half millimetre numeric tolerance");
+  require(lowest>=-.5f && lowest<=.5f,"a sleeping item's visible hull must stay within half a centimetre of its support");
   for(int frame=0;frame<60;++frame) world.tick(frame%3==2 ? 16 : 17);
   require(small.isSleeping(),"a small sleeping hull must not wake or jitter on level ground");
   for(int c=0;c<4;++c)
@@ -647,8 +657,8 @@ void testItemMassImpulseAndWake() {
   const float preciseGap=precise.position().y-20.f,ordinaryGap=ordinary.position().y-20.f;
   std::printf("Item contact slop: hull gap %.9g cm, ordinary gap %.9g cm\n",double(preciseGap),double(ordinaryGap));
   require(precise.isSleeping() && ordinary.isSleeping(),"penetration slop fixtures must reach genuine native sleep");
-  // Item hulls deliberately retain the same native contact tolerance as ordinary bodies.
-  near(preciseGap,-2.f,.05f,"an Item hull must retain the global two centimetre penetration allowance");
+  // The inflated shell compensates for the unchanged native penetration slop.
+  near(preciseGap,0.f,.05f,"an inflated Item shell must put its visible surface on the support");
   near(ordinaryGap,-2.f,.05f,"an ordinary body must retain main's two centimetre penetration allowance");
   }
 

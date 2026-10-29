@@ -18,6 +18,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
@@ -1109,10 +1110,33 @@ const DynamicWorld::ItemHull& DynamicWorld::itemHullShape(const ProtoMesh& proto
     hull.fallbackReason="zero or nonfinite hull volume";
     return hull;
     }
-  hull.shape=result.Get();
+  const auto& shape=static_cast<const JPH::ConvexHullShape&>(*result.Get());
+  std::vector<JPH::Vec3> inflated;
+  inflated.reserve(shape.GetNumPoints()*26);
+  for(JPH::uint i=0;i<shape.GetNumPoints();++i) {
+    const auto point=shape.GetPoint(i)+shape.GetCenterOfMass();
+    for(int x=-1;x<=1;++x)
+      for(int y=-1;y<=1;++y)
+        for(int z=-1;z<=1;++z) {
+          if(x==0 && y==0 && z==0)continue;
+          const auto direction=JPH::Vec3(float(x),float(y),float(z)).Normalized();
+          inflated.push_back(point+direction*.02f);
+          }
+    }
+  // The collision shell compensates for Jolt's global two centimetre slop.
+  // Keep the source envelope for visible support measurements, mass and water.
+  JPH::ConvexHullShapeSettings inflatedSettings(inflated.data(),int(inflated.size()),.00025f);
+  inflatedSettings.mHullTolerance=.0001f;
+  inflatedSettings.mMaxErrorConvexRadius=.0001f;
+  const auto inflatedResult=inflatedSettings.Create();
+  if(inflatedResult.HasError()) {
+    hull.fallbackReason="Jolt inflated hull: "+std::string(inflatedResult.GetError().c_str());
+    return hull;
+    }
+  hull.originalShape=result.Get();
+  hull.shape=inflatedResult.Get();
   hull.volume=volume;
   hull.vertices.clear();
-  const auto& shape=static_cast<const JPH::ConvexHullShape&>(*hull.shape);
   hull.vertices.reserve(shape.GetNumPoints());
   for(JPH::uint i=0;i<shape.GetNumPoints();++i)
     hull.vertices.push_back(CollisionWorld::toCentimeters(shape.GetPoint(i)+shape.GetCenterOfMass()));
@@ -1130,7 +1154,10 @@ DynamicWorld::Item DynamicWorld::addDynamicObj(const Tempest::Matrix4x4& pos, co
   const float mass=std::max(.05f,float(materialDensity(mat)*hull.volume*volumeScale(pos)));
   auto obj=std::make_unique<BodyData>();
   obj->body=world->addDynamicBody(hull.shape,pos,materialFriction(mat),mass);
-  // The native hull also supplies submerged volume and water resistance.
+  // Express the original envelope in the inflated body's COM frame. Inflation
+  // may shift the centroid of an asymmetric mesh, but must not move its water shape.
+  obj->body->setBuoyancyShape(new JPH::OffsetCenterOfMassShape(hull.originalShape,
+    hull.shape->GetCenterOfMass()-hull.originalShape->GetCenterOfMass()));
   // Dynamic bodies already use LinearCast, including the smallest items.
   obj->body->setNoiseProfile(impactMaterial(mat),mat,"item");
   return Item(this,obj.release());
