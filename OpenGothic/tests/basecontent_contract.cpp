@@ -2934,7 +2934,7 @@ struct BaseContentContract {
       Resources resources;
       Resources::loadBase();
       }
-    catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("OPENGOTHIC_BASE")!=std::string::npos; }
+    catch(const BaseStore::Error& error) { rejected=std::string(error.what()).find("content-convert resolve <game directory>")!=std::string::npos; }
     require(rejected,"invalid explicit base must fail with recovery instructions");
 
     for(const std::string kind:{"models","fonts","programs","outputunits","audio","music"}) {
