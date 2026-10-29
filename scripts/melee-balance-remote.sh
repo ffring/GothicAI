@@ -26,6 +26,7 @@ native-posture-on-2h,p30-vanilla-1h,p30-posture-on-1h.
 MELEE_BALANCE_HOST selects the SSH alias (default: ryzen).
 MELEE_BALANCE_PYTHON selects a remote Python with torch (default: body/.venv).
 MELEE_POSTURE_SCALE multiplies the knockdown threshold in every series (sweeps).
+MELEE_DOWN_TACTICS sets GAME melee_down_tactics in every series (0 or 1).
 USAGE
 }
 
@@ -66,7 +67,7 @@ done
 remote_script() {
   local remote_args='' remote_env='' arg key
   for arg in "$@"; do printf -v remote_args '%s %q' "$remote_args" "$arg"; done
-  for key in GQ_BIN GQ_PROFILE MELEE_BALANCE_PYTHON MELEE_POSTURE_SCALE; do
+  for key in GQ_BIN GQ_PROFILE MELEE_BALANCE_PYTHON MELEE_POSTURE_SCALE MELEE_DOWN_TACTICS; do
     if [[ -n "${!key:-}" ]]; then printf -v remote_env '%s %q' "$remote_env" "$key=${!key}"; fi
   done
   { cat "$ROOT/scripts/gq-job.sh"; cat; } |
@@ -149,6 +150,9 @@ for name in "${series[@]}"; do
   if [[ -n "${MELEE_POSTURE_SCALE:-}" ]]; then
     scale_env=("OPENGOTHIC_MELEE_POSTURE_SCALE=$MELEE_POSTURE_SCALE")
     printf '%s\n' "$MELEE_POSTURE_SCALE" > "$out/posture-scale.txt"
+  fi
+  if [[ -n "${MELEE_DOWN_TACTICS:-}" ]]; then
+    scale_env+=("MELEE_DOWN_TACTICS=$MELEE_DOWN_TACTICS")
   fi
   cp "$task_root/provenance/source-commit.txt" "$task_root/provenance/source.patch" \
      "$task_root/provenance/runner.sha256" "$out/"

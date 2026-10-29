@@ -1,16 +1,10 @@
 import React from 'react';
 import {AbsoluteFill, random, useCurrentFrame, useVideoConfig} from 'remotion';
 import type {TagT} from '../schema';
-import {chance} from '../dice';
 import {COLOR, FONT, OUTLINE} from '../theme';
 import {rise, shown} from './anim';
+import {withChances} from './carryMath';
 import {enterTransform, MOTION} from './motion';
-
-// `{chance:exe:40:14.7}`: the chance by that rule for that talent and distance, as the game counts it
-const withChances = (text: string) =>
-  text.replace(/\{chance:(exe|opengothic):(\d+):([\d.]+)\}/g, (_, rule, talent, d) =>
-    String(Math.round(chance(rule, Number(talent), Number(d)))),
-  );
 
 const SHIFT = {center: 'translateX(-50%)', right: 'translateX(-36px)', left: 'translateX(calc(-100% + 36px))'};
 // the point of the box over the pin, where it grows from
@@ -19,8 +13,8 @@ const ORIGIN = {center: '50% 100%', right: '36px 100%', left: 'calc(100% - 36px)
 // a label over a thing in the picture: a pin at (x, y), the box above it (opening to the side near an edge), its
 // lines appear one by one; a line with `count` runs random numbers (seeded: the same every render) and stops on
 // the real one. The pin lands first and the box follows from it `MOTION.follow` later, so the label reads as
-// coming out of the thing it marks
-export const Tags: React.FC<{tags: TagT[]}> = ({tags}) => {
+// coming out of the thing it marks. A line the next beat carries off (`carried`) leaves its box at the cut
+export const Tags: React.FC<{tags: TagT[]; carried?: {tag: number; line: number; at: number}}> = ({tags, carried}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   const t = frame / fps;
@@ -28,7 +22,9 @@ export const Tags: React.FC<{tags: TagT[]}> = ({tags}) => {
     <AbsoluteFill>
       {tags.map((tag, i) => {
         const o = shown(t, tag.at, tag.until);
-        if (o <= 0) {
+        // a one-line tag whose line flew off takes its pin and box with it: no empty box under a transition
+        const emptied = carried?.tag === i && tag.lines.length === 1 && t >= carried.at;
+        if (o <= 0 || emptied) {
           return null;
         }
         const boxAt = tag.at + MOTION.follow;
@@ -66,8 +62,9 @@ export const Tags: React.FC<{tags: TagT[]}> = ({tags}) => {
               }}
             >
               {tag.lines.map((line, j) => {
-                const lo = shown(t, line.at, undefined, 0.12);
-                if (lo <= 0) {
+                const gone = carried && carried.tag === i && carried.line === j && t >= carried.at;
+                const lo = gone ? 0 : shown(t, line.at, undefined, 0.12);
+                if (lo <= 0 && !gone) {
                   return null;
                 }
                 let text = withChances(line.text);

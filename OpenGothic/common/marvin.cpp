@@ -193,6 +193,7 @@ Marvin::Marvin() {
     {"toggle melee_physics_hits", C_ToggleMeleePhysicsHits},
     {"toggle melee_reactions",    C_ToggleMeleeReactions},
     {"toggle melee_posture",      C_ToggleMeleePosture},
+    {"toggle melee_down_tactics", C_ToggleMeleeDownTactics},
     };
   }
 
@@ -646,6 +647,12 @@ bool Marvin::exec(std::string_view v) {
       const bool enabled = !Gothic::physicsFlags().meleePosture;
       Gothic::settingsSetI("GAME","melee_posture",enabled ? 1 : 0);
       print(enabled ? "Melee posture: ON" : "Melee posture: OFF");
+      return true;
+      }
+    case C_ToggleMeleeDownTactics: {
+      const bool enabled = !Gothic::physicsFlags().meleeDownTactics;
+      Gothic::settingsSetI("GAME","melee_down_tactics",enabled ? 1 : 0);
+      print(enabled ? "Melee down tactics: ON" : "Melee down tactics: OFF");
       return true;
       }
     }
