@@ -1204,6 +1204,10 @@ Vec3 MdlVisual::mapWeaponBone() const {
   return {pos.at(3,0), pos.at(3,1), pos.at(3,2)};
   }
 
+void MdlVisual::setLayerSpeed(const Animation::Sequence* seq, float k, uint64_t now) {
+  skInst->setLayerSpeed(seq,k,now);
+  }
+
 void MdlVisual::setAnimSpeed(std::string_view name, float k) {
   skInst->setAnimSpeed(name,k);
   }

@@ -1772,14 +1772,15 @@ void Npc::syncMeleeShadowSwing() {
     }
   if(meleeDownStrike && meleeShadow && meleeShadow->window && meleeShadow->window->sequence==attack->sequence &&
      meleeShadow->start==attack->start) {
-    // The finishing move stands on over the body for seconds (a pull-out, a look); the chop
-    // ends a moment after its blow and blends back into the fight stance.
+    // The finishing move stays over the body for seconds: the pull-out and the step back.
+    // A moment after the blow the rest plays faster; cut short, its step forward stayed
+    // (70 cm a chop) and the hero ended up standing on the body.
     constexpr double holdMs = 250;
+    constexpr float  restSpeed = 2.5f;
     if(double(owner.tickCount())>=double(attack->start)+double(meleeShadow->window->endMs)/attack->speed+holdMs) {
       meleeDownStrike = false;
       finishMeleeShadowSwing();
-      visual.interrupt();
-      setAnim(Anim::Idle);
+      visual.setLayerSpeed(attack->sequence,restSpeed,owner.tickCount());
       return;
       }
     }
