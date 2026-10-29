@@ -1339,6 +1339,10 @@ void MainWindow::render(){
         }
       }
 
+    // Reuse only this frame slot; do not advance the simulation while its GPU work is pending.
+    auto& sync = fence[cmdId];
+    { FrameProfile::Scope timing(FrameProfile::Zone::FencePoll); sync.wait(); }
+
     /*
       Note: game update goes first
       once player position is updated, animation bones(cameraBone in particular) can be updated
@@ -1368,15 +1372,6 @@ void MainWindow::render(){
         }
       }
 
-    auto& sync = fence[cmdId];
-    const bool ready=[&] { FrameProfile::Scope timing(FrameProfile::Zone::FencePoll); return sync.wait(0); }();
-    if(!ready) {
-      // GPU rendering is not done, pass to next frame
-      std::this_thread::yield();
-      profile.flag(FrameProfile::Flag::FenceBusy);
-      profile.outcome(FrameProfile::Outcome::FenceBusy);
-      return;
-      }
     { FrameProfile::Scope timing(FrameProfile::Zone::Recycle); Resources::resetRecycled(cmdId); }
 
     {

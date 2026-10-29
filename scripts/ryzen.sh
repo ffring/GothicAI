@@ -236,18 +236,19 @@ e2e_window_position() {
 
 source_digest() {
   # Content and paths include additions/deletions and uncommitted files, not just HEAD.
-  python3 - "$ROOT/OpenGothic" <<'PY'
+  python3 - "$ROOT" <<'PY'
 import hashlib
 import sys
 from pathlib import Path
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
-for path in sorted(root.rglob('*')):
-    if 'build' in path.relative_to(root).parts:
-        continue
-    if path.is_file():
-        digest.update(path.relative_to(root).as_posix().encode() + b'\0')
-        digest.update(hashlib.sha256(path.read_bytes()).digest())
+for source in ('OpenGothic', 'scripts/convert'):
+    for path in sorted((root / source).rglob('*')):
+        if 'build' in path.relative_to(root).parts:
+            continue
+        if path.is_file():
+            digest.update(path.relative_to(root).as_posix().encode() + b'\0')
+            digest.update(hashlib.sha256(path.read_bytes()).digest())
 print(digest.hexdigest())
 PY
 }
@@ -284,7 +285,8 @@ staging = None
 garbage = []
 
 def ready(path, name):
-    return (path / name).is_file() and os.access(path / name, os.X_OK)
+    names = (name, 'content-convert') if name == 'Gothic2Notr' else (name,)
+    return all((path / item).is_file() and os.access(path / item, os.X_OK) for item in names)
 
 def retire(path):
     # Deletion may take time. Detach under the lock and unlink outside it.
@@ -381,7 +383,7 @@ engine_ready() {
     export RYZEN_GAME_BIN="$cached/Gothic2Notr"
     return
   fi
-  [[ -x "$state/build/opengothic/Gothic2Notr" && -f "$state/build/source.sha256" && -f "$state/build/CMakeCache.txt" ]] && \
+  [[ -x "$state/build/opengothic/Gothic2Notr" && -x "$state/build/opengothic/content-convert" && -f "$state/build/source.sha256" && -f "$state/build/CMakeCache.txt" ]] && \
      [[ "$(cat "$state/build/source.sha256")" == "$digest" ]] && \
      grep -qx 'OPENGOTHIC_ENABLE_APP_CADENCE:BOOL=ON' "$state/build/CMakeCache.txt" || return 1
   export RYZEN_GAME_BIN="$state/build/opengothic/Gothic2Notr"
@@ -593,9 +595,11 @@ remote_run() {
   local started=$SECONDS rc digest
   [[ "${RYZEN_JOBS:-12}" =~ ^[1-9][0-9]*$ ]] || { echo 'RYZEN_JOBS must be positive' >&2; return 2; }
   if [[ "$action" == pytest ]]; then
-    export GOTHIC_DIR="$HOME/gothic-ai/game"
+    game_settings
     digest="$(storygraph_digest)"
     build_storygraph "$state" "$digest"
+    # Select the base and refresh its pointer before the server tests read it.
+    "$RYZEN_STORYGRAPH_BIN" "$GOTHIC_DIR" --ou-messages >/dev/null
     cd "$ROOT/server"
     uv run pytest "$@" && rc=0 || rc=$?
     echo "Ryzen: pytest $((SECONDS - started))s, exit $rc"

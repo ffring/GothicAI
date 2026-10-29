@@ -251,6 +251,8 @@ if [[ "${1:-}" == --remote ]]; then
   [[ "$TASK" == "$HOME/gothic-ai/city-set-${SET#city-}" && "$RUN" =~ ^[a-zA-Z0-9_-]+$ ]] || exit 2
   CAPTURE="$TASK/inputs/$RUN"
   export CITY_CAPTURE_ROOT="$CAPTURE/runtime"
+  GAME_BIN="$CITY_CAPTURE_ROOT/build/opengothic/Gothic2Notr" \
+    bash "$(dirname "$0")/base-ensure.sh" "$HOME/gothic-ai/game"
   OUT="$TASK/runs/$RUN"
   mkdir -p "$OUT"
   VARIANTS=(before after)
@@ -356,7 +358,7 @@ if [[ "$SET" == city-3 && "$MAC" == 0 ]]; then
   bash "$ROOT/scripts/content/capture-city.sh" --append-census "$STAGING/tools/city.bench" \
     "$ROOT/scripts/content/city-intent.bench" "$STAGING/content/after/materials/materials.json"
 fi
-cp "$ROOT/scripts/content/capture-city.sh" "$STAGING/tools/"
+cp "$ROOT/scripts/content/capture-city.sh" "$ROOT/scripts/base-ensure.sh" "$STAGING/tools/"
 cp "$TOOLS/analyze.py" "$TOOLS/discard-ffmpeg.sh" "$STAGING/tools/"
 
 if [[ "$MAC" == 1 ]]; then
@@ -365,6 +367,7 @@ if [[ "$MAC" == 1 ]]; then
   [[ -x "$BIN" && -d "$GOTHIC_DIR" ]] || { echo 'missing Mac binary or game directory' >&2; exit 2; }
   [[ "$(uname)" == Darwin ]] || { echo '--mac-city-fps requires macOS' >&2; exit 2; }
   cp -p "$BIN" "$STAGING/Gothic2Notr"
+  cp -p "${CONTENT_CONVERT:-$(dirname "$BIN")/content-convert}" "$STAGING/content-convert"
   export BIN="$STAGING/Gothic2Notr" SAVE="$STAGING/save_slot_1.sav"
   cp "$TOOLS/gpu-apple.py" "$STAGING/tools/"
   mkdir "$STAGING/tools/empty-textures"
@@ -392,6 +395,7 @@ PY
     (( SECONDS - wait_start < wait_limit )) || { echo "Mac occupied for ${wait_limit}s; no Mac game started" >&2; exit 75; }
     sleep 5
   done
+  GAME_BIN="$BIN" bash "$ROOT/scripts/base-ensure.sh" "$GOTHIC_DIR"
   mkdir -p "$STAGING/captures"
   for variant in before after; do
     printf '%s\t\t\n' "$variant" >"$STAGING/config.tsv"
@@ -454,6 +458,7 @@ mkdir "$task/inputs/$run"
 runtime="$task/inputs/$run/runtime"
 mkdir -p "$runtime/build/opengothic" "$runtime/tools" "$runtime/hd-textures/textures" "$task/inputs/$run/content"
 cp -p "$bin" "$runtime/build/opengothic/Gothic2Notr"
+cp -p "$(dirname "$bin")/content-convert" "$runtime/build/opengothic/content-convert"
 printf '%s\n' "$digest" >"$runtime/build/source.sha256"
 SH
 RUNTIME="$TASK/inputs/$RUN/runtime"

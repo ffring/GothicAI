@@ -41,7 +41,7 @@ for place in "${PLACES[@]}"; do
   case "$place" in market|harbour|forest|interior|combat) ;; *) fail "unknown place: $place (market harbour forest interior combat)" ;; esac
 done
 export PERF_WINDOW PERF_REPEAT PERF_WAIT
-export PERF_ARGS="${PERF_ARGS:-}" PERF_ENV="${PERF_ENV:-}"
+export PERF_ARGS="${PERF_ARGS:-}" PERF_ENV="${PERF_ENV:-}" PERF_VID_RES="${PERF_VID_RES:-0}"
 if [[ "$REMOTE_RUN" == 0 ]]; then
   OUT="$ROOT/.bench/perf-$(date -u +%Y%m%dT%H%M%SZ)-$$"
   mkdir -p "$OUT"
@@ -64,9 +64,10 @@ if [[ "$REMOTE_RUN" == 0 ]]; then
     remote mkdir -p "$SOURCE/OpenGothic" "$SOURCE/scripts/bench" "$REMOTE_OUT"
     remote df -h "$REMOTE_HOME"
     rsync -a --delete --exclude='/build*/' --exclude='.git' "$ROOT/OpenGothic/" "$RYZEN_HOST:$SOURCE/OpenGothic/"
-    rsync -a "$ROOT/scripts/perf.sh" "$ROOT/scripts/perf_report.py" "$RYZEN_HOST:$SOURCE/scripts/"
+    rsync -a "$ROOT/scripts/perf.sh" "$ROOT/scripts/perf_report.py" "$ROOT/scripts/base-ensure.sh" "$RYZEN_HOST:$SOURCE/scripts/"
+    rsync -a --delete --exclude='/build*/' "$ROOT/scripts/convert/" "$RYZEN_HOST:$SOURCE/scripts/convert/"
     rsync -a "$ROOT"/scripts/bench/perf-*.bench "$RYZEN_HOST:$SOURCE/scripts/bench/"
-    REMOTE_ENV=(PERF_REMOTE=1 "PERF_WINDOW=$PERF_WINDOW" "PERF_REPEAT=$PERF_REPEAT" "PERF_WAIT=$PERF_WAIT"
+    REMOTE_ENV=(PERF_REMOTE=1 "PERF_VID_RES=$PERF_VID_RES" "PERF_WINDOW=$PERF_WINDOW" "PERF_REPEAT=$PERF_REPEAT" "PERF_WAIT=$PERF_WAIT"
       "PERF_ARGS=$PERF_ARGS" "PERF_ENV=$PERF_ENV" "PERF_COMMIT=$PERF_COMMIT" "PERF_DIRTY=$PERF_DIRTY"
       "GOTHIC_DIR=$REMOTE_HOME/gothic-ai/game" "OPENGOTHIC_BASE_CACHE=$TASK/base-cache"
       "OPENGOTHIC_BASE_STORE=/mnt/shared/gothic-ai/perf-stand" "OPENGOTHIC_BASE=")
@@ -146,6 +147,7 @@ meta = dict(git_commit=os.environ.get('PERF_COMMIT'),
             backend='Metal' if platform.system() == 'Darwin' else 'Vulkan',
             host='ryzen' if os.environ.get('PERF_REMOTE') == '1' else platform.node(),
             repeats=int(os.environ['PERF_REPEAT']), places=sys.argv[2:],
+            vid_res=int(os.environ.get('PERF_VID_RES', '0')),
             game_args=args, game_env=extra_env)
 (out / 'metadata.json').write_text(json.dumps(meta, indent=2) + '\n')
 PY
@@ -183,7 +185,11 @@ env.update(TEMPEST_BACKGROUND='0', TEMPEST_WINDOW_SIZE=meta['requested_window'],
            OPENGOTHIC_BENCH_VISIBLE='1',
            OPENGOTHIC_BENCH=scenario, OPENGOTHIC_BENCH_OUT=str(leaf),
            OPENGOTHIC_FRAME_PROFILE=str(leaf / 'frameprofile.csv'))
-ini = ['[ENGINE]', 'zMaxFps=0', '[INTERNAL]', 'vidResIndex=0',
+# PERF_VID_RES picks the internal render resolution: 0 full, 1 = 75 %, 2 = 50 % of the drawable.
+vid_res = env.get('PERF_VID_RES', '0')
+if vid_res not in ('0', '1', '2'):
+    raise SystemExit('perf: PERF_VID_RES must be 0, 1 or 2')
+ini = ['[ENGINE]', 'zMaxFps=0', '[INTERNAL]', f'vidResIndex={vid_res}',
        '[SOUND]', 'soundVolume=1', 'musicVolume=1', 'musicEnabled=1', 'worldSounds=1']
 # The same initial GAME switches accepted by bench.sh, before world loading.
 settings = ('MOVABLE_VOBS', 'ARROW_STICKING', 'PHYSICS_NOISE', 'DESTRUCTION', 'BUOYANCY',
@@ -196,6 +202,8 @@ for key in settings:
             raise SystemExit(f'perf: {key} must be 0 or 1')
         ini.append(f'{key.lower()}={env[key]}')
 (leaf / 'run/Gothic.ini').write_text('\n'.join(ini) + '\n')
+subprocess.run(['bash', str(Path(scenario).parents[1] / 'base-ensure.sh'), env['GOTHIC_DIR']],
+               env=env, check=True)
 command = [env['GAME_BIN'], '-g', env['GOTHIC_DIR'], '-g2', '-window', '-devmode',
            '-nomenu', '-nointro', '-w', 'NEWWORLD.ZEN', *meta['game_args']]
 meta.update(place=place, repeat=int(repeat), command=command)
