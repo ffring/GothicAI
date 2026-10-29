@@ -44,6 +44,7 @@ class Renderer final {
       };
     Tempest::Size internalResolution(Tempest::Size src) const;
     float         internalResolutionScale() const;
+    Tempest::Size effectResolution() const;
 
     void updateCamera(const WorldView& wview, const Camera &camera);
     bool requiresRtScene() const;
@@ -133,6 +134,7 @@ class Renderer final {
 
       bool           zEnvMappingEnabled = false;
       bool           zCloudShadowScale  = false;
+      bool           halfResAoFog       = true;
       bool           zFogRadial         = false;
 
       bool           zWindEnabled       = false;
