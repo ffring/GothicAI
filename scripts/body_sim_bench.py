@@ -223,6 +223,8 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
             elif visibility:
                 runner.request({"cmd": "body_visibility_watch", "enabled": True}, allow_error=True)
             reset_s = time.monotonic()-begin
+            if melee_shadow is not None and index:
+                preserve_melee_journals(output/"run", output/f"episode-{index-1}", args.seed+index-1)
             native_reset_ms = reset.get("reset_wall_ms")
             warmup_ms = reset.get("simulated_ms")
             start = runner.request({"cmd": "arena_start", "provider": "native"})
@@ -250,6 +252,8 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
         sample = runner.sample() if runner is not None else {}
         if runner is not None:
             runner.request({"cmd": "close"})
+            if melee_shadow is not None and episodes:
+                preserve_melee_journals(output/"run", output/f"episode-{len(episodes)-1}", args.seed+len(episodes)-1)
     finally:
         if runner is not None:
             runner.terminate()
@@ -277,7 +281,9 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
                                                                output/"policy/worker-00/run/melee-posture.jsonl",
                                                                enabled=melee_posture == 1)
     if melee_shadow == 1 and name=="shadow-on":
-        result["shadow_coverage"] = {"native": shadow_coverage(output/"run/melee-blade-shadow.jsonl", episodes)}
+        result["shadow_coverage"] = {}
+        if episodes:
+            result["shadow_coverage"]["native"] = shadow_coverage(output/"run/melee-blade-shadow.jsonl", episodes)
         if "policy" in result:
             result["shadow_coverage"]["policy"] = shadow_coverage(
                 output/"policy/worker-00/run/melee-blade-shadow.jsonl", result["policy"]["episodes"])

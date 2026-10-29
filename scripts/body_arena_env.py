@@ -29,12 +29,15 @@ def preserve_melee_journals(workdir: Path, episode_dir: Path, seed: int) -> None
                    if (path := workdir / (name + suffix)).is_file()]
         if not sources:
             continue
-        with (episode_dir / (name + ".jsonl")).open("w") as output:
+        destination = episode_dir / (name + ".jsonl")
+        seen = set(destination.read_text().splitlines(keepends=True)) if destination.is_file() else set()
+        with destination.open("a") as output:
             for path in sources:
                 with path.open() as source:
                     for line in source:
-                        if json.loads(line).get("arena_seed") == seed:
+                        if line not in seen and json.loads(line).get("arena_seed") == seed:
                             output.write(line)
+                            seen.add(line)
 
 
 class ArenaInfrastructureError(RuntimeError):

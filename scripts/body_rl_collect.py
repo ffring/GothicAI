@@ -283,6 +283,9 @@ def run_worker(process: int, options: dict, envs: list[int], tasks) -> dict:
                     seats.append(Seat(rival, rivals[against], options["opponent_temperature"],
                                       random.Random(f"{options['sampling_seed']}:{seed}:opponent"), False))
                 reset_s = time.monotonic()-started
+                if options["keep_journals"] and summaries:
+                    previous = summaries[-1]
+                    preserve_melee_journals(output / "run", output / previous["name"], previous["seed"])
                 for seat in seats:
                     seat.runtime.begin_episode(initial["session_epoch"], initial["world_epoch"], initial_game_ms=initial["game_ms"])
                 by_entity = {seat.entity: seat for seat in seats}
@@ -410,6 +413,9 @@ def run_worker(process: int, options: dict, envs: list[int], tasks) -> dict:
                 else:
                     shutil.rmtree(episode_dir, ignore_errors=True)
             runner.call({"cmd": "close"})
+            if options["keep_journals"] and summaries:
+                previous = summaries[-1]
+                preserve_melee_journals(output / "run", output / previous["name"], previous["seed"])
         finally:
             runner.terminate()
         return {"worker": worker, "episodes": len(summaries)}
