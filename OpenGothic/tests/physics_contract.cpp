@@ -4320,6 +4320,17 @@ namespace {
       require(shadow.takeShadowBladeContacts(attacker).empty(),
               "a world contact must stop the entire shadow swing across later physics steps");
       require(shadow.bodyCount()==2,"shadow stepping must not add a sensor body");
+
+      // The same sweep in the wind-up (the blow starts at 100 ms): the wall is passed,
+      // the target behind it is reached.
+      shadow.updateShadowBlade(attacker,2,{before},51,0,200,.7f,151);
+      shadow.tick(17);
+      shadow.updateShadowBlade(attacker,2,{after},68,0,200,.7f,151);
+      shadow.tick(17);
+      const auto windup=shadow.takeShadowBladeContacts(attacker);
+      require(windup.size()==3 && windup[0].npc==nearTarget && windup[1].world && !windup[1].stopsSwing &&
+              windup[1].windup && windup[2].npc==farTarget,
+              "a wall touched in the wind-up must be passed and not hide the later target");
       }
     }
   }
