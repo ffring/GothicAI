@@ -50,6 +50,8 @@ class KilledGameRetryTests(unittest.TestCase):
         (settings.parent.parent / 'game-base.json').write_text(json.dumps({'base': 'c' * 64, 'videos': ''}))
         binaries.mkdir()
         shutil.copyfile(SCRIPT.with_name('e2e.sh'), source / 'scripts/e2e.sh')
+        # Base preparation has its own tests; here the base is already ready.
+        (source / 'scripts/base-ensure.sh').write_text('exit 0\n')
         # Keep the production shell monitor, but replace its services and game.
         uv = binaries / 'uv'
         uv.write_text(f'#!{sys.executable}\n' + r'''
@@ -1199,41 +1201,40 @@ remote() { "$@"; }
         self.assertTrue((engine / 'Gothic2Notr').exists())
         self.assertTrue((storygraph / 'storygraph').exists())
 
-    def test_storygraph_digest_tracks_dependencies_independently(self):
-        inputs = ['ai_bridge/storygraph/main.cpp', 'ai_bridge/textcodec.cpp',
-                  'ai_bridge/textcodec.h', 'lib/ZenKit/src/Archive.cc',
-                  'lib/rapidjson/include/rapidjson/document.h']
-        for relative in inputs + ['game/main.cpp']:
-            path = self.source / 'OpenGothic' / relative
+    def test_storygraph_digest_tracks_engine_and_converter_sources(self):
+        # storygraph links base and video import from the engine tree, so it
+        # shares the engine digest: OpenGothic plus scripts/convert.
+        inputs = ['OpenGothic/ai_bridge/storygraph/main.cpp', 'OpenGothic/ai_bridge/textcodec.cpp',
+                  'OpenGothic/lib/ZenKit/src/Archive.cc', 'OpenGothic/common/basestore.cpp',
+                  'OpenGothic/game/main.cpp', 'scripts/convert/main.cpp']
+        for relative in inputs:
+            path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(relative)
 
-        def digest(kind=''):
+        def digest(function):
             result = subprocess.run(
-                ['bash', '-c', definitions() + '\nROOT="$TEST_ROOT/source"\nsource_digest ' + kind],
+                ['bash', '-c', definitions() + '\nROOT="$TEST_ROOT/source"\n' + function],
                 env=self.env, capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             return result.stdout.strip()
 
-        original = digest('storygraph')
+        original = digest('storygraph_digest')
+        self.assertEqual(digest('source_digest'), original)
         for relative in inputs:
             with self.subTest(source=relative):
-                path = self.source / 'OpenGothic' / relative
+                path = self.source / relative
                 path.write_text(relative + ' changed')
-                self.assertNotEqual(digest('storygraph'), original)
+                self.assertNotEqual(digest('storygraph_digest'), original)
                 path.write_text(relative)
-        engine_before = digest()
-        (self.source / 'OpenGothic/game/main.cpp').write_text('engine-only edit')
-        self.assertEqual(digest('storygraph'), original)
-        self.assertNotEqual(digest(), engine_before)
-        engine_before = digest()
-        for relative in ['ai_bridge/storygraph/build/generated.cpp', 'build/generated.cpp',
-                         'lib/ZenKit/build/generated.cpp']:
-            path = self.source / 'OpenGothic' / relative
+        self.assertEqual(digest('storygraph_digest'), original)
+        for relative in ['OpenGothic/ai_bridge/storygraph/build/generated.cpp',
+                         'OpenGothic/build/generated.cpp', 'OpenGothic/lib/ZenKit/build/generated.cpp',
+                         'scripts/convert/build/generated.cpp', 'scripts/other/tool.py']:
+            path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('generated output')
-        self.assertEqual(digest('storygraph'), original)
-        self.assertEqual(digest(), engine_before)
+        self.assertEqual(digest('storygraph_digest'), original)
 
 
 class TunnelTests(unittest.TestCase):
