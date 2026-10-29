@@ -48,6 +48,21 @@ DURATIONS = (0.2, 0.35, 0.5, 0.6)
 STAGGER = 0.08
 
 
+# timing.ts holdPush: a held picture of 2 s or more pushes in by itself, 1 % a second, 3-5 %
+HOLD_PUSH = 2.0
+PUSH_MIN, PUSH_MAX = 0.03, 0.05
+
+
+def hold_push(beat: dict) -> tuple[float, float] | None:
+    """(from, scale) of the beat's own slow push, as timing.ts holdPush, or None."""
+    if beat.get("zoom") or beat.get("push") == 0 or beat.get("kind") == "split":
+        return None
+    at = beat.get("freeze") if beat.get("kind") == "footage" else 0.0
+    if at is None or beat["dur"] - at < HOLD_PUSH:
+        return None
+    return at, 1 + beat.get("push", min(PUSH_MAX, max(PUSH_MIN, 0.01 * (beat["dur"] - at))))
+
+
 def _fits(dur: float) -> bool:
     return any(abs(dur - d) < 1e-6 for d in DURATIONS)
 
@@ -80,6 +95,9 @@ def language(plan: dict) -> list[str]:
                     row("zoom", f"{zoom['dur']:g} s of {beat['dur']:g}", "a linear zoom is a slow push across the beat; ease it otherwise")
             elif zoom["dur"] > 0.04 and not _fits(zoom["dur"]):  # up to a frame: a punch-in, as good as a cut
                 row("zoom", f"{zoom['dur']:g} s", "an eased zoom takes slow 0.6, or is a linear push across the beat")
+        push = beat.get("push")
+        if push and push < PUSH_MIN - 1e-6:
+            row("push", f"{push:g}", "below 0.03 the push does not read: 0.03-0.05, or 0 for none")
         carry = beat.get("carry")
         if carry and "dur" in carry and not (DURATIONS[1] - 1e-6 <= carry["dur"] <= DURATIONS[-1] + 1e-6):
             row("carry", f"{carry['dur']:g} s", "a carry takes 0.35-0.6 s by its travel; leave dur out")
@@ -124,6 +142,20 @@ def stills(frames: list[bytes], fps: float, band: tuple[float, float], least: fl
                 out.append((start, i - 1))
             start = i
     return out
+
+
+def hold_beats(plan: dict, a: float, b: float) -> tuple[str, str]:
+    """The beats a still stretch from a to b s lies in, and whether their own slow push runs there: "yes" for all
+    of them, "part" for some, "no" for none. A push keeps the hold alive, not new: the voice still carries it."""
+    ids, pushed = [], []
+    t = 0.0
+    for beat in plan["beats"]:
+        if t < b and a < t + beat["dur"]:
+            ids.append(beat["id"])
+            push = hold_push(beat)
+            pushed.append(bool(push) and t + push[0] < b)
+        t += beat["dur"]
+    return ", ".join(ids), "yes" if pushed and all(pushed) else "part" if any(pushed) else "no"
 
 
 PAD_BEFORE = 0.1
@@ -254,9 +286,11 @@ def main() -> None:
                "The plan against references/motion.md: a row is a choice to justify or fix, not always a defect.", ""]
     report += (["| beat | beat at, s | what | value | rule |", "|---|---|---|---|---|", *lang] if lang else ["None."])
     report += ["", f"## Still longer than {least:g} s", "",
-               "Nothing outside the caption band changes: a hold the voice must carry, or a place for the next move.", ""]
-    report += (["| from, s | to, s | length, s |", "|---|---|---|",
-                *[f"| {a / fps:.2f} | {b / fps:.2f} | {(b - a) / fps:.1f} |" for a, b in held]] if held else ["None."])
+               "Nothing new outside the caption band (a slow push alone changes too little to count): a hold the voice "
+               "must carry, or a place for the next move. `push` says whether the beat's own push runs there.", ""]
+    report += (["| from, s | to, s | length, s | beats | push |", "|---|---|---|---|---|",
+                *[f"| {a / fps:.2f} | {b / fps:.2f} | {(b - a) / fps:.1f} | {' | '.join(hold_beats(plan, a / fps, b / fps))} |"
+                  for a, b in held]] if held else ["None."])
     (out / "report.md").write_text("\n".join(report) + "\n")
     print(f"{len(rows)} strips, {len(found)} jumps nobody planned, {len(lang)} motion-language notes, "
           f"{len(held)} stills over {least:g} s -> {out / 'report.md'}")

@@ -113,6 +113,13 @@ the original plan gains and ducking for Studio and drafts; they do not run the p
   or the publication's edge fades moves; `flash` is a hard cut with a white flash. `zoom` eases in and out
   (cubic) unless `ease: "linear"`, for a slow push across a whole beat. The footage of a beat followed by a
   transition must run `dur` past the beat's end;
+- a held picture pushes in by itself, so a long hold does not read as a frozen screen: a `card`, a `still`, or
+  `footage` after its `freeze`, held 2 s or more, scales linearly across the hold by 1 % a second held, between
+  3 and 5 % (`holdPush` in `timing.ts`), so a longer hold pushes slower, not further. The whole beat pushes
+  about the centre of the safe area, with its tags, lines, texts and carry, so everything stays on its target;
+  the captions and the hook stay still. A beat's own `zoom` replaces it (a plan cannot set both), `push: 0`
+  turns it off (a beat where an exact frame matters), `push: 0.03`-`0.05` sets the scale; live footage and
+  `split` do not push;
 - `carry` on a beat (not the first) carries one thing across the cut into it, so the two beats share it instead
   of swapping pictures: `from: {tag, line}` takes a line of a tag of the beat before (its text, colour and the
   place `Tags` draws it on the cut, computed with `measureText`; the line leaves its box at the cut), or
@@ -458,7 +465,9 @@ one-frame flash. It also checks the motion language of the plan: a duration the 
 0.35-0.6 s), two things of one beat entering less than 0.08 s apart, a thing entering under its beat's own
 transition; and lists every stretch where the picture holds still longer than `--still` (3 s by default):
 nothing outside the caption band changes by 0.03 of 255 per frame (a card or a freeze changes by 0.000-0.001,
-a hero idling in footage by 0.05-0.1). The draft may be a `--scale 0.5` render; only ffmpeg runs. Its tests
+a hero idling in footage by 0.05-0.1). A slow push alone changes less than that, so a pushed hold is still
+listed, with its beats and whether their push runs there (`push`: yes, part, no); a `push` below 0.03 is a
+motion-language note. The draft may be a `--scale 0.5` render; only ffmpeg runs. Its tests
 are `shorts/tests/test_strips.py`.
 Schema and geometry checks: `node --test tests/charts.test.mjs` (Node 22.18+ for native TypeScript
 stripping), including rejection of wide-only cards in tall and interpolation of `cone.path`.
@@ -468,6 +477,10 @@ up to three people. The versions are pinned in `package.json`.
 
 ## План и журнал
 
+- 2026-10-30: a held picture (a card, a still, a freeze) of 2 s or more pushes in by itself, 3-5 % across the
+  hold (`holdPush`), the user's choice over the old rule that nothing drifts on its own; `push: 0` turns it off.
+  The strips report marks which still holds it covers. On a 27 s card the title moves 1 px at a time (Chrome
+  snaps text to pixels); `will-change: transform` made it smooth but cost a third of the text's sharpness.
 - 2026-10-29: `strips.py` checks the motion language of the plan (durations off the set, two entrances at once,
   an entrance under a transition) and lists holds longer than `--still`, the last of the review of third-party
   motion skills (motion-art-direction, motion-video-kit's frozen-time). On the combat-AI video it found the
