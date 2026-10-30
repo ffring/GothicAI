@@ -164,6 +164,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
     wdynamic->setBuoyancyEnabled(Gothic::physicsFlags().buoyancy);
     wdynamic->setClothEnabled(Gothic::physicsFlags().cloth);
+    wdynamic->setItemWakeEnabled(Gothic::physicsFlags().itemWake);
     wdynamic->setPhysicsNoiseCallback([this](const PhysicsNoise& noise) { emitPhysicsNoise(noise); });
     for(auto& surface:worldCloth.surfaces)
       if(auto visual=ClothVisual::createSurface(*this,surface.mesh,surface.pins,surface.visual,surface.id,surface.stiffness,surface.linearDamping))
@@ -685,6 +686,7 @@ void World::tick(uint64_t dt) {
   wdynamic->setDestructionEnabled(Gothic::physicsFlags().destruction);
   wdynamic->setBuoyancyEnabled(Gothic::physicsFlags().buoyancy);
   wdynamic->setClothEnabled(Gothic::physicsFlags().cloth);
+  wdynamic->setItemWakeEnabled(Gothic::physicsFlags().itemWake);
   if(!Gothic::physicsFlags().arrowSticking)
     stuckArrows.clear();
   static bool doTicks=true;

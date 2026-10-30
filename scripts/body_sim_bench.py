@@ -175,7 +175,13 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
     variant.runner_extra_args = list(extra)
     variant.melee_shadow = melee_shadow
     variant.melee_posture = melee_posture
-    if melee_shadow is not None:
+    down_tactics = os.environ.get("MELEE_DOWN_TACTICS")
+    if down_tactics is not None and down_tactics not in ("0", "1"):
+        raise ValueError("MELEE_DOWN_TACTICS must be 0 or 1")
+    hit_stop = os.environ.get("MELEE_HITSTOP")
+    if hit_stop is not None and hit_stop not in ("0", "1"):
+        raise ValueError("MELEE_HITSTOP must be 0 or 1")
+    if melee_shadow is not None or down_tactics is not None or hit_stop is not None:
         # Both collectors copy this private INI; the archived reference stays unchanged.
         variant.reference = output/"reference"
         settings = variant.reference/"run/Gothic.ini"
@@ -184,11 +190,16 @@ def run_variant(args: argparse.Namespace, name: str, *, serial: bool, trace: boo
         config.read(args.reference/"run/Gothic.ini")
         if not config.has_section("GAME"):
             config.add_section("GAME")
-        config.set("GAME", "melee_blade_shadow", str(melee_shadow))
+        if melee_shadow is not None:
+            config.set("GAME", "melee_blade_shadow", str(melee_shadow))
         if melee_physics_hits is not None:
             config.set("GAME", "melee_physics_hits", str(melee_physics_hits))
         if melee_posture is not None:
             config.set("GAME", "melee_posture", str(melee_posture))
+        if down_tactics is not None:
+            config.set("GAME", "melee_down_tactics", down_tactics)
+        if hit_stop is not None:
+            config.set("GAME", "melee_hitstop", hit_stop)
         with settings.open("w") as stream:
             config.write(stream)
     os.environ.pop("OPENGOTHIC_BODY_TRACE", None)

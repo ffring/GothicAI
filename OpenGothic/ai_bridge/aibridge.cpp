@@ -2192,8 +2192,20 @@ bool AiBridge::Impl::onConsoleCommand(std::string_view cmd, std::string& reply) 
       reply += " " + id;
     return true;
     }
+  if(sub=="skip" && args.size()>2) {
+    // its important dialogs count as told, as `debug skip_important` does: a shot's npc does not stop the hero
+    Npc* npc = npcBySymbol(*world,upperSymbol(args[2]));
+    Npc* pl  = world->player();
+    if(npc==nullptr || pl==nullptr || npc==pl) {
+      reply = "no npc " + args[2];
+      return true;
+      }
+    world->script().skipImportantInfos(*npc,*pl);
+    reply = "skipped " + args[2];
+    return true;
+    }
 
-  reply = "usage: ai status | ai attach <npc> | ai detach [npc] | ai dialogs <npc> | ai ptt start [<wav>]|stop|cancel";
+  reply = "usage: ai status | ai attach <npc> | ai detach [npc] | ai dialogs <npc> | ai skip <npc> | ai ptt start [<wav>]|stop|cancel";
   return true;
   }
 

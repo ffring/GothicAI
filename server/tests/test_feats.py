@@ -153,6 +153,13 @@ def test_notable_first_repeated_and_unusual_outcomes():
     for flag in (False, None):
         human = {"fact": "died", "npc": "HUMAN", "killer": "PLAYER", "monster": flag}
         assert notable(2, human, [(1, monster), (2, human)])
+    # The first murder of a peaceful man stays notable after killing a bandit in a fair fight.
+    bandit = crime(kind="murder", victim="BRAGO", lawful_fight=True)
+    farmer = crime(id="C2", kind="murder")
+    assert notable(2, farmer, [(1, bandit), (2, farmer)])
+    assert not notable(3, crime(id="C3", kind="murder", victim="HILDA"), [
+        (1, bandit), (2, farmer), (3, crime(id="C3", kind="murder", victim="HILDA")),
+    ])
 
 
 def test_turns_require_the_related_earlier_deed():

@@ -164,7 +164,7 @@ struct Npc::MeleeShadow final {
   float reachCpuMs = 0, reachCpuMaxMs = 0;
   uint64_t reachQueries = 0;
   std::optional<Window> window;
-  uint64_t id = 0, start = 0, tick = 0;
+  uint64_t id = 0, start = 0, origin = 0, tick = 0;
   float speed = 1;
   std::string attacker, weapon, animation, legacyTarget = "null", legacyResult = "no_optimal_frame";
   const Npc* legacyNpc = nullptr;
@@ -192,6 +192,7 @@ struct Npc::MeleeShadow final {
     const Npc* target = nullptr;
     std::string who = "null";
     uint64_t sample = 0;
+    float startDistanceCm = 0;
     Vec3 targetStart, forward, nearestOffset;
     float initialGapCm = 0, minClearanceCm = std::numeric_limits<float>::max(), retreatCm = 0;
     float previewAdvanceCm = 0, previewContactMs = 0, previewCpuMs = 0, previewApproachCm = std::numeric_limits<float>::infinity();
@@ -1496,6 +1497,27 @@ void Npc::updateMeleeBenchBlade() {
     }
   }
 
+std::optional<std::pair<uint32_t,uint32_t>> Npc::meleeFinishStroke(const std::vector<float>& height) {
+  // the longest drop of the tip
+  uint32_t top = 0, from = 0, to = 0;
+  for(uint32_t frame=1;frame<height.size();++frame) {
+    if(height[frame]>height[top])
+      top = frame;
+    if(height[top]-height[frame]>height[from]-height[to])
+      from = top, to = frame;
+    }
+  // the stroke ends where the tip comes to rest at its lowest, not on the later settling,
+  // and starts at the top it falls from, not on a higher point before the swing round the side
+  while(to>from+1 && height[to-1]-height[to]<=2.f)
+    --to;
+  from = to;
+  while(from>0 && height[from-1]>=height[from]-1.f)
+    --from;
+  if(to<=from+1)
+    return std::nullopt;
+  return std::make_pair(from,to);
+  }
+
 void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, bool normalY) const {
   if(!meleeShadow)
     meleeShadow = std::make_unique<MeleeShadow>();
@@ -1555,13 +1577,29 @@ void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, 
   if(mode==WeaponState::Fist && left<pose.boneCount())
     sampleSpeeds(left,leftSpeed,leftReach);
   // The original's finishing move (T_1HSFINISH, T_2HSFINISH) has no optimal frame: it kills by
-  // script. As a chop at one lying, its blow is where the blade is fastest.
+  // script. As a chop at one lying, its blow is the stroke down: the longest drop of the blade's
+  // tip, from the top of the swing to the ground. The blade is fastest earlier, swung round the
+  // side over the head, and a window placed there closed with a short axe still above the body.
+  std::optional<std::pair<uint32_t,uint32_t>> stroke;
+  if(optimal.empty() && mode!=WeaponState::Fist && !seq->reverse) {
+    std::vector<float> height(data.numFrames,0);
+    for(uint32_t frame=0;frame<data.numFrames;++frame) {
+      Matrix4x4 matrix;
+      if(!pose.animRelative(seq->name,float(frame)/float(data.numFrames-1),size_t(-1),right,matrix))
+        throw std::runtime_error("Cannot sample melee shadow finishing stroke");
+      Vec3 tip(-length,0,0);
+      matrix.project(tip);
+      height[frame] = tip.y;
+      }
+    stroke = meleeFinishStroke(height);
+    }
   if(optimal.empty())
-    optimal.push_back(uint32_t(std::max_element(rightSpeed.begin(),rightSpeed.end())-rightSpeed.begin()));
+    optimal.push_back(stroke ? uint32_t(std::max_element(rightSpeed.begin()+stroke->first,rightSpeed.begin()+stroke->second+1)-rightSpeed.begin()) :
+                               uint32_t(std::max_element(rightSpeed.begin(),rightSpeed.end())-rightSpeed.begin()));
   for(uint32_t index=0;index<optimal.size();++index) {
     const auto opt = optimal[index];
-    const uint32_t lo = index==0 ? 0 : (optimal[index-1]+opt)/2+1;
-    const uint32_t hi = index+1==optimal.size() ? data.numFrames-1 : (opt+optimal[index+1])/2;
+    const uint32_t lo = stroke ? stroke->first : index==0 ? 0 : (optimal[index-1]+opt)/2+1;
+    const uint32_t hi = stroke ? stroke->second : index+1==optimal.size() ? data.numFrames-1 : (opt+optimal[index+1])/2;
     const float rpeak = *std::max_element(rightSpeed.begin()+lo,rightSpeed.begin()+hi+1);
     const float lpeak = *std::max_element(leftSpeed.begin()+lo,leftSpeed.begin()+hi+1);
     const bool useLeft = mode==WeaponState::Fist && lpeak>rpeak;
@@ -1573,6 +1611,10 @@ void Npc::cacheMeleeShadowWindows(const Animation::Sequence* seq, float length, 
       --first;
     while(last<hi && speeds[last+1]>=threshold)
       ++last;
+    if(stroke) {
+      first = stroke->first;
+      last = stroke->second;
+      }
     // A low-speed optimal frame still has its own adjacent sample interval.
     if(first==last) {
       first = first>lo ? first-1 : first;
@@ -1772,7 +1814,7 @@ void Npc::syncMeleeShadowSwing() {
     return;
     }
   if(meleeDownStrike && meleeShadow && meleeShadow->window && meleeShadow->window->sequence==attack->sequence &&
-     meleeShadow->start==attack->start) {
+     meleeShadow->origin==attack->origin) {
     // The finishing move stays over the body for seconds: the pull-out and the step back.
     // A moment after the blow the rest plays faster; cut short, its step forward stayed
     // (70 cm a chop) and the hero ended up standing on the body.
@@ -1817,8 +1859,12 @@ void Npc::syncMeleeShadowSwing() {
   if(window==nullptr)
     throw std::runtime_error("Melee shadow requires an optimal-frame attack window");
   if(shadow.window && shadow.window->sequence==seq && shadow.window->index==window->index &&
-     shadow.start==attack->start && shadow.window->length==length && shadow.window->normalY==normalY)
+     shadow.origin==attack->origin && shadow.window->length==length && shadow.window->normalY==normalY) {
+    // the same swing: a hit stop moves its clock, the windows follow it
+    shadow.start = attack->start;
+    shadow.speed = attack->speed;
     return;
+    }
   const auto selected = *window;
   finishMeleeShadowSwing(false);
   if(meleeShadowSuspended)
@@ -1830,6 +1876,7 @@ void Npc::syncMeleeShadowSwing() {
   shadow.window = selected;
   ++shadow.id;
   shadow.start = attack->start;
+  shadow.origin = attack->origin;
   shadow.tick = owner.tickCount();
   shadow.speed = attack->speed;
   shadow.attacker = meleeShadowWho(this);
@@ -1856,6 +1903,7 @@ void Npc::syncMeleeShadowSwing() {
   if(TestBench::bodyTracing() && currentTarget!=nullptr) {
     shadow.diagnostic.target = currentTarget;
     shadow.diagnostic.who = meleeShadowWho(currentTarget);
+    shadow.diagnostic.startDistanceCm = fightDistanceTo(*currentTarget).length();
     }
   if(shadow.physicsHits && currentTarget!=nullptr && fghAlgo.isInFocusAngle(*this,*currentTarget,60.f)) {
     auto& magnet = shadow.magnet;
@@ -2236,6 +2284,8 @@ void Npc::consumeMeleeContacts() {
       if(!swing.window || swing.id!=id)
         return;
       swing.contacts[index].damage = std::max(0,before-target->attribute(ATR_HITPOINTS));
+      if(!dodge)
+        meleeHitStop(*target,hit,entry.multiplier,block);
       }
     if(block) {
       swing.stopped = true;
@@ -2244,6 +2294,31 @@ void Npc::consumeMeleeContacts() {
         stopMeleeSwing();
       }
     }
+  }
+
+void Npc::meleeHitStop(Npc& target, const MeleeBladeContact& hit, float multiplier, bool blocked) {
+  if(!Gothic::physicsFlags().meleeHitStop)
+    return;
+  // The blade bites and both bodies hold their frame for a moment, then go on: the weight of the
+  // blow. A blocked one holds only the guard, the blow itself rebounds into the stance.
+  const auto ws = weaponState();
+  // Under three frames of 30 the hold is not seen at all: a weak blow still holds most of it
+  float ms = ws==WeaponState::W2H ? 120.f : (ws==WeaponState::W1H ? 90.f : 60.f);
+  ms = blocked ? 60.f : ms*std::clamp(multiplier,.8f,1.3f);
+  constexpr float hold = .04f;
+  const uint64_t until = owner.tickCount()+uint64_t(ms);
+  if(!blocked)
+    visual.hitStop(until,hold);
+  target.visual.hitStop(until,hold);
+  if(isPlayer() || target.isPlayer()) {
+    if(auto camera = Gothic::inst().camera()) {
+      const float deg = target.isPlayer() ? (blocked ? .5f : 1.2f) : (blocked ? .3f : .5f);
+      camera->impact(hit.velocityCmS,deg*(blocked ? 1.f : std::clamp(multiplier,.8f,1.3f)));
+      }
+    }
+  if(TestBench::bodyTracing())
+    TestBench::bodyEvent(*this,&target,"hit_stop",owner.tickCount(),
+                        "\"ms\":"+std::to_string(int(ms))+",\"blocked\":"+(blocked ? "true" : "false"),visual.pose().animNames());
   }
 
 void Npc::noteMeleeShadowMarks(const std::vector<MeleeBladeContact>& contacts) {
@@ -2368,6 +2443,7 @@ void Npc::finishMeleeShadowSwing(bool remove, bool discard) {
     const double activeBegin = double(shadow.start)+double(window.beginMs)/shadow.speed;
     const double activeEnd = double(shadow.start)+double(window.endMs)/shadow.speed;
     diagnostic = "{\"target\":" + value.who +
+                 ",\"start_distance_cm\":" + number(value.startDistanceCm) +
                  ",\"active_begin_ms\":" + number(activeBegin) +
                  ",\"active_end_ms\":" + number(activeEnd) +
                  ",\"sample_time_ms\":" + number(value.sample) +
@@ -3709,10 +3785,18 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
 
   const auto ws = weaponState();
   const auto bs = bodyStateMasked();
+  const auto& flags = Gothic::physicsFlags();
+  const bool downTactics = !bodyOverride && flags.meleeDownTactics && flags.meleePosture && flags.meleePhysicsHits &&
+                          (ws==WeaponState::W1H || ws==WeaponState::W2H);
+  const bool targetKnockdown = downTactics && currentTarget->meleeKnockdown;
+  // Discard the remaining native combo, but let the attack already in flight finish below.
+  if(targetKnockdown)
+    fghAlgo.onTargetKnockdown();
   const bool magnetHeading = visual.pose().isAttackAnim() && meleeShadow && meleeShadow->window && meleeShadow->physicsHits &&
                              meleeShadow->magnet.eligible;
 
-  if(bs==BS_HIT && (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
+  if((bs==BS_HIT || (targetKnockdown && visual.pose().isAttackAnim())) &&
+     (ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H)) {
     traceCombatGate("melee_hit_lock");
     //NOTE: 'storm' attack has BS_RUN state and not meant to be auto-rotated
     if(!magnetHeading)
@@ -3721,7 +3805,7 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     return true;
     }
 
-  if(!bodyOverride && !fghAlgo.hasInstructions()) {
+  if(!bodyOverride && !targetKnockdown && !fghAlgo.hasInstructions()) {
     traceCombatGate("no_instructions");
     return false;
     }
@@ -3743,6 +3827,38 @@ bool Npc::implAttack(uint64_t dt, bool bodyOverride, FightAlgo::Action bodyActio
     if(!magnetHeading)
       implTurnToFai(*currentTarget,dt);
     mvAlgo.tick(dt,MoveAlgo::FaiMove);
+    return true;
+    }
+
+  if(targetKnockdown) {
+    const bool rising = currentTarget->meleeRiseTick!=0;
+    // Use the same root-transformed distance as isInFinishRange, bounded by its script limit.
+    const float finishRange = std::min(fghAlgo.attackFinishDistance(owner.script()),ws==WeaponState::W1H ? 165.f : 170.f);
+    const bool inRange = rising ? fghAlgo.isInWRange(*this,*currentTarget,owner.script()) :
+                                 fghAlgo.qDistTo(*this,*currentTarget)<=finishRange*finishRange;
+    const auto action = FightAlgo::resolveDownTactics(downTactics,currentTarget->meleeKnockdown,rising,inRange,
+                                                     fghAlgo.isInFocusAngle(*this,*currentTarget,5.f));
+    if(action==FightAlgo::MV_MOVE) {
+      implTurnToFai(*currentTarget,dt);
+      setAnim(AnimationSolver::Move);
+      go2.set(currentTarget,GT_Enemy);
+      go2.nativeCombatTarget = currentTarget;
+      mvAlgo.tick(dt,MoveAlgo::FaiMove);
+      go2.clear();
+      wayPath.clear();
+      }
+    else {
+      visual.stopWalkAnim(*this);
+      if(!visual.pose().isStanding())
+        setAnim(Anim::Idle);
+      implTurnToFai(*currentTarget,dt);
+      if(action==FightAlgo::MV_ATTACK && visual.pose().isStanding()) {
+        const auto hit = owner.physic()->ray(collosionCenter(),currentTarget->collosionCenter());
+        if(!hit.hasCol && doAttack(Anim::Attack,BS_HIT))
+          implFaiWait(visual.pose().atkTotalTime()+1);
+        }
+      mvAlgo.tick(dt,MoveAlgo::FaiMove);
+      }
     return true;
     }
 

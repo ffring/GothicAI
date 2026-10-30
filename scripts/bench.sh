@@ -20,16 +20,20 @@
 #      SOUND, MUSIC  volumes 0..1 (default 0); with TEMPEST_AUDIO_LOOPBACK=48000 the sound of a segment
 #                    goes into <segment>.wav instead of the speakers
 #      MOVABLE_VOBS  optional initial GAME movable_vobs setting (0 or 1), before world loading
+#      ITEM_HULLS    optional initial GAME item_hulls setting (0 or 1), for new item bodies
 #      ARROW_STICKING optional initial GAME arrow_sticking setting (0 or 1), before world loading
 #      PHYSICS_NOISE optional initial GAME physics_noise setting (0 or 1), before world loading
 #      DESTRUCTION optional initial GAME destruction setting (0 or 1), before world loading
 #      BUOYANCY     optional initial GAME buoyancy setting (0 or 1), before world loading
 #      CLOTH        optional initial GAME cloth setting (0 or 1), before world loading
+#      ITEM_WAKE    optional initial GAME item_wake setting (0 or 1), before world loading
 #      CHARACTER_VIRTUAL optional initial GAME character_virtual setting (0 or 1), before world loading
 #      NPC_CHARACTER_VIRTUAL optional initial GAME npc_character_virtual setting (0 or 1)
 #      MONSTER_CHARACTER_VIRTUAL optional initial GAME monster_character_virtual setting (0 or 1)
 #      MELEE_PHYSICS_HITS optional initial GAME melee_physics_hits setting (0 or 1)
 #      MELEE_POSTURE optional initial GAME melee_posture setting (0 or 1)
+#      MELEE_DOWN_TACTICS optional initial GAME melee_down_tactics setting (0 or 1)
+#      MELEE_HITSTOP optional initial GAME melee_hitstop setting (0 or 1)
 #      MELEE_REACTIONS optional initial GAME melee_reactions setting (0 or 1)
 #      MELEE_BLADE_SHADOW optional initial GAME melee_blade_shadow setting (0 or 1)
 #      OPENGOTHIC_TEXTURES  sharper textures (default: those of scripts/hd-textures.sh, when made; empty: none)
@@ -143,7 +147,7 @@ fi
 
 # These fixtures use a prepared world and clock; skip the new-game chapter video
 # before their first command on NEWWORLD.
-if [[ "$NAME" == cloth* || "$NAME" == monster-character-virtual* || "$NAME" == own-mesh-* || "$NAME" == movable-census || "$NAME" == melee-physics || "$NAME" == melee-blade-shadow || "$NAME" == melee-posture-* ]]; then
+if [[ "$NAME" == item-wake || "$NAME" == cloth* || "$NAME" == monster-character-virtual* || "$NAME" == own-mesh-* || "$NAME" == movable-census || "$NAME" == melee-physics || "$NAME" == melee-blade-shadow || "$NAME" == melee-posture-* ]]; then
   START_ARGS+=(-nointro)
 fi
 
@@ -188,11 +192,15 @@ musicVolume=${MUSIC:-0}
 musicEnabled=$([[ "${MUSIC:-0}" == 0 || "${MUSIC:-0}" == 0.0 ]] && echo 0 || echo 1)
 worldSounds=${WORLD_SOUNDS:-1}
 EOF
-if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CLOTH:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}${MONSTER_CHARACTER_VIRTUAL:-}${MELEE_BLADE_SHADOW:-}${MELEE_PHYSICS_HITS:-}${MELEE_POSTURE:-}${MELEE_REACTIONS:-}" ]]; then
+if [[ -n "${MOVABLE_VOBS:-}${ITEM_HULLS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}${BUOYANCY:-}${CLOTH:-}${ITEM_WAKE:-}${CHARACTER_VIRTUAL:-}${NPC_CHARACTER_VIRTUAL:-}${MONSTER_CHARACTER_VIRTUAL:-}${MELEE_BLADE_SHADOW:-}${MELEE_PHYSICS_HITS:-}${MELEE_POSTURE:-}${MELEE_REACTIONS:-}${MELEE_DOWN_TACTICS:-}${MELEE_HITSTOP:-}" ]]; then
   printf '\n[GAME]\n' >>"$RUN/Gothic.ini"
   if [[ -n "${MOVABLE_VOBS:-}" ]]; then
     [[ "$MOVABLE_VOBS" == 0 || "$MOVABLE_VOBS" == 1 ]] || { echo "MOVABLE_VOBS must be 0 or 1" >&2; exit 2; }
     printf 'movable_vobs=%s\n' "$MOVABLE_VOBS" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${ITEM_HULLS:-}" ]]; then
+    [[ "$ITEM_HULLS" == 0 || "$ITEM_HULLS" == 1 ]] || { echo "ITEM_HULLS must be 0 or 1" >&2; exit 2; }
+    printf 'item_hulls=%s\n' "$ITEM_HULLS" >>"$RUN/Gothic.ini"
   fi
   if [[ -n "${ARROW_STICKING:-}" ]]; then
     [[ "$ARROW_STICKING" == 0 || "$ARROW_STICKING" == 1 ]] || { echo "ARROW_STICKING must be 0 or 1" >&2; exit 2; }
@@ -218,6 +226,14 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}
     [[ "$MELEE_POSTURE" == 0 || "$MELEE_POSTURE" == 1 ]] || { echo "MELEE_POSTURE must be 0 or 1" >&2; exit 2; }
     printf 'melee_posture=%s\n' "$MELEE_POSTURE" >>"$RUN/Gothic.ini"
   fi
+  if [[ -n "${MELEE_DOWN_TACTICS:-}" ]]; then
+    [[ "$MELEE_DOWN_TACTICS" == 0 || "$MELEE_DOWN_TACTICS" == 1 ]] || { echo "MELEE_DOWN_TACTICS must be 0 or 1" >&2; exit 2; }
+    printf 'melee_down_tactics=%s\n' "$MELEE_DOWN_TACTICS" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${MELEE_HITSTOP:-}" ]]; then
+    [[ "$MELEE_HITSTOP" == 0 || "$MELEE_HITSTOP" == 1 ]] || { echo "MELEE_HITSTOP must be 0 or 1" >&2; exit 2; }
+    printf 'melee_hitstop=%s\n' "$MELEE_HITSTOP" >>"$RUN/Gothic.ini"
+  fi
   if [[ -n "${MELEE_REACTIONS:-}" ]]; then
     [[ "$MELEE_REACTIONS" == 0 || "$MELEE_REACTIONS" == 1 ]] || { echo "MELEE_REACTIONS must be 0 or 1" >&2; exit 2; }
     printf 'melee_reactions=%s\n' "$MELEE_REACTIONS" >>"$RUN/Gothic.ini"
@@ -241,6 +257,10 @@ if [[ -n "${MOVABLE_VOBS:-}${ARROW_STICKING:-}${PHYSICS_NOISE:-}${DESTRUCTION:-}
   if [[ -n "${CLOTH:-}" ]]; then
     [[ "$CLOTH" == 0 || "$CLOTH" == 1 ]] || { echo "CLOTH must be 0 or 1" >&2; exit 2; }
     printf 'cloth=%s\n' "$CLOTH" >>"$RUN/Gothic.ini"
+  fi
+  if [[ -n "${ITEM_WAKE:-}" ]]; then
+    [[ "$ITEM_WAKE" == 0 || "$ITEM_WAKE" == 1 ]] || { echo "ITEM_WAKE must be 0 or 1" >&2; exit 2; }
+    printf 'item_wake=%s\n' "$ITEM_WAKE" >>"$RUN/Gothic.ini"
   fi
 fi
 
