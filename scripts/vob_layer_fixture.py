@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a procedural cube in empty test content, optionally at the NEWWORLD start."""
+"""Generate a test cube and optional base PFX at the NEWWORLD start in empty content."""
 
 import argparse
 import json
@@ -58,7 +58,7 @@ def cube_glb():
             + struct.pack("<I4s", len(binary), b"BIN\0") + binary)
 
 
-def make_content(directory, collision=None):
+def make_content(directory, collision=None, emitters=False):
     directory = directory.expanduser().resolve()
     working = (Path.home() / ".local/share/gothic-ai/content").resolve()
     if directory == working or working in directory.parents:
@@ -69,21 +69,32 @@ def make_content(directory, collision=None):
     meshes.mkdir(parents=True)
     (meshes / "cube.glb").write_bytes(cube_glb())
     (meshes / "meshes.json").write_text(json.dumps({VISUAL: {"glb": "cube.glb"}}) + "\n")
-    if collision:
+    if collision or emitters:
         layers = directory / "worlds/NEWWORLD/vobs.d"
         layers.mkdir(parents=True)
-        (layers / "cube.json").write_text(json.dumps({"format": 1, "add": [{
+        additions = [{
             "key": "test.cube", "kind": "mesh", "visual": VISUAL,
-            "position": POSITION_CM, "yaw_deg": 0, "collision": collision,
-        }]}) + "\n")
+            "position": POSITION_CM, "yaw_deg": 0, "collision": collision or "none",
+        }]
+        if emitters:
+            additions.extend([
+                {"key": "test.smoke", "kind": "emitter", "pfx": "FIRE_SMOKE.pfx",
+                 "position": [30213, 5386, -15710], "yaw_deg": 0},
+                {"key": "test.fire", "kind": "emitter", "pfx": "FIRE_MEDIUM.pfx",
+                 "position": [30063, 5186, -15710], "yaw_deg": 0},
+                {"key": "test.light", "kind": "light", "range": 600,
+                 "color": [255, 170, 90], "position": [30013, 5336, -15710], "yaw_deg": 0},
+            ])
+        (layers / "cube.json").write_text(json.dumps({"format": 1, "add": additions}) + "\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--content", required=True, type=Path)
     parser.add_argument("--collision", choices=("mesh", "none"))
+    parser.add_argument("--emitters", action="store_true", help="add smoke, fire and a warm light")
     args = parser.parse_args()
-    make_content(args.content, args.collision)
+    make_content(args.content, args.collision, args.emitters)
 
 
 if __name__ == "__main__":

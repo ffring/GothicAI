@@ -1,6 +1,7 @@
 #include "voblayer.h"
 #include "movablevobs.h"
 #include "gothicglb.h"
+#include "programdata.h"
 
 #include <Tempest/Log>
 #include <rapidjson/document.h>
@@ -30,11 +31,12 @@ struct Added {
   virtual ~Added() = default;
   std::string key;
   };
-struct Mesh final : asset::VirtualObject, Added {};
+struct LayerVob final : asset::VirtualObject, Added {};
 struct Light final : asset::VLight, Added {};
 struct Context {
   std::vector<Vob> removed;
   const std::map<std::string,fs::path>* ownMeshes = nullptr;
+  std::unique_ptr<zenkit::DaedalusScript> particles;
   };
 
 [[noreturn]] void fail(const std::string& reason) { throw std::runtime_error(reason); }
@@ -73,6 +75,35 @@ std::string meshKey(std::string name) {
   const auto extension=fs::path(name).extension().string();
   require(extension.empty() || extension==".3DS" || extension==".MRM","expected static mesh visual");
   return extension.empty() ? name : name.substr(0,name.size()-extension.size());
+  }
+std::string particleName(std::string name, Context& context, const fs::path& baseWorldDir) {
+  require(!name.empty() && name.find_first_of("/\\")==std::string::npos &&
+          name.find('\0')==std::string::npos,"invalid PFX name");
+  for(auto& c:name) c=char(std::toupper(uint8_t(c)));
+  const auto extension=fs::path(name).extension().string();
+  require(extension.empty() || extension==".PFX","expected PFX name");
+  if(!extension.empty()) name.resize(name.size()-extension.size());
+  if(context.particles==nullptr) {
+    const auto root=baseWorldDir.parent_path().parent_path();
+    const auto index=ProgramData::readIndex(root/"programs");
+    // Particle definitions request ScriptLang::NONE: VFS first, then the ordinary host script.
+    const auto* source=index.findVfs("ParticleFx.dat");
+    if(source==nullptr) source=index.findHost("_work/Data/Scripts/_compiled/ParticleFx.dat");
+    require(source!=nullptr,"ParticleFx.dat missing from program base index");
+    std::string sha256;
+    auto program=ProgramData::readProgram(index.path(*source),&sha256);
+    require(sha256==source->recordSha256,"particle program identity differs from base index");
+    context.particles=std::make_unique<zenkit::DaedalusScript>(
+        zenkit::DaedalusScript::from_program(std::move(program)));
+    }
+  const auto& script=*context.particles;
+  const auto* symbol=script.find_symbol_by_name(name);
+  const auto* cls=script.find_symbol_by_name("C_PARTICLEFX");
+  require(symbol!=nullptr && symbol->type()==zenkit::DaedalusDataType::INSTANCE,"unknown PFX "+name);
+  auto parent=symbol;
+  while(parent!=nullptr && parent!=cls) parent=script.find_symbol_by_index(parent->parent());
+  require(cls!=nullptr && parent==cls,"unknown PFX "+name);
+  return name+".PFX";
   }
 void layerFields(const Json& obj, std::initializer_list<const char*> allowed) {
   require(obj.IsObject(),"expected object");
@@ -323,9 +354,9 @@ Result applyFile(WorldData::Data& data, Context& context, const fs::path& baseWo
     if(doc.HasMember("add")) {
       array(doc["add"]);
       for(const auto& entry:doc["add"].GetArray()) {
-        std::string context="add: ";
+        std::string entryContext="add: ";
         try {
-          const auto key=layerString(member(entry,"key")); context="key "+jsonString(key)+": ";
+          const auto key=layerString(member(entry,"key")); entryContext="key "+jsonString(key)+": ";
           require(keys.insert(key).second,"duplicate key");
           const auto kind=layerString(member(entry,"kind"));
           Vob v;
@@ -337,9 +368,18 @@ Result applyFile(WorldData::Data& data, Context& context, const fs::path& baseWo
             require(visuals.count(name)!=0,"unknown visual "+name);
             const auto collision=layerString(member(entry,"collision"));
             require(collision=="none" || collision=="mesh","expected collision none or mesh");
-            v=std::make_shared<Mesh>();
+            v=std::make_shared<LayerVob>();
             v->type=VirtualObjectType::zCVob; v->show_visual=true; v->cd_static=collision=="mesh";
             v->visual=visuals.at(name);
+            v->visual_name=v->visual->name; v->associated_visual_type=v->visual->type;
+            } else if(kind=="emitter") {
+            layerFields(entry,{"key","kind","position","rotation","yaw_deg","pfx"});
+            auto visual=std::make_shared<VisualParticleEffect>();
+            visual->type=VisualType::PARTICLE_EFFECT;
+            visual->name=particleName(layerString(member(entry,"pfx")),context,baseWorldDir);
+            v=std::make_shared<LayerVob>();
+            v->type=VirtualObjectType::zCVob; v->show_visual=true; v->cd_static=false;
+            v->visual=std::move(visual);
             v->visual_name=v->visual->name; v->associated_visual_type=v->visual->type;
             } else if(kind=="light") {
             layerFields(entry,{"key","kind","position","rotation","yaw_deg","range","color"});
@@ -355,7 +395,7 @@ Result applyFile(WorldData::Data& data, Context& context, const fs::path& baseWo
             light->color={rgb[0],rgb[1],rgb[2],255};
             light->is_static=true; light->on=true; light->can_move=false; light->cd_static=false;
             v=std::move(light);
-            } else fail("expected kind mesh or light");
+            } else fail("expected kind mesh, light or emitter");
           v->position=layerPosition(entry); v->rotation=layerRotation(entry);
           dynamic_cast<Added&>(*v).key=key; v->vob_name=key; v->vob_static=true; v->cd_dynamic=v->cd_static; v->physics_enabled=false;
           uint32_t hash=2166136261u;
@@ -364,7 +404,7 @@ Result applyFile(WorldData::Data& data, Context& context, const fs::path& baseWo
           require(ids.insert(v->id).second,"layer ID collision");
           additions.push_back(std::move(v));
           }
-        catch(const std::exception& e) { error(context,e); }
+        catch(const std::exception& e) { error(entryContext,e); }
         }
       }
     for(const char* operation:{"remove","move"}) if(doc.HasMember(operation)) {

@@ -115,6 +115,11 @@ std::string mesh(const std::string& key, const std::string& visual="BASE.3DS", c
          "\",\"collision\":\""+collision+"\",\"position\":[100,200,300],\"yaw_deg\":90}";
   }
 
+std::string emitter(const std::string& key, const std::string& pfx) {
+  return "{\"key\":\""+key+"\",\"kind\":\"emitter\",\"pfx\":\""+pfx+
+         "\",\"position\":[100,200,300],\"yaw_deg\":90}";
+  }
+
 const asset::VirtualObject* find(const WorldData::Data& data, uint32_t id) {
   const auto visit=[&](const auto& self,const auto& list)->const asset::VirtualObject* {
     for(const auto& v:list) {
@@ -415,8 +420,12 @@ struct WorldDataContract {
     uint32_t removed=0,moved=0;
     Tempest::Vec3 originalPosition;
     size_t baseRoots=0;
-    for(int phase=0;phase<3;++phase) {
-      if(phase==2) fs::remove(layer);
+    for(int phase=0;phase<4;++phase) {
+      if(phase==2) setenv("OPENGOTHIC_VOB_LAYERS","0",1);
+      if(phase==3) {
+        fs::remove(layer);
+        unsetenv("OPENGOTHIC_VOB_LAYERS");
+        }
       Resources resources;
       Gothic gothic;
       gothic.isNpcInDialogFn=[](const Npc*) { return false; };
@@ -443,19 +452,63 @@ struct WorldDataContract {
         require(!baseline.empty(),"save without layer writes an archive");
         textFile(layer,"{\"format\":1,\"remove\":["+std::to_string(removed)+"],\"move\":[{\"id\":"+
                  std::to_string(moved)+",\"position\":[111,222,333],\"yaw_deg\":0}],\"add\":["+
-                 mesh("save-cube","VOB_LAYER_TEST_CUBE","mesh")+
-                 R"(,{"key":"save-light","kind":"light","position":[10,20,30],"yaw_deg":0,"range":400,"color":[255,100,20]}]})");
+                 mesh("save-cube","VOB_LAYER_TEST_CUBE","mesh")+","+
+                 emitter("save-smoke","FIRE_SMOKE.pfx")+","+
+                 emitter("save-fire","fire_medium")+","+
+                 emitter("save-sparks","Fire_Sparks.PfX")+
+                 R"(,{"key":"save-flies","kind":"emitter","pfx":"FLIES","position":[10,20,30],"rotation":[[0,0,1],[0,1,0],[-1,0,0]]},{"key":"save-light","kind":"light","position":[10,20,30],"yaw_deg":0,"range":400,"color":[255,100,20]}]})");
+        const auto baseWorld=Resources::baseDir()/"worlds/NEWWORLD";
+        const auto checked=VobLayer::check(baseWorld,layer,fixture.content);
+        require(checked.errors.empty() && checked.added==6,"offline checker accepts base PFX names in different cases with optional suffix");
+        require(subprocess({GOTHIC_CONTENT_CONVERT,"check-vob-layer",baseWorld.string(),layer.string(),fixture.content.string()})==0,
+                "converter CLI resolves emitters from base particle programs");
+        const auto invalid=layer.parent_path()/"zz-unknown.json";
+        textFile(invalid,"{\"format\":1,\"move\":[{\"id\":"+std::to_string(moved)+
+                 ",\"position\":[999,0,0],\"yaw_deg\":0}],\"add\":["+
+                 emitter("rolled-back","FIRE_SMOKE")+","+emitter("missing-pfx","NO_SUCH_PFX")+"]}");
+        const auto rejected=VobLayer::check(baseWorld,invalid,fixture.content);
+        require(!rejected.errors.empty() && rejected.errors.front().find("missing-pfx")!=std::string::npos &&
+                rejected.errors.front().find(invalid.string())!=std::string::npos,"unknown PFX error names its file and key");
+        auto data=WorldData::read(baseWorld);
+        const auto applied=VobLayer::apply(data,baseWorld,layer.parent_path().parent_path());
+        require(applied.errors.size()==1 && applied.added==6 && find(data,moved)->position.x==111,
+                "unknown PFX skips the entire file including its valid emitter and move");
+        size_t emitters=0;
+        for(const auto& vob:data.vobs) {
+          if(!VobLayer::isAdded(*vob) || vob->associated_visual_type!=asset::VisualType::PARTICLE_EFFECT) continue;
+          ++emitters;
+          require(vob->type==asset::VirtualObjectType::zCVob && vob->show_visual && !vob->cd_static && !vob->cd_dynamic &&
+                  vob->visual && vob->visual->type==asset::VisualType::PARTICLE_EFFECT &&
+                  (vob->visual_name=="FIRE_SMOKE.PFX" || vob->visual_name=="FIRE_MEDIUM.PFX" ||
+                   vob->visual_name=="FIRE_SPARKS.PFX" || vob->visual_name=="FLIES.PFX") && vob->visual->name==vob->visual_name,
+                  "layer emitter is a visible, noncolliding native PFX zCVob with a canonical name");
+          }
+        require(emitters==4,"all four base particle effects use the native emitter visual path");
+        fs::remove(invalid);
         }
       else if(phase==1) {
         load(world,baseline);
-        require(world.wobj.rootVobs.size()==baseRoots+1 && layerCount(world)==2,"old save loads current added mesh/light exactly once");
+        require(world.wobj.rootVobs.size()==baseRoots+5 && layerCount(world)==6,"old save loads current mesh/light/emitters exactly once");
         require(runtimeVob(world,removed)==nullptr,"old save cannot resurrect a removed base vob");
         const auto* movedVob=runtimeVob(world,moved);
         require(movedVob && movedVob->position()==Tempest::Vec3(111,222,333),"old save cannot undo an authored layer move");
         layered=save(world);
         load(world,layered);
-        require(layerCount(world)==2 && runtimeVob(world,removed)==nullptr,"layered save reload keeps additions once and removal active");
+        require(layerCount(world)==6 && runtimeVob(world,removed)==nullptr,"layered save reload keeps additions once and removal active");
         require(runtimeVob(world,moved)->position()==Tempest::Vec3(111,222,333),"layered save reload keeps current layer move");
+        gothic.clearGame().reset();
+        gothic.setGame(std::make_unique<GameSession>("NEWWORLD.ZEN"));
+        auto& reloaded=*gothic.world();
+        require(reloaded.wobj.rootVobs.size()==baseRoots+5 && layerCount(reloaded)==6,
+                "recreating the world destroys the previous layer and creates its emitters once");
+        load(reloaded,layered);
+        require(layerCount(reloaded)==6,"loading a layered save into a recreated world does not duplicate emitters");
+        gothic.clearGame().reset();
+        gothic.setGame(std::make_unique<GameSession>("OLDWORLD.ZEN"));
+        require(layerCount(*gothic.world())==0,"loading a different world leaves no emitters from the previous world");
+        gothic.clearGame().reset();
+        gothic.setGame(std::make_unique<GameSession>("NEWWORLD.ZEN"));
+        require(layerCount(*gothic.world())==6,"returning to the layered world creates its additions exactly once");
         }
       else {
         load(world,layered);
