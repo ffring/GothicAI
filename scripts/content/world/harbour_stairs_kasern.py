@@ -7,10 +7,10 @@ An edit of world_edit.py on the chunk NEWWORLD/0_0 (set stairskasern-1):
 
 By the waypoint NW_CITY_HABOUR_KASERN_07 the path from the harbour climbs 4.50 m between stone walls in two flights
 of NW_HARBOUR_STAIRS_01 with a landing between them. Each flight is two triangles, one texture tile along the slope:
-6 painted steps, a light tread band (42 % of the period) over a dark riser (58 %), 2.25 m rise. The lower flight
-is a trapezoid: its foot is cut askew by the yard, 2.45 m wide at the bottom and 4.50 m at the top. The edit
-replaces each flight with 6 treads and risers in the original's proportions (37.5 cm riser), each nosing with a
-4 cm worn chamfer, the inner corners on the old ramp line, so the steps run into the side walls and the landing
+6 painted steps, a light tread band (42 % of the period) over a dark riser (58 %), 2.25 m rise over 3.5 m. The
+lower flight is a trapezoid: its foot is cut askew by the yard, 2.45 m wide at the bottom and 4.50 m at the top.
+The edit replaces each flight with the steps of the first stair (stairs-3: 26.7 cm riser): 8 steps of 28.1 cm,
+each taking one painted period of the texture, each nosing with a 4 cm worn chamfer, the inner corners on the old ramp line, so the steps run into the side walls and the landing
 without gaps; the sides follow the flight's own edges, so the trapezoid stays a trapezoid. Treads and risers both
 take the light band: the dark band is painted shadow, which the engine casts itself on a real riser (the lesson of
 the first stair, reports/content/2026-10-harbour-stairs/README.md). U across as on the ramp. Everything else in
@@ -24,13 +24,14 @@ from mathutils import Vector
 from world_bpy import gothic_name, to_blender, to_gothic
 
 PER_TILE = 6                # painted steps per texture tile along the slope
+RISER = 320.0 / 12          # cm: the riser of the first stair (stairs-3, harbour_stairs.py), which this one keeps
 TREAD_SHARE = 0.42          # light band of one period, measured on the texture (harbour_stairs.py)
 NOSING = 4.0                # cm, worn chamfer on each nosing
 NOSING_SHARE = 0.10         # the lower end of the light band goes on the chamfer
 MATERIAL = 'NW_HARBOUR_STAIRS_01'
 # The two flights in Gothic centimetres (x, z): by NW_CITY_HABOUR_KASERN_07.
 BOX = ((1500.0, 2300.0), (4900.0, 5950.0))
-PARAMETERS = {'material': MATERIAL, 'steps_per_tile': PER_TILE, 'tread_share': TREAD_SHARE, 'nosing_cm': NOSING,
+PARAMETERS = {'material': MATERIAL, 'steps_per_tile': PER_TILE, 'riser_cm': RISER, 'tread_share': TREAD_SHARE, 'nosing_cm': NOSING,
               'nosing_share': NOSING_SHARE, 'box_cm': {'x': list(BOX[0]), 'z': list(BOX[1])}}
 
 
@@ -95,8 +96,10 @@ def edit(ctx):
         flat = lambda v: Vector((v.x, 0.0, v.z))
         run_l, run_r = flat(t0[1] - b0[1]), flat(t1[1] - b1[1])
         v_bottom, v_top = 1.0 - b0[2].y, 1.0 - t0[2].y           # glTF v (Blender stores 1 - v)
-        steps = round((v_bottom - v_top) * PER_TILE)
-        period = (v_bottom - v_top) / steps
+        # as many steps as the first stair's riser gives; each takes one painted period of the texture, so
+        # the light band stays on the tread although the flight has more steps than the texture paints
+        steps = round(rise / RISER)
+        period = (v_bottom - v_top) / round((v_bottom - v_top) * PER_TILE)
         if color_corner is not None:
             colour = tuple(b0[3][color_corner])
         elif color_point is not None:
@@ -158,8 +161,7 @@ def edit(ctx):
         gn = NOSING / (horizontal.length / steps)
         hn = NOSING / (rise / steps)
         for s in range(1, steps + 1):
-            j = steps - s
-            v_back = v_top + j * period
+            v_back = v_bottom - (s % PER_TILE or PER_TILE) * period      # one painted period per step, counted from the foot
             v_nose = v_back + TREAD_SHARE * period
             v_edge = v_nose - NOSING_SHARE * period
             t, h = s - 1, s - 1
