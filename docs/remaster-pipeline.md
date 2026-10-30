@@ -104,7 +104,7 @@
 - [`roof_holes.py`](../scripts/content/world/roof_holes.py) — провалы `ROOF_01` насквозь, кусок `NEWWORLD/0_-1`, набор `roofholes-2`. Контуры провалов — `data/content/world/roof01-holes.json` (`roof_holes_layout.py`), материалы — `roof_hole_shade.py`;
 - [`roof_edge.py`](../scripts/content/world/roof_edge.py) — торцы гонтин на карнизах и ступени рядов на фронтонах хижин порта, куски `0_-1` (после провалов) и `0_0`, набор `roofedge-1`. Торцы стоят на швах `roofs-8`: раскладка — `data/content/world/roof01-shingles.json` (`roof_edge_layout.py`);
 - [`crane_deck.py`](../scripts/content/world/crane_deck.py) — кромка досок и накладки настилов четырёх кранов порта, куски `-2_-2`, `-2_-3`, `-2_-4`, `-1_-1`, `-1_0`, набор `cranedeck-1`. Настил через границу кусков читается из соседних кусков базы;
-- [`harbour_stairs_kasern.py`](../scripts/content/world/harbour_stairs_kasern.py) — два марша по 6 ступеней на подъёме от порта к казармам, кусок `0_0`, набор `stairskasern-1`; нижний марш — трапеция.
+- [`harbour_stairs_kasern.py`](../scripts/content/world/harbour_stairs_kasern.py) — два марша по 8 ступеней на подъёме от порта к казармам, кусок `0_0`, набор `stairskasern-1`; нижний марш — трапеция, каждой ступени свой нарисованный период, нормали пандуса.
 
 Правка получает `ctx`: меш куска, подложку, имя мира и куска (`ctx.chunk`, `<x>_<z>`), папку кусков базы (`ctx.base_chunks`, чтобы прочитать соседа) и `ctx.allow_open`.
 
@@ -216,7 +216,7 @@
 | 13 | `harbour-roof-holes` | правка мира | провалы `ROOF_01` насквозь (кусок `NEWWORLD/0_-1`, `scripts/content/world/roof_holes.py`), материалы `OWN_ROOF_HOLE_SHADE`, `OWN_ROOF_HOLE_WALL` | хижина порта B037 (пилот) | нарисованные провалы `roofs-8` | включён |
 | 14 | `harbour-crane-deck` | правка мира | кромка досок и накладки настилов кранов `HARBOUR_WOOD_IRON_01` (куски `-2_-2`, `-2_-3`, `-2_-4`, `-1_-1`, `-1_0`, `scripts/content/world/crane_deck.py`) | четыре крана порта | плоский настил оригинала | начат |
 | 15 | `harbour-roof-edge` | правка мира | торцы гонтин на карнизах и ступени рядов на фронтонах `ROOF_01` (куски `0_-1`, `0_0`, `scripts/content/world/roof_edge.py`) | хижины порта B031, B035–B037 | кромка без толщины, `roofs-8` | начат |
-| 16 | `harbour-stairs-kasern` | правка мира | два марша по 6 ступеней вместо пандусов `HARBOUR_STAIRS_01` (кусок `0_0`, `scripts/content/world/harbour_stairs_kasern.py`) | подъём от порта к казармам | пандусы с нарисованными ступенями | начат |
+| 16 | `harbour-stairs-kasern` | правка мира | два марша по 8 ступеней вместо пандусов `HARBOUR_STAIRS_01` (кусок `0_0`, `scripts/content/world/harbour_stairs_kasern.py`) | подъём от порта к казармам | пандусы с нарисованными ступенями | начат |
 
 «Статус» — ворота пользователя по ассету одной фразой: последние принятые ворота, затем ворота, отправленные на правки. Его считает `remaster.py queue` из `asset.json`; `remaster.py decide` печатает новую фразу, и её вписывают в той же правке. Тест `test_queue_table_matches_the_gates` сверяет таблицу с воротами, а строка без папки ассета должна говорить «не начат». Чего не хватает до следующего этапа, включая рецензентов, показывает `remaster.py check <ассет> --stage <этап>`.
 

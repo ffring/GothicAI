@@ -15,7 +15,7 @@ so the panel's edges run along the painted shingles. The edit adds the shingles'
   roof01-shingles.json, roof_edge_layout.py): it runs on past the edge to its own uneven butt line, as thick as
   the bake made it (2.2-3.2 cm, hand-split shakes), with the keyways between shingles where the texture has
   them; under it a starter course 1.8 cm thick, set back 1.5 cm, its keyways halfway between;
-- at the verges, the cut side of every course: thick at the butt, thinner up to the next course, a saw-tooth
+- at the verges, the cut side of every course: thick at the butt, thinning out to the next course, a saw-tooth
   as every course rests on the one below; it ends at the barge rafter's inner edge and leaves the rafter clear.
 Ridges stay: the texture paints the ridge board there. Edges where a panel's U and V both change (valleys,
 hips, a panel cut by the chunk border) and edges with another roof panel beyond them are left as they are.
@@ -47,6 +47,9 @@ BOXES = {'B031': (-185.0, 2960.0, -6310.0, -4290.0), 'B035': (689.0, 3539.0, -7.
 STARTER = 1.8          # cm: the starter course under the eaves' shingles
 STARTER_BACK = 1.5     # cm its butt sits behind the shingle's
 COVER_V = 0.03         # a ridge-board sliver this wide in V (or less) at an eave is covered
+BOARD_V = 0.006        # the ridge board is painted down to V 0.994: an eave this far inside V = 1 shows it too
+SINK = 0.4             # cm: a new top starts this far under the roof and comes out of it on a clean line (laid a
+                       # hair over the roof it fought with it far off: a dotted line, reviewers 2026-10-30)
 SHINGLE_V = (0.07, 0.03)    # the covering top takes the shingles this far under V = 1, inner and outer edge: clear of
                             # the ridge board, painted down to V 0.994 (a light line along the eaves: reviewers, 2026-10-30)
 EAVE_OVER = 3.0        # cm the butts stand past the fascia, which is flush with the panel's edge: a drip edge
@@ -54,8 +57,10 @@ EXT = (3.0, 6.5)       # cm: a butt stands this far past the panel's edge at lea
 VERGE_OVER = (0.0, 0.0)   # cm the course ends overhang the barge rafter: none, they end at its inner edge (over it
                           # they halved the rafter's width in sight: reviewers, 2026-10-30)
 VERGE_LIP = 4.0        # cm inside the edge where the end shingle starts to rise off the painted field
-VERGE_HEAD = 0.8       # cm a course's end stands above the field just under the next butt
-LIFT = 0.3             # cm over the barge rafter's top: no fighting with it
+VERGE_HEAD = 0.0       # cm a course's end stands above the field just under the next butt: it thins out to nothing,
+                       # so its side is a shadow at each butt with gaps between (at 0.8 cm the sides ran on into one
+                       # black line along the barge rafter, reviewers 2026-10-30)
+LIFT = 0.3             # cm the eaves' shingles lie over the roof's plane past its edge
 ISO = 0.01             # an edge is an eave or a verge when V (U) changes by less than this along it
 EDGE_UV = (0.001, 0.005)   # the verge lip takes the texture this far inside the edge (UV), outer and inner
 NEIGHBOUR = 12.0       # cm: another roof panel this close past an edge makes it a joint, not an edge
@@ -269,7 +274,7 @@ def edit(ctx):
             y_edge = (1.0 - v_edge) * layout.py
             # the square's top band (the painted ridge board) runs past V = 1 onto the eaves: cover it
             v_floor = float(round(v_edge))
-            cover = (v_edge - v_floor) * grad_v.length if 0.0 < v_edge - v_floor < COVER_V else 0.0
+            cover = (v_edge - v_floor + BOARD_V) * grad_v.length if -BOARD_V < v_edge - v_floor < COVER_V else 0.0
             course, butt_line = layout.course_at(y_edge)
             x_a, x_b = ua.x * layout.px, ub.x * layout.px
             sign = 1 if x_b > x_a else -1
@@ -291,23 +296,33 @@ def edit(ctx):
                     x = x_a + (x_b - x_a) * t
                     e = EAVE_OVER + (y_edge - interp(x, xs, ys)) * cm_per_m_v
                     exts.append(max(EXT[0], min(EXT[1], e)))
-                # the shingle's top: from inside the painted ridge-board sliver (the square's top band shows past
-                # V = 1 at the eaves) out to its butt, a hair above the panel, in the shingle's own lower part
-                inner = -(cover + 1.0) if cover > 0 else 0.0
-                top_in = [point(t, inner, -LIFT) for t in ts]
+                # the shingle's top: from under the roof inside the painted ridge-board sliver (the square's top band
+                # shows past V = 1 at the eaves) up out of it before the sliver, over the edge, out to its butt, a
+                # hair above the roof's plane, in the shingle's own lower part
+                inner = -(3.0 * cover + 3.0)
+                top_in = [point(t, inner, SINK) for t in ts]
+                top_edge = [point(t, 0.0, -LIFT) for t in ts]
                 top = [point(t, e, -LIFT) for t, e in zip(ts, exts)]
                 low = [point(t, e, thick) for t, e in zip(ts, exts)]
                 low_in = [point(t, 0.0, thick) for t in ts]
                 uv_in = [Vector((ua.x + du * t, v_floor - SHINGLE_V[0])) for t in ts]
                 uv_out = [Vector((ua.x + du * t, v_floor - SHINGLE_V[1])) for t in ts]
+                uv_edge = [i.lerp(o, -inner / (e - inner)) for i, o, e in zip(uv_in, uv_out, exts)]
                 for k in range(2):
                     # the top, the butt, the underside back to the edge
-                    face([top_in[k], top_in[k + 1], top[k + 1], top[k]], [uv_in[k], uv_in[k + 1], uv_out[k + 1], uv_out[k]], n)
+                    face([top_in[k], top_in[k + 1], top_edge[k + 1], top_edge[k]],
+                         [uv_in[k], uv_in[k + 1], uv_edge[k + 1], uv_edge[k]], n)
+                    face([top_edge[k], top_edge[k + 1], top[k + 1], top[k]],
+                         [uv_edge[k], uv_edge[k + 1], uv_out[k + 1], uv_out[k]], n)
                     end([top[k], top[k + 1], low[k + 1], low[k]], out)
                     end([low[k], low[k + 1], low_in[k + 1], low_in[k]], -n)
                 for j, side in ((0, -along), (2, along)):
                     if 0.0 < ts[j] < 1.0:      # a keyway: the side of the shingle
-                        end([top_in[j], top[j], low[j], low_in[j]], side)
+                        end([top_edge[j], top[j], low[j], low_in[j]], side)
+                    else:                      # the eave's end at a verge: the shingle's cut side, in its own tone
+                        dv_cm = Vector((0.0, thick / grad_v.length))
+                        face([top_edge[j], top[j], low[j], low_in[j]],
+                             [uv_edge[j], uv_out[j], uv_out[j] + dv_cm, uv_edge[j] + dv_cm], side)
                 starters.append((ts[1], exts[1], thick))
             # the starter course: keyways halfway along the shingles above, its butt 1.5 cm behind theirs
             cuts = [0.0] + [t for t, _, _ in starters] + [1.0]
@@ -325,6 +340,7 @@ def edit(ctx):
                      point(s0, ext, top_d + STARTER)]
                 qi = [point(s0, 0.0, top_d + STARTER), point(s1, 0.0, top_d + STARTER)]
                 end(q, out)
+                end([point(s0, 0.0, top_d), point(s1, 0.0, top_d), q[1], q[0]], n)   # seen down a keyway
                 end([q[3], q[2], qi[1], qi[0]], -n)
                 for s, e, side in ((s0, (q[0], q[3], qi[0]), -along), (s1, (q[1], q[2], qi[1]), along)):
                     if 0.0 < s < 1.0 and ext > 0.0:
@@ -365,12 +381,16 @@ def edit(ctx):
                 v0, v1 = 1.0 - s0 / layout.py, 1.0 - s1 / layout.py
                 ui, uo = Vector((u_edge + u_in * 3, 0)), Vector((u_edge + u_in * .2, 0))
                 uvs = lambda u, va, vb: [Vector((u.x, va)), Vector((u.x, vb))]
-                face([p(s0, -VERGE_LIP, LIFT), p(s1, -VERGE_LIP, LIFT), p(s1, over, th(s1)), p(s0, over, th(s0))],
+                face([p(s0, -VERGE_LIP, -SINK), p(s1, -VERGE_LIP, -SINK), p(s1, over, th(s1)), p(s0, over, th(s0))],
                      uvs(ui, v0, v1) + uvs(uo, v1, v0), n)
-                end([p(s0, over, th(s0)), p(s1, over, th(s1)), p(s1, over, LIFT), p(s0, over, LIFT)], out)
+                # the course's cut side over the barge rafter: long grain, the shingle's own tone, the texture
+                # folded over the edge; only the butts are end grain, a dark notch at every course
+                wrap = lambda h: Vector((uo.x + u_in / EDGE_UV[1] * h / grad_u.length, 0))
+                face([p(s0, over, th(s0)), p(s1, over, th(s1)), p(s1, over, 0.0), p(s0, over, 0.0)],
+                     uvs(uo, v0, v1) + uvs(wrap(th(s1)), v1, v0), out)
                 if s0 == y0:
                     # the butt of the course, seen from down the slope
-                    end([p(y0, -VERGE_LIP, LIFT), p(y0, over, th(y0)), p(y0, over, LIFT), p(y0, 0.0, LIFT)], -up)
+                    end([p(y0, -VERGE_LIP, -SINK), p(y0, over, th(y0)), p(y0, over, 0.0)], -up)
         else:
             counts['skipped'] += 1
 

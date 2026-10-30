@@ -14,18 +14,42 @@
       "id": "r3l-stairs-yard",
       "stage": "ingame",
       "mode": "blind",
-      "verdict": "pending",
-      "date": "2026-10-30"
+      "verdict": "REJECT",
+      "date": "2026-10-30",
+      "path": "reviews/r3l-stairs-yard/merged.json"
     },
     {
       "id": "r3l-stairs-close",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "REJECT",
+      "date": "2026-10-30",
+      "path": "reviews/r3l-stairs-close/merged.json"
+    },
+    {
+      "id": "r3l-stairs-landing",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "REJECT",
+      "date": "2026-10-30",
+      "path": "reviews/r3l-stairs-landing/merged.json"
+    },
+    {
+      "id": "r4-stairs-yard",
       "stage": "ingame",
       "mode": "blind",
       "verdict": "pending",
       "date": "2026-10-30"
     },
     {
-      "id": "r3l-stairs-landing",
+      "id": "r4-stairs-close",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-30"
+    },
+    {
+      "id": "r4-stairs-landing",
       "stage": "ingame",
       "mode": "blind",
       "verdict": "pending",
