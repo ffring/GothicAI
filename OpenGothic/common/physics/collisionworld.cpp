@@ -34,6 +34,7 @@
 #include <Jolt/Physics/Collision/TransformedShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexShape.h>
 #include <Jolt/Physics/Collision/Shape/SphereShape.h>
 
 #include <algorithm>
@@ -55,6 +56,30 @@
 namespace {
   bool waterThing(int category) {
     return category==DynamicWorld::C_Item || category==DynamicWorld::C_MovableVob || category==DynamicWorld::C_Fragment;
+    }
+
+  JPH::AABox itemCollisionBounds(const JPH::Body& body) {
+    auto leaf=body.GetTransformedShape();
+    JPH::SubShapeID remainder;
+    while(leaf.mShape->GetType()==JPH::EShapeType::Decorated)
+      leaf=leaf.GetSubShapeTransformedShape(JPH::SubShapeID(),remainder);
+    if(leaf.mShape->GetType()!=JPH::EShapeType::Convex)
+      throw std::runtime_error("Item collision bounds require a convex shape");
+    const auto& shape=static_cast<const JPH::ConvexShape&>(*leaf.mShape);
+    JPH::ConvexShape::SupportBuffer buffer;
+    const auto* support=shape.GetSupportFunction(JPH::ConvexShape::ESupportMode::Default,buffer,leaf.GetShapeScale());
+    const float radius=support->GetConvexRadius();
+    JPH::AABox bounds;
+    for(JPH::uint axis=0;axis<3;++axis) {
+      JPH::Vec3 worldDirection=JPH::Vec3::sZero();
+      worldDirection.SetComponent(axis,1.f);
+      const auto localDirection=leaf.mShapeRotation.Conjugated()*worldDirection;
+      const auto min=leaf.mShapePositionCOM+leaf.mShapeRotation*support->GetSupport(-localDirection);
+      const auto max=leaf.mShapePositionCOM+leaf.mShapeRotation*support->GetSupport(localDirection);
+      bounds.mMin.SetComponent(axis,float(min[axis])-radius);
+      bounds.mMax.SetComponent(axis,float(max[axis])+radius);
+      }
+    return bounds;
     }
 
   void submergedVolume(const JPH::Body& body, const JPH::Shape& shape, float waterY,
@@ -3377,8 +3402,10 @@ std::vector<CollisionWorld::WaterBodySnapshot> CollisionWorld::waterBodySnapshot
       const auto bounds=shape->GetWorldSpaceBounds(body.GetCenterOfMassTransform(),JPH::Vec3::sOne());
       entry.worldBounds[0]=toCentimeters(bounds.mMin);
       entry.worldBounds[1]=toCentimeters(bounds.mMax);
-      entry.collisionBounds[0]=toCentimeters(body.GetWorldSpaceBounds().mMin);
-      entry.collisionBounds[1]=toCentimeters(body.GetWorldSpaceBounds().mMax);
+      // The broad-phase box can include empty corners of a rotated hull.
+      const auto collisionBounds=body.GetObjectLayer()==DynamicWorld::C_Item ? itemCollisionBounds(body) : body.GetWorldSpaceBounds();
+      entry.collisionBounds[0]=toCentimeters(collisionBounds.mMin);
+      entry.collisionBounds[1]=toCentimeters(collisionBounds.mMax);
       entry.mass=1.f/body.GetMotionProperties()->GetInverseMass();
       entry.density=entry.mass/shape->GetVolume();
       entry.sleeping=!body.IsActive();

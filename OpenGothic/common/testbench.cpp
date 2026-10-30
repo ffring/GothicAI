@@ -6311,7 +6311,7 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
   bench.itemWakeCase=name;bench.itemWakePhysics.clear();bench.itemWakeSample=uint64_t(-1);
   const char* names[]{"ITMI_GOLD","ITFO_BEER","ITMW_1H_COMMON_01","ITFO_APPLE"};
   const unsigned count=(name=="pile" || name=="pile-far" || name=="event")?50:4;
-  size_t initialOverlaps=0;
+  size_t initialOverlaps=0;float maximumReleaseHeight=0;
   for(unsigned i=0;i<count;++i) {
     const auto symbol=world.script().findSymbolIndex(names[i%4]);
     if(symbol==size_t(-1)) {arenaAbort("item wake preparation: native item instance unavailable");return;}
@@ -6329,7 +6329,13 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
     const auto native=std::find_if(after.begin(),after.end(),[&](const auto& body){return body.item==item;});
     if(native==after.end()) {arenaAbort("item wake preparation: item has no native bounds");return;}
     const auto center=(native->collisionBounds[0]+native->collisionBounds[1])*.5f;
-    const auto displacement=Vec3(at.x-center.x,floor.v.y+100.f-native->collisionBounds[0].y,at.z-center.z);
+    auto displacement=Vec3(at.x-center.x,floor.v.y+100.f-native->collisionBounds[0].y,at.z-center.z);
+    const auto low=native->collisionBounds[0]+displacement,high=native->collisionBounds[1]+displacement;
+    for(const auto& previous:bench.itemWakeItems)
+      if(low.x<previous.collisionBounds[1].x && previous.collisionBounds[0].x<high.x &&
+         low.z<previous.collisionBounds[1].z && previous.collisionBounds[0].z<high.z)
+        displacement.y=std::max(displacement.y,previous.collisionBounds[1].y+10.f-native->collisionBounds[0].y);
+    maximumReleaseHeight=std::max(maximumReleaseHeight,native->collisionBounds[0].y+displacement.y-floor.v.y);
     const auto release=item->position()+displacement;
     auto releasePose=item->transform();
     releasePose.set(3,0,release.x);releasePose.set(3,1,release.y);releasePose.set(3,2,release.z);
@@ -6340,17 +6346,18 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
     sample.boundsOrigin=release;sample.floorY=floor.v.y;
     for(size_t other=0;other<bench.itemWakeItems.size();++other) {
       const auto* a=sample.collisionBounds;const auto* b=bench.itemWakeItems[other].collisionBounds;
-      // Native settling resolves contacts before the bodyless baseline.
       if(a[0].x<b[1].x && b[0].x<a[1].x && a[0].y<b[1].y && b[0].y<a[1].y &&
          a[0].z<b[1].z && b[0].z<a[1].z)++initialOverlaps;
       }
     bench.itemWakeItems.push_back(sample);
     }
+  if(initialOverlaps) {arenaAbort("item wake preparation: staged release AABBs overlap");return;}
   bench.itemWakePreparing=true;
   event("item_wake_setup","\"case\":"+jsonStr(name)+",\"enabled\":"+
     (Gothic::settingsGetI("GAME","item_wake")?"true":"false")+
     ",\"item_hulls\":"+(Gothic::physicsFlags().itemHulls?"true":"false")+
-    ",\"items\":"+std::to_string(count)+",\"initial_item_overlaps\":"+std::to_string(initialOverlaps)+",\"hero_distance_cm\":"+
+    ",\"items\":"+std::to_string(count)+",\"initial_item_overlaps\":"+std::to_string(initialOverlaps)+
+    ",\"maximum_release_height_cm\":"+ragdollNumber(maximumReleaseHeight)+",\"hero_distance_cm\":"+
     ragdollNumber((player.position()-bench.itemWakeCenter).length()));
   }
 

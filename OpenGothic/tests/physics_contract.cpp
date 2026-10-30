@@ -20,6 +20,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <Jolt/Physics/Collision/Shape/CapsuleShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
@@ -3925,6 +3926,52 @@ namespace {
     }
 
   void testItemWake() {
+    for(const bool legacy:{false,true}) {
+      CollisionWorld world;
+      std::vector<JPH::Vec3> points={{0,0,0},{1,0,0},{0,1,0},{0,0,1}};
+      JPH::ShapeRefC shape;
+      if(legacy) {
+        points.clear();
+        for(unsigned corner=0;corner<8;++corner)
+          points.emplace_back(corner&1 ? .8f : .2f,corner&2 ? .3f : -.1f,corner&4 ? .1f : -.3f);
+        shape=new JPH::RotatedTranslatedShape({.5f,.1f,-.1f},JPH::Quat::sIdentity(),
+                                               new JPH::BoxShape({.3f,.2f,.2f}));
+        }
+      else {
+        const auto hull=JPH::ConvexHullShapeSettings(points.data(),int(points.size()),0.f).Create();
+        require(!hull.HasError(),"tight item bounds fixture requires an asymmetric convex hull");
+        shape=hull.Get();
+        }
+      auto matrix=at(100,200,300);
+      matrix.rotateOZ(225);
+      matrix.scale(1.2f,.7f,1.1f);
+      auto item=world.addDynamicBody(shape,matrix,.7f,1,DynamicWorld::C_Item,true);
+      Tempest::Vec3 min(std::numeric_limits<float>::infinity()),max(-std::numeric_limits<float>::infinity());
+      for(const auto& vertex:points) {
+        auto point=CollisionWorld::toCentimeters(vertex);
+        matrix.project(point);
+        min.x=std::min(min.x,point.x); min.y=std::min(min.y,point.y); min.z=std::min(min.z,point.z);
+        max.x=std::max(max.x,point.x); max.y=std::max(max.y,point.y); max.z=std::max(max.z,point.z);
+        }
+      const auto snapshot=world.waterBodySnapshot();
+      require(snapshot.size()==1,"tight item bounds must describe the existing native body");
+      const auto actualMin=CollisionWorld::toMeters(snapshot[0].collisionBounds[0]);
+      const auto actualMax=CollisionWorld::toMeters(snapshot[0].collisionBounds[1]);
+      const auto expectedMin=CollisionWorld::toMeters(min),expectedMax=CollisionWorld::toMeters(max);
+      for(size_t axis=0;axis<3;++axis) {
+        requireNear(actualMin[axis],expectedMin[axis],.00003f,
+                    "item collision minima must match transformed support points including COM and scale");
+        requireNear(actualMax[axis],expectedMax[axis],.00003f,
+                    "item collision maxima must match transformed support points including COM and scale");
+        }
+      JPH::Vec3 broadMin,broadMax;
+      item->getAabb(broadMin,broadMax);
+      requireNear(snapshot[0].worldBounds[0].y,broadMin.GetY()*100.f,.003f,
+                  "tight item diagnostics must leave the existing water bounds unchanged");
+      if(!legacy)
+        require(snapshot[0].collisionBounds[0].y-broadMin.GetY()*100.f>20.f,
+                "a rotated asymmetric hull's empty broad-phase corner must not count as physical penetration");
+      }
     Resources resources;
     ProtoMesh proto(PackedMesh(movableBox({30,30,30}),PackedMesh::PK_Visual),"CONTRACT_WAKE_ITEM.MRM");
     DynamicWorld shapes(nullptr,{});
