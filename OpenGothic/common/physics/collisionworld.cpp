@@ -1460,6 +1460,18 @@ void CollisionWorld::CollisionBody::retainForItemWake() {
   itemWakeUntilStep=owner->impl->simulationStep+8;
   }
 
+bool CollisionWorld::CollisionBody::keepSleepingItem(const Tempest::Vec3& positionCm) const {
+  if((owner->buoyancy && inWater) || itemRecovered ||
+     (owner->itemWake && itemWakeUntilStep>=owner->impl->simulationStep && itemWakeUntilStep!=0))
+    return true;
+  const auto position=toMeters(positionCm);
+  const float range=toMeters(DynamicWorld::characterItemRange);
+  for(const auto* character:owner->impl->virtualCharacters)
+    if((position-character->impl->character->GetPosition()).LengthSq()<=range*range)
+      return true;
+  return false;
+  }
+
 void CollisionWorld::CollisionBody::setScale(const Tempest::Vec3& value) {
   const auto next = JPH::Vec3(value.x,value.y,value.z);
   if(scale==next)
@@ -3022,22 +3034,11 @@ void CollisionWorld::tick(uint64_t dt) {
       m[13] *= 100.f;
       m[14] *= 100.f;
       matrix.setData(m);
-      bool keepSleeping = (buoyancy && body->inWater) || body->itemRecovered ||
-                          (itemWake && body->itemWakeUntilStep>=impl->simulationStep && body->itemWakeUntilStep!=0);
-      if(!native.IsActive() && !keepSleeping) {
-        const float range = toMeters(DynamicWorld::characterItemRange);
-        for(const auto* character:impl->virtualCharacters) {
-          if((native.GetPosition()-character->impl->character->GetPosition()).LengthSq()<=range*range) {
-            keepSleeping = true;
-            break;
-            }
-          }
-        }
       // Legacy items lose their body at rest. A nearby virtual character needs
       // that sleeping body to remain queryable so a native contact can wake it.
       // A sleeping water item also retains its native body, independently of
       // characters, so save/load, pickup and a buoyancy toggle remain physical.
-      disable = !native.IsActive() && !keepSleeping;
+      disable = !native.IsActive() && !body->keepSleepingItem(toCentimeters(native.GetPosition()));
       }
     item->setPhysicsMatrix(matrix);
     if(disable)

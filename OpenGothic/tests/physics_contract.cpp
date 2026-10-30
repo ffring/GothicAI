@@ -3925,43 +3925,51 @@ namespace {
     }
 
   void testItemWake() {
-    for(const int category:{DynamicWorld::C_Ragdoll,DynamicWorld::C_Fragment,DynamicWorld::C_Item,
-                            DynamicWorld::C_MovableVob}) {
-      for(const bool enabled:{false,true}) {
-        CollisionWorld world;
-        world.setItemWakeEnabled(enabled);
-        auto floor=world.addCollisionBody(new JPH::BoxShape({20,.5f,20}),at(0,-50,0),.7f,
-                                          DynamicWorld::C_Landscape);
-        std::unique_ptr<CollisionWorld::DynamicBody> item;
-        const Tempest::Vec3 rest(0,10,0);
-        world.setItemWakeCallback([&](const Tempest::Vec3& min,const Tempest::Vec3& max,size_t budget) {
-          require(budget>0 && budget<=8,"item wake must bound new bodies per native step");
-          if(rest.x<min.x || rest.x>max.x || rest.y<min.y || rest.y>max.y || rest.z<min.z || rest.z>max.z)
-            return size_t(0);
-          const bool missing=item==nullptr;
-          if(missing)
-            item=world.addDynamicBody(new JPH::BoxShape({.1f,.1f,.1f}),at(rest.x,rest.y,rest.z),.7f,1,
-                                       DynamicWorld::C_Item,true);
-          const auto id=item->nativeId();
-          const auto velocity=item->velocity();
-          const bool sleeping=item->isSleeping();
-          item->retainForItemWake();
-          require(item->nativeId()==id && item->mass()==1.f && item->isSleeping()==sleeping &&
-                  (item->velocity()-velocity).quadLength()==0.f,
-                  "item wake retention must preserve existing mass, sleep, velocity and identity");
-          return size_t(missing);
-          });
-        auto moving=world.addDynamicBody(new JPH::BoxShape({.2f,.2f,.2f}),at(-100,20,0),.7f,10,category);
-        moving->setVelocity({500,0,0},{});
-        for(int i=0;i<120;++i)
-          world.tick(17);
-        const float displacement=item ? (item->position()-rest).length() : 0.f;
-        std::printf("Item wake layer %d enabled %d: created %d, displacement %.6f cm\n",
-                    category,int(enabled),int(item!=nullptr),double(displacement));
-        require(enabled ? item!=nullptr && displacement>5.f : item==nullptr,
-                "every active dynamic body kind must create and displace a bodyless item only with item_wake ON");
+    Resources resources;
+    ProtoMesh proto(PackedMesh(movableBox({30,30,30}),PackedMesh::PK_Visual),"CONTRACT_WAKE_ITEM.MRM");
+    DynamicWorld shapes(nullptr,{});
+    const auto& hull=shapes.itemHullShape(proto,"CONTRACT_WAKE_ITEM.MRM");
+    require(hull.shape!=nullptr,"item wake must exercise a genuine mesh hull");
+    for(const bool hulls:{false,true}) {
+      const JPH::ShapeRefC shape=hulls ? hull.shape : JPH::ShapeRefC(new JPH::BoxShape({.15f,.15f,.15f}));
+      for(const int category:{DynamicWorld::C_Ragdoll,DynamicWorld::C_Fragment,DynamicWorld::C_Item,
+                              DynamicWorld::C_MovableVob}) {
+        for(const bool enabled:{false,true}) {
+          CollisionWorld world;
+          world.setItemWakeEnabled(enabled);
+          auto floor=world.addCollisionBody(new JPH::BoxShape({20,.5f,20}),at(0,-50,0),.7f,
+                                            DynamicWorld::C_Landscape);
+          std::unique_ptr<CollisionWorld::DynamicBody> item;
+          const Tempest::Vec3 rest(0,16,0);
+          world.setItemWakeCallback([&](const Tempest::Vec3& min,const Tempest::Vec3& max,size_t budget) {
+            require(budget>0 && budget<=8,"item wake must bound new bodies per native step");
+            if(rest.x<min.x || rest.x>max.x || rest.y<min.y || rest.y>max.y || rest.z<min.z || rest.z>max.z)
+              return size_t(0);
+            const bool missing=item==nullptr;
+            if(missing)
+              item=world.addDynamicBody(shape,at(rest.x,rest.y,rest.z),.7f,1,
+                                         DynamicWorld::C_Item,true);
+            const auto id=item->nativeId();
+            const auto velocity=item->velocity();
+            const bool sleeping=item->isSleeping();
+            item->retainForItemWake();
+            require(item->nativeId()==id && item->mass()==1.f && item->isSleeping()==sleeping &&
+                    (item->velocity()-velocity).quadLength()==0.f,
+                    "item wake retention must preserve existing mass, sleep, velocity and identity");
+            return size_t(missing);
+            });
+          auto moving=world.addDynamicBody(new JPH::BoxShape({.2f,.2f,.2f}),at(-100,20,0),.7f,10,category);
+          moving->setVelocity({500,0,0},{});
+          for(int i=0;i<120;++i)
+            world.tick(17);
+          const float displacement=item ? (item->position()-rest).length() : 0.f;
+          std::printf("Item wake hulls %d layer %d enabled %d: created %d, displacement %.6f cm\n",
+                      int(hulls),category,int(enabled),int(item!=nullptr),double(displacement));
+          require(enabled ? item!=nullptr && displacement>5.f : item==nullptr,
+                  "every active dynamic body kind must create and displace a bodyless item only with item_wake ON");
+          }
         }
-      }
+    }
     {
       CollisionWorld world;
       std::vector<std::unique_ptr<CollisionWorld::DynamicBody>> sources;
@@ -4030,17 +4038,75 @@ namespace {
       requireMatrix(item->matrix(),loaded,"rejecting a nonfinite restore must not replace the valid recovery transform");
       require(item->isSleeping(),"rejecting a nonfinite restore must preserve recovery sleep");
       }
-    {
+    for(const bool hulls:{false,true}) {
       DynamicWorld world(nullptr,{});
       Bounds bounds;
-      bounds.assign(std::pair(Tempest::Vec3(-10,-10,-10),Tempest::Vec3(10,10,10)));
+      bounds.assign(proto.bbox());
       const auto loaded=at(100,200,300);
-      auto item=world.addDynamicObj(loaded,bounds,asset::MaterialGroup::WOOD);
+      auto item=world.addDynamicObj(loaded,bounds,asset::MaterialGroup::WOOD,&proto,"CONTRACT_WAKE_ITEM.MRM",hulls);
+      const float mass=item.mass();
+      const auto id=world.waterBodySnapshot()[0].id;
+      item.restorePhysics(loaded,true);
+      item.retainForItemWake();
+      require(item.isSleeping() && item.mass()==mass && item.velocity().quadLength()==0.f,
+              "retaining either item shape must preserve its mass, sleep and zero velocity");
       item.restorePhysics(loaded,false,{100,200,300},{1,2,3});
+      const auto velocity=item.velocity(),angular=item.angularVelocity();
+      item.retainForItemWake();
+      require(!item.isSleeping() && item.mass()==mass && world.waterBodySnapshot()[0].id==id &&
+              (item.velocity()-velocity).quadLength()==0.f && (item.angularVelocity()-angular).quadLength()==0.f,
+              "retaining either moving item shape must preserve body identity, mass and both velocities");
+      item.setObjMatrix(at(0,-10200,0));
+      world.tick(17);
+      requireMatrix(item.matrix(),loaded,"either item shape must recover its loaded awake position");
+      require(item.isSleeping() && item.velocity().quadLength()==0.f && item.angularVelocity().quadLength()==0.f,
+              "either recovered item shape must sleep with zero velocities");
       item.restorePhysics(at(0,std::numeric_limits<float>::infinity(),0),false,{100,200,300},{1,2,3});
       requireMatrix(item.matrix(),loaded,"the Item restore wrapper must retain its last valid loaded transform");
       require(item.isSleeping() && item.velocity().quadLength()==0.f && item.angularVelocity().quadLength()==0.f,
               "the Item restore wrapper must not restore saved motion after recovering invalid coordinates");
+      }
+    {
+      CollisionWorld world;
+      world.setWaterSurfaceCallback([](const Tempest::Vec3&,float,float& surface) { surface=0; return true; });
+      const auto floating=at(0,-8,0),dry=at(100,100,0);
+      auto wetItem=world.addDynamicBody(new JPH::BoxShape({.2f,.2f,.2f}),floating,.7f,44.8f,
+                                       DynamicWorld::C_Item,true);
+      auto dryItem=world.addDynamicBody(new JPH::BoxShape({.2f,.2f,.2f}),dry,.7f,44.8f,
+                                       DynamicWorld::C_Item,true);
+      wetItem->restoreTransform(floating,true);
+      dryItem->restoreTransform(dry,true);
+      for(const bool enabled:{false,true}) {
+        world.setItemWakeEnabled(enabled);
+        for(int frame=0;frame<12;++frame)
+          world.tick(frame%3==2 ? 16 : 17);
+        require(wetItem->isSleeping() && wetItem->keepSleepingItem(wetItem->position()),
+                "the production retirement rule must retain a sleeping water item with item_wake ON or OFF");
+        require(dryItem->isSleeping() && !dryItem->keepSleepingItem(dryItem->position()),
+                "a dry sleeper without a nearby character or wake request must still retire");
+        requireMatrix(wetItem->matrix(),floating,"item_wake must not move an already sleeping water item");
+        require(wetItem->velocity().quadLength()==0.f,"item_wake must preserve a sleeping water item's zero velocity");
+        }
+      }
+    for(const bool hulls:{false,true}) {
+      DynamicWorld world(nullptr,waterBasin(-15000));
+      world.setItemWakeEnabled(true);
+      Bounds bounds;
+      bounds.assign(proto.bbox());
+      auto item=world.addDynamicObj(at(0,110,0),bounds,asset::MaterialGroup::METAL,
+                                    &proto,"CONTRACT_WAKE_ITEM.MRM",hulls);
+      bool belowSurfaceHundredMeters=false;
+      for(int frame=0;frame<1800;++frame) {
+        world.tick(frame%3==2 ? 16 : 17);
+        const auto y=item.position().y;
+        if(belowSurfaceHundredMeters)
+          require(y<-10000,"a sinking item inside a deep world must not return to its surface creation position");
+        belowSurfaceHundredMeters|=y<-10100;
+        }
+      std::printf("Item wake deep water hulls %d: final %.6f cm, sleeping %d\n",
+                  int(hulls),double(item.position().y),int(item.isSleeping()));
+      require(belowSurfaceHundredMeters && item.position().y<-14950 && item.position().y>-15050 && item.isSleeping(),
+              "a metal item must reach the deep basin floor beyond one hundred metres without underworld recovery");
       }
     }
 

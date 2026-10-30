@@ -59,6 +59,7 @@ class CollisionWorld final {
         Tempest::Vec3        velocity() const; // centimetres/second
         Tempest::Vec3        angularVelocity() const; // world radians/second
         bool                isSleeping() const;
+        bool                keepSleepingItem(const Tempest::Vec3& positionCm) const;
         void                retainForItemWake();
         // World-space newton seconds. Rejects non-dynamic, zero or nonfinite input.
         bool                addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr,

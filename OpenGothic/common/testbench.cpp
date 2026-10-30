@@ -774,15 +774,18 @@ struct Bench {
     std::string name;
     Vec3 initial,collisionBounds[2],boundsOrigin;
     float floorY=0,travel=0,penetration=0;
-    bool bodyCreated=false,fell=false,below=false;
+    bool bodyCreated=false,hadBody=false,fell=false,below=false;
     };
   std::vector<ItemWakeSample> itemWakeItems;
   std::vector<Npc*> itemWakeActors;
   Item* itemWakeMover=nullptr;
   Vec3 itemWakeCenter;
   std::string itemWakeCase;
-  bool itemWakeSite=false,itemWakeRunning=false;
-  uint64_t itemWakeSample=0,itemWakePulse=0,itemWakeStart=0;
+  bool itemWakeSite=false,itemWakeRunning=false,itemWakePreparing=false;
+  uint64_t itemWakeSample=0,itemWakePulse=0,itemWakeStart=0,itemWakeWindow=0;
+  uint64_t itemWakeLastNativeStep=0,itemWakeZeroFrames=0,itemWakeFirstPhysicsTick=0,itemWakeLastPhysicsTick=0;
+  float itemWakeMinimumGap=std::numeric_limits<float>::infinity();
+  size_t itemWakeQueryOverlaps=0,itemWakeInitiallyBodyless=0;
   std::vector<float> itemWakePhysics;
 
   std::string waterLootMode;
@@ -6174,24 +6177,17 @@ void saveMovableSession(World& world,const std::string& label) {
     std::to_string(bytes.size())+",\"world\":"+jsonStr(world.name())+",\"bodies\":"+movableRows(world));
   }
 
-// The observer stays beyond CharacterVirtual's three-metre item range. Each
-// case starts with retired dry sleepers, then uses only native physical bodies.
+// The observer stays beyond CharacterVirtual's three-metre item range. Setup
+// lets native Item bodies settle and retire before a contact is introduced.
 void itemWakeFields(World& world) {
-  if(!bench.itemWakeRunning || bench.itemWakeSample==world.tickCount())return;
+  if((!bench.itemWakeRunning && !bench.itemWakePreparing) || bench.itemWakeSample==world.tickCount())return;
+  if(bench.itemWakeRunning && bench.itemWakeWindow && world.tickCount()-bench.itemWakeStart>bench.itemWakeWindow)return;
   bench.itemWakeSample=world.tickCount();
-  if(bench.itemWakeCase=="debris" && world.tickCount()-bench.itemWakeStart>=200) {
-    const auto parts=world.physic()->fragmentSnapshot();
-    if(std::none_of(parts.begin(),parts.end(),[](const auto& part){return destructionOwns(part.parentId);})) {
-      arenaAbort("item wake crate break created no native debris");return;
-      }
-    }
   const auto bodies=world.physic()->waterBodySnapshot();
   for(auto& sample:bench.itemWakeItems) {
     const auto at=sample.item->position();
     const bool finite=std::isfinite(at.x) && std::isfinite(at.y) && std::isfinite(at.z);
-    sample.bodyCreated|=sample.item->isDynamic();
     if(!finite) {sample.fell=true;sample.below=true;continue;}
-    sample.travel=std::max(sample.travel,(at-sample.initial).length());
     if(const auto native=std::find_if(bodies.begin(),bodies.end(),[&](const auto& body){return body.item==sample.item;});
        native!=bodies.end()) {
       sample.collisionBounds[0]=native->collisionBounds[0];sample.collisionBounds[1]=native->collisionBounds[1];
@@ -6201,31 +6197,84 @@ void itemWakeFields(World& world) {
       sample.collisionBounds[0]+=at-sample.boundsOrigin;sample.collisionBounds[1]+=at-sample.boundsOrigin;
       sample.boundsOrigin=at;
       }
+    if(bench.itemWakePreparing)continue;
+    const bool dynamic=sample.item->isDynamic();
+    sample.bodyCreated|=dynamic && !sample.hadBody;sample.hadBody=dynamic;
+    sample.travel=std::max(sample.travel,(at-sample.initial).length());
     const auto center=(sample.collisionBounds[0]+sample.collisionBounds[1])*.5f;
     const auto floor=world.physic()->landRay(Vec3(center.x,std::max(sample.floorY+500.f,sample.collisionBounds[1].y+20.f),center.z),10000.f);
     if(floor.hasCol)sample.penetration=std::max(sample.penetration,floor.v.y-sample.collisionBounds[0].y);
     sample.fell|=!floor.hasCol || sample.penetration>5.f;
     // This conservative threshold is above the actual world's lower bound.
-    // Zero here therefore also proves zero below worldMinY - 100 metres.
     sample.below|=at.y<sample.floorY-10000.f;
     }
-  if(bench.itemWakeCase=="pile") {
-    if(bench.itemWakePhysics.size()==20000) {arenaAbort("item wake physics samples overflow");return;}
-    bench.itemWakePhysics.push_back(world.physic()->physicsStats().stepMilliseconds);
-    if(world.tickCount()>=bench.itemWakePulse) {
-      bench.itemWakePulse=world.tickCount()+100;
-      const float sign=(world.tickCount()/500)%2 ? 1.f : -1.f;
-      for(auto* npc:bench.itemWakeActors)
-        npc->addRagdollImpulse({10.f*sign,8.f,5.f*sign});
+  if(bench.itemWakePreparing)return;
+  if((bench.itemWakeCase=="debris" || bench.itemWakeCase=="event-debris") && world.tickCount()-bench.itemWakeStart>=200) {
+    const auto parts=world.physic()->fragmentSnapshot();
+    if(std::none_of(parts.begin(),parts.end(),[](const auto& part){return destructionOwns(part.parentId);})) {
+      arenaAbort("item wake preparation: crate break created no native debris");return;
       }
+    }
+  if(bench.itemWakeCase=="pile-far") {
+    const float infinity=std::numeric_limits<float>::infinity();
+    Vec3 low(infinity,infinity,infinity),high(-infinity,-infinity,-infinity);size_t parts=0;
+    for(const auto& body:bodies) {
+      if(!body.ragdoll || std::none_of(bench.itemWakeActors.begin(),bench.itemWakeActors.end(),
+        [&](const auto* npc){return npc->ragdollBody()==body.ragdoll;}))continue;
+      ++parts;
+      low.x=std::min(low.x,body.collisionBounds[0].x);low.y=std::min(low.y,body.collisionBounds[0].y);low.z=std::min(low.z,body.collisionBounds[0].z);
+      high.x=std::max(high.x,body.collisionBounds[1].x);high.y=std::max(high.y,body.collisionBounds[1].y);high.z=std::max(high.z,body.collisionBounds[1].z);
+      }
+    if(!parts) {arenaAbort("item wake preparation: far pile lost its native ragdolls");return;}
+    for(const auto& sample:bench.itemWakeItems) {
+      const auto* box=sample.collisionBounds;
+      const Vec3 gap(std::max({low.x-box[1].x,box[0].x-high.x,0.f}),
+                     std::max({low.y-box[1].y,box[0].y-high.y,0.f}),
+                     std::max({low.z-box[1].z,box[0].z-high.z,0.f}));
+      bench.itemWakeMinimumGap=std::min(bench.itemWakeMinimumGap,gap.length());
+      bench.itemWakeQueryOverlaps+=box[0].x<=high.x+50.f && box[1].x>=low.x-50.f &&
+        box[0].y<=high.y+50.f && box[1].y>=low.y-50.f && box[0].z<=high.z+50.f && box[1].z>=low.z-50.f;
+      }
+    }
+  if(bench.itemWakeCase=="pile" || bench.itemWakeCase=="pile-far" || bench.itemWakeCase.starts_with("event-")) {
+    const auto step=world.physic()->simulationStep();const auto advanced=step-bench.itemWakeLastNativeStep;
+    bench.itemWakeLastNativeStep=step;
+    if(advanced>1) {arenaAbort("item wake preparation: measurement frame advanced multiple native steps");return;}
+    if(advanced==0)++bench.itemWakeZeroFrames;
+    else if(bench.itemWakeCase!="pile-far" || bench.itemWakePhysics.size()<720) {
+      if(bench.itemWakePhysics.size()==20000) {arenaAbort("item wake physics samples overflow");return;}
+      if(bench.itemWakePhysics.empty())bench.itemWakeFirstPhysicsTick=world.tickCount();
+      bench.itemWakeLastPhysicsTick=world.tickCount();
+      bench.itemWakePhysics.push_back(world.physic()->physicsStats().stepMilliseconds);
+      }
+    }
+  if((bench.itemWakeCase=="pile" || bench.itemWakeCase=="pile-far") && world.tickCount()>=bench.itemWakePulse) {
+    bench.itemWakePulse=world.tickCount()+100;
+    const float sign=(world.tickCount()/500)%2 ? 1.f : -1.f;
+    for(auto* npc:bench.itemWakeActors)npc->addRagdollImpulse({10.f*sign,8.f,5.f*sign});
     }
   }
 
-void itemWakeSetup(World& world,Npc& player,std::string_view name) {
-  if(name!="ragdoll" && name!="debris" && name!="item" && name!="pile") {
-    arenaAbort("item wake setup expects ragdoll, debris, item or pile");return;
+void itemWakeResetWindow(World& world,uint64_t window) {
+  bench.itemWakeInitiallyBodyless=0;
+  for(auto& sample:bench.itemWakeItems) {
+    sample.initial=sample.item->position();sample.travel=0;sample.penetration=0;
+    sample.bodyCreated=false;sample.hadBody=sample.item->isDynamic();sample.fell=false;sample.below=false;
+    bench.itemWakeInitiallyBodyless+=!sample.hadBody;
     }
-  bench.itemWakeRunning=false;
+  bench.itemWakePhysics.clear();bench.itemWakeSample=uint64_t(-1);
+  bench.itemWakeStart=world.tickCount();bench.itemWakeWindow=window;
+  bench.itemWakeLastNativeStep=world.physic()->simulationStep();bench.itemWakeZeroFrames=0;
+  bench.itemWakeFirstPhysicsTick=0;bench.itemWakeLastPhysicsTick=0;
+  bench.itemWakeMinimumGap=std::numeric_limits<float>::infinity();bench.itemWakeQueryOverlaps=0;
+  bench.itemWakeRunning=true;
+  }
+
+void itemWakeSetup(World& world,Npc& player,std::string_view name) {
+  if(name!="ragdoll" && name!="debris" && name!="item" && name!="pile" && name!="pile-far" && name!="event") {
+    arenaAbort("item wake setup expects ragdoll, debris, item, pile, pile-far or event");return;
+    }
+  bench.itemWakeRunning=false;bench.itemWakePreparing=false;
   for(auto& sample:bench.itemWakeItems)world.removeItem(*sample.item);
   bench.itemWakeItems.clear();
   if(bench.itemWakeMover)world.removeItem(*bench.itemWakeMover);
@@ -6237,43 +6286,45 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
     if(const auto* anchor=world.findPoint("NW_XARDAS_TOWER_VALLEY_091",false)) {
       player.setPosition(anchor->pos);player.updateTransform();
       }
-    if(!chooseRagdollArena(world,player)) {arenaAbort("item wake fixture needs supported outdoor ground");return;}
+    if(!chooseRagdollArena(world,player)) {arenaAbort("item wake preparation: fixture needs supported outdoor ground");return;}
     bench.itemWakeCenter=bench.ragdollArenaTarget-Vec3(0,80,0);
     std::vector<Npc*> nearby;
     for(uint32_t id=0;id<world.npcCount();++id)
       if(auto* npc=world.npcById(id);npc && npc!=&player &&
          (npc->position()-bench.itemWakeCenter).length()<2000.f)nearby.push_back(npc);
     for(auto* npc:nearby)world.removeNpc(*npc);
+    std::vector<Item*> stock;
+    world.detectItem(bench.itemWakeCenter,2000.f,[&](Item& item){stock.push_back(&item);});
+    for(auto* item:stock)world.removeItem(*item);
+    event("item_wake_arena_clear","\"stock_items_removed\":"+std::to_string(stock.size()));
     bench.itemWakeSite=true;
     }
   player.clearAiQueue();player.clearGoTo();player.stopWalking();player.closeWeapon(true);
   auto hero=bench.itemWakeCenter+Vec3(0,0,-1500);
   const auto ground=world.physic()->landRay(hero+Vec3(0,300,0),900);
-  if(!ground.hasCol) {arenaAbort("item wake observer has no supported floor");return;}
+  if(!ground.hasCol) {arenaAbort("item wake preparation: observer has no supported floor");return;}
   hero.y=ground.v.y;player.setPosition(hero);player.updateTransform();
   bench.cam=C_Hold;lookFrom(bench.itemWakeCenter+Vec3(0,650,850),bench.itemWakeCenter);
-  bench.itemWakeCase=name;bench.itemWakePhysics.clear();bench.itemWakeSample=0;
+  bench.itemWakeCase=name;bench.itemWakePhysics.clear();bench.itemWakeSample=uint64_t(-1);
   const char* names[]{"ITMI_GOLD","ITFO_BEER","ITMW_1H_COMMON_01","ITFO_APPLE"};
-  const unsigned count=name=="pile"?50:4;
+  const unsigned count=(name=="pile" || name=="pile-far" || name=="event")?50:4;
   for(unsigned i=0;i<count;++i) {
     const auto symbol=world.script().findSymbolIndex(names[i%4]);
-    if(symbol==size_t(-1)) {arenaAbort("item wake native item instance unavailable");return;}
-    const auto offset=name=="pile" ? Vec3((float(i%5)-2.f)*120.f,0,(float(i/5)-4.5f)*40.f) :
-                                    Vec3(0,0,(float(i)-1.5f)*48.f);
+    if(symbol==size_t(-1)) {arenaAbort("item wake preparation: native item instance unavailable");return;}
+    const auto offset=count==50 ? Vec3((float(i%5)-2.f)*120.f,0,(float(i/5)-4.5f)*40.f) :
+                                 Vec3(0,0,(float(i)-1.5f)*48.f);
     const auto at=bench.itemWakeCenter+offset;
     const auto floor=world.physic()->landRay(at+Vec3(0,100,0),300);
-    if(!floor.hasCol || floor.n.y<.98f) {arenaAbort("item wake item lacks level native support");return;}
+    if(!floor.hasCol || floor.n.y<.98f) {arenaAbort("item wake preparation: item lacks level native support");return;}
     auto* item=world.addItem(symbol,at);
-    if(!item || !item->bBox()) {arenaAbort("item wake item has no native bounds");return;}
+    if(!item || !item->bBox()) {arenaAbort("item wake preparation: item has no native bounds");return;}
     const auto* bounds=item->bBox();
     item->setPosition(at.x-(bounds[0].x+bounds[1].x)*.5f,floor.v.y-bounds[0].y+30.f,
                       at.z-(bounds[0].z+bounds[1].z)*.5f);
     item->setPhysicsEnable(world);
     const auto after=world.physic()->waterBodySnapshot();
     const auto native=std::find_if(after.begin(),after.end(),[&](const auto& body){return body.item==item;});
-    if(native==after.end()) {arenaAbort("item wake item has no native bounds");return;}
-    // Use the actual proxy's resting height, so waking a small item cannot
-    // score a false displacement merely by correcting floor penetration.
+    if(native==after.end()) {arenaAbort("item wake preparation: item has no native bounds");return;}
     const auto displacement=Vec3(0,floor.v.y-native->collisionBounds[0].y+.05f,0);
     const auto resting=item->position()+displacement;
     item->setPosition(resting.x,resting.y,resting.z);
@@ -6285,66 +6336,161 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
       const auto* a=sample.collisionBounds;const auto* b=bench.itemWakeItems[other].collisionBounds;
       if(a[0].x<b[1].x && b[0].x<a[1].x && a[0].y<b[1].y && b[0].y<a[1].y &&
          a[0].z<b[1].z && b[0].z<a[1].z) {
-        arenaAbort("item wake initial native AABBs overlap: "+std::to_string(other)+" and "+std::to_string(i));return;
+        arenaAbort("item wake preparation: initial native AABBs overlap: "+std::to_string(other)+" and "+std::to_string(i));return;
         }
       }
-    item->setPhysicsDisable();
+    if(!item->addSpellImpulse({0,-item->physicsMass()*.02f,0})) {
+      arenaAbort("item wake preparation: native item could not start settling");return;
+      }
     bench.itemWakeItems.push_back(sample);
     }
+  bench.itemWakePreparing=true;
   event("item_wake_setup","\"case\":"+jsonStr(name)+",\"enabled\":"+
     (Gothic::settingsGetI("GAME","item_wake")?"true":"false")+
+    ",\"item_hulls\":"+(Gothic::physicsFlags().itemHulls?"true":"false")+
     ",\"items\":"+std::to_string(count)+",\"initial_item_overlaps\":0,\"hero_distance_cm\":"+
     ragdollNumber((player.position()-bench.itemWakeCenter).length()));
   }
 
+bool itemWakeBreakCrate(World& world,Npc& player) {
+  const std::string visual="NW_HARBOUR_CRATE_01.3DS";
+  auto support=bench.itemWakeCenter+Vec3(0,220,0);float floorY=bench.itemWakeCenter.y;
+  const bool groundEvent=bench.itemWakeCase=="event-debris";
+  if(groundEvent) {
+    const auto* mesh=Resources::loadMesh(visual);
+    if(!mesh) {arenaAbort("item wake preparation: event crate mesh unavailable");return false;}
+    float left=std::numeric_limits<float>::infinity();
+    for(const auto& sample:bench.itemWakeItems)left=std::min(left,sample.collisionBounds[0].x);
+    support.x=left-(mesh->bbox()[1].x-mesh->bbox()[0].x)*.5f-20.f;
+    support.y=bench.itemWakeCenter.y;
+    Vec3 failed;
+    if(!destructionSupported(world,visual,support,support,failed)) {
+      arenaAbort("item wake preparation: beside-grid crate lacks supported footprint");return false;
+      }
+    floorY=support.y;
+    }
+  if(!destructionAdd(world,visual,support)) {
+    arenaAbort("item wake preparation: crate insertion failed");return false;
+    }
+  const auto bodies=world.physic()->movableVobSnapshot();
+  const auto found=std::find_if(bodies.begin(),bodies.end(),[](const auto& body){return destructionOwns(body.id);});
+  if(found==bodies.end()) {arenaAbort("item wake preparation: crate has no native snapshot");return false;}
+  auto target=(found->localBounds[0]+found->localBounds[1])*.5f;found->transform.project(target);
+  if(groundEvent) {
+    const auto snapshots=world.physic()->waterBodySnapshot();
+    const auto native=std::find_if(snapshots.begin(),snapshots.end(),[&](const auto& body){return body.parentId==found->id;});
+    if(native==snapshots.end()) {arenaAbort("item wake preparation: event crate lacks native bounds");return false;}
+    float itemLeft=std::numeric_limits<float>::infinity();
+    for(const auto& sample:bench.itemWakeItems)itemLeft=std::min(itemLeft,sample.collisionBounds[0].x);
+    const float gap=itemLeft-native->collisionBounds[1].x,offset=native->collisionBounds[0].y-floorY;
+    if(gap<=0.f || std::abs(offset)>5.f) {arenaAbort("item wake preparation: event crate overlaps items or lacks ground contact");return false;}
+    event("item_wake_event_crate","\"support_cm\":"+ragdollVector(support)+
+      ",\"bottom_floor_offset_cm\":"+ragdollNumber(offset)+",\"item_grid_gap_cm\":"+ragdollNumber(gap));
+    }
+  const auto affected=world.physic()->meleeMovableVobs(target+Vec3(-180,0,0),Vec3(1,0,0),300.f,
+    1000.f,1000.f,FractureRule::Melee::OneHand,&player);
+  if(affected!=1) {arenaAbort("item wake preparation: crate native break strike missed");return false;}
+  return true;
+  }
+
 void itemWakeBegin(World& world,Npc& player) {
   if(bench.itemWakeItems.empty() || bench.itemWakeRunning) {arenaAbort("item wake setup required");return;}
-  for(const auto& sample:bench.itemWakeItems)
-    if(sample.item->isDynamic() || (sample.item->position()-player.position()).length()<1000.f) {
-      arenaAbort("item wake requires bodyless items at least ten metres from the hero");return;
-      }
+  itemWakeFields(world);
+  size_t dynamic=0;
+  for(const auto& sample:bench.itemWakeItems)dynamic+=sample.item->isDynamic();
+  if(dynamic) {
+    arenaAbort("item wake preparation: "+std::to_string(dynamic)+" items still have bodies after settling");return;
+    }
+  bench.itemWakePreparing=false;
   const auto center=bench.itemWakeCenter;
-  if(bench.itemWakeCase=="ragdoll" || bench.itemWakeCase=="pile") {
-    const unsigned count=bench.itemWakeCase=="pile"?6:1;
+  const bool far=bench.itemWakeCase=="pile-far";
+  if(bench.itemWakeCase=="ragdoll" || bench.itemWakeCase=="pile" || far || bench.itemWakeCase=="event") {
+    const unsigned count=(bench.itemWakeCase=="pile" || far)?6:1;
     for(unsigned i=0;i<count;++i) {
       const auto at=center+Vec3(count==1?0.f:(float(i%3)-1.f)*120.f,220.f,float(i/3)*120.f-40.f);
       auto* npc=world.addNpc(world.script().findSymbolIndex("BAU_904_BAUER"),at);
-      if(!npc) {arenaAbort("item wake falling NPC insertion failed");return;}
+      if(!npc) {arenaAbort("item wake preparation: falling NPC insertion failed");return;}
       npc->clearAiQueue();npc->clearState(false);npc->setExternalControl(true);
       npc->handle().flags=zenkit::NpcFlag(uint32_t(npc->handle().flags)&~uint32_t(zenkit::NpcFlag::IMMORTAL));
       npc->setLastHitBy(&player);
-      if(!npc->setRagdollDown(true)) {arenaAbort("item wake native NPC death refused");return;}
+      if(!npc->setRagdollDown(true)) {arenaAbort("item wake preparation: native NPC death refused");return;}
       npc->prepareRagdoll();
-      if(!npc->ragdollBody()) {arenaAbort("item wake NPC death created no ragdoll");return;}
-      npc->addRagdollImpulse({0,-5,8});
-      bench.itemWakeActors.push_back(npc);
+      if(!npc->ragdollBody()) {arenaAbort("item wake preparation: NPC death created no ragdoll");return;}
+      npc->addRagdollImpulse({0,-5,8});bench.itemWakeActors.push_back(npc);
       }
+    if(bench.itemWakeCase=="event")bench.itemWakeCase="event-ragdoll";
     }
   else if(bench.itemWakeCase=="debris") {
-    if(!destructionAdd(world,"NW_HARBOUR_CRATE_01.3DS",center+Vec3(0,220,0))) {
-      arenaAbort("item wake crate insertion failed");return;
-      }
-    const auto bodies=world.physic()->movableVobSnapshot();
-    const auto found=std::find_if(bodies.begin(),bodies.end(),[](const auto& body){return destructionOwns(body.id);});
-    if(found==bodies.end()) {arenaAbort("item wake crate has no native snapshot");return;}
-    auto target=(found->localBounds[0]+found->localBounds[1])*.5f;found->transform.project(target);
-    const auto affected=world.physic()->meleeMovableVobs(target+Vec3(-180,0,0),Vec3(1,0,0),300.f,
-      1000.f,1000.f,FractureRule::Melee::OneHand,&player);
-    if(affected!=1) {arenaAbort("item wake crate native break strike missed");return;}
+    if(!itemWakeBreakCrate(world,player))return;
     }
   else {
     const auto instance=world.script().findSymbolIndex("ITMI_LUTE");
-    if(instance==size_t(-1)) {arenaAbort("item wake rolling item instance unavailable");return;}
+    if(instance==size_t(-1)) {arenaAbort("item wake preparation: rolling item instance unavailable");return;}
     auto matrix=Matrix4x4::mkIdentity();matrix.translate(center+Vec3(-180,30,-24));
     auto* item=world.addItemDyn(instance,matrix,size_t(-1));
     if(!item || item->physicsMass()<=0 || !item->addSpellImpulse({item->physicsMass()*5.f,0,0},&player)) {
-      arenaAbort("item wake rolling native Item launch failed");return;
+      arenaAbort("item wake preparation: rolling native Item launch failed");return;
       }
     bench.itemWakeMover=item;
     }
-  bench.itemWakeRunning=true;bench.itemWakeStart=world.tickCount();bench.itemWakePulse=world.tickCount()+100;
+  if(far) {
+    const float infinity=std::numeric_limits<float>::infinity();
+    Vec3 low(infinity,infinity,infinity),high(-infinity,-infinity,-infinity);
+    Vec3 itemLow=low,itemHigh=high;size_t parts=0;
+    for(const auto& body:world.physic()->waterBodySnapshot()) {
+      if(!body.ragdoll || std::none_of(bench.itemWakeActors.begin(),bench.itemWakeActors.end(),
+        [&](const auto* npc){return npc->ragdollBody()==body.ragdoll;}))continue;
+      ++parts;
+      low.x=std::min(low.x,body.collisionBounds[0].x);low.z=std::min(low.z,body.collisionBounds[0].z);
+      high.x=std::max(high.x,body.collisionBounds[1].x);high.z=std::max(high.z,body.collisionBounds[1].z);
+      }
+    if(!parts) {arenaAbort("item wake preparation: far pile lacks native ragdoll bounds");return;}
+    for(const auto& sample:bench.itemWakeItems) {
+      itemLow.x=std::min(itemLow.x,sample.collisionBounds[0].x);itemLow.z=std::min(itemLow.z,sample.collisionBounds[0].z);
+      itemHigh.x=std::max(itemHigh.x,sample.collisionBounds[1].x);itemHigh.z=std::max(itemHigh.z,sample.collisionBounds[1].z);
+      }
+    bool supported=false;std::vector<Vec3> places;std::vector<float> floors;Vec3 translation;
+    for(const auto offset:{Vec3(high.x+300.f-itemLow.x,0,0),Vec3(low.x-300.f-itemHigh.x,0,0),
+                           Vec3(0,0,high.z+300.f-itemLow.z),Vec3(0,0,low.z-300.f-itemHigh.z)}) {
+      places.clear();floors.clear();
+      for(const auto& sample:bench.itemWakeItems) {
+        auto at=sample.item->position()+offset;
+        const auto floor=world.physic()->landRay(at+Vec3(0,500,0),1500.f);
+        if(!floor.hasCol || floor.n.y<.98f)break;
+        at.y+=floor.v.y-sample.floorY;
+        if((at-player.position()).length()<1000.f)break;
+        places.push_back(at);floors.push_back(floor.v.y);
+        }
+      if(places.size()==bench.itemWakeItems.size()) {supported=true;translation=offset;break;}
+      }
+    if(!supported) {arenaAbort("item wake preparation: far item grid has no supported position outside ragdolls");return;}
+    for(size_t i=0;i<places.size();++i) {
+      auto& sample=bench.itemWakeItems[i];const auto delta=places[i]-sample.item->position();
+      sample.item->setPosition(places[i].x,places[i].y,places[i].z);
+      sample.collisionBounds[0]+=delta;sample.collisionBounds[1]+=delta;sample.boundsOrigin=places[i];sample.floorY=floors[i];
+      }
+    event("item_wake_far_placement","\"translation_cm\":"+ragdollVector(translation)+",\"initial_minimum_axis_gap_cm\":300");
+    }
+  for(const auto& sample:bench.itemWakeItems)
+    if((sample.item->position()-player.position()).length()<1000.f) {
+      arenaAbort("item wake preparation: items must remain at least ten metres from the hero");return;
+      }
+  itemWakeResetWindow(world,bench.itemWakeCase.starts_with("event-")?3000:0);
+  bench.itemWakePulse=world.tickCount()+100;
   event("item_wake_begin","\"case\":"+jsonStr(bench.itemWakeCase)+",\"bodyless_items\":"+
-    std::to_string(bench.itemWakeItems.size())+",\"ragdolls\":"+std::to_string(bench.itemWakeActors.size()));
+    std::to_string(bench.itemWakeInitiallyBodyless)+",\"ragdolls\":"+std::to_string(bench.itemWakeActors.size()));
+  }
+
+void itemWakeEventDebris(World& world,Npc& player) {
+  if(bench.itemWakeCase!="event-ragdoll" || bench.itemWakeRunning || bench.itemWakeItems.size()!=50) {
+    arenaAbort("item wake event-debris requires the completed one-corpse event with the same fifty items");return;
+    }
+  bench.itemWakeCase="event-debris";
+  if(!itemWakeBreakCrate(world,player))return;
+  itemWakeResetWindow(world,3000);
+  event("item_wake_begin","\"case\":\"event-debris\",\"bodyless_items\":"+
+    std::to_string(bench.itemWakeInitiallyBodyless)+",\"ragdolls\":"+std::to_string(bench.itemWakeActors.size())+
+    ",\"same_items_reused\":true");
   }
 
 void itemWakeCheckpoint(World& world) {
@@ -6362,15 +6508,28 @@ void itemWakeCheckpoint(World& world) {
   auto times=bench.itemWakePhysics;std::sort(times.begin(),times.end());
   const float p95=times.empty()?0.f:times[size_t(.95*double(times.size()-1))];
   const bool enabled=Gothic::settingsGetI("GAME","item_wake")!=0;
-  const bool pile=bench.itemWakeCase=="pile";
-  const bool pass=falls==0 && below==0 && (pile ? times.size()>=200 && p95<=2.f :
-    enabled ? moved>0 && created>0 : moved==0 && created==0);
+  const bool reportOnly=bench.itemWakeCase=="pile",far=bench.itemWakeCase=="pile-far",eventCase=bench.itemWakeCase.starts_with("event-");
+  const auto elapsed=bench.itemWakeSample-bench.itemWakeStart;
+  const auto checkpointElapsed=world.tickCount()-bench.itemWakeStart;
+  const bool safe=falls==0 && below==0;
+  const bool pass=reportOnly || (safe && (far ? times.size()==720 && created==0 && bench.itemWakeInitiallyBodyless==50 &&
+    bench.itemWakeQueryOverlaps==0 && bench.itemWakeMinimumGap>50.f : eventCase ?
+    checkpointElapsed>=3000 && times.size()>=179 && times.size()<=180 && p95<=2.f :
+    enabled ? moved>0 && created>0 : moved==0 && created==0));
   event("item_wake_checkpoint","\"case\":"+jsonStr(bench.itemWakeCase)+",\"enabled\":"+
-    (enabled?"true":"false")+",\"moved_over_5cm\":"+std::to_string(moved)+
-    ",\"bodies_created\":"+std::to_string(created)+",\"floor_falls\":"+std::to_string(falls)+
-    ",\"below_world\":"+std::to_string(below)+",\"max_floor_penetration_cm\":"+ragdollNumber(penetration)+
-    ",\"physics_samples\":"+std::to_string(times.size())+
-    ",\"physics_p95_ms\":"+ragdollNumber(p95)+",\"pass\":"+(pass?"true":"false")+",\"items\":"+items+"]");
+    (enabled?"true":"false")+",\"item_hulls\":"+(Gothic::physicsFlags().itemHulls?"true":"false")+
+    ",\"report_only\":"+(reportOnly?"true":"false")+",\"initially_bodyless_items\":"+std::to_string(bench.itemWakeInitiallyBodyless)+
+    ",\"moved_over_5cm\":"+std::to_string(moved)+",\"bodies_created\":"+std::to_string(created)+
+    ",\"floor_falls\":"+std::to_string(falls)+",\"below_world\":"+std::to_string(below)+
+    ",\"max_floor_penetration_cm\":"+ragdollNumber(penetration)+",\"physics_samples\":"+std::to_string(times.size())+
+    ",\"native_step_samples\":"+std::to_string(times.size())+",\"zero_step_frames\":"+std::to_string(bench.itemWakeZeroFrames)+
+    ",\"physics_first_sample_ms\":"+(times.empty()?"null":std::to_string(bench.itemWakeFirstPhysicsTick-bench.itemWakeStart))+
+    ",\"physics_last_sample_ms\":"+(times.empty()?"null":std::to_string(bench.itemWakeLastPhysicsTick-bench.itemWakeStart))+
+    ",\"window_ms\":"+std::to_string(bench.itemWakeWindow)+",\"sampled_elapsed_ms\":"+std::to_string(elapsed)+
+    ",\"checkpoint_elapsed_ms\":"+std::to_string(checkpointElapsed)+
+    ",\"far_query_overlaps\":"+std::to_string(bench.itemWakeQueryOverlaps)+",\"minimum_aggregate_gap_cm\":"+
+    (far?ragdollNumber(bench.itemWakeMinimumGap):"null")+",\"physics_p95_ms\":"+ragdollNumber(p95)+
+    ",\"pass\":"+(pass?"true":"false")+",\"items\":"+items+"]");
   bench.itemWakeRunning=false;
   if(!pass)arenaAbort("item wake native contact or physics budget failed");
   }
@@ -11503,6 +11662,7 @@ void exec(const std::string& line, World& w, Npc& pl, PlayerControl& ctrl) {
   else if(c=="item-wake" && a.size()==3 && a[1]=="setup")itemWakeSetup(w,pl,a[2]);
   else if(c=="item-wake" && a.size()==2 && a[1]=="begin")itemWakeBegin(w,pl);
   else if(c=="item-wake" && a.size()==2 && a[1]=="checkpoint")itemWakeCheckpoint(w);
+  else if(c=="item-wake" && a.size()==2 && a[1]=="event-debris")itemWakeEventDebris(w,pl);
   else if(c=="item-hulls" && a.size()==2 && a[1]=="census")itemHullCensus(w);
   else if(c=="item-hulls" && a.size()==3 && a[1]=="setup")itemHullSetup(w,pl,a[2]);
   else if(c=="item-hulls" && a.size()==2 && a[1]=="report")itemHullReport(w);
