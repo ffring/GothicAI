@@ -32,10 +32,10 @@
 
 ## Приёмка
 
-Пакеты слепых пар, порядки `order-1` и `order-2` (вне git):
-- `~/.local/share/gothic-ai/remaster/harbour-crane-deck/reviews/r3-crane-far/`
-- `~/.local/share/gothic-ai/remaster/harbour-crane-deck/reviews/r3-deck-mid/`
-- `~/.local/share/gothic-ai/remaster/harbour-crane-deck/reviews/r3-deck-close/`
+Пакеты слепых пар `lightfix-1 | наше`, порядки `order-1` и `order-2` (вне git):
+- `~/.local/share/gothic-ai/remaster/harbour-crane-deck/reviews/r3l-crane-far/`
+- `~/.local/share/gothic-ai/remaster/harbour-crane-deck/reviews/r3l-deck-mid/`
+- `~/.local/share/gothic-ai/remaster/harbour-crane-deck/reviews/r3l-deck-close/`
 
 Кадры: `~/.local/share/gothic-ai/remaster/harbour-crane-deck/captures/{original,harbour-volume-1}/`. Камера `crane-a` (кран A у корабля) снята, но настил там в тени корабля — пакета по ней нет.
 

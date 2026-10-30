@@ -26,11 +26,11 @@
 
 ## Приёмка
 
-Пакеты слепых пар, порядки `order-1` и `order-2` (вне git):
-- `~/.local/share/gothic-ai/remaster/harbour-roof-edge/reviews/r3-front/`
-- `~/.local/share/gothic-ai/remaster/harbour-roof-edge/reviews/r3-eave-close/`
-- `~/.local/share/gothic-ai/remaster/harbour-roof-edge/reviews/r3-verge-close/`
-- `~/.local/share/gothic-ai/remaster/harbour-roof-edge/reviews/r3-huts-east/`
+Пакеты слепых пар `lightfix-1 | наше`, порядки `order-1` и `order-2` (вне git):
+- `~/.local/share/gothic-ai/remaster/harbour-roof-edge/reviews/r3l-front/`
+- `~/.local/share/gothic-ai/remaster/harbour-roof-edge/reviews/r3l-eave-close/`
+- `~/.local/share/gothic-ai/remaster/harbour-roof-edge/reviews/r3l-verge-close/`
+- `~/.local/share/gothic-ai/remaster/harbour-roof-edge/reviews/r3l-huts-east/`
 
 Кадры: `~/.local/share/gothic-ai/remaster/harbour-roof-edge/captures/{original,harbour-volume-2}/`.
 
