@@ -4084,6 +4084,11 @@ namespace {
       world.tick(17);
       requireMatrix(item->matrix(),loaded,"rejecting a nonfinite restore must not replace the valid recovery transform");
       require(item->isSleeping(),"rejecting a nonfinite restore must preserve recovery sleep");
+      auto broken=world.addDynamicBody(new JPH::BoxShape({.1f,.1f,.1f}),at(0,std::numeric_limits<float>::quiet_NaN(),0),.7f,1);
+      world.tick(17);
+      broken->setPosition({std::numeric_limits<float>::quiet_NaN(),0,0});
+      world.tick(17);
+      require(broken->isSleeping(),"an item created from a nonfinite pose must sleep instead of recursing into recovery");
       }
     for(const bool hulls:{false,true}) {
       DynamicWorld world(nullptr,{});

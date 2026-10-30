@@ -2734,9 +2734,17 @@ void CollisionWorld::recoverItems() {
   }
 
 void CollisionWorld::recoverItem(CollisionBody& body, const Tempest::Vec3& failedPosition) {
+  auto& native=impl->system.GetBodyInterface();
+  const auto& restMatrix=body.itemRestTransform;
+  if(!std::isfinite(restMatrix.at(3,0)) || !std::isfinite(restMatrix.at(3,1)) || !std::isfinite(restMatrix.at(3,2))) {
+    // A body created from a nonfinite pose has no place to return to;
+    // setObjMatrix would send it straight back here.
+    native.SetLinearAndAngularVelocity(body.id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
+    native.DeactivateBody(body.id);
+    return;
+    }
   const auto rest=toTransform(body.itemRestTransform);
   body.setObjMatrix(body.itemRestTransform);
-  auto& native=impl->system.GetBodyInterface();
   native.SetPositionAndRotation(body.id,rest.position,rest.rotation,JPH::EActivation::DontActivate);
   native.SetLinearAndAngularVelocity(body.id,JPH::Vec3::sZero(),JPH::Vec3::sZero());
   native.DeactivateBody(body.id);
