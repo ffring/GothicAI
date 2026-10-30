@@ -32,7 +32,10 @@ struct Added {
   };
 struct Mesh final : asset::VirtualObject, Added {};
 struct Light final : asset::VLight, Added {};
-struct Context { std::vector<Vob> removed; };
+struct Context {
+  std::vector<Vob> removed;
+  const std::map<std::string,fs::path>* ownMeshes = nullptr;
+  };
 
 [[noreturn]] void fail(const std::string& reason) { throw std::runtime_error(reason); }
 void require(bool condition,const std::string& reason) { if(!condition) fail(reason); }
@@ -185,6 +188,11 @@ std::map<std::string,std::shared_ptr<Visual>> layerVisuals(const WorldData::Data
         if(ext==".MMB") result[fs::path(name).replace_extension(".MMS").string()]=visual;
         }
     }
+  if(context.ownMeshes!=nullptr) {
+    for(const auto& [name,file]:*context.ownMeshes)
+      if(fs::is_regular_file(file)) staticVisual(name);
+    return result;
+    }
   if(!contentRoot.empty() && fs::exists(contentRoot/"meshes/meshes.json")) {
     const auto root=contentRoot/"meshes";
     rapidjson::Document index;
@@ -306,7 +314,7 @@ Result applyFile(WorldData::Data& data, Context& context, const fs::path& baseWo
       if(!isAdded(*v)) base.emplace(v->id,v); else keys.insert(key(*v));
       };
     visitVobs(data.vobs,collect);
-    visitVobs(context.removed,collect);
+    visitVobs(context.removed,[&](const Vob& v) { ids.insert(v->id); });
     const auto visuals=layerVisuals(data,context,baseWorldDir,contentRoot);
     std::vector<Vob> additions;
     std::vector<uint32_t> removals;
@@ -380,7 +388,10 @@ Result applyFile(WorldData::Data& data, Context& context, const fs::path& baseWo
           if(moving) {
             layerFields(entry,{"id","position","rotation","yaw_deg"});
             moves.push_back({base.at(id),layerPosition(entry),layerRotation(entry)});
-            } else removals.push_back(id);
+            } else {
+            removals.push_back(id);
+            base.erase(id);
+            }
           }
         catch(const std::exception& e) { error(context,e); }
         }
@@ -410,12 +421,23 @@ const std::string& key(const asset::VirtualObject& vob) {
   return empty;
   }
 
-Result apply(WorldData::Data& data,const fs::path& baseWorldDir,const fs::path& worldContentDir) {
+Result apply(WorldData::Data& data,const fs::path& baseWorldDir,const fs::path& worldContentDir,
+             const std::map<std::string,fs::path>* ownMeshes) {
   Result total;
   if(const char* flag=std::getenv("OPENGOTHIC_VOB_LAYERS"); flag!=nullptr && std::string_view(flag)=="0")
     return total;
+  std::vector<fs::path> files;
+  try {
+    files=layerFiles(worldContentDir);
+    }
+  catch(const fs::filesystem_error& error) {
+    total.errors.push_back((worldContentDir/"vobs.d").string()+": "+error.what());
+    Tempest::Log::e("vob layer: skipped ",total.errors.back());
+    return total;
+    }
   Context context;
-  for(const auto& file:layerFiles(worldContentDir)) {
+  context.ownMeshes = ownMeshes;
+  for(const auto& file:files) {
     const auto result=applyFile(data,context,baseWorldDir,file,worldContentDir.parent_path().parent_path());
     if(result.errors.empty())
       Tempest::Log::i("vob layer: ",file.string(),": applied added=",result.added," removed=",result.removed," moved=",result.moved);

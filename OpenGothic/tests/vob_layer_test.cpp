@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -138,7 +139,7 @@ void validLayers(const Fixture& f) {
   f.clearLayers();
   textFile(f.layers/"10-add.json","{\"format\":1,\"add\":["+mesh("base-solid","BASE.3DS","mesh")+","+
            mesh("own-ghost","VOB_LAYER_TEST_CUBE","none")+
-           R"(,{"key":"lamp","kind":"light","position":[1,2,3],"rotation":[[1,0,0],[0,1,0],[0,0,1]],"range":450,"color":[255,128,0]}],"remove":[19],"move":[{"id":7,"position":[11,22,33],"yaw_deg":0}]})");
+           R"(,{"key":"lamp","kind":"light","position":[1,2,3],"rotation":[[0,0,1],[0,1,0],[-1,0,0]],"range":450,"color":[255,128,0]}],"remove":[19],"move":[{"id":7,"position":[11,22,33],"yaw_deg":0}]})");
   textFile(f.layers/"20-move.json",R"({"format":1,"move":[{"id":7,"position":[44,55,66],"rotation":[[0,0,1],[0,1,0],[-1,0,0]]},{"id":43,"position":[10,20,30],"yaw_deg":90}]})");
   const auto checked=VobLayer::check(f.world,f.layers/"10-add.json",f.content);
   require(checked.errors.empty() && checked.added==3 && checked.removed==1 && checked.moved==1,"offline checker valid layer counts");
@@ -158,6 +159,10 @@ void validLayers(const Fixture& f) {
           std::abs(std::abs(data.vobs[2]->rotation.columns[0].z)-1.f)<.0001f,"yaw rotates about the vertical axis");
   const auto* light=dynamic_cast<asset::VLight*>(data.vobs[4].get());
   require(light!=nullptr && light->is_static && light->range==450 && light->color.r==255 && light->color.g==128 && light->color.b==0,"static light properties");
+  const float rotationRows[3][3]={{0,0,1},{0,1,0},{-1,0,0}};
+  for(unsigned row=0;row<3;++row) for(unsigned column=0;column<3;++column)
+    require(light->rotation[column][row]==rotationRows[row][column] &&
+            find(data,7)->rotation[column][row]==rotationRows[row][column],"add and move preserve vobs.json matrix rows without transposing");
   setenv("OPENGOTHIC_VOB_LAYERS","0",1);
   require(WorldData::compare(Fixture::original(),f.read()).empty(),"OPENGOTHIC_VOB_LAYERS=0 skips all files");
   unsetenv("OPENGOTHIC_VOB_LAYERS");
@@ -170,6 +175,7 @@ void rejectedLayers(const Fixture& f) {
     {"missing-move-id",R"({"format":1,"move":[{"id":98765,"position":[0,0,0],"yaw_deg":0}]})"},
     {"duplicate-key","{\"format\":1,\"add\":["+mesh("existing")+"]}"},
     {"duplicate-in-file","{\"format\":1,\"add\":["+mesh("same")+","+mesh("same")+"]}"},
+    {"duplicate-remove",R"({"format":1,"remove":[19,19]})"},
     {"unknown-visual","{\"format\":1,\"add\":["+mesh("missing","NO_SUCH_VISUAL")+"]}"},
     {"schema",R"({"format":1,"add":[{"key":"bad-schema","kind":"mesh","position":[0,0],"yaw_deg":0,"visual":"BASE","collision":"none"}]})"},
     {"format",R"({"format":2})"}
@@ -202,6 +208,52 @@ void rejectedLayers(const Fixture& f) {
     if(name=="schema")
       require(subprocess({GOTHIC_CONTENT_CONVERT,"check-vob-layer",f.world.string(),file.string(),f.content.string()})!=0,"converter CLI rejects schema errors");
     }
+  }
+
+void removedReferences(const Fixture& f) {
+  for(bool move:{false,true}) {
+    f.clearLayers();
+    textFile(f.layers/"00-remove.json",R"({"format":1,"remove":[19]})");
+    const auto file=f.layers/"10-removed-id.json";
+    const auto operation=move ? R"("move":[{"id":19,"position":[999,0,0],"yaw_deg":0}])" : R"("remove":[19])";
+    textFile(file,"{\"format\":1,\"add\":["+mesh("rolled-back")+"],"+operation+"}");
+    textFile(f.layers/"20-valid.json","{\"format\":1,\"add\":["+mesh("after-removed-error")+"]}");
+    const auto checked=VobLayer::check(f.world,file,f.content);
+    require(!checked.errors.empty() && checked.errors.front().find("19")!=std::string::npos &&
+            checked.errors.front().find(file.string())!=std::string::npos,"offline checker rejects an already removed id with file and id");
+    size_t errors=0;
+    Tempest::Log::setOutputCallback([&](Tempest::Log::Mode mode,const char* line) {
+      if(mode==Tempest::Log::Error && std::string_view(line).find(file.filename().string())!=std::string::npos) ++errors;
+      });
+    const auto data=f.read();
+    Tempest::Log::setOutputCallback({});
+    require(errors==1 && data.vobs.size()==3 && find(data,19)==nullptr &&
+            data.vobs.back()->vob_name=="after-removed-error","removed-id file is skipped atomically and the following file applies");
+    }
+  }
+
+void unreadableLayers(const Fixture& f) {
+  f.clearLayers();
+  textFile(f.layers/"add.json","{\"format\":1,\"add\":["+mesh("inaccessible")+"]}");
+  auto data=WorldData::read(f.world);
+  const auto permissions=fs::status(f.layers).permissions();
+  fs::permissions(f.layers,fs::perms::none);
+  size_t errors=0;
+  Tempest::Log::setOutputCallback([&](Tempest::Log::Mode mode,const char* line) {
+    if(mode==Tempest::Log::Error && std::string_view(line).find(f.layers.string())!=std::string::npos) ++errors;
+    });
+  VobLayer::Result result;
+  try { result=VobLayer::apply(data,f.world,f.content/"worlds/TEST"); }
+  catch(...) {
+    fs::permissions(f.layers,permissions);
+    Tempest::Log::setOutputCallback({});
+    throw;
+    }
+  fs::permissions(f.layers,permissions);
+  Tempest::Log::setOutputCallback({});
+  require(result.errors.size()==1 && errors==1 && result.errors.front().find(f.layers.string())!=std::string::npos,
+          "unreadable vobs.d returns one named error and log without throwing");
+  require(WorldData::compare(Fixture::original(),data).empty(),"unreadable vobs.d preserves the base world");
   }
 
 void saveBoundPolicy(const Fixture& f) {
@@ -271,6 +323,52 @@ void runtimeMesh(const Fixture& f) {
 }
 
 struct WorldDataContract {
+  static void meshRegistry(const Fixture& fixture) {
+    fixture.clearLayers();
+    writeWorldChunks(asset::WorldMesh{},Fixture::original().source,fixture.world);
+    const auto manifest=fixture.world/"world.json";
+    std::ifstream input(manifest);
+    std::string json{std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};
+    require(!json.empty() && json.front()=='{',"synthetic world manifest");
+    json.insert(1,"\"archives\":[],");
+    textFile(manifest,json);
+    const auto index=fixture.content/"meshes/meshes.json";
+    std::ifstream meshes(index);
+    const std::string originalIndex{std::istreambuf_iterator<char>(meshes),std::istreambuf_iterator<char>()};
+    require(!originalIndex.empty(),"cube mesh registry fixture");
+    textFile(index,"{}");
+    const auto game=fixture.root.string();
+    const char* args[]={"gothic-vob-layer-test","-g",game.c_str()};
+    CommandLine commandLine(3,args);
+    setenv("OPENGOTHIC_CENSUS","",1);
+    const auto file=fixture.layers/"late-mesh.json";
+    {
+      Resources resources;
+      resources.automaticBase.path=fixture.base;
+      textFile(index,originalIndex);
+      textFile(file,"{\"format\":1,\"add\":["+mesh("late-mesh","VOB_LAYER_TEST_CUBE")+"]}");
+      require(VobLayer::check(fixture.world,file,fixture.content).errors.empty(),"offline checker sees the current on-disk mesh registry");
+      size_t errors=0;
+      Tempest::Log::setOutputCallback([&](Tempest::Log::Mode mode,const char* line) {
+        if(mode==Tempest::Log::Error && std::string_view(line).find(file.filename().string())!=std::string::npos) ++errors;
+        });
+      WorldData::Data data;
+      asset::WorldMesh worldMesh;
+      Resources::loadWorld(data,worldMesh,"TEST.ZEN");
+      Tempest::Log::setOutputCallback({});
+      require(errors==1 && WorldData::compare(Fixture::original(),data).empty(),
+              "running Resources rejects a late mesh entry atomically using its startup registry");
+      }
+    {
+      Resources resources;
+      resources.automaticBase.path=fixture.base;
+      WorldData::Data data;
+      asset::WorldMesh worldMesh;
+      Resources::loadWorld(data,worldMesh,"TEST.ZEN");
+      require(data.vobs.size()==4 && data.vobs.back()->vob_name=="late-mesh" && VobLayer::isAdded(*data.vobs.back()),
+              "fresh Resources accepts the mesh entry and applies the layer");
+      }
+    }
   static const Vob* runtimeVob(const Vob& root,uint32_t id) {
     if(root.vobObjectID==id) return &root;
     for(const auto& child:root.child)
@@ -383,7 +481,10 @@ int main() {
     noLayers(fixture);
     validLayers(fixture);
     rejectedLayers(fixture);
+    removedReferences(fixture);
+    unreadableLayers(fixture);
     saveBoundPolicy(fixture);
+    WorldDataContract::meshRegistry(fixture);
     WorldDataContract::saves(fixture);
     runtimeMesh(fixture);
     std::cout << "{\"test\":\"vob_layer\",\"passed\":true,\"assertions\":" << assertions << "}\n";

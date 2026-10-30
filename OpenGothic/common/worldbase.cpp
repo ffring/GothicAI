@@ -13,7 +13,8 @@
 WorldBaseResult tryWorldData(WorldData::Data& world, asset::WorldMesh& worldMesh,
                             std::string_view name, const std::filesystem::path& dir,
                             const std::filesystem::path& overrideDir,
-                            const std::vector<std::pair<std::string,uintmax_t>>& baseArchives) {
+                            const std::vector<std::pair<std::string,uintmax_t>>& baseArchives,
+                            const std::map<std::string,std::filesystem::path>* ownMeshes) {
   WorldBaseResult result;
   const auto started = std::chrono::steady_clock::now();
   try {
@@ -57,7 +58,7 @@ WorldBaseResult tryWorldData(WorldData::Data& world, asset::WorldMesh& worldMesh
       throw std::runtime_error("world data source differs from world.json");
     if(!data.waynet)
       throw std::runtime_error("world waynet missing");
-    VobLayer::apply(data,dir,overrideDir);
+    VobLayer::apply(data,dir,overrideDir,ownMeshes);
     auto mesh = readWorldChunks(dir,overrideDir);
     mesh.name = data.name;
     mesh.bbox = data.bbox;
