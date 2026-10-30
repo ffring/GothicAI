@@ -18,6 +18,8 @@ walkmode walk
 cam follow 450 240 90
 pos
 shot vob-layer-start
+cam follow 450 240 120
+cam look 240
 wait 2500
 shot vob-layer-day
 wait 100
@@ -26,6 +28,8 @@ wait 2500
 shot vob-layer-night
 wait 100
 set time 12 0
+cam follow 450 240 90
+cam look 90
 press forward
 wait 2000
 pos

@@ -79,11 +79,11 @@ def make_content(directory, collision=None, emitters=False):
         if emitters:
             additions.extend([
                 {"key": "test.smoke", "kind": "emitter", "pfx": "FIRE_SMOKE.pfx",
-                 "position": [30213, 5386, -15710], "yaw_deg": 0},
+                 "position": [30063, 5286, -15710], "yaw_deg": 0},
                 {"key": "test.fire", "kind": "emitter", "pfx": "FIRE_MEDIUM.pfx",
                  "position": [30063, 5186, -15710], "yaw_deg": 0},
                 {"key": "test.light", "kind": "light", "range": 600,
-                 "color": [255, 170, 90], "position": [30013, 5336, -15710], "yaw_deg": 0},
+                 "color": [255, 170, 90], "position": [30013, 5486, -15710], "yaw_deg": 0},
             ])
         (layers / "cube.json").write_text(json.dumps({"format": 1, "add": additions}) + "\n")
 
