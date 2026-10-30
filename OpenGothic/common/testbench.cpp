@@ -6311,12 +6311,11 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
   bench.itemWakeCase=name;bench.itemWakePhysics.clear();bench.itemWakeSample=uint64_t(-1);
   const char* names[]{"ITMI_GOLD","ITFO_BEER","ITMW_1H_COMMON_01","ITFO_APPLE"};
   const unsigned count=(name=="pile" || name=="pile-far" || name=="event")?50:4;
-  size_t initialOverlaps=0;float maximumReleaseHeight=0;
+  size_t initialOverlaps=0;float maximumReleaseHeight=0,gridSpacing=0;
   for(unsigned i=0;i<count;++i) {
     const auto symbol=world.script().findSymbolIndex(names[i%4]);
     if(symbol==size_t(-1)) {arenaAbort("item wake preparation: native item instance unavailable");return;}
-    const auto offset=count==50 ? Vec3((float(i%5)-2.f)*120.f,0,(float(i/5)-4.5f)*40.f) :
-                                 Vec3(0,0,(float(i)-1.5f)*48.f);
+    const auto offset=count==50 ? Vec3() : Vec3(0,0,(float(i)-1.5f)*48.f);
     const auto at=bench.itemWakeCenter+offset;
     const auto floor=world.physic()->landRay(at+Vec3(0,100,0),300);
     if(!floor.hasCol || floor.n.y<.98f) {arenaAbort("item wake preparation: item lacks level native support");return;}
@@ -6328,6 +6327,15 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
     const auto after=world.physic()->waterBodySnapshot();
     const auto native=std::find_if(after.begin(),after.end(),[&](const auto& body){return body.item==item;});
     if(native==after.end()) {arenaAbort("item wake preparation: item has no native bounds");return;}
+    if(count==50) {
+      const auto extent=native->collisionBounds[1]-native->collisionBounds[0];
+      gridSpacing=std::max(gridSpacing,std::max(extent.x,extent.z)+5.f);
+      Bench::ItemWakeSample sample;sample.item=item;sample.name=names[i%4];
+      sample.collisionBounds[0]=native->collisionBounds[0];sample.collisionBounds[1]=native->collisionBounds[1];
+      item->setPhysicsDisable();
+      bench.itemWakeItems.push_back(sample);
+      continue;
+      }
     const auto center=(native->collisionBounds[0]+native->collisionBounds[1])*.5f;
     auto displacement=Vec3(at.x-center.x,floor.v.y+100.f-native->collisionBounds[0].y,at.z-center.z);
     const auto low=native->collisionBounds[0]+displacement,high=native->collisionBounds[1]+displacement;
@@ -6351,13 +6359,38 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
       }
     bench.itemWakeItems.push_back(sample);
     }
-  if(initialOverlaps) {arenaAbort("item wake preparation: staged release AABBs overlap");return;}
+  if(count==50) {
+    for(size_t i=0;i<bench.itemWakeItems.size();++i) {
+      auto& sample=bench.itemWakeItems[i];
+      const auto at=bench.itemWakeCenter+Vec3((float(i%10)-4.f)*gridSpacing,0,(float(i/10)-2.f)*gridSpacing);
+      const auto floor=world.physic()->landRay(at+Vec3(0,500,0),1000.f);
+      if(!floor.hasCol || floor.n.y<.98f) {arenaAbort("item wake preparation: sleeping grid lacks level native support");return;}
+      const auto center=(sample.collisionBounds[0]+sample.collisionBounds[1])*.5f;
+      const auto delta=Vec3(at.x-center.x,floor.v.y+.05f-sample.collisionBounds[0].y,at.z-center.z);
+      const auto position=sample.item->position()+delta;
+      auto pose=sample.item->transform();
+      pose.set(3,0,position.x);pose.set(3,1,position.y);pose.set(3,2,position.z);
+      sample.item->setObjMatrix(pose);
+      if(!sample.item->wakePhysics() || !sample.item->physicsSleeping() || sample.item->physicsVelocity().quadLength()!=0.f) {
+        arenaAbort("item wake preparation: grid item was not created sleeping at rest");return;
+        }
+      sample.initial=position;sample.boundsOrigin=position;sample.floorY=floor.v.y;
+      sample.collisionBounds[0]+=delta;sample.collisionBounds[1]+=delta;
+      for(size_t other=0;other<i;++other) {
+        const auto* a=sample.collisionBounds;const auto* b=bench.itemWakeItems[other].collisionBounds;
+        if(a[0].x<b[1].x && b[0].x<a[1].x && a[0].y<b[1].y && b[0].y<a[1].y &&
+           a[0].z<b[1].z && b[0].z<a[1].z)++initialOverlaps;
+        }
+      }
+    }
+  if(initialOverlaps) {arenaAbort("item wake preparation: initial item AABBs overlap");return;}
   bench.itemWakePreparing=true;
   event("item_wake_setup","\"case\":"+jsonStr(name)+",\"enabled\":"+
     (Gothic::settingsGetI("GAME","item_wake")?"true":"false")+
     ",\"item_hulls\":"+(Gothic::physicsFlags().itemHulls?"true":"false")+
     ",\"items\":"+std::to_string(count)+",\"initial_item_overlaps\":"+std::to_string(initialOverlaps)+
-    ",\"maximum_release_height_cm\":"+ragdollNumber(maximumReleaseHeight)+",\"hero_distance_cm\":"+
+    ",\"maximum_release_height_cm\":"+ragdollNumber(maximumReleaseHeight)+
+    ",\"grid_spacing_cm\":"+ragdollNumber(gridSpacing)+",\"hero_distance_cm\":"+
     ragdollNumber((player.position()-bench.itemWakeCenter).length()));
   }
 
