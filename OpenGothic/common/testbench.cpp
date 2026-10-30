@@ -774,7 +774,7 @@ struct Bench {
     std::string name;
     Vec3 initial,collisionBounds[2],boundsOrigin;
     float floorY=0,travel=0,penetration=0;
-    bool bodyCreated=false,hadBody=false,fell=false,below=false;
+    bool bodyCreated=false,hadBody=false,fell=false,below=false,preparationDive=false;
     };
   std::vector<ItemWakeSample> itemWakeItems;
   std::vector<Npc*> itemWakeActors;
@@ -6187,7 +6187,7 @@ void itemWakeFields(World& world) {
   for(auto& sample:bench.itemWakeItems) {
     const auto at=sample.item->position();
     const bool finite=std::isfinite(at.x) && std::isfinite(at.y) && std::isfinite(at.z);
-    if(!finite) {sample.fell=true;sample.below=true;continue;}
+    if(!finite) {sample.fell=true;sample.below=true;sample.preparationDive|=bench.itemWakePreparing;continue;}
     if(const auto native=std::find_if(bodies.begin(),bodies.end(),[&](const auto& body){return body.item==sample.item;});
        native!=bodies.end()) {
       sample.collisionBounds[0]=native->collisionBounds[0];sample.collisionBounds[1]=native->collisionBounds[1];
@@ -6197,7 +6197,10 @@ void itemWakeFields(World& world) {
       sample.collisionBounds[0]+=at-sample.boundsOrigin;sample.collisionBounds[1]+=at-sample.boundsOrigin;
       sample.boundsOrigin=at;
       }
-    if(bench.itemWakePreparing)continue;
+    if(bench.itemWakePreparing) {
+      sample.preparationDive|=sample.collisionBounds[0].y<sample.floorY-100.f;
+      continue;
+      }
     const bool dynamic=sample.item->isDynamic();
     sample.bodyCreated|=dynamic && !sample.hadBody;sample.hadBody=dynamic;
     sample.travel=std::max(sample.travel,(at-sample.initial).length());
@@ -6308,6 +6311,7 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
   bench.itemWakeCase=name;bench.itemWakePhysics.clear();bench.itemWakeSample=uint64_t(-1);
   const char* names[]{"ITMI_GOLD","ITFO_BEER","ITMW_1H_COMMON_01","ITFO_APPLE"};
   const unsigned count=(name=="pile" || name=="pile-far" || name=="event")?50:4;
+  size_t initialOverlaps=0;
   for(unsigned i=0;i<count;++i) {
     const auto symbol=world.script().findSymbolIndex(names[i%4]);
     if(symbol==size_t(-1)) {arenaAbort("item wake preparation: native item instance unavailable");return;}
@@ -6316,31 +6320,29 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
     const auto at=bench.itemWakeCenter+offset;
     const auto floor=world.physic()->landRay(at+Vec3(0,100,0),300);
     if(!floor.hasCol || floor.n.y<.98f) {arenaAbort("item wake preparation: item lacks level native support");return;}
-    auto* item=world.addItem(symbol,at);
-    if(!item || !item->bBox()) {arenaAbort("item wake preparation: item has no native bounds");return;}
-    const auto* bounds=item->bBox();
-    item->setPosition(at.x-(bounds[0].x+bounds[1].x)*.5f,floor.v.y-bounds[0].y+30.f,
-                      at.z-(bounds[0].z+bounds[1].z)*.5f);
-    item->setPhysicsEnable(world);
+    auto pose=Matrix4x4::mkIdentity();
+    if(Gothic::physicsFlags().itemHulls) {pose.rotateOX(20);pose.rotateOY(37);}
+    pose.set(3,0,at.x);pose.set(3,1,floor.v.y+100.f);pose.set(3,2,at.z);
+    auto* item=world.addItemDyn(symbol,pose,world.npcId(&player));
+    if(!item || !item->isDynamic()) {arenaAbort("item wake preparation: item has no native body");return;}
     const auto after=world.physic()->waterBodySnapshot();
     const auto native=std::find_if(after.begin(),after.end(),[&](const auto& body){return body.item==item;});
     if(native==after.end()) {arenaAbort("item wake preparation: item has no native bounds");return;}
-    const auto displacement=Vec3(0,floor.v.y-native->collisionBounds[0].y+.05f,0);
-    const auto resting=item->position()+displacement;
-    item->setPosition(resting.x,resting.y,resting.z);
-    Bench::ItemWakeSample sample;sample.item=item;sample.name=names[i%4];sample.initial=resting;
+    const auto center=(native->collisionBounds[0]+native->collisionBounds[1])*.5f;
+    const auto displacement=Vec3(at.x-center.x,floor.v.y+100.f-native->collisionBounds[0].y,at.z-center.z);
+    const auto release=item->position()+displacement;
+    auto releasePose=item->transform();
+    releasePose.set(3,0,release.x);releasePose.set(3,1,release.y);releasePose.set(3,2,release.z);
+    item->setObjMatrix(releasePose);
+    Bench::ItemWakeSample sample;sample.item=item;sample.name=names[i%4];sample.initial=release;
     sample.collisionBounds[0]=native->collisionBounds[0]+displacement;
     sample.collisionBounds[1]=native->collisionBounds[1]+displacement;
-    sample.boundsOrigin=resting;sample.floorY=floor.v.y;
+    sample.boundsOrigin=release;sample.floorY=floor.v.y;
     for(size_t other=0;other<bench.itemWakeItems.size();++other) {
       const auto* a=sample.collisionBounds;const auto* b=bench.itemWakeItems[other].collisionBounds;
+      // Native settling resolves contacts before the bodyless baseline.
       if(a[0].x<b[1].x && b[0].x<a[1].x && a[0].y<b[1].y && b[0].y<a[1].y &&
-         a[0].z<b[1].z && b[0].z<a[1].z) {
-        arenaAbort("item wake preparation: initial native AABBs overlap: "+std::to_string(other)+" and "+std::to_string(i));return;
-        }
-      }
-    if(!item->addSpellImpulse({0,-item->physicsMass()*.02f,0})) {
-      arenaAbort("item wake preparation: native item could not start settling");return;
+         a[0].z<b[1].z && b[0].z<a[1].z)++initialOverlaps;
       }
     bench.itemWakeItems.push_back(sample);
     }
@@ -6348,7 +6350,7 @@ void itemWakeSetup(World& world,Npc& player,std::string_view name) {
   event("item_wake_setup","\"case\":"+jsonStr(name)+",\"enabled\":"+
     (Gothic::settingsGetI("GAME","item_wake")?"true":"false")+
     ",\"item_hulls\":"+(Gothic::physicsFlags().itemHulls?"true":"false")+
-    ",\"items\":"+std::to_string(count)+",\"initial_item_overlaps\":0,\"hero_distance_cm\":"+
+    ",\"items\":"+std::to_string(count)+",\"initial_item_overlaps\":"+std::to_string(initialOverlaps)+",\"hero_distance_cm\":"+
     ragdollNumber((player.position()-bench.itemWakeCenter).length()));
   }
 
@@ -6396,10 +6398,14 @@ bool itemWakeBreakCrate(World& world,Npc& player) {
 void itemWakeBegin(World& world,Npc& player) {
   if(bench.itemWakeItems.empty() || bench.itemWakeRunning) {arenaAbort("item wake setup required");return;}
   itemWakeFields(world);
-  size_t dynamic=0;
-  for(const auto& sample:bench.itemWakeItems)dynamic+=sample.item->isDynamic();
-  if(dynamic) {
-    arenaAbort("item wake preparation: "+std::to_string(dynamic)+" items still have bodies after settling");return;
+  for(const auto& sample:bench.itemWakeItems) {
+    const auto center=(sample.collisionBounds[0]+sample.collisionBounds[1])*.5f;
+    const auto floor=world.physic()->landRay(Vec3(center.x,std::max(sample.floorY+500.f,sample.collisionBounds[1].y+20.f),center.z),10000.f);
+    const float offset=floor.hasCol?sample.collisionBounds[0].y-floor.v.y:std::numeric_limits<float>::infinity();
+    if(sample.item->isDynamic() || sample.preparationDive || !floor.hasCol || std::abs(offset)>5.f) {
+      arenaAbort("item wake preparation: invalid resting "+sample.name+", dynamic="+std::to_string(sample.item->isDynamic())+
+        ", dived="+std::to_string(sample.preparationDive)+", bottom_floor_offset_cm="+ragdollNumber(offset));return;
+      }
     }
   bench.itemWakePreparing=false;
   const auto center=bench.itemWakeCenter;
@@ -6454,10 +6460,11 @@ void itemWakeBegin(World& world,Npc& player) {
                            Vec3(0,0,high.z+300.f-itemLow.z),Vec3(0,0,low.z-300.f-itemHigh.z)}) {
       places.clear();floors.clear();
       for(const auto& sample:bench.itemWakeItems) {
-        auto at=sample.item->position()+offset;
-        const auto floor=world.physic()->landRay(at+Vec3(0,500,0),1500.f);
+        const auto low=sample.collisionBounds[0]+offset,high=sample.collisionBounds[1]+offset;
+        const auto center=(low+high)*.5f;
+        const auto floor=world.physic()->landRay(Vec3(center.x,std::max(sample.floorY+500.f,high.y+20.f),center.z),1500.f);
         if(!floor.hasCol || floor.n.y<.98f)break;
-        at.y+=floor.v.y-sample.floorY;
+        const auto at=sample.item->position()+Vec3(offset.x,floor.v.y+.05f-sample.collisionBounds[0].y,offset.z);
         if((at-player.position()).length()<1000.f)break;
         places.push_back(at);floors.push_back(floor.v.y);
         }
@@ -6466,7 +6473,9 @@ void itemWakeBegin(World& world,Npc& player) {
     if(!supported) {arenaAbort("item wake preparation: far item grid has no supported position outside ragdolls");return;}
     for(size_t i=0;i<places.size();++i) {
       auto& sample=bench.itemWakeItems[i];const auto delta=places[i]-sample.item->position();
-      sample.item->setPosition(places[i].x,places[i].y,places[i].z);
+      auto pose=sample.item->transform();
+      pose.set(3,0,places[i].x);pose.set(3,1,places[i].y);pose.set(3,2,places[i].z);
+      sample.item->setObjMatrix(pose);
       sample.collisionBounds[0]+=delta;sample.collisionBounds[1]+=delta;sample.boundsOrigin=places[i];sample.floorY=floors[i];
       }
     event("item_wake_far_placement","\"translation_cm\":"+ragdollVector(translation)+",\"initial_minimum_axis_gap_cm\":300");
