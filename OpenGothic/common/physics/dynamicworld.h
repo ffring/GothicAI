@@ -410,6 +410,7 @@ class DynamicWorld final {
       std::vector<Tempest::Vec3> vertices; // hull vertices in visual-local centimetres
       std::string fallbackReason;
       float volume = 0.f, boundsVolume = 0.f; // cubic metres, before object scale
+      float extraPaddingCm = 0.f; // collision padding beyond the base centimetre
       };
     const ItemHull& itemHullShape(const ProtoMesh& proto, std::string_view visual);
     Item           addMovableVob(const ProtoMesh& mesh, std::string_view visual, const Tempest::Matrix4x4& matrix,

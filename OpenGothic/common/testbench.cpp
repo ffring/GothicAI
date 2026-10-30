@@ -42,6 +42,7 @@
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/CollisionDispatch.h>
 #include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
@@ -728,7 +729,7 @@ struct Bench {
     JPH::ShapeRefC shape;
     Vec3 axis,sleepPosition;
     Matrix4x4 sleepTransform=Matrix4x4::mkIdentity();
-    float mass=0,maxJitter=0;
+    float mass=0,maxJitter=0,extraPaddingCm=0;
     uint64_t sleepAt=uint64_t(-1);
     bool belowWorld=false;
     };
@@ -3153,11 +3154,11 @@ asset::MaterialGroup itemHullMaterial(int32_t material) {
   }
 
 void itemHullCensus(World& world) {
-  size_t instances=0,hulls=0,fallbacks=0;
+  size_t instances=0,hulls=0,fallbacks=0,extraVisuals=0;
   std::map<std::string,std::string> visuals;
   std::map<std::string,size_t> reasons;
-  std::vector<float> ratios;
-  std::string outliers="[";
+  std::vector<float> ratios,pointsBefore,pointsAfter;
+  std::string outliers="[",extraPadding="[";
   world.script().getVm().enumerate_instances_by_class_name("C_ITEM",[&](zenkit::DaedalusSymbol& symbol) {
     Item item(world,symbol.index(),Item::T_Inventory);++instances;
     std::string visual=item.handle().visual;
@@ -3172,12 +3173,24 @@ void itemHullCensus(World& world) {
     const auto& shape=world.physic()->itemHullShape(*mesh,visual);
     if(visuals.emplace(visual,shape.fallbackReason).second) {
       const bool hull=shape.shape!=nullptr;
-      if(hull) {++hulls;if(shape.boundsVolume>0)ratios.push_back(shape.volume/shape.boundsVolume);}
+      const auto before=hull?static_cast<const JPH::ConvexHullShape&>(*shape.originalShape).GetNumPoints():0;
+      const auto after=hull?static_cast<const JPH::ConvexHullShape&>(*shape.shape).GetNumPoints():0;
+      if(hull) {
+        ++hulls;if(shape.boundsVolume>0)ratios.push_back(shape.volume/shape.boundsVolume);
+        pointsBefore.push_back(float(before));pointsAfter.push_back(float(after));
+        if(shape.extraPaddingCm>0.f) {
+          ++extraVisuals;
+          if(extraPadding.size()>1)extraPadding+=',';
+          extraPadding+="{\"visual\":"+jsonStr(visual)+",\"extra_padding_cm\":"+ragdollNumber(shape.extraPaddingCm)+"}";
+          }
+        }
       else {++fallbacks;++reasons[shape.fallbackReason];}
       event("item_hulls_census_visual","\"visual\":"+jsonStr(visual)+",\"hull\":"+(hull?"true":"false")+
         ",\"reason\":"+jsonStr(shape.fallbackReason)+",\"hull_volume_m3\":"+ragdollNumber(shape.volume)+
         ",\"bounds_volume_m3\":"+ragdollNumber(shape.boundsVolume)+",\"ratio\":"+
-        (shape.boundsVolume>0?ragdollNumber(shape.volume/shape.boundsVolume):"null"));
+        (shape.boundsVolume>0?ragdollNumber(shape.volume/shape.boundsVolume):"null")+
+        ",\"original_points\":"+std::to_string(before)+",\"inflated_points\":"+std::to_string(after)+
+        ",\"extra_padding_cm\":"+ragdollNumber(shape.extraPaddingCm));
       }
     Bounds bounds;bounds.assign(mesh->bboxMesh);
     const auto material=itemHullMaterial(item.handle().material);
@@ -3193,8 +3206,9 @@ void itemHullCensus(World& world) {
       }
     });
   std::sort(ratios.begin(),ratios.end());
-  const auto percentile=[&](float fraction) {
-    return ratios.empty()?0.f:ratios[std::min(ratios.size()-1,size_t(std::round(float(ratios.size()-1)*fraction)))];
+  std::sort(pointsBefore.begin(),pointsBefore.end());std::sort(pointsAfter.begin(),pointsAfter.end());
+  const auto percentile=[](const std::vector<float>& values,float fraction) {
+    return values.empty()?0.f:values[std::min(values.size()-1,size_t(std::round(float(values.size()-1)*fraction)))];
     };
   std::string failures="{";
   for(const auto& [reason,count]:reasons) {
@@ -3203,8 +3217,15 @@ void itemHullCensus(World& world) {
     }
   event("item_hulls_census","\"instances\":"+std::to_string(instances)+",\"visuals\":"+std::to_string(visuals.size())+
     ",\"hulls\":"+std::to_string(hulls)+",\"fallbacks\":"+std::to_string(fallbacks)+
-    ",\"fallback_reasons\":"+failures+"},\"volume_ratio_p10\":"+ragdollNumber(percentile(.1f))+
-    ",\"volume_ratio_median\":"+ragdollNumber(percentile(.5f))+",\"volume_ratio_p90\":"+ragdollNumber(percentile(.9f))+
+    ",\"fallback_reasons\":"+failures+"},\"volume_ratio_p10\":"+ragdollNumber(percentile(ratios,.1f))+
+    ",\"volume_ratio_median\":"+ragdollNumber(percentile(ratios,.5f))+",\"volume_ratio_p90\":"+ragdollNumber(percentile(ratios,.9f))+
+    ",\"points_before_median\":"+ragdollNumber(percentile(pointsBefore,.5f))+
+    ",\"points_before_p90\":"+ragdollNumber(percentile(pointsBefore,.9f))+
+    ",\"points_before_max\":"+ragdollNumber(percentile(pointsBefore,1.f))+
+    ",\"points_after_median\":"+ragdollNumber(percentile(pointsAfter,.5f))+
+    ",\"points_after_p90\":"+ragdollNumber(percentile(pointsAfter,.9f))+
+    ",\"points_after_max\":"+ragdollNumber(percentile(pointsAfter,1.f))+
+    ",\"extra_visuals\":"+std::to_string(extraVisuals)+",\"extra_padding_visuals\":"+extraPadding+"]"+
     ",\"mass_outliers\":"+outliers+"],\"pass\":"+(hulls*100>=visuals.size()*99?"true":"false"));
   }
 
@@ -3365,11 +3386,14 @@ void itemHullSetup(World& world,Npc& player,std::string_view surface) {
     if(!item || !item->isDynamic()) {arenaAbort("item hull fixture world Item has no native body");return;}
     Bench::ItemHullDrop drop;drop.item=item;drop.label=spec.label;
     drop.symbol=world.script().findSymbol(symbol)->name();drop.vertices=std::move(visibleVertices);drop.shape=hull.originalShape;
+    drop.extraPaddingCm=Gothic::settingsGetI("GAME","item_hulls")?hull.extraPaddingCm:0.f;
     if(spec.longAxis)drop.axis=axis;
     drop.mass=item->physicsMass();bench.itemHullDrops.push_back(std::move(drop));
     event("item_hulls_drop","\"surface\":"+jsonStr(surface)+",\"index\":"+std::to_string(i)+
       ",\"symbol\":"+jsonStr(bench.itemHullDrops.back().symbol)+",\"label\":"+jsonStr(spec.label)+
-      ",\"mass_kg\":"+ragdollNumber(item->physicsMass())+",\"drop_height_cm\":100,\"hull\":"+(hull.shape!=nullptr?"true":"false")+
+      ",\"mass_kg\":"+ragdollNumber(item->physicsMass())+",\"extra_padding_cm\":"+ragdollNumber(bench.itemHullDrops.back().extraPaddingCm)+
+      ",\"gap_max_cm\":"+ragdollNumber(1.05f+bench.itemHullDrops.back().extraPaddingCm)+
+      ",\"drop_height_cm\":100,\"hull\":"+(hull.shape!=nullptr?"true":"false")+
       ",\"position_cm\":"+ragdollVector(at)+",\"native_floor_cm\":"+ragdollVector(floor.v)+",\"native_floor_normal\":"+ragdollVector(floor.n));
     }
   bench.itemHullStart=world.tickCount();bench.itemHullSample=uint64_t(-1);bench.itemHullCosts.clear();bench.itemHullTracing=true;
@@ -3463,14 +3487,16 @@ void itemHullReport(World& world) {
     const bool slept=drop.sleepAt!=uint64_t(-1),moved=drop.maxJitter>.0001f;
     through+=passedThrough;escaped+=leftSupport;below+=drop.belowWorld;jitter+=moved;unslept+=!slept;
     unsleptSupported+=!slept && !leftSupport;
-    // The cross-run comparison requires ON to sleep no later than OFF in the
-    // same case. There is no standalone absolute sleep deadline here.
-    const bool ok=!passedThrough && !drop.belowWorld && (leftSupport || bench.itemHullLoad || !slept ||
-      (!moved && gap>=-.5f && gap<=.5f && (drop.axis.quadLength()==0 || angle<=15.f)));
+    // Compare ON/OFF sleep times only on flat/table. Other finite supports
+    // allow a rounded item to roll off, but a supported item must settle.
+    const bool ok=!passedThrough && !drop.belowWorld && (leftSupport || bench.itemHullLoad ||
+      (slept && !moved && gap>=-1.05f && gap<=1.05f+drop.extraPaddingCm && (drop.axis.quadLength()==0 || angle<=15.f)));
     pass&=ok;
     event("item_hulls_result","\"surface\":"+jsonStr(bench.itemHullSurface)+",\"index\":"+std::to_string(i)+
       ",\"symbol\":"+jsonStr(drop.symbol)+",\"label\":"+jsonStr(drop.label)+",\"mass_kg\":"+ragdollNumber(drop.mass)+
       ",\"sleep_ms\":"+(slept?std::to_string(drop.sleepAt):"null")+",\"support_gap_cm\":"+ragdollNumber(gap)+
+      ",\"extra_padding_cm\":"+ragdollNumber(drop.extraPaddingCm)+
+      ",\"gap_max_cm\":"+ragdollNumber(1.05f+drop.extraPaddingCm)+
       ",\"long_axis_degrees\":"+(drop.axis.quadLength()>0?ragdollNumber(angle):"null")+
       ",\"post_sleep_motion_cm\":"+ragdollNumber(drop.maxJitter)+",\"position_cm\":"+ragdollVector(position)+
       ",\"above_support\":"+(!leftSupport?"true":"false")+",\"escaped_edge\":"+(leftSupport?"true":"false")+

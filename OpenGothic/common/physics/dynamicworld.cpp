@@ -1111,31 +1111,72 @@ const DynamicWorld::ItemHull& DynamicWorld::itemHullShape(const ProtoMesh& proto
     return hull;
     }
   const auto& shape=static_cast<const JPH::ConvexHullShape&>(*result.Get());
+  std::vector<JPH::Vec3> directions;
+  directions.reserve(14);
+  for(int x=-1;x<=1;++x)
+    for(int y=-1;y<=1;++y)
+      for(int z=-1;z<=1;++z) {
+        const int nonzero=int(x!=0)+int(y!=0)+int(z!=0);
+        if(nonzero==1 || nonzero==3)
+          directions.push_back(JPH::Vec3(float(x),float(y),float(z)).Normalized());
+        }
   std::vector<JPH::Vec3> inflated;
-  inflated.reserve(shape.GetNumPoints()*26);
-  for(JPH::uint i=0;i<shape.GetNumPoints();++i) {
-    const auto point=shape.GetPoint(i)+shape.GetCenterOfMass();
-    for(int x=-1;x<=1;++x)
-      for(int y=-1;y<=1;++y)
-        for(int z=-1;z<=1;++z) {
-          if(x==0 && y==0 && z==0)continue;
-          const auto direction=JPH::Vec3(float(x),float(y),float(z)).Normalized();
-          inflated.push_back(point+direction*.02f);
-          }
-    }
-  // The collision shell compensates for Jolt's global two centimetre slop.
+  inflated.reserve(shape.GetNumPoints()*14);
+  const auto inflate=[&](float padding) {
+    inflated.clear();
+    for(JPH::uint i=0;i<shape.GetNumPoints();++i) {
+      const auto point=shape.GetPoint(i)+shape.GetCenterOfMass();
+      for(const auto& direction:directions)
+        inflated.push_back(point+direction*padding);
+      }
+    JPH::ConvexHullShapeSettings inflatedSettings(inflated.data(),int(inflated.size()),.00025f);
+    inflatedSettings.mHullTolerance=.0001f;
+    inflatedSettings.mMaxErrorConvexRadius=.0001f;
+    return inflatedSettings.Create();
+    };
+  // One centimetre centres the visible envelope in Jolt's unchanged 2 cm slop.
   // Keep the source envelope for visible support measurements, mass and water.
-  JPH::ConvexHullShapeSettings inflatedSettings(inflated.data(),int(inflated.size()),.00025f);
-  inflatedSettings.mHullTolerance=.0001f;
-  inflatedSettings.mMaxErrorConvexRadius=.0001f;
-  const auto inflatedResult=inflatedSettings.Create();
+  float padding=.01f;
+  auto inflatedResult=inflate(padding);
   if(inflatedResult.HasError()) {
     hull.fallbackReason="Jolt inflated hull: "+std::string(inflatedResult.GetError().c_str());
     return hull;
     }
+  // Inner radius is the shortest COM-to-support-plane distance, including
+  // tilted thin meshes. Rebuilding also accounts for centroid movement.
+  constexpr float minimumInnerRadius=.03f;
+  if(inflatedResult.Get()->GetInnerRadius()<minimumInnerRadius) {
+    float lower=padding,upper=.04f;
+    auto upperResult=inflate(upper);
+    for(int i=0;i<4 && !upperResult.HasError() && upperResult.Get()->GetInnerRadius()<minimumInnerRadius;++i) {
+      lower=upper;upper*=2.f;upperResult=inflate(upper);
+      }
+    if(upperResult.HasError()) {
+      hull.fallbackReason="Jolt inflated hull: "+std::string(upperResult.GetError().c_str());
+      return hull;
+      }
+    if(upperResult.Get()->GetInnerRadius()<minimumInnerRadius) {
+      hull.fallbackReason="inflated hull cannot reach the minimum inner radius";
+      return hull;
+      }
+    for(int i=0;i<16 && upper-lower>.000001f;++i) {
+      const float middle=(lower+upper)*.5f;
+      auto middleResult=inflate(middle);
+      if(middleResult.HasError()) {
+        hull.fallbackReason="Jolt inflated hull: "+std::string(middleResult.GetError().c_str());
+        return hull;
+        }
+      if(middleResult.Get()->GetInnerRadius()>=minimumInnerRadius) {
+        upper=middle;upperResult=std::move(middleResult);
+        }
+      else lower=middle;
+      }
+    padding=upper;inflatedResult=std::move(upperResult);
+    }
   hull.originalShape=result.Get();
   hull.shape=inflatedResult.Get();
   hull.volume=volume;
+  hull.extraPaddingCm=(padding-.01f)*100.f;
   hull.vertices.clear();
   hull.vertices.reserve(shape.GetNumPoints());
   for(JPH::uint i=0;i<shape.GetNumPoints();++i)
