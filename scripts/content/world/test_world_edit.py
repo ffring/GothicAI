@@ -22,7 +22,8 @@ MATERIALS = [{'name': 'TEST_A', 'texture': 'TEST_A.TGA'}, {'name': 'TEST_B', 'te
 
 
 def write_glb(path, primitives, materials=MATERIALS):
-    """A chunk as the converter writes it: per primitive POSITION, NORMAL, TEXCOORD_0, _VERTEX, indices."""
+    """A chunk as the converter writes it: per primitive POSITION, NORMAL, TEXCOORD_0, _VERTEX, indices; a
+    primitive with a fifth item, the vertex light (0..1 per vertex), also gets _FEATURE and COLOR_0 (RGBA bytes)."""
     binary = bytearray()
     views, accessors, prims = [], [], []
 
@@ -41,13 +42,18 @@ def write_glb(path, primitives, materials=MATERIALS):
         accessors.append(acc)
         return len(accessors) - 1
 
-    for material, positions, ids, triangles in primitives:
+    for material, positions, ids, triangles, *light in primitives:
         pos = np.array(positions, np.float32)
         n = len(pos)
         attrs = {'POSITION': add(pos, 'VEC3', 5126, 34962, True),
                  'NORMAL': add(np.tile(np.float32([0, 1, 0]), (n, 1)), 'VEC3', 5126, 34962),
                  'TEXCOORD_0': add(pos[:, [0, 2]] / 100, 'VEC2', 5126, 34962),
                  '_VERTEX': add(np.array(ids, np.float32), 'SCALAR', 5126, 34962)}
+        if light:
+            attrs['_FEATURE'] = add(np.array(ids, np.float32), 'SCALAR', 5126, 34962)
+            grey = np.rint(np.array(light[0], np.float32) * 255).astype(np.uint8)
+            attrs['COLOR_0'] = add(np.stack([grey, grey, grey, np.full(n, 255, np.uint8)], 1), 'VEC4', 5121, 34962)
+            accessors[attrs['COLOR_0']]['normalized'] = True
         prims.append({'attributes': attrs, 'indices': add(np.array(triangles, np.uint32).reshape(-1), 'SCALAR', 5125, 34963),
                       'material': material, 'mode': 4})
     doc = {'asset': {'version': '2.0'}, 'scene': 0, 'scenes': [{'nodes': [0]}],
@@ -155,6 +161,23 @@ def test_same_geometry_ignores_order(tmp_path):
     assert chunk_glb.same_geometry(tmp_path / 'a.glb', tmp_path / 'c.glb')
 
 
+def test_check_catches_a_changed_vertex_light(tmp_path):
+    # two materials with their own light; the export that dropped COLOR_0 turned the second one white
+    pos, ids, tris = grid(0, 2)
+    half = len(tris) // 2
+    light = [0.2 + 0.05 * k for k in range(len(pos))]
+    base = tmp_path / 'base/0_0.glb'
+    write_glb(base, [(0, pos, ids, tris[:half], light), (1, pos, ids, tris[half:], light)])
+    write_glb(tmp_path / 'same.glb', [(0, pos, ids, tris[:half], light), (1, pos, ids, tris[half:], light)])
+    same = chunk_glb.check(base, tmp_path / 'same.glb', world_json=tmp_path / 'none.json')
+    assert not any('vertex light' in p for p in same.problems)
+    assert same.summary['light']['checked'] == 3 * len(tris) and same.summary['light']['other'] == 0
+    write_glb(tmp_path / 'white.glb', [(0, pos, ids, tris[:half], light), (1, pos, ids, tris[half:], [1.0] * len(pos))])
+    white = chunk_glb.check(base, tmp_path / 'white.glb', world_json=tmp_path / 'none.json')
+    assert any(p.startswith('vertex light') and '(TEST_B)' in p for p in white.problems)
+    assert white.summary['light']['other'] == 3 * (len(tris) - half)
+
+
 # --- Blender
 
 def have_blender():
@@ -216,6 +239,25 @@ def test_build_adds_edits_up_and_records_them(tmp_path, capsys):
     code, _, _ = build(tmp_path, base)
     assert code == 0 and out.stat().st_mtime_ns == before
     assert 'left as it is' in capsys.readouterr().out
+
+
+@blender
+def test_build_keeps_the_light_of_every_material(tmp_path, capsys):
+    # Blender 5.2's exporter wrote COLOR_0 for the first material only (world_bpy.keep_vertex_light)
+    base = world(tmp_path)
+    pos, ids, tris = grid(0, 2)
+    half = len(tris) // 2
+    light = [0.2 + 0.05 * k for k in range(len(pos))]
+    write_glb(base / 'worlds/TESTWORLD/chunks/0_0.glb', [(0, pos, ids, tris[:half], light),
+                                                          (1, pos, ids, tris[half:], light)])
+    code, staging, _ = build(tmp_path, base, '--set', 'test-1', '--chunk', 'TESTWORLD/0_0', *edit_args('add_post'))
+    out = capsys.readouterr().out
+    assert code == 0, out
+    assert 'changed' in out and ', 0 changed' in out
+    chunk = chunk_glb.read_chunk(staging / 'test-1/worlds/TESTWORLD/chunks/0_0.glb')
+    new = [c for p in chunk.primitives for v, c in zip(p.vertex_ids.reshape(-1), p.colors.reshape(-1, 4)) if v < 0]
+    # the post takes the light of the base around it, neither white nor black
+    assert new and all(0.15 < c[0] < 0.7 for c in new)
 
 
 # --- rebuilds of the published chunks
