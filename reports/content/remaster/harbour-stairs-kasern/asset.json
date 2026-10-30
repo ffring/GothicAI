@@ -1,0 +1,38 @@
+{
+  "asset": "harbour-stairs-kasern",
+  "title": "Лестница от порта к казармам",
+  "kind": "building",
+  "created": "2026-10-30",
+  "goal": "the same Gothic, better made",
+  "namespaces": [
+    "harbour-stairs-kasern"
+  ],
+  "sources": [],
+  "selected": {},
+  "reviews": [
+    {
+      "id": "r3-stairs-yard",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-30"
+    },
+    {
+      "id": "r3-stairs-close",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-30"
+    },
+    {
+      "id": "r3-stairs-landing",
+      "stage": "ingame",
+      "mode": "blind",
+      "verdict": "pending",
+      "date": "2026-10-30"
+    }
+  ],
+  "gates": [],
+  "build": null,
+  "backup": null
+}

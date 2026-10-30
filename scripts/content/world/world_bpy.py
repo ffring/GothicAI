@@ -6,7 +6,7 @@ Blender 5.2, started by world_edit.py (world_edit_blender.py is the entry):
 
 job.json: {"base": <base chunk .glb>, "out": <edited .glb>, "allowed": <allowed.json>, "meta": <meta.json>,
 "edits": [<edit .py>, ...], "names": {<edit .py>: <path in git>}, "world": <WORLD>, "repo": <repository>,
-"gui": false}. The base chunk is imported twice: the chunk the edits change, and the original as an underlay to
+"chunk": <x>_<z>, "base_chunks": <the base's chunks folder>, "gui": false}. The base chunk is imported twice: the chunk the edits change, and the original as an underlay to
 measure against (wireframe, cannot be selected, not rendered). Each edit is a script with one function,
 `edit(ctx)`, run in order on the same mesh, so edits of several steps in one chunk add up. The underlay is removed
 before the export (and before any save of a .blend in the GUI). allowed.json gets the open edges each edit
@@ -43,14 +43,16 @@ def gothic_name(material):
 
 
 class Context:
-    """What an edit gets: the chunk's object and mesh, the underlay, the chunk's name, and allow_open."""
+    """What an edit gets: the chunk's object and mesh, the underlay, the chunk's name, the base's chunks folder
+    (to read a neighbour: something that lies across the chunk border), and allow_open."""
 
-    def __init__(self, obj, underlay, world, chunk):
+    def __init__(self, obj, underlay, world, chunk, base_chunks=None):
         self.obj = obj
         self.mesh = obj.data
         self.underlay = underlay
         self.world = world
         self.chunk = chunk
+        self.base_chunks = Path(base_chunks) if base_chunks else None
         self.edit = None
         self.allowed = []     # [{'edit', 'reason', 'edges': [[a, b], ...]}]
 
@@ -117,8 +119,8 @@ def main(job_path):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     obj = import_chunk(job['base'])
     underlay = make_underlay(import_chunk(job['base']))
-    world, chunk = job.get('world', ''), Path(job['base']).stem
-    ctx = Context(obj, underlay, world, chunk)
+    world, chunk = job.get('world', ''), job.get('chunk') or Path(job['base']).stem
+    ctx = Context(obj, underlay, world, chunk, job.get('base_chunks'))
     meta = {}
     for path in job['edits']:
         ctx.edit = job.get('names', {}).get(path, path)

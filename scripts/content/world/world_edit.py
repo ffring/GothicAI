@@ -241,6 +241,7 @@ def cmd_build(a) -> int:
     out.unlink(missing_ok=True)
     job = {'base': str(base_copy), 'out': str(out), 'allowed': str(work / 'allowed.json'),
            'meta': str(work / 'meta.json'), 'world': world, 'gui': bool(a.gui), 'repo': str(REPO),
+           'chunk': name, 'base_chunks': str(src.parent),
            'edits': [str(REPO / e) for e in edits], 'names': {str(REPO / e): e for e in edits}}
     print(f'{a.id}: {chunk} of {base.name}, edits {", ".join(edits)}')
     run_blender(job, work, gui=a.gui)
