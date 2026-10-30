@@ -72,12 +72,16 @@ def cadence_rows(step_ms, zone_ms=1):
 def test_perf_content_arguments_and_abba(monkeypatch, tmp_path):
     args = content.parse_args(["none", "working-8"])
     assert args.places == ["harbour", "market"]
+    assert (args.noise_pct, args.threshold_pct) == (2, 5)
+    args = content.parse_args(["none", "working-8", "--noise-pct", "1", "--threshold-pct", "3"])
+    assert (args.noise_pct, args.threshold_pct) == (1, 3)
     for invalid in (["../working-8", "none"], ["none", "working-8", "unknown"]):
         with pytest.raises(SystemExit):
             content.parse_args(invalid)
     calls = []
     monkeypatch.setattr(content.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs["env"])))
-    monkeypatch.setattr(content, "write_report", lambda directory: None)
+    reports = []
+    monkeypatch.setattr(content, "write_report", lambda *values: reports.append(values))
     monkeypatch.setenv("PERF_ENV", "OPENGOTHIC_CONTENT=/wrong OPENGOTHIC_FOOTIK=0")
     content.run_attempts(tmp_path, tmp_path / "content", args)
     assert [command[-1] for command, _ in calls] == ["harbour"] * 4 + ["market"] * 4
@@ -85,10 +89,12 @@ def test_perf_content_arguments_and_abba(monkeypatch, tmp_path):
                                                                str(tmp_path / "content/working-8"), ""] * 2
     assert all(env["PERF_REPEAT"] == "1" and env["NO_BUILD"] == "1" and "/wrong" not in env["PERF_ENV"]
                for _, env in calls)
+    assert reports == [(tmp_path, 1, 3)]
 
 
-@pytest.mark.parametrize("b_ms,within", [(10.5, True), (10.6, False), (9, True)])
-def test_perf_content_recorded_delta_threshold_and_counters(tmp_path, b_ms, within):
+@pytest.mark.parametrize("b_ms,verdict", [(10.1, "в шуме"), (10.5, "в пороге"),
+                                         (10.6, "сверх порога"), (9, "в пороге")])
+def test_perf_content_recorded_delta_threshold_and_counters(tmp_path, b_ms, verdict):
     (tmp_path / "metadata.json").write_text(json.dumps({"places": ["market"]}))
     for side, steps in (("A", (9, 11)), ("B", (b_ms, b_ms))):
         for repeat, step in enumerate(steps, 1):
@@ -104,7 +110,7 @@ def test_perf_content_recorded_delta_threshold_and_counters(tmp_path, b_ms, with
     assert data["p50"]["delta_pct"] == pytest.approx((b_ms / 10 - 1) * 100)
     # Pooled A p95 is 11 ms, so these B values all satisfy the p95 gate.
     assert data["within_threshold"] is True
-    assert data["p50"]["within_noise"] is True
+    assert "within_noise" not in data["p50"]
     assert data["p50"]["spread_a_ms"] == 2
     assert data["counters"]["A"] == {"triangles": 12000, "draw_calls": 40,
                                        "completed_frames": 38, "submitted_frames": 40}
@@ -114,8 +120,15 @@ def test_perf_content_recorded_delta_threshold_and_counters(tmp_path, b_ms, with
                 for view in range(1, 5) for frame in range(5)]
         profile(path.parent, rows, geometry=True)
     result = content.comparison(tmp_path)
-    assert result["places"]["market"]["within_threshold"] is within
-    assert ("в пороге" if within else "сверх порога") in content.table(result)
+    assert result["noise_p95_pct"] == 2
+    assert result["threshold_p95_pct"] == 5
+    assert result["places"]["market"]["p95_verdict"] == verdict
+    assert verdict in content.table(result)
+    custom = content.comparison(tmp_path, noise_pct=6, threshold_pct=10)
+    assert custom["places"]["market"]["p95_verdict"] == ("в пороге" if b_ms == 9 else "в шуме")
+    assert (custom["noise_p95_pct"], custom["threshold_p95_pct"]) == (6, 10)
+    assert [content.p95_verdict(value, 2, 5) for value in (-2, 2, -2.01, 2.01, 5, 5.01)] == [
+        "в шуме", "в шуме", "в пороге", "в пороге", "в пороге", "сверх порога"]
 
 
 def test_percentiles_dynamic_columns_segments_and_no_gpu(tmp_path):

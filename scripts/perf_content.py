@@ -19,6 +19,7 @@ import perf_report
 ROOT = Path(__file__).resolve().parents[1]
 PLACES = ("harbour", "market", "forest", "interior", "combat")
 ORDER = ("A", "B", "B", "A")
+NOISE_PCT = 2.0
 THRESHOLD_PCT = 5.0
 
 
@@ -33,10 +34,14 @@ def parse_args(argv):
     parser.add_argument("a", type=content_name)
     parser.add_argument("b", type=content_name)
     parser.add_argument("places", nargs="*", choices=PLACES)
+    parser.add_argument("--noise-pct", type=float, default=NOISE_PCT, help="p95 noise band in percent (default: 2)")
+    parser.add_argument("--threshold-pct", type=float, default=THRESHOLD_PCT, help="p95 increase limit in percent (default: 5)")
     args = parser.parse_args(argv)
     args.places = args.places or ["harbour", "market"]
     if len(set(args.places)) != len(args.places):
         parser.error("places must not repeat")
+    if not 0 <= args.noise_pct <= args.threshold_pct < float("inf"):
+        parser.error("require finite 0 <= noise-pct <= threshold-pct")
     return args
 
 
@@ -59,7 +64,13 @@ def tree_sha(directory):
     return digest.hexdigest()
 
 
-def comparison(directory):
+def p95_verdict(delta_pct, noise_pct, threshold_pct):
+    if abs(delta_pct) <= noise_pct:
+        return "в шуме"
+    return "в пороге" if delta_pct <= threshold_pct else "сверх порога"
+
+
+def comparison(directory, noise_pct=NOISE_PCT, threshold_pct=THRESHOLD_PCT):
     directory = Path(directory)
     metadata = json.loads((directory / "metadata.json").read_text())
     sides = {side: perf_report.build_report(directory / side) for side in ("A", "B")}
@@ -89,7 +100,8 @@ def comparison(directory):
             change["spread_a_ms"], change["spread_b_ms"] = (
                 max(values) - min(values) for data in (left, right)
                 for values in [[get(repeat["summary"]) for repeat in data["repeats"]]])
-            change["noise_pct"] = change["noise"] * 100 / change["a"]
+            # Repeat spread remains descriptive; calibration defines the noise band.
+            del change["noise"], change["within_noise"]
             changes[metric] = change
         counters = {}
         for side, data in (("A", left), ("B", right)):
@@ -106,48 +118,62 @@ def comparison(directory):
             counters[side] = {name: statistics.fmean(row[name] for row in frames)
                               for name in ("triangles", "draw_calls")}
             counters[side].update(completed_frames=len(frames), submitted_frames=submitted)
-        places[place] = {**changes, "within_threshold": changes["p95"]["delta_pct"] <= THRESHOLD_PCT,
+        places[place] = {**changes, "within_threshold": changes["p95"]["delta_pct"] <= threshold_pct,
+                         "p95_verdict": p95_verdict(changes["p95"]["delta_pct"], noise_pct, threshold_pct),
                          "counters": counters,
                          "repeats": {side: [{"p50_ms": row["summary"]["frame_ms"]["p50"],
                                               "p95_ms": row["summary"]["frame_ms"]["p95"],
                                               "frames": row["summary"]["frames"]}
                                              for row in sides[side]["places"][place]["repeats"]]
                                      for side in ("A", "B")}}
-    return {"metadata": metadata, "threshold_p95_pct": THRESHOLD_PCT,
+    return {"metadata": metadata, "noise_p95_pct": noise_pct, "threshold_p95_pct": threshold_pct,
             "drawable": list(next(iter(drawables))), "timing": perf_report.TIMING,
-            "noise_method": "Absolute delta <= larger A/B max-min repeat spread. "
+            "noise_method": "Absolute p95 delta <= calibrated noise band in percent. "
+                            "Repeat max-min spread is descriptive only. "
                             "Percentiles pool frame intervals from both repeats.",
             "places": places}
 
 
 def table(report):
-    lines = ["| Место | p50 A, мс | p50 B, мс | Δ p50 | Разброс p50 A / B, мс | p95 A, мс | p95 B, мс | Δ p95 | Разброс p95 A / B, мс | Порог p95 ≤ +5% |",
+    lines = ["| Место | p50 A, мс | p50 B, мс | Δ p50 | Разброс p50 A / B, мс | p95 A, мс | p95 B, мс | Δ p95 | Разброс p95 A / B, мс | Вердикт p95 |",
              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
     for place, data in report["places"].items():
         a, b = data["p50"], data["p95"]
-        label = "в пороге" if data["within_threshold"] else "сверх порога"
+        label = data["p95_verdict"]
         lines.append(f"| {place} | {a['a']:.3f} | {a['b']:.3f} | {a['delta_pct']:+.2f}% | "
                      f"{a['spread_a_ms']:.3f} / {a['spread_b_ms']:.3f} | "
                      f"{b['a']:.3f} | {b['b']:.3f} | {b['delta_pct']:+.2f}% | "
                      f"{b['spread_a_ms']:.3f} / {b['spread_b_ms']:.3f} | {label} |")
-    lines += ["", "| Место | Треугольники/кадр A | Треугольники/кадр B | Draw calls/кадр A | Draw calls/кадр B | Модуль Δ p50 ≤ разброс |",
-              "|---|---:|---:|---:|---:|---|"]
+    lines += ["", "| Место | Треугольники/кадр A | Треугольники/кадр B | Draw calls/кадр A | Draw calls/кадр B |",
+              "|---|---:|---:|---:|---:|"]
     for place, data in report["places"].items():
         a, b = (data["counters"][side] for side in ("A", "B"))
-        label = "да" if data["p50"]["within_noise"] else "нет"
         lines.append(f"| {place} | {a['triangles']:.0f} | {b['triangles']:.0f} | "
-                     f"{a['draw_calls']:.1f} | {b['draw_calls']:.1f} | {label} |")
+                     f"{a['draw_calls']:.1f} | {b['draw_calls']:.1f} |")
     return "\n".join(lines)
 
 
-def write_report(directory):
-    report = comparison(directory)
+def write_report(directory, noise_pct=NOISE_PCT, threshold_pct=THRESHOLD_PCT, output=None):
+    report = comparison(directory, noise_pct, threshold_pct)
     meta = report["metadata"]
+    report["conclusions"] = []
+    if meta["a"] != meta["b"]:
+        for place, data in report["places"].items():
+            a, b = (data["counters"][side] for side in ("A", "B"))
+            triangles = b["triangles"] - a["triangles"]
+            report["conclusions"].append(
+                f"{place}: {triangles / 1000:+.0f} тыс. треугольников "
+                f"({triangles * 100 / a['triangles']:+.1f}%) и "
+                f"{b['draw_calls'] - a['draw_calls']:+.1f} вызова отрисовки на кадр; "
+                f"время кадра — {data['p95_verdict']} (Δ p95 {data['p95']['delta_pct']:+.2f}%).")
     markdown = (f"# Цена контента квартала\n\nA: `{meta['a']}`; B: `{meta['b']}`. "
                 f"Ryzen, Vulkan, drawable {report['drawable'][0]}×{report['drawable'][1]}.\n\n"
                 f"Commit: `{meta['git_commit']}`; dirty files: {meta['dirty_files']}. "
                 f"Порядок каждого места: A B B A, одна сборка и одна заявка `gq quiet`.\n\n"
-                + table(report) + "\n\n" + report["timing"] + "\n\n"
+                f"Вердикт p95: «в шуме» при модуле Δ ≤ {noise_pct:g}%; "
+                f"«в пороге» при Δ ≤ +{threshold_pct:g}% вне шума; «сверх порога» иначе.\n\n"
+                + table(report) + "\n\n" + "\n\n".join(report["conclusions"]) + "\n\n"
+                + report["timing"] + "\n\n"
                 + report["noise_method"] + "\n\n"
                 + "Треугольники: Vulkan clipping-stage input primitives, все треугольные проходы "
                 "(включая indirect/mesh, тени, глубину, UI и post). Draw calls: команды "
@@ -156,7 +182,9 @@ def write_report(directory):
                 "доля завершения — в JSON. Запросы читаются после штатного fence без дополнительного ожидания.\n\n"
                 + f"CSV и журналы: `{meta['archive']}`.\n\n"
                 + "SHA-256 наборов: `" + json.dumps(meta["content_sha256"], sort_keys=True) + "`.\n")
-    perf_report.write_outputs(Path(directory), "report", report, markdown)
+    destination = Path(directory if output is None else output)
+    destination.mkdir(parents=True, exist_ok=True)
+    perf_report.write_outputs(destination, "report", report, markdown)
     print(table(report), flush=True)
 
 
@@ -178,7 +206,7 @@ def run_attempts(directory, content, args):
             out = directory / side / f"attempt-{counts[side]}"
             print(f"perf-content: {place} {side}={name}, repeat {counts[side]}/2", flush=True)
             subprocess.run(["bash", str(ROOT / "scripts/perf.sh"), "__run", str(out), place], env=env, check=True)
-    write_report(directory)
+    write_report(directory, args.noise_pct, args.threshold_pct)
 
 
 def launch(args):
@@ -243,7 +271,8 @@ def launch(args):
                              os.environ.get("RYZEN_LOCK_WAIT", "3600"), "--name", "content perf ABBA",
                              "--archive", remote_out, "--", "env", *environment, "python3",
                              source + "/scripts/perf_content.py", "__run", remote_out, task + "/content",
-                             args.a, args.b, *args.places])
+                             args.a, args.b, *args.places, "--noise-pct", str(args.noise_pct),
+                             "--threshold-pct", str(args.threshold_pct)])
     # Fetch only small final artifacts; raw attempts stay in the checksum-verified archive.
     for name in ("report.md", "report.json"):
         remote_path = archive if result.returncode == 0 else remote_out

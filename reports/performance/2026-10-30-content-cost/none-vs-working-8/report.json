@@ -26,13 +26,14 @@
       "PERF_INI": ""
     }
   },
+  "noise_p95_pct": 2.0,
   "threshold_p95_pct": 5.0,
   "drawable": [
     1728,
     1117
   ],
   "timing": "Frame intervals are differences between consecutive submitted attempt begin_ns timestamps in the same contiguous perf-PLACE/view-N segment. Intervening FenceBusy attempts count toward elapsed time and zone costs, never as rendered frames. Partial time before the first and after the last submitted attempt of each segment is omitted. FPS is interval count / measured wall time; percentiles use linear interpolation. appcadence.csv is retained as a clock diagnostic, not used for these statistics.",
-  "noise_method": "Absolute delta <= larger A/B max-min repeat spread. Percentiles pool frame intervals from both repeats.",
+  "noise_method": "Absolute p95 delta <= calibrated noise band in percent. Repeat max-min spread is descriptive only. Percentiles pool frame intervals from both repeats.",
   "places": {
     "harbour": {
       "p50": {
@@ -40,24 +41,19 @@
         "b": 9.685258000000001,
         "delta": 0.05111000000000132,
         "delta_pct": 0.5305087694314155,
-        "noise": 0.07399949999999933,
-        "within_noise": true,
         "spread_a_ms": 0.07399949999999933,
-        "spread_b_ms": 0.06713699999999889,
-        "noise_pct": 0.7680959437201851
+        "spread_b_ms": 0.06713699999999889
       },
       "p95": {
         "a": 10.5722495,
         "b": 10.459126649999998,
         "delta": -0.11312285000000166,
         "delta_pct": -1.069997922391083,
-        "noise": 0.3005425499999994,
-        "within_noise": true,
         "spread_a_ms": 0.3005425499999994,
-        "spread_b_ms": 0.09341679999999997,
-        "noise_pct": 2.842749312717217
+        "spread_b_ms": 0.09341679999999997
       },
       "within_threshold": true,
+      "p95_verdict": "в шуме",
       "counters": {
         "A": {
           "triangles": 1123291.3964128287,
@@ -105,24 +101,19 @@
         "b": 9.987688,
         "delta": -0.024696999999999747,
         "delta_pct": -0.24666450600930495,
-        "noise": 0.06808799999999948,
-        "within_noise": true,
         "spread_a_ms": 0.06808799999999948,
-        "spread_b_ms": 0.032261000000000095,
-        "noise_pct": 0.6800377732178645
+        "spread_b_ms": 0.032261000000000095
       },
       "p95": {
         "a": 10.877129649999999,
         "b": 10.8570292,
         "delta": -0.02010044999999927,
         "delta_pct": -0.18479553564941897,
-        "noise": 0.18178179999999955,
-        "within_noise": true,
         "spread_a_ms": 0.06631065000000014,
-        "spread_b_ms": 0.18178179999999955,
-        "noise_pct": 1.671229504927337
+        "spread_b_ms": 0.18178179999999955
       },
       "within_threshold": true,
+      "p95_verdict": "в шуме",
       "counters": {
         "A": {
           "triangles": 1057692.3897613066,
@@ -164,5 +155,9 @@
         ]
       }
     }
-  }
+  },
+  "conclusions": [
+    "harbour: +142 тыс. треугольников (+12.7%) и +1.0 вызова отрисовки на кадр; время кадра — в шуме (Δ p95 -1.07%).",
+    "market: +106 тыс. треугольников (+10.0%) и +1.0 вызова отрисовки на кадр; время кадра — в шуме (Δ p95 -0.18%)."
+  ]
 }
