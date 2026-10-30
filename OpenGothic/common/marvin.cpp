@@ -187,6 +187,7 @@ Marvin::Marvin() {
     {"toggle destruction",        C_ToggleDestruction},
     {"toggle buoyancy",           C_ToggleBuoyancy},
     {"toggle cloth",              C_ToggleCloth},
+    {"toggle item_wake",          C_ToggleItemWake},
     {"toggle character_virtual",  C_ToggleCharacterVirtual},
     {"toggle npc_character_virtual",C_ToggleNpcCharacterVirtual},
     {"toggle monster_character_virtual",C_ToggleMonsterCharacterVirtual},
@@ -610,6 +611,12 @@ bool Marvin::exec(std::string_view v) {
       const bool enabled = !Gothic::physicsFlags().cloth;
       Gothic::settingsSetI("GAME","cloth",enabled ? 1 : 0);
       print(enabled ? "Cloth: ON" : "Cloth: OFF");
+      return true;
+      }
+    case C_ToggleItemWake: {
+      const bool enabled = !Gothic::physicsFlags().itemWake;
+      Gothic::settingsSetI("GAME","item_wake",enabled ? 1 : 0);
+      print(enabled ? "Item wake: ON" : "Item wake: OFF");
       return true;
       }
     case C_ToggleCharacterVirtual: {

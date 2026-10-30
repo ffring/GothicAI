@@ -811,6 +811,19 @@ DynamicWorld::DynamicWorld(World* owner, const asset::WorldMesh& worldMesh, cons
   bboxList  .reset(new BBoxList   (*this));
 
   if(owner!=nullptr) {
+    world->setItemWakeCallback([owner](const Tempest::Vec3& min,const Tempest::Vec3& max,size_t budget) {
+      const auto center=(min+max)*.5f;
+      const float radius=(max-min).length()*.5f;
+      size_t created=0;
+      owner->detectItem(center,radius,[&](::Item& item) {
+        const auto p=item.position();
+        if(p.x<min.x || p.x>max.x || p.y<min.y || p.y>max.y || p.z<min.z || p.z>max.z)
+          return;
+        if(item.isDynamic() || created<budget)
+          created+=item.wakePhysics() ? 1 : 0;
+        });
+      return created;
+      });
     world->setItemHitCallback([owner](::Item& itm, asset::MaterialGroup mat, float impulse, float mass) {
       auto  snd = owner->addLandHitEffect(ItemMaterial(itm.handle().material),mat,itm.transform());
       float v   = impulse/mass;
@@ -1409,6 +1422,10 @@ void DynamicWorld::setBuoyancyEnabled(bool enabled) {
   world->setBuoyancyEnabled(enabled);
   }
 
+void DynamicWorld::setItemWakeEnabled(bool enabled) {
+  world->setItemWakeEnabled(enabled);
+  }
+
 bool DynamicWorld::buoyancyEnabled() const {
   return world->buoyancyEnabled();
   }
@@ -1987,6 +2004,10 @@ std::vector<DynamicWorld::WaterBodySnapshot> DynamicWorld::waterBodySnapshot() c
     entry.transform=native.transform;
     entry.worldBounds[0]=native.worldBounds[0];
     entry.worldBounds[1]=native.worldBounds[1];
+    entry.collisionBounds[0]=native.collisionBounds[0];
+    entry.collisionBounds[1]=native.collisionBounds[1];
+    if(native.body!=nullptr && native.body->ptrType()==P_Item)
+      entry.item=static_cast<const ::Item*>(native.body->payload());
     entry.velocity=native.velocity;
     entry.mass=native.mass;
     entry.density=native.density;
@@ -2493,6 +2514,7 @@ DynamicWorld::PhysicsStats DynamicWorld::physicsStats() const {
   return {world->stepMilliseconds(),world->bodyCount(),world->rayCount()};
   }
 
+uint64_t DynamicWorld::simulationStep() const { return world->simulationStep(); }
 void DynamicWorld::configureMeleeBench(int substeps) { world->configureMeleeBench(substeps); }
 void DynamicWorld::updateMeleeBlade(const Npc* owner,const Tempest::Matrix4x4& hand,float lengthCm) { world->updateMeleeBlade(owner,hand,lengthCm); }
 void DynamicWorld::removeMeleeBlade(const Npc* owner) { world->removeMeleeBlade(owner); }
@@ -3127,7 +3149,9 @@ void DynamicWorld::Item::restorePhysics(const Tempest::Matrix4x4& matrix, bool s
                                       const Tempest::Vec3& velocity, const Tempest::Vec3& angular) {
   if(obj==nullptr || obj->body==nullptr) return;
   obj->body->restoreTransform(matrix,sleeping);
-  if(!sleeping) obj->body->setVelocity(velocity,angular);
+  // A nonfinite restore recovered to rest; do not overwrite its zero velocity.
+  if(!sleeping && std::isfinite(matrix.at(3,0)) && std::isfinite(matrix.at(3,1)) && std::isfinite(matrix.at(3,2)))
+    obj->body->setVelocity(velocity,angular);
   }
 
 float DynamicWorld::Item::mass() const {
@@ -3144,6 +3168,11 @@ Tempest::Vec3 DynamicWorld::Item::angularVelocity() const {
 
 bool DynamicWorld::Item::isSleeping() const {
   return obj==nullptr || obj->body==nullptr || obj->body->isSleeping();
+  }
+
+void DynamicWorld::Item::retainForItemWake() {
+  if(obj!=nullptr && obj->body!=nullptr)
+    obj->body->retainForItemWake();
   }
 
 bool DynamicWorld::Item::touchedByNpc() const {

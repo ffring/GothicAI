@@ -229,6 +229,7 @@ class DynamicWorld final {
         Tempest::Vec3 velocity() const; // centimetres/second; zero without dynamics
         Tempest::Vec3 angularVelocity() const; // world radians/second; zero without dynamics
         bool isSleeping() const;
+        void retainForItemWake();
         bool touchedByNpc() const;
         // World-space newton seconds (kg * metres/second), with native wake.
         bool addImpulse(const Tempest::Vec3& impulseNs, Npc* culprit = nullptr);
@@ -419,6 +420,7 @@ class DynamicWorld final {
     void           setMovableVobsEnabled(bool enabled);
     void           setDestructionEnabled(bool enabled);
     void           setBuoyancyEnabled(bool enabled);
+    void           setItemWakeEnabled(bool enabled);
     bool           buoyancyEnabled() const;
     bool           destructionEnabled() const;
     Cloth&         cloth();
@@ -480,6 +482,7 @@ class DynamicWorld final {
     struct WaterBodySnapshot {
       uintptr_t id = 0, parentId = 0;
       const Ragdoll* ragdoll = nullptr;
+      const ::Item* item = nullptr;
       uint32_t bone = 0;
       float targetFraction = 0;
       uint32_t zenId = uint32_t(-1);
@@ -487,7 +490,7 @@ class DynamicWorld final {
       int category = C_Null;
       std::string visual;
       Tempest::Matrix4x4 transform;
-      Tempest::Vec3 worldBounds[2], velocity;
+      Tempest::Vec3 worldBounds[2], collisionBounds[2], velocity;
       float mass = 0, density = 0, waterY = 0, submergedFraction = 0;
       bool sleeping = true, inWater = false;
       };
@@ -585,6 +588,7 @@ class DynamicWorld final {
       uint64_t rays = 0;
       };
     PhysicsStats physicsStats() const;
+    uint64_t simulationStep() const;
 
     // Called explicitly by the runner; ordinary worlds never build a navmesh.
     NavMesh::Geometry navigationGeometry() const;
