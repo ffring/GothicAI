@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 
 import pytest
 
@@ -11,6 +12,8 @@ import pytest
 SPEC = importlib.util.spec_from_file_location("perf_report", Path(__file__).parents[1] / "perf_report.py")
 report = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(report)
+sys.path.insert(0, str(Path(__file__).parents[1]))
+import perf_content as content
 
 
 @pytest.mark.parametrize("cache", (None, "/custom/base-cache"))
@@ -33,7 +36,7 @@ TASK=/remote/task
     assert environment.get("OPENGOTHIC_BASE_CACHE") == cache
 
 
-def profile(directory, rows, gpu=False, extra_zone=False):
+def profile(directory, rows, gpu=False, extra_zone=False, geometry=False):
     directory.mkdir(parents=True, exist_ok=True)
     fields = ["attempt", "segment", "begin_ns", "end_ns", "observer_ns", "outcome", "overflow",
               "encode_ns", "encode_calls", "encode_first_ns", "encode_last_ns", "palette_bytes"]
@@ -41,6 +44,8 @@ def profile(directory, rows, gpu=False, extra_zone=False):
         fields += ["gpu_ns", "gpu_done", "gpu_buffers"]
     if extra_zone:
         fields += ["p30_ns", "p30_calls", "p30_first_ns", "p30_last_ns"]
+    if geometry:
+        fields += ["triangles", "draw_calls", "geometry_done"]
     with (directory / "frameprofile.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fields)
         writer.writeheader()
@@ -49,16 +54,68 @@ def profile(directory, rows, gpu=False, extra_zone=False):
             values.update(attempt=index, segment="perf-market/view-1", outcome=1,
                           begin_ns=index * 10_000_000, encode_ns=1_000_000,
                           encode_calls=1, palette_bytes=1024)
+            if geometry:
+                values.update(triangles=12000, draw_calls=40, geometry_done=1)
             values.update(row)
             values["end_ns"] = values["begin_ns"] + 2_000_000
             writer.writerow(values)
-    (directory / "metadata.json").write_text(json.dumps({"git_commit": "abc123", "drawable": [1728, 1117]}))
+    (directory / "metadata.json").write_text(json.dumps({"git_commit": "abc123", "drawable": [1728, 1117],
+                                                       "drawable_width": 1728, "drawable_height": 1117}))
     return directory
 
 
 def cadence_rows(step_ms, zone_ms=1):
     return [{"begin_ns": index * step_ms * 1_000_000, "encode_ns": int(zone_ms * 1_000_000)}
             for index in range(5)]
+
+
+def test_perf_content_arguments_and_abba(monkeypatch, tmp_path):
+    args = content.parse_args(["none", "working-8"])
+    assert args.places == ["harbour", "market"]
+    for invalid in (["../working-8", "none"], ["none", "working-8", "unknown"]):
+        with pytest.raises(SystemExit):
+            content.parse_args(invalid)
+    calls = []
+    monkeypatch.setattr(content.subprocess, "run", lambda command, **kwargs: calls.append((command, kwargs["env"])))
+    monkeypatch.setattr(content, "write_report", lambda directory: None)
+    monkeypatch.setenv("PERF_ENV", "OPENGOTHIC_CONTENT=/wrong OPENGOTHIC_FOOTIK=0")
+    content.run_attempts(tmp_path, tmp_path / "content", args)
+    assert [command[-1] for command, _ in calls] == ["harbour"] * 4 + ["market"] * 4
+    assert [env["OPENGOTHIC_CONTENT"] for _, env in calls] == ["", str(tmp_path / "content/working-8"),
+                                                               str(tmp_path / "content/working-8"), ""] * 2
+    assert all(env["PERF_REPEAT"] == "1" and env["NO_BUILD"] == "1" and "/wrong" not in env["PERF_ENV"]
+               for _, env in calls)
+
+
+@pytest.mark.parametrize("b_ms,within", [(10.5, True), (10.6, False), (9, True)])
+def test_perf_content_recorded_delta_threshold_and_counters(tmp_path, b_ms, within):
+    (tmp_path / "metadata.json").write_text(json.dumps({"places": ["market"]}))
+    for side, steps in (("A", (9, 11)), ("B", (b_ms, b_ms))):
+        for repeat, step in enumerate(steps, 1):
+            rows = [{"segment": f"perf-market/view-{view}",
+                     "begin_ns": int((view * 1000 + frame * step) * 1e6)}
+                    for view in range(1, 5) for frame in range(5)]
+            # Incomplete geometry must not become a zero in the mean.
+            rows[-1].update(geometry_done=0, triangles=0, draw_calls=0)
+            profile(tmp_path / side / f"attempt-{repeat}", rows, geometry=True)
+    data = content.comparison(tmp_path)["places"]["market"]
+    assert data["p50"]["a"] == 10
+    assert data["p50"]["b"] == pytest.approx(b_ms)
+    assert data["p50"]["delta_pct"] == pytest.approx((b_ms / 10 - 1) * 100)
+    # Pooled A p95 is 11 ms, so these B values all satisfy the p95 gate.
+    assert data["within_threshold"] is True
+    assert data["p50"]["within_noise"] is True
+    assert data["p50"]["spread_a_ms"] == 2
+    assert data["counters"]["A"] == {"triangles": 12000, "draw_calls": 40,
+                                       "completed_frames": 38, "submitted_frames": 40}
+    # Constant recorded A isolates the exact +5% p95 boundary.
+    for path in (tmp_path / "A").rglob("frameprofile.csv"):
+        rows = [{"segment": f"perf-market/view-{view}", "begin_ns": (view * 1000 + frame * 10) * 1_000_000}
+                for view in range(1, 5) for frame in range(5)]
+        profile(path.parent, rows, geometry=True)
+    result = content.comparison(tmp_path)
+    assert result["places"]["market"]["within_threshold"] is within
+    assert ("в пороге" if within else "сверх порога") in content.table(result)
 
 
 def test_percentiles_dynamic_columns_segments_and_no_gpu(tmp_path):
