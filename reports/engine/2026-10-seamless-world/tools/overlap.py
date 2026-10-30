@@ -1,6 +1,6 @@
 import json,os
-# reads ../data/<WORLD>_tric.json written by ext2.py (triangles per 64 m chunk)
-S=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','data','')
+# reads ../measurements/<WORLD>_tric.json written by ext2.py (triangles per 64 m chunk)
+S=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','measurements','')
 T={w:{tuple(map(int,k.split('_'))):v for k,v in json.load(open(S+w+'_tric.json'))['tric'].items()} for w in ['NEWWORLD','OLDWORLD','ADDONWORLD']}
 def overlap(a,b,off,thr=1):
     ox,oz=off  # in chunks

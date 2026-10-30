@@ -35,7 +35,7 @@ for w in W:
     px=[p['position'][0] for p in pts]; pz=[p['position'][2] for p in pts]; py=[p['position'][1] for p in pts]
     print('  waypoints',len(pts),'edges',len(wn.get('edges',[])),'X m %.0f..%.0f Y %.0f..%.0f Z %.0f..%.0f'%(min(px)/100,max(px)/100,min(py)/100,max(py)/100,min(pz)/100,max(pz)/100))
     names[w]=set(p['name'].upper() for p in pts)
-    json.dump({'tric':tric},open(os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','data',f'{w}_tric.json'),'w'))
+    json.dump({'tric':tric},open(os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','measurements',f'{w}_tric.json'),'w'))
 import itertools
 for a,b in itertools.combinations(W,2):
     s=names[a]&names[b]
