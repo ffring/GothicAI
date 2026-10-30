@@ -11,11 +11,13 @@ and 46-50 cm thick with its corners cut. The texture paints the deck as three br
 nailed straps across them (U 0.078, 0.342, 0.659, 0.918, each 0.05 wide); the slab's top is one plane and its
 sides go straight down from its edge, so the planks have no thickness and the straps no relief. The edit adds:
 - round the deck's edge, the planks' own edge: they stand 3 cm past the slab's side and are 8 cm thick, with a
-  shadow under them; at the ends the three planks end apart, 1.2 cm between them, where the texture's seams are;
+  shadow under them; at the ends the three planks end apart, 2 cm between them, where the texture's seams are,
+  each standing out its own way (0-1.5 cm more); no seam is cut within 20 cm of a corner;
 - the straps, 2 cm proud of the planks, across the deck where the texture paints them, bent down over the
   planks' edge at both ends.
-New faces take the deck's own texture: the straps the painted strap under them, the planks' edges and ends the
-plank just inside the edge. Everything else in the chunk stays as it was.
+New faces take the deck's own texture: the straps the painted strap under them; a plank's side along the grain
+the board at its true scale; a plank's end a stretch of the board squeezed into it, which reads as end grain (the
+first version stretched a sliver of the board down the end into cold vertical streaks: reviewers, 2026-10-30). Everything else in the chunk stays as it was.
 
 A deck can lie across a chunk border: every chunk's edit reads the decks from the base chunks around it, builds
 the edge where its own top triangle is, and the straps in the chunk holding most of the deck's top.
@@ -37,14 +39,17 @@ MATERIAL = 'NW_HARBOUR_WOOD_IRON_01'
 MIN_DECK = 15.0e4      # cm²: a horizontal top this large is a crane's deck (the feet and posts are under 4 m²)
 OVER = 3.0             # cm the planks stand past the slab's side
 PLANK = 8.0            # cm: the planks' thickness
-SEAM = 1.2             # cm between plank ends at a seam
+SEAM = 2.0             # cm between plank ends at a seam
+SEAM_MIN = 20.0        # cm: a seam closer than this to a corner is not cut (no sliver of a plank)
+END_OVER = (0.0, 1.5, 0.7)   # cm the three planks stand out further at an end, each its own
+END_SQUEEZE = 0.12     # U of the board squeezed into a plank's end: end grain, not stretched fibres
 SEAMS_V = (1 / 3, 2 / 3)                       # plank seams of the texture, V of the square
 STRAPS_U = (0.078, 0.342, 0.659, 0.918)        # strap centres of the texture, U of the square
 STRAP_W = 0.05         # strap width, U of the square
 STRAP = 2.0            # cm the straps stand proud of the planks
 WRAP = 0.6             # cm a strap stands off the planks' edge where it bends down over it
-EDGE_UV = 0.01         # the planks' edges take the texture this far inside the deck's edge (UV)
-PARAMETERS = {'material': MATERIAL, 'over_cm': OVER, 'plank_cm': PLANK, 'seam_cm': SEAM, 'seams_v': list(SEAMS_V),
+PARAMETERS = {'material': MATERIAL, 'over_cm': OVER, 'plank_cm': PLANK, 'seam_cm': SEAM, 'seam_min_cm': SEAM_MIN,
+              'end_over_cm': list(END_OVER), 'end_squeeze_u': END_SQUEEZE, 'seams_v': list(SEAMS_V),
               'straps_u': list(STRAPS_U), 'strap_w_u': STRAP_W, 'strap_cm': STRAP, 'wrap_cm': WRAP}
 
 
@@ -261,16 +266,25 @@ def edit(ctx):
             for p in (a, b):
                 corners.setdefault((round(p.x, 1), round(p.y, 1)), (p, []))[1].append((out, m.uv(p)))
             ta, tb = m.uv(a), m.uv(b)
-            inward = (m.uv(a - out * 10.0) - ta).normalized() * EDGE_UV      # UV step into the deck
+            per_cm = (m.uv(a - out * 10.0) - ta) / 10.0                    # UV per cm into the deck
+            # The edge's faces: along the grain (a long side, U changes along the edge) they show the plank's
+            # side at its true scale, the grain running along; across it (an end) the plank's end grain,
+            # a long stretch of the board squeezed into the end so the grain reads as end grain, not as fibres.
+            across = abs(tb.y - ta.y) > abs(tb.x - ta.x)
+            if across:
+                down = Vector((END_SQUEEZE * (1.0 if per_cm.x >= 0 else -1.0), 0.0))
+            else:
+                down = per_cm * PLANK
             cuts = {0.0, 1.0}
             seams = set()
-            for s in SEAMS_V:
+            for sv in SEAMS_V:
                 for k in range(-3, 4):
-                    v = s + k
+                    v = sv + k
                     if (ta.y - v) * (tb.y - v) < 0:
                         t = (v - ta.y) / (tb.y - ta.y)
-                        cuts.add(t)
-                        seams.add(t)
+                        if min(t, 1.0 - t) * length >= SEAM_MIN:    # no sliver of a plank at a corner
+                            cuts.add(t)
+                            seams.add(t)
             for u in straps:
                 for e in (u - STRAP_W / 2, u + STRAP_W / 2):
                     if (ta.x - e) * (tb.x - e) < 0:
@@ -282,31 +296,34 @@ def edit(ctx):
                 s1 = t1 - (gap if t1 in seams else 0.0)
                 if s1 - s0 < 1e-4:
                     continue
+                u0, u1 = ta.lerp(tb, s0), ta.lerp(tb, s1)
+                # at an end every plank stands out its own way: they were cut one by one
+                over = OVER + (END_OVER[int(((u0.y + u1.y) / 2) * 3) % 3] if across else 0.0)
                 e0, e1 = a + d * s0, a + d * s1
-                o0, o1 = e0 + out * OVER, e1 + out * OVER
+                o0, o1 = e0 + out * over, e1 + out * over
                 l0, l1 = o0 - up * PLANK, o1 - up * PLANK
                 i0, i1 = e0 - up * PLANK, e1 - up * PLANK
-                u0, u1 = ta.lerp(tb, s0), ta.lerp(tb, s1)
-                w0, w1 = u0 + inward, u1 + inward
+                w0, w1 = u0 + down, u1 + down
                 face([e0, e1, o1, o0], [u0, u1, u1, u0], up)
                 face([o0, o1, l1, l0], [u0, u1, w1, w0], out)
                 face([l0, l1, i1, i0], [w0, w1, w1, w0], -up)
-                if s0 > 0.0:            # a plank's end at a seam or a strap's side
-                    face([e0, o0, l0, i0], [u0, u0, w0, w0], -d)
-                if s1 < 1.0:
-                    face([e1, o1, l1, i1], [u1, u1, w1, w1], d)
+                if s0 > 0.0 or over > OVER:     # a plank's end at a seam, a strap's side, a plank standing out
+                    face([e0, o0, l0, i0], [u0, u0 + down * .3, w0, w0 - down * .7], -d)
+                if s1 < 1.0 or over > OVER:
+                    face([e1, o1, l1, i1], [u1, u1 + down * .3, w1, w1 - down * .7], d)
                 # a strap bends down over the planks' edge here
                 um = ta.lerp(tb, (s0 + s1) / 2).x
                 if any(abs(um - c) < STRAP_W / 2 for c in straps):
                     top0, top1 = e0 + up * STRAP, e1 + up * STRAP
-                    f0, f1 = e0 + out * (OVER + WRAP) + up * STRAP, e1 + out * (OVER + WRAP) + up * STRAP
+                    f0, f1 = e0 + out * (over + WRAP) + up * STRAP, e1 + out * (over + WRAP) + up * STRAP
                     b0, b1 = f0 - up * (STRAP + PLANK + WRAP), f1 - up * (STRAP + PLANK + WRAP)
                     k0, k1 = b0 - out * (WRAP + 2.0), b1 - out * (WRAP + 2.0)
+                    sd = per_cm * (STRAP + PLANK + WRAP)      # the painted strap continues down its true length
                     face([top0, top1, f1, f0], [u0, u1, u1, u0], up)
-                    face([f0, f1, b1, b0], [u0, u1, u1, u0], out)
-                    face([b0, b1, k1, k0], [u0, u1, u1, u0], -up)
+                    face([f0, f1, b1, b0], [u0, u1, u1 + sd, u0 + sd], out)
+                    face([b0, b1, k1, k0], [u0 + sd, u1 + sd, u1 + sd, u0 + sd], -up)
                     for e, f, bb, k, tt, side in ((e0, f0, b0, k0, u0, -d), (e1, f1, b1, k1, u1, d)):
-                        face([e + up * STRAP, f, bb, k, e], [tt] * 5, side)
+                        face([e + up * STRAP, f, bb, k, e], [tt, tt, tt + sd, tt + sd, tt + sd], side)
 
         # the planks run round the corners: close the wedge between two edges' planks
         for p, outs in corners.values():

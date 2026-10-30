@@ -16,7 +16,7 @@ so the panel's edges run along the painted shingles. The edit adds the shingles'
   the bake made it (2.2-3.2 cm, hand-split shakes), with the keyways between shingles where the texture has
   them; under it a starter course 1.8 cm thick, set back 1.5 cm, its keyways halfway between;
 - at the verges, the cut side of every course: thick at the butt, thinner up to the next course, a saw-tooth
-  as every course rests on the one below.
+  as every course rests on the one below; it ends at the barge rafter's inner edge and leaves the rafter clear.
 Ridges stay: the texture paints the ridge board there. Edges where a panel's U and V both change (valleys,
 hips, a panel cut by the chunk border) and edges with another roof panel beyond them are left as they are.
 The shingles' tops take the roof's own texture: at the eaves the lower part of the shingles under V = 1, laid a
@@ -47,10 +47,12 @@ BOXES = {'B031': (-185.0, 2960.0, -6310.0, -4290.0), 'B035': (689.0, 3539.0, -7.
 STARTER = 1.8          # cm: the starter course under the eaves' shingles
 STARTER_BACK = 1.5     # cm its butt sits behind the shingle's
 COVER_V = 0.03         # a ridge-board sliver this wide in V (or less) at an eave is covered
-SHINGLE_V = (0.03, 0.006)   # the covering top takes the shingles this far under V = 1, inner and outer edge
+SHINGLE_V = (0.07, 0.03)    # the covering top takes the shingles this far under V = 1, inner and outer edge: clear of
+                            # the ridge board, painted down to V 0.994 (a light line along the eaves: reviewers, 2026-10-30)
 EAVE_OVER = 3.0        # cm the butts stand past the fascia, which is flush with the panel's edge: a drip edge
 EXT = (3.0, 6.5)       # cm: a butt stands this far past the panel's edge at least, at most
-VERGE_OVER = (2.5, 4.5)   # cm the course ends overhang the barge rafter, whose top is flush with the panel
+VERGE_OVER = (0.0, 0.0)   # cm the course ends overhang the barge rafter: none, they end at its inner edge (over it
+                          # they halved the rafter's width in sight: reviewers, 2026-10-30)
 VERGE_LIP = 4.0        # cm inside the edge where the end shingle starts to rise off the painted field
 VERGE_HEAD = 0.8       # cm a course's end stands above the field just under the next butt
 LIFT = 0.3             # cm over the barge rafter's top: no fighting with it
@@ -215,7 +217,9 @@ def edit(ctx):
         return face(pts, uvs, facing, end_slot)
 
     def face(pts, uvs, facing, material=None):
-        if any((pts[k] - pts[k - 1]).length < 1e-3 for k in range(len(pts))):
+        keep = [k for k in range(len(pts)) if (pts[k] - pts[k - 1]).length >= 1e-3]     # a corner on its neighbour
+        pts, uvs = [pts[k] for k in keep], [uvs[k] for k in keep]
+        if len(pts) < 3:
             return None
         vs = [new_vert(q) for q in pts]
         f = bm.faces.new(vs)

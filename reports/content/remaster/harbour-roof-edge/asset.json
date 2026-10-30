@@ -11,28 +11,28 @@
   "selected": {},
   "reviews": [
     {
-      "id": "r3-front",
+      "id": "r3w-front",
       "stage": "ingame",
       "mode": "blind",
       "verdict": "pending",
       "date": "2026-10-30"
     },
     {
-      "id": "r3-eave-close",
+      "id": "r3w-eave-close",
       "stage": "ingame",
       "mode": "blind",
       "verdict": "pending",
       "date": "2026-10-30"
     },
     {
-      "id": "r3-verge-close",
+      "id": "r3w-verge-close",
       "stage": "ingame",
       "mode": "blind",
       "verdict": "pending",
       "date": "2026-10-30"
     },
     {
-      "id": "r3-huts-east",
+      "id": "r3w-huts-east",
       "stage": "ingame",
       "mode": "blind",
       "verdict": "pending",

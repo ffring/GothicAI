@@ -10,7 +10,8 @@ of NW_HARBOUR_STAIRS_01 with a landing between them. Each flight is two triangle
 6 painted steps, a light tread band (42 % of the period) over a dark riser (58 %), 2.25 m rise over 3.5 m. The
 lower flight is a trapezoid: its foot is cut askew by the yard, 2.45 m wide at the bottom and 4.50 m at the top.
 The edit replaces each flight with the steps of the first stair (stairs-3: 26.7 cm riser): 8 steps of 28.1 cm,
-each taking one painted period of the texture, each nosing with a 4 cm worn chamfer, the inner corners on the old ramp line, so the steps run into the side walls and the landing
+each taking one painted period of the texture, each riser leaning back 25 degrees, each nosing with a 4 cm worn
+chamfer, the inner corners on the old ramp line, so the steps run into the side walls and the landing
 without gaps; the sides follow the flight's own edges, so the trapezoid stays a trapezoid. Treads and risers both
 take the light band: the dark band is painted shadow, which the engine casts itself on a real riser (the lesson of
 the first stair, reports/content/2026-10-harbour-stairs/README.md). U across as on the ramp. Everything else in
@@ -18,6 +19,8 @@ the chunk is kept as it was imported.
 
 The converted chunk is Gothic content (a derivative, user's decision 2026-10-24): it stays outside git.
 """
+import math
+
 import bmesh
 from mathutils import Vector
 
@@ -25,13 +28,17 @@ from world_bpy import gothic_name, to_blender, to_gothic
 
 PER_TILE = 6                # painted steps per texture tile along the slope
 RISER = 320.0 / 12          # cm: the riser of the first stair (stairs-3, harbour_stairs.py), which this one keeps
+RAKE = 25.0                 # degrees a riser leans back, as worn old stone stairs do: an upright riser faces the yard
+                            # in the wall's shadow and sees half the sky the ramp saw - the lower flight came out 23 %
+                            # darker from the yard and its risers near black (reviewers, 2026-10-30). A riser leans
+                            # back 11 cm, the tread in sight is 21-29 cm.
 TREAD_SHARE = 0.42          # light band of one period, measured on the texture (harbour_stairs.py)
 NOSING = 4.0                # cm, worn chamfer on each nosing
 NOSING_SHARE = 0.10         # the lower end of the light band goes on the chamfer
 MATERIAL = 'NW_HARBOUR_STAIRS_01'
 # The two flights in Gothic centimetres (x, z): by NW_CITY_HABOUR_KASERN_07.
 BOX = ((1500.0, 2300.0), (4900.0, 5950.0))
-PARAMETERS = {'material': MATERIAL, 'steps_per_tile': PER_TILE, 'riser_cm': RISER, 'tread_share': TREAD_SHARE, 'nosing_cm': NOSING,
+PARAMETERS = {'material': MATERIAL, 'steps_per_tile': PER_TILE, 'riser_cm': RISER, 'rake_deg': RAKE, 'tread_share': TREAD_SHARE, 'nosing_cm': NOSING,
               'nosing_share': NOSING_SHARE, 'box_cm': {'x': list(BOX[0]), 'z': list(BOX[1])}}
 
 
@@ -39,7 +46,6 @@ def edit(ctx):
     me = ctx.mesh
     slot = next(i for i, m in enumerate(me.materials) if gothic_name(m) == MATERIAL)
     uv_layer = me.uv_layers.active.name
-    color_name = me.color_attributes.active_color.name if me.color_attributes.active_color else None
     old_normals = [Vector(n.vector) for n in me.corner_normals]
 
     bm = bmesh.new()
@@ -49,8 +55,6 @@ def edit(ctx):
     uv = bm.loops.layers.uv[uv_layer]
     vid = bm.verts.layers.float.get('_VERTEX')
     fid = bm.verts.layers.float.get('_FEATURE')
-    color_point = bm.verts.layers.color.get(color_name) if color_name else None
-    color_corner = bm.loops.layers.color.get(color_name) if color_name else None
     loop_index = bm.loops.layers.int.new('loop_index')
     i = 0
     for f in bm.faces:
@@ -100,12 +104,6 @@ def edit(ctx):
         # the light band stays on the tread although the flight has more steps than the texture paints
         steps = round(rise / RISER)
         period = (v_bottom - v_top) / round((v_bottom - v_top) * PER_TILE)
-        if color_corner is not None:
-            colour = tuple(b0[3][color_corner])
-        elif color_point is not None:
-            colour = tuple(b0[0][color_point])
-        else:
-            colour = None
         print(f'flight: rise {rise:.1f} cm, run {run_l.length:.1f}/{run_r.length:.1f} cm, width '
               f'{(b1[1] - b0[1]).length:.1f} at the foot, {(t1[1] - t0[1]).length:.1f} at the top; {steps} steps of '
               f'{rise / steps:.2f} cm; u {b0[2].x:.3f}..{b1[2].x:.3f} at the foot, {t0[2].x:.3f}..{t1[2].x:.3f} at the top')
@@ -133,8 +131,6 @@ def edit(ctx):
                     v[vid] = -1.0
                 if fid is not None:
                     v[fid] = -1.0
-                if color_point is not None and colour is not None:
-                    v[color_point] = colour
             cache[key] = v
             return v
 
@@ -154,12 +150,11 @@ def edit(ctx):
                 k = quad.index(lp.vert)
                 lp[uv].uv = (uvs[k].x, 1.0 - uvs[k].y)
                 lp[loop_index] = -1
-                if color_corner is not None and colour is not None:
-                    lp[color_corner] = colour
             new_faces.append(f)
 
         gn = NOSING / (horizontal.length / steps)
         hn = NOSING / (rise / steps)
+        rk = (rise / steps - NOSING) * math.tan(math.radians(RAKE)) / (horizontal.length / steps)   # in goings
         for s in range(1, steps + 1):
             v_back = v_bottom - (s % PER_TILE or PER_TILE) * period      # one painted period per step, counted from the foot
             v_nose = v_back + TREAD_SHARE * period
@@ -168,12 +163,13 @@ def edit(ctx):
             uv4 = lambda ta, tb, va, vb: [Vector((u_at(0, ta), va)), Vector((u_at(1, ta), va)),
                                           Vector((u_at(1, tb), vb)), Vector((u_at(0, tb), vb))]
             # riser: light band, its upper edge meets the chamfer
-            face([vert(0, t, h), vert(1, t, h), vert(1, t, s - hn), vert(0, t, s - hn)],
-                 uv4(t, t, v_back, v_edge), riser_normal)
-            face([vert(0, t, s - hn), vert(1, t, s - hn), vert(1, t + gn, s), vert(0, t + gn, s)],
-                 uv4(t, t + gn, v_nose, v_edge), nosing_normal)
-            face([vert(0, t + gn, s), vert(1, t + gn, s), vert(1, s, s), vert(0, s, s)],
-                 uv4(t + gn, s, v_edge, v_back), tread_normal)
+            # riser: leans back from its foot on the ramp line, light band, its upper edge meets the chamfer
+            face([vert(0, t, h), vert(1, t, h), vert(1, t + rk, s - hn), vert(0, t + rk, s - hn)],
+                 uv4(t, t + rk, v_back, v_edge), riser_normal)
+            face([vert(0, t + rk, s - hn), vert(1, t + rk, s - hn), vert(1, t + rk + gn, s), vert(0, t + rk + gn, s)],
+                 uv4(t + rk, t + rk + gn, v_nose, v_edge), nosing_normal)
+            face([vert(0, t + rk + gn, s), vert(1, t + rk + gn, s), vert(1, s, s), vert(0, s, s)],
+                 uv4(t + rk + gn, s, v_edge, v_back), tread_normal)
         bmesh.ops.delete(bm, geom=[f for f in flight if f.is_valid], context='FACES_ONLY')
 
     ctx.allow_open(new_faces, 'the sides of the steps run into the side walls and the landing')
