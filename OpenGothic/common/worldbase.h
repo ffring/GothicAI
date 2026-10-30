@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -22,4 +23,5 @@ struct WorldBaseResult {
 WorldBaseResult tryWorldData(WorldData::Data& world, asset::WorldMesh& worldMesh,
                             std::string_view name, const std::filesystem::path& dir,
                             const std::filesystem::path& overrideDir,
-                            const std::vector<std::pair<std::string,uintmax_t>>& baseArchives);
+                            const std::vector<std::pair<std::string,uintmax_t>>& baseArchives,
+                            const std::map<std::string,std::filesystem::path>* ownMeshes = nullptr);

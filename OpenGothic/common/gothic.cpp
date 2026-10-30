@@ -128,6 +128,7 @@ Gothic::Gothic() {
   defaults->set("GAME", "melee_reactions",       1);
   defaults->set("GAME", "melee_posture",         1);
   defaults->set("GAME", "melee_down_tactics",    1);
+  defaults->set("GAME", "melee_hitstop",         1);
 
   defaults->set("GAME", "animatedWindows",     1);
   defaults->set("GAME", "subTitles",           1);
@@ -896,7 +897,8 @@ void Gothic::refreshPhysicsFlags() {
     settingsGetI("GAME","melee_reactions")!=0,
     settingsGetI("GAME","melee_posture")!=0,
     settingsGetI("GAME","melee_down_tactics")!=0,
-    settingsGetI("GAME","item_hulls")!=0
+    settingsGetI("GAME","item_hulls")!=0,
+    settingsGetI("GAME","melee_hitstop")!=0
     };
   }
 

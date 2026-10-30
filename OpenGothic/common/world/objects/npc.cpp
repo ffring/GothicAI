@@ -164,7 +164,7 @@ struct Npc::MeleeShadow final {
   float reachCpuMs = 0, reachCpuMaxMs = 0;
   uint64_t reachQueries = 0;
   std::optional<Window> window;
-  uint64_t id = 0, start = 0, tick = 0;
+  uint64_t id = 0, start = 0, origin = 0, tick = 0;
   float speed = 1;
   std::string attacker, weapon, animation, legacyTarget = "null", legacyResult = "no_optimal_frame";
   const Npc* legacyNpc = nullptr;
@@ -1814,7 +1814,7 @@ void Npc::syncMeleeShadowSwing() {
     return;
     }
   if(meleeDownStrike && meleeShadow && meleeShadow->window && meleeShadow->window->sequence==attack->sequence &&
-     meleeShadow->start==attack->start) {
+     meleeShadow->origin==attack->origin) {
     // The finishing move stays over the body for seconds: the pull-out and the step back.
     // A moment after the blow the rest plays faster; cut short, its step forward stayed
     // (70 cm a chop) and the hero ended up standing on the body.
@@ -1859,8 +1859,12 @@ void Npc::syncMeleeShadowSwing() {
   if(window==nullptr)
     throw std::runtime_error("Melee shadow requires an optimal-frame attack window");
   if(shadow.window && shadow.window->sequence==seq && shadow.window->index==window->index &&
-     shadow.start==attack->start && shadow.window->length==length && shadow.window->normalY==normalY)
+     shadow.origin==attack->origin && shadow.window->length==length && shadow.window->normalY==normalY) {
+    // the same swing: a hit stop moves its clock, the windows follow it
+    shadow.start = attack->start;
+    shadow.speed = attack->speed;
     return;
+    }
   const auto selected = *window;
   finishMeleeShadowSwing(false);
   if(meleeShadowSuspended)
@@ -1872,6 +1876,7 @@ void Npc::syncMeleeShadowSwing() {
   shadow.window = selected;
   ++shadow.id;
   shadow.start = attack->start;
+  shadow.origin = attack->origin;
   shadow.tick = owner.tickCount();
   shadow.speed = attack->speed;
   shadow.attacker = meleeShadowWho(this);
@@ -2279,6 +2284,8 @@ void Npc::consumeMeleeContacts() {
       if(!swing.window || swing.id!=id)
         return;
       swing.contacts[index].damage = std::max(0,before-target->attribute(ATR_HITPOINTS));
+      if(!dodge)
+        meleeHitStop(*target,hit,entry.multiplier,block);
       }
     if(block) {
       swing.stopped = true;
@@ -2287,6 +2294,31 @@ void Npc::consumeMeleeContacts() {
         stopMeleeSwing();
       }
     }
+  }
+
+void Npc::meleeHitStop(Npc& target, const MeleeBladeContact& hit, float multiplier, bool blocked) {
+  if(!Gothic::physicsFlags().meleeHitStop)
+    return;
+  // The blade bites and both bodies hold their frame for a moment, then go on: the weight of the
+  // blow. A blocked one holds only the guard, the blow itself rebounds into the stance.
+  const auto ws = weaponState();
+  // Under three frames of 30 the hold is not seen at all: a weak blow still holds most of it
+  float ms = ws==WeaponState::W2H ? 120.f : (ws==WeaponState::W1H ? 90.f : 60.f);
+  ms = blocked ? 60.f : ms*std::clamp(multiplier,.8f,1.3f);
+  constexpr float hold = .04f;
+  const uint64_t until = owner.tickCount()+uint64_t(ms);
+  if(!blocked)
+    visual.hitStop(until,hold);
+  target.visual.hitStop(until,hold);
+  if(isPlayer() || target.isPlayer()) {
+    if(auto camera = Gothic::inst().camera()) {
+      const float deg = target.isPlayer() ? (blocked ? .5f : 1.2f) : (blocked ? .3f : .5f);
+      camera->impact(hit.velocityCmS,deg*(blocked ? 1.f : std::clamp(multiplier,.8f,1.3f)));
+      }
+    }
+  if(TestBench::bodyTracing())
+    TestBench::bodyEvent(*this,&target,"hit_stop",owner.tickCount(),
+                        "\"ms\":"+std::to_string(int(ms))+",\"blocked\":"+(blocked ? "true" : "false"),visual.pose().animNames());
   }
 
 void Npc::noteMeleeShadowMarks(const std::vector<MeleeBladeContact>& contacts) {

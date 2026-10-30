@@ -101,6 +101,7 @@ class Marvin {
       C_ToggleMeleeReactions,
       C_ToggleMeleePosture,
       C_ToggleMeleeDownTactics,
+      C_ToggleMeleeHitStop,
       };
 
     struct Cmd {
