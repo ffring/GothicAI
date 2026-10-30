@@ -130,7 +130,7 @@ def table(report):
                      f"{a['spread_a_ms']:.3f} / {a['spread_b_ms']:.3f} | "
                      f"{b['a']:.3f} | {b['b']:.3f} | {b['delta_pct']:+.2f}% | "
                      f"{b['spread_a_ms']:.3f} / {b['spread_b_ms']:.3f} | {label} |")
-    lines += ["", "| Место | Треугольники/кадр A | Треугольники/кадр B | Draw calls/кадр A | Draw calls/кадр B | |Δ p50| ≤ разброс |",
+    lines += ["", "| Место | Треугольники/кадр A | Треугольники/кадр B | Draw calls/кадр A | Draw calls/кадр B | Модуль Δ p50 ≤ разброс |",
               "|---|---:|---:|---:|---:|---|"]
     for place, data in report["places"].items():
         a, b = (data["counters"][side] for side in ("A", "B"))
@@ -247,7 +247,8 @@ def launch(args):
     # Fetch only small final artifacts; raw attempts stay in the checksum-verified archive.
     for name in ("report.md", "report.json"):
         remote_path = archive if result.returncode == 0 else remote_out
-        subprocess.run(["rsync", "-a", f"{host}:{remote_path}/{name}", str(out) + "/"], check=False)
+        subprocess.run(["rsync", "-a", f"{host}:{remote_path}/{name}", str(out) + "/"],
+                       check=result.returncode == 0)
     print(out, flush=True)
     return result.returncode
 
