@@ -182,6 +182,7 @@ Marvin::Marvin() {
     {"toggle arrow_sticking",     C_ToggleArrowSticking},
     {"toggle spell_physics",      C_ToggleSpellPhysics},
     {"toggle movable_vobs",       C_ToggleMovableVobs},
+    {"toggle item_hulls",         C_ToggleItemHulls},
     {"toggle physics_noise",      C_TogglePhysicsNoise},
     {"toggle destruction",        C_ToggleDestruction},
     {"toggle buoyancy",           C_ToggleBuoyancy},
@@ -195,6 +196,7 @@ Marvin::Marvin() {
     {"toggle melee_reactions",    C_ToggleMeleeReactions},
     {"toggle melee_posture",      C_ToggleMeleePosture},
     {"toggle melee_down_tactics", C_ToggleMeleeDownTactics},
+    {"toggle melee_hitstop",      C_ToggleMeleeHitStop},
     };
   }
 
@@ -593,6 +595,9 @@ bool Marvin::exec(std::string_view v) {
     case C_ToggleMovableVobs:
       Gothic::settingsSetI("GAME","movable_vobs",Gothic::settingsGetI("GAME","movable_vobs")==0 ? 1 : 0);
       return true;
+    case C_ToggleItemHulls:
+      Gothic::settingsSetI("GAME","item_hulls",Gothic::settingsGetI("GAME","item_hulls")==0 ? 1 : 0);
+      return true;
     case C_TogglePhysicsNoise:
       Gothic::settingsSetI("GAME","physics_noise",Gothic::settingsGetI("GAME","physics_noise")==0 ? 1 : 0);
       return true;
@@ -660,6 +665,12 @@ bool Marvin::exec(std::string_view v) {
       const bool enabled = !Gothic::physicsFlags().meleeDownTactics;
       Gothic::settingsSetI("GAME","melee_down_tactics",enabled ? 1 : 0);
       print(enabled ? "Melee down tactics: ON" : "Melee down tactics: OFF");
+      return true;
+      }
+    case C_ToggleMeleeHitStop: {
+      const bool enabled = !Gothic::physicsFlags().meleeHitStop;
+      Gothic::settingsSetI("GAME","melee_hitstop",enabled ? 1 : 0);
+      print(enabled ? "Melee hit stop: ON" : "Melee hit stop: OFF");
       return true;
       }
     }

@@ -88,6 +88,7 @@ class Marvin {
       C_ToggleArrowSticking,
       C_ToggleSpellPhysics,
       C_ToggleMovableVobs,
+      C_ToggleItemHulls,
       C_TogglePhysicsNoise,
       C_ToggleDestruction,
       C_ToggleBuoyancy,
@@ -101,6 +102,7 @@ class Marvin {
       C_ToggleMeleeReactions,
       C_ToggleMeleePosture,
       C_ToggleMeleeDownTactics,
+      C_ToggleMeleeHitStop,
       };
 
     struct Cmd {

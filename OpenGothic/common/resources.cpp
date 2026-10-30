@@ -374,7 +374,10 @@ void Resources::censusProfile(std::string_view game, std::string_view outputUnit
 
 void Resources::loadWorld(WorldData::Data& world, asset::WorldMesh& worldMesh, std::string_view name) {
   const auto dir = worldBaseDir(name);
-  const auto result = tryWorldData(world,worldMesh,name,dir,worldOverrideDir(name),inst->baseArchives);
+  std::map<std::string,std::filesystem::path> ownMeshes;
+  for(const auto& [key,mesh]:inst->meshOverrides)
+    ownMeshes.emplace(key,mesh.file);
+  const auto result = tryWorldData(world,worldMesh,name,dir,worldOverrideDir(name),inst->baseArchives,&ownMeshes);
   if(result.replaced) {
     if(inst->census)
       inst->census->replaced(name,(worldContentDir("base",name)/"world.json").generic_string());
